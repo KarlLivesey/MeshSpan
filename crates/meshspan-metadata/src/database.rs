@@ -320,8 +320,9 @@ mod tests {
 
     use super::{LocalDatabase, MetadataStoreError, PartitionDatabase, open_connection};
     use crate::migration::{
-        PARTITION_SCHEMA_VERSION, local_authentication_ceremony_migration_digest,
-        local_claim_bundle_migration_digest, local_federation_authority_cache_migration_digest,
+        LOCAL_SCHEMA_VERSION, PARTITION_SCHEMA_VERSION,
+        local_authentication_ceremony_migration_digest, local_claim_bundle_migration_digest,
+        local_federation_authority_cache_migration_digest,
         local_federation_storage_capability_migration_digest,
         local_federation_storage_lifecycle_migration_digest,
         local_federation_storage_quota_migration_digest,
@@ -777,7 +778,10 @@ mod tests {
                 )
                 .is_err()
         );
-        assert_eq!(database.check_integrity()?.schema_version, 11);
+        assert_eq!(
+            database.check_integrity()?.schema_version,
+            LOCAL_SCHEMA_VERSION
+        );
         Ok(())
     }
 

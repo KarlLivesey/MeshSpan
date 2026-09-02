@@ -13,25 +13,25 @@ use meshspan_domain::{
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
 };
-use meshspan_work::{WorkSignals, WorkSubject};
+use meshspan_work::{DrainScope, WorkDemand, WorkSignals, WorkSubject};
 use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::{
     AcknowledgementCellRequirement, AcknowledgementCellRole, AcknowledgementConsistencyClass,
     AddGroupMember, AssignVolumeAcknowledgementPolicy, AssignVolumeLocalityPolicy,
-    AssignVolumeProtectionPolicy, BootstrapMesh, BootstrapRecoveryIdentity, ClaimMaintenanceWork,
-    CommitConvergedVolumeHead, CommitScrubPass, CommitSecretGeneration, CommitShardRepair,
-    CompleteMaintenanceWork, ConvergedHeadEvidence, CreateAcknowledgementPolicy,
-    CreateActivationPolicy, CreateAuthenticationMethod, CreateAvailabilityCell, CreateComponent,
-    CreateFaultGroup, CreateGroup, CreateLocalityPolicy, CreateProtectionPolicy, CreateUser,
-    CreateVolume, GrantInheritance, GrantPermission, GrantPermissionWithActivation,
-    IssueAuthenticationSession, LocalityRequirementConfiguration, MaintenanceWorkCompletion,
-    NewAuthenticationCredential, NewRecoveryCode, PermissionScope, ProtectionScenarioConfiguration,
-    PublishSmbExport, QueueMaintenanceWork, RecordName, RegisterNodeWrappingKey,
-    RegisterStorageTarget, RemoveGroupMember, RenewMaintenanceWork, RevokeAuthenticationMethod,
-    RevokeAuthenticationSession, SessionAuthenticationFactor, SessionClientLabel,
-    SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
+    AssignVolumeProtectionPolicy, BeginStorageTargetDrain, BootstrapMesh,
+    BootstrapRecoveryIdentity, ClaimMaintenanceWork, CommitConvergedVolumeHead, CommitScrubPass,
+    CommitSecretGeneration, CommitShardRepair, CompleteMaintenanceWork, ConvergedHeadEvidence,
+    CreateAcknowledgementPolicy, CreateActivationPolicy, CreateAuthenticationMethod,
+    CreateAvailabilityCell, CreateComponent, CreateFaultGroup, CreateGroup, CreateLocalityPolicy,
+    CreateProtectionPolicy, CreateUser, CreateVolume, GrantInheritance, GrantPermission,
+    GrantPermissionWithActivation, IssueAuthenticationSession, LocalityRequirementConfiguration,
+    MaintenanceWorkCompletion, NewAuthenticationCredential, NewRecoveryCode, PermissionScope,
+    ProtectionScenarioConfiguration, PublishSmbExport, QueueMaintenanceWork, RecordName,
+    RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember, RenewMaintenanceWork,
+    RevokeAuthenticationMethod, RevokeAuthenticationSession, SessionAuthenticationFactor,
+    SessionClientLabel, SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
     SetTargetAvailabilityCellMembership, SmbExportGatewaySelection, StepUpAuthenticationSession,
     StorageUsageLimit, StrongFallbackMode, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND,
     WithdrawSmbExport,
@@ -400,6 +400,40 @@ fn maintenance_work_commands_round_trip_subject_claim_and_outcomes()
     for command in commands {
         assert_round_trip(context, command)?;
     }
+    Ok(())
+}
+
+#[test]
+fn storage_target_drain_command_round_trips_its_policy_and_work()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let command = AuthoritativeCommand::BeginStorageTargetDrain(BeginStorageTargetDrain {
+        work: QueueMaintenanceWork {
+            work_id: WorkId::from_bytes([93; 16])?,
+            deduplication_key: [94; 32],
+            subject: WorkSubject::Drain(DrainScope::Target {
+                target_id: TargetId::from_bytes([95; 16])?,
+                target_generation: 2,
+            }),
+            signals: WorkSignals {
+                data_unavailable: false,
+                remaining_recovery_margin: 2,
+                protection_debt: 1,
+                locality_debt: 0,
+                instability: 0,
+                access_heat: 0,
+                created_at: UnixMicros::new(6),
+                due_at: Some(UnixMicros::new(6)),
+            },
+            demand: WorkDemand {
+                in_flight_bytes: 4_096,
+            },
+            next_attempt_at: UnixMicros::new(6),
+        },
+        allow_temporary_degraded: true,
+        cleanup_requested: false,
+    });
+    assert_round_trip(context, command)?;
     Ok(())
 }
 

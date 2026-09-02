@@ -186,6 +186,8 @@ pub enum AuthoritativeCommand {
     AssignVolumeAcknowledgementPolicy(AssignVolumeAcknowledgementPolicy),
     /// Creates or coalesces one durable maintenance job from exact health evidence.
     QueueMaintenanceWork(QueueMaintenanceWork),
+    /// Excludes one target generation from new writes and atomically queues its evacuation.
+    BeginStorageTargetDrain(BeginStorageTargetDrain),
     /// Fences one eligible worker's bounded lease over a ready maintenance job.
     ClaimMaintenanceWork(ClaimMaintenanceWork),
     /// Extends the same live claim without changing its fence or assignment.
@@ -359,6 +361,7 @@ impl AuthoritativeCommand {
             Self::CreateAcknowledgementPolicy(value) => value.update_digest(digest),
             Self::AssignVolumeAcknowledgementPolicy(value) => value.update_digest(digest),
             Self::QueueMaintenanceWork(value) => value.update_digest(digest),
+            Self::BeginStorageTargetDrain(value) => value.update_digest(digest),
             Self::ClaimMaintenanceWork(value) => value.update_digest(digest),
             Self::RenewMaintenanceWork(value) => value.update_digest(digest),
             Self::CompleteMaintenanceWork(value) => value.update_digest(digest),
@@ -1936,6 +1939,18 @@ pub struct QueueMaintenanceWork {
     pub next_attempt_at: UnixMicros,
 }
 
+/// Atomic transition from writable target to durable resumable evacuation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BeginStorageTargetDrain {
+    /// Exact target-drain work; its subject must name the same live target generation.
+    pub work: QueueMaintenanceWork,
+    /// Allows safe removal once bytes remain recoverable even if desired protection is temporarily
+    /// below policy. This never permits data loss.
+    pub allow_temporary_degraded: bool,
+    /// Requests physical cleanup only after authority commits safe-to-detach evidence.
+    pub cleanup_requested: bool,
+}
+
 /// One new fenced execution attempt over a durable maintenance job.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClaimMaintenanceWork {
@@ -3259,6 +3274,15 @@ digest_simple_record!(
         digest.optional_instant(value.signals.due_at);
         digest.unsigned(value.demand.in_flight_bytes);
         digest.signed(value.next_attempt_at.get());
+    }
+);
+digest_simple_record!(
+    BeginStorageTargetDrain,
+    b"begin-storage-target-drain",
+    |value, digest| {
+        value.work.update_digest(digest);
+        digest.boolean(value.allow_temporary_degraded);
+        digest.boolean(value.cleanup_requested);
     }
 );
 digest_simple_record!(

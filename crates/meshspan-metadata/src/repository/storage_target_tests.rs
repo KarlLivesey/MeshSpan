@@ -2,16 +2,17 @@
 
 use meshspan_domain::{
     AuditEventId, ComponentInstanceId, HostId, MeshId, NodeId, OperationId, PartitionId,
-    PrincipalId, Revision, RoleId, TargetId, UnixMicros,
+    PrincipalId, Revision, RoleId, TargetId, UnixMicros, WorkId,
 };
+use meshspan_work::{DrainScope, WorkDemand, WorkSignals, WorkSubject};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tempfile::tempdir;
 
 use super::{ApplyDisposition, AuthoritativeRepository, EntityKind, LogPosition, RepositoryError};
 use crate::{
-    AuthoritativeCommand, BootstrapMesh, CommandContext, CreateComponent, PartitionDatabase,
-    RecordName, RegisterStorageTarget, StorageUsageLimit,
+    AuthoritativeCommand, BeginStorageTargetDrain, BootstrapMesh, CommandContext, CreateComponent,
+    PartitionDatabase, QueueMaintenanceWork, RecordName, RegisterStorageTarget, StorageUsageLimit,
 };
 
 struct Fixture {
@@ -246,6 +247,91 @@ fn draining_target_is_readable_but_never_returned_as_writable()
         repository.readable_storage_target_provider_context_by_target(target_id)?,
         Some(readable)
     );
+    Ok(())
+}
+
+#[test]
+fn target_drain_atomically_excludes_writes_and_queues_evacuating_work()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture()?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 2, term: 1 },
+        context(30, fixture.administrator, 31, 30, Some(1))?,
+        &target_command(&fixture, StorageUsageLimit::Percent(95))?,
+    )?;
+    let target_id = TargetId::from_bytes([40; 16])?;
+    let work_id = WorkId::from_bytes([50; 16])?;
+    let command = AuthoritativeCommand::BeginStorageTargetDrain(BeginStorageTargetDrain {
+        work: QueueMaintenanceWork {
+            work_id,
+            deduplication_key: [51; 32],
+            subject: WorkSubject::Drain(DrainScope::Target {
+                target_id,
+                target_generation: 1,
+            }),
+            signals: WorkSignals {
+                data_unavailable: false,
+                remaining_recovery_margin: 1,
+                protection_debt: 0,
+                locality_debt: 0,
+                instability: 0,
+                access_heat: 0,
+                created_at: UnixMicros::new(40),
+                due_at: Some(UnixMicros::new(40)),
+            },
+            demand: WorkDemand {
+                in_flight_bytes: 4_096,
+            },
+            next_attempt_at: UnixMicros::new(40),
+        },
+        allow_temporary_degraded: true,
+        cleanup_requested: false,
+    });
+    let receipt = fixture.repository.apply_committed(
+        LogPosition { index: 3, term: 1 },
+        context(52, fixture.administrator, 53, 40, Some(2))?,
+        &command,
+    )?;
+
+    assert_eq!(receipt.entity.kind, EntityKind::StorageTarget);
+    assert_eq!(receipt.entity.id, target_id.as_bytes());
+    assert_eq!(
+        fixture
+            .repository
+            .maintenance_work(work_id)?
+            .ok_or("drain work missing")?
+            .subject,
+        WorkSubject::Drain(DrainScope::Target {
+            target_id,
+            target_generation: 1,
+        })
+    );
+    assert_eq!(
+        fixture
+            .repository
+            .storage_target_provider_context_by_target(target_id)?,
+        None
+    );
+    assert!(
+        fixture
+            .repository
+            .readable_storage_target_provider_context_by_target(target_id)?
+            .is_some()
+    );
+    let stored = fixture.repository.into_database().connection().query_row(
+        "SELECT allow_temporary_degraded, cleanup_requested, state, requested_at
+         FROM storage_target_drains WHERE work_id = ?1",
+        [work_id.as_bytes().as_slice()],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        },
+    )?;
+    assert_eq!(stored, (1, 0, 1, 40));
     Ok(())
 }
 

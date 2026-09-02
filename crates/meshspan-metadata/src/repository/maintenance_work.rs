@@ -13,6 +13,7 @@ use crate::{
     CompleteMaintenanceWork, MaintenanceWorkCompletion, QueueMaintenanceWork, RenewMaintenanceWork,
 };
 
+mod drain;
 mod repair;
 mod scrub;
 mod scrub_schedule;
@@ -20,6 +21,8 @@ mod scrub_schedule;
 pub use repair::ShardRepairEffectRecord;
 pub use scrub::ScrubPassEffectRecord;
 pub use scrub_schedule::{DueStorageScrub, DueStorageScrubCursor, DueStorageScrubPage};
+
+pub(super) use drain::begin_target;
 
 const JOB_QUEUED: i64 = 1;
 const JOB_CLAIMED: i64 = 2;
@@ -36,9 +39,9 @@ const MAXIMUM_READY_PAGE_ITEMS: usize = 1_000;
 // successful work from an unrelated operation receipt.
 const REPAIR_EFFECT_KIND: i64 = 105;
 const SCRUB_EFFECT_KIND: i64 = 106;
-const DRAIN_EFFECT_KIND: i64 = 107;
-const REBALANCE_EFFECT_KIND: i64 = 108;
-const RECONCILE_EFFECT_KIND: i64 = 109;
+const DRAIN_EFFECT_KIND: i64 = 108;
+const REBALANCE_EFFECT_KIND: i64 = 109;
+const RECONCILE_EFFECT_KIND: i64 = 110;
 
 /// Durable lifecycle of one deduplicated maintenance job.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
