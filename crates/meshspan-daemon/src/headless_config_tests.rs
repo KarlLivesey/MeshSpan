@@ -27,6 +27,8 @@ fn complete_configuration_preserves_native_paths_and_typed_join_secret()
         OsString::from("/state/instance"),
         OsString::from("--https-listen"),
         OsString::from("127.0.0.1:9443"),
+        OsString::from("--smb-listen"),
+        OsString::from("127.0.0.1:1445"),
         OsString::from("--claim-output"),
         OsString::from("/run/meshspan/claim"),
         OsString::from("--storage-path"),
@@ -42,6 +44,7 @@ fn complete_configuration_preserves_native_paths_and_typed_join_secret()
         [Path::new("/data/one"), Path::new("/data/two")]
     );
     assert_eq!(config.https_listen(), "127.0.0.1:9443".parse()?);
+    assert_eq!(config.smb_listen(), "127.0.0.1:1445".parse()?);
     assert_eq!(
         config.claim_output(),
         Some(Path::new("/run/meshspan/claim"))
@@ -60,12 +63,15 @@ fn complete_configuration_preserves_native_paths_and_typed_join_secret()
 }
 
 #[test]
-fn defaults_to_a_non_privileged_all_interfaces_https_listener()
--> Result<(), HeadlessDaemonConfigError> {
+fn defaults_to_all_interfaces_public_listeners() -> Result<(), HeadlessDaemonConfigError> {
     let config = parse(["--daemon-state-dir", "/state", "--storage-path", "/data"])?;
     assert_eq!(
         config.https_listen(),
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8_443)
+    );
+    assert_eq!(
+        config.smb_listen(),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 445)
     );
     assert!(config.claim_output().is_none());
     assert!(config.join_grant().is_none());
@@ -93,6 +99,14 @@ fn malformed_duplicate_and_secret_substitution_inputs_fail_closed() {
             "/data",
             "--https-listen",
             "localhost:443",
+        ],
+        vec![
+            "--daemon-state-dir",
+            "/state",
+            "--storage-path",
+            "/data",
+            "--smb-listen",
+            "localhost:445",
         ],
         vec![
             "--daemon-state-dir",
