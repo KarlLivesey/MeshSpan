@@ -174,6 +174,7 @@ fn smb_verifier(
                 scopes,
             },
             &verifier,
+            key.secret_digest(),
         )
         .map(Some)
         .map_err(|_| ApiKeyIssuanceError::Material)

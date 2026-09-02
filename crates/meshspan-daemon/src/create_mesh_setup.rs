@@ -424,6 +424,7 @@ fn initial_smb_verifier_ciphertext(
                 scopes: ALL_INITIAL_LOGIN_SCOPES,
             },
             &verifier,
+            material.api_key.secret_digest(),
         )
         .map_err(|_| CreateMeshSetupError::InitialAuthentication)
 }

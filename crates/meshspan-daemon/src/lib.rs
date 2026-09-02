@@ -439,10 +439,11 @@ pub use setup_api::{
 pub use smb_authentication::{
     ProtectedSmbVerifierKeySource, SmbAuthenticatedIdentity, SmbAuthentication,
     SmbAuthenticationAuthority, SmbAuthenticationAuthorityError, SmbAuthenticationError,
-    SmbAuthenticationService, SmbVerifierKeySource,
+    SmbAuthenticationService, SmbCredentialEvidence, SmbVerifierKeySource,
 };
 pub use smb_verifier_secret::{
-    SmbVerifierBinding, SmbVerifierCipher, SmbVerifierEnvelopeKey, SmbVerifierSecretError,
+    SmbVerifierBinding, SmbVerifierCipher, SmbVerifierEnvelopeKey, SmbVerifierMaterial,
+    SmbVerifierSecretError,
 };
 pub use step_up_session::{
     StepUpCurrentSessionError, StepUpCurrentSessionService, StepUpSessionAuthority,

@@ -112,15 +112,17 @@ fn issued_key_replays_across_gateways_logs_in_and_rejects_changed_input()
         service_scope: 7,
         scopes: 7,
     };
-    let verifier = crate::SmbVerifierCipher::new(
+    let material = crate::SmbVerifierCipher::new(
         crate::SmbVerifierEnvelopeKey::from_parts([22; 32], [23; 32])?,
         1,
     )?
     .decrypt(binding, &issued_material.verifier_ciphertext)?;
     assert_eq!(
-        verifier.expose_for_encryption(),
+        material.verifier().expose_for_encryption(),
         NtlmPasswordVerifier::derive(&first.secret)?.expose_for_encryption()
     );
+    let key = meshspan_domain::ApiKeyBundle::parse(&first.secret)?;
+    assert_eq!(material.credential_digest(), key.secret_digest());
     Ok(())
 }
 
