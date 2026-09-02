@@ -13,9 +13,10 @@ use meshspan_filesystem::{
     CloseHandleOutcome, CloseHandleReceipt, DirectoryPublicationReceipt, FilesystemAccessContext,
     FilesystemFileAdapter, FilesystemHandleCloseReceipt, FilesystemHandleCreateReceipt,
     FilesystemHandleReadReceipt, FilesystemHandleWriteReceipt, HandleLeaseReceipt,
-    HandleWriteAdmissionReceipt, LockRangeReceipt, NamespaceListPage, NamespaceObjectStat,
-    NamespacePublicationReceipt, NamespaceRenameReceipt, NamespaceUnlinkReceipt, OpenHandleReceipt,
-    PublicationDisposition, RangeLockKind, StageWriteOutcome, UnlockRangeReceipt,
+    HandleWriteAdmissionReceipt, LockRangeReceipt, NamespaceComponent, NamespaceListEntry,
+    NamespaceListPage, NamespaceObjectStat, NamespacePublicationReceipt, NamespaceRenameReceipt,
+    NamespaceUnlinkReceipt, OpenHandleReceipt, PublicationDisposition, RangeLockKind,
+    StageWriteOutcome, UnlockRangeReceipt,
 };
 
 use super::{
@@ -23,8 +24,9 @@ use super::{
     SmbTreeBinding,
 };
 use crate::{
-    CloseRequest, CreateDisposition, CreateOptions, CreateRequest, CreateTargetKind, FlushRequest,
-    LockElement, LockKind, LockRequest, ReadRequest, Smb2Command, Smb2Header, SmbRequestedAccess,
+    CloseRequest, CreateDisposition, CreateOptions, CreateRequest, CreateTargetKind,
+    DirectoryInformationClass, FlushRequest, LockElement, LockKind, LockRequest,
+    QueryDirectoryRequest, ReadRequest, Smb2Command, Smb2Header, SmbRequestedAccess,
     SmbShareAccess, WriteRequest,
 };
 
@@ -37,6 +39,9 @@ enum Call {
     Create {
         components: Vec<String>,
         maximum_stage_bytes: Option<u64>,
+    },
+    CreateDirectory {
+        components: Vec<String>,
     },
     Write {
         offset: u64,
@@ -153,15 +158,51 @@ impl FilesystemFileAdapter for TestFilesystem {
         _context: FilesystemAccessContext,
         _request: &AdapterListRequest,
     ) -> Result<NamespaceListPage, Self::Error> {
-        Err(TestError)
+        Ok(NamespaceListPage {
+            namespace_commit_id: namespace_commit()?,
+            directory_object_id: object()?,
+            directory_object_revision_id: object_revision()?,
+            entries: vec![NamespaceListEntry {
+                name: NamespaceComponent::new(
+                    "listed.txt",
+                    meshspan_filesystem::NamespaceLimits::PORTABLE,
+                )
+                .map_err(|_| TestError)?,
+                object_id: ObjectId::from_bytes([21; 16]).map_err(|_| TestError)?,
+                object_revision_id: ObjectRevisionId::from_bytes([22; 16])
+                    .map_err(|_| TestError)?,
+                entry_generation: 1,
+                kind: meshspan_filesystem::DirectoryEntryKind::File,
+                file_version_id: Some(file_version()?),
+                logical_length: Some(17),
+            }],
+            next_cursor: None,
+        })
     }
 
     fn create_directory(
         &mut self,
         _context: FilesystemAccessContext,
-        _request: &AdapterCreateDirectoryRequest,
+        request: &AdapterCreateDirectoryRequest,
     ) -> Result<DirectoryPublicationReceipt, Self::Error> {
-        Err(TestError)
+        self.calls.push(Call::CreateDirectory {
+            components: request
+                .path
+                .components()
+                .iter()
+                .map(|component| component.display().to_owned())
+                .collect(),
+        });
+        Ok(DirectoryPublicationReceipt {
+            disposition: PublicationDisposition::Applied,
+            operation_id: request.operation_id,
+            request_digest: [16; 32],
+            directory_object_id: object()?,
+            directory_object_revision_id: object_revision()?,
+            namespace_commit_id: namespace_commit()?,
+            head_sequence: 1,
+            result_digest: [17; 32],
+        })
     }
 
     fn create_file(
@@ -297,7 +338,7 @@ fn file_commands_use_one_authorised_copy_on_write_lifecycle()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut adapter = adapter(64)?;
     let create = create_request(11, vec!["report.txt".to_owned()]);
-    let opened = adapter.create_file(context()?, &create)?;
+    let opened = adapter.create(context()?, &create)?;
     assert_eq!(&opened.response.packet[112..120], &12_u64.to_le_bytes());
 
     let write = WriteRequest {
@@ -373,12 +414,12 @@ fn identity_and_size_fail_before_common_filesystem_dispatch()
     let mut create = create_request(21, vec!["small.txt".to_owned()]);
     create.header.tree_id = 99;
     assert!(matches!(
-        adapter.create_file(context()?, &create),
+        adapter.create(context()?, &create),
         Err(SmbFilesystemAdapterError::InvalidIdentity)
     ));
 
     create.header.tree_id = 23;
-    let opened = adapter.create_file(context()?, &create)?;
+    let opened = adapter.create(context()?, &create)?;
     let oversized = WriteRequest {
         header: header(Smb2Command::Write, 22),
         file_id: opened.file_id,
@@ -398,7 +439,7 @@ fn identity_and_size_fail_before_common_filesystem_dispatch()
 #[test]
 fn exact_range_lock_is_retained_for_a_later_unlock() -> Result<(), Box<dyn std::error::Error>> {
     let mut adapter = adapter(64)?;
-    let opened = adapter.create_file(
+    let opened = adapter.create(
         context()?,
         &create_request(30, vec!["locked.txt".to_owned()]),
     )?;
@@ -442,6 +483,52 @@ fn exact_range_lock_is_retained_for_a_later_unlock() -> Result<(), Box<dyn std::
         return Err(Box::new(TestError));
     };
     assert_ne!(*lock_id, LockId::from_bytes([16; 16])?);
+    Ok(())
+}
+
+#[test]
+fn directory_create_enumerate_and_close_use_the_logical_namespace()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut adapter = adapter(64)?;
+    let mut create = create_request(40, vec!["documents".to_owned()]);
+    create.disposition = CreateDisposition::CreateNew;
+    create.desired_access.write_data = false;
+    create.file_attributes = 0x0000_0010;
+    create.options.target_kind = CreateTargetKind::Directory;
+    let opened = adapter.create(context()?, &create)?;
+
+    let response = adapter.query_directory(
+        context()?,
+        &QueryDirectoryRequest {
+            header: header(Smb2Command::QueryDirectory, 41),
+            information_class: DirectoryInformationClass::Names,
+            restart_scan: true,
+            return_single_entry: false,
+            reopen: false,
+            file_id: opened.file_id,
+            search_pattern: Some("*".to_owned()),
+            output_buffer_length: 4_096,
+        },
+    )?;
+    let expected_name = "listed.txt"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    assert_eq!(&response.packet[84..], expected_name);
+    adapter.close_file(
+        context()?,
+        CloseRequest {
+            header: header(Smb2Command::Close, 42),
+            file_id: opened.file_id,
+            postquery_attributes: true,
+        },
+    )?;
+    assert_eq!(
+        adapter.into_inner().calls,
+        vec![Call::CreateDirectory {
+            components: vec!["shared".to_owned(), "documents".to_owned()]
+        }]
+    );
     Ok(())
 }
 

@@ -18,6 +18,7 @@ mod negotiate;
 mod negotiate_response;
 mod ntlm_v2;
 mod ntlm_wire;
+mod query_directory;
 mod session_keys;
 mod session_setup;
 mod signing;
@@ -54,6 +55,10 @@ pub use negotiate_response::{
 pub use ntlm_v2::{NtlmPasswordVerifier, NtlmSessionBaseKey, NtlmVerificationError};
 pub use ntlm_wire::{
     NtlmAuthenticate, NtlmChallenge, NtlmChallengeConfig, NtlmNegotiate, NtlmWireError,
+};
+pub use query_directory::{
+    DirectoryInformationClass, DirectoryResponseEntry, QueryDirectoryRequest,
+    QueryDirectoryResponse, SmbQueryDirectoryError,
 };
 pub use session_keys::{Smb311PreauthHash, Smb311SessionKeys, SmbSessionKeyError};
 pub use session_setup::{

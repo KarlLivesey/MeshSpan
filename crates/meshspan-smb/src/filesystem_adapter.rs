@@ -5,19 +5,24 @@
 use std::collections::BTreeMap;
 
 use meshspan_contracts::BoundedBytes;
-use meshspan_domain::{DurationMicros, HandleId, LockId, OperationId, UnixMicros, VolumeId};
+use meshspan_domain::{
+    DurationMicros, HandleId, LockId, ObjectId, OperationId, UnixMicros, VolumeId,
+};
 use meshspan_filesystem::{
-    AdapterCloseFileRequest, AdapterCreateFileRequest, AdapterFlushFileRequest, AdapterLockRequest,
-    AdapterReadFileRequest, AdapterUnlockRequest, AdapterWriteFileRequest, ByteRange,
-    CreateDisposition as FilesystemDisposition, FilesystemAccessContext, FilesystemFileAdapter,
-    HandleAccess, HandleShare, NamespaceLimits, NamespacePath, RangeLockKind,
+    AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
+    AdapterFlushFileRequest, AdapterListRequest, AdapterLockRequest, AdapterReadFileRequest,
+    AdapterStatRequest, AdapterUnlockRequest, AdapterWriteFileRequest, ByteRange,
+    CreateDisposition as FilesystemDisposition, DirectoryEntryKind, DirectoryListCursor,
+    FilesystemAccessContext, FilesystemFileAdapter, HandleAccess, HandleShare, NamespaceLimits,
+    NamespacePath, RangeLockKind,
 };
 use sha2::{Digest, Sha256};
 
 use crate::{
     CloseRequest, CloseResponse, CloseResponseAttributes, CreateAction, CreateDisposition,
-    CreateRequest, CreateResponse, CreateResponseValues, CreateTargetKind, FlushRequest, LockKind,
-    LockRequest, LockResponse, ReadRequest, ReadResponse, SmbFileId, WriteRequest, WriteResponse,
+    CreateRequest, CreateResponse, CreateResponseValues, CreateTargetKind, DirectoryResponseEntry,
+    FlushRequest, LockKind, LockRequest, LockResponse, QueryDirectoryRequest,
+    QueryDirectoryResponse, ReadRequest, ReadResponse, SmbFileId, WriteRequest, WriteResponse,
 };
 
 const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
@@ -112,6 +117,7 @@ pub struct SmbFilesystemAdapter<F> {
     tree: SmbTreeBinding,
     limits: SmbFilesystemLimits,
     handles: BTreeMap<SmbFileId, OpenFile>,
+    directories: BTreeMap<SmbFileId, OpenDirectory>,
     locks: BTreeMap<(SmbFileId, u64, u64), LockId>,
 }
 
@@ -123,6 +129,12 @@ struct OpenFile {
     logical_length: u64,
     lease_expires_at: UnixMicros,
     dirty: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OpenDirectory {
+    path: Option<NamespacePath>,
+    cursor: Option<DirectoryListCursor>,
 }
 
 impl<F> SmbFilesystemAdapter<F>
@@ -137,6 +149,7 @@ where
             tree,
             limits,
             handles: BTreeMap::new(),
+            directories: BTreeMap::new(),
             locks: BTreeMap::new(),
         }
     }
@@ -153,7 +166,7 @@ where
     ///
     /// Rejects mismatched tree identities, directory/root opens, unsafe paths, invalid bounds or
     /// any common authority/filesystem failure.
-    pub fn create_file(
+    pub fn create(
         &mut self,
         context: FilesystemAccessContext,
         request: &CreateRequest,
@@ -162,7 +175,7 @@ where
         if request.path_components.is_empty()
             || request.options.target_kind == CreateTargetKind::Directory
         {
-            return Err(SmbFilesystemAdapterError::UnsupportedTarget);
+            return self.create_directory(context, request);
         }
         let path = self.path(&request.path_components)?;
         let file_id = derive_file_id(
@@ -254,6 +267,70 @@ where
             },
         );
         Ok(SmbCreateOutcome { response, file_id })
+    }
+
+    /// Enumerates one immutable bounded directory page through the shared namespace service.
+    ///
+    /// # Errors
+    ///
+    /// Rejects mismatched or unknown directory identities, unsupported search patterns, common
+    /// authority/filesystem failures, empty terminal pages and unrepresentable responses.
+    pub fn query_directory(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &QueryDirectoryRequest,
+    ) -> Result<QueryDirectoryResponse, SmbFilesystemAdapterError<F::Error>> {
+        self.validate_header(request.header.session_id, request.header.tree_id)?;
+        if !matches!(request.search_pattern.as_deref(), None | Some("*" | "*.*")) {
+            return Err(SmbFilesystemAdapterError::UnsupportedSearchPattern);
+        }
+        let directory = self
+            .directories
+            .get(&request.file_id)
+            .ok_or(SmbFilesystemAdapterError::UnknownDirectory)?;
+        let cursor = if request.restart_scan || request.reopen {
+            None
+        } else {
+            directory.cursor.clone()
+        };
+        let page = self
+            .filesystem
+            .list(
+                context,
+                &AdapterListRequest {
+                    volume_id: self.tree.volume_id,
+                    directory_path: directory.path.clone(),
+                    cursor,
+                    maximum_results: directory_page_bound(request, self.tree.namespace_limits)?,
+                    observed_at: context.now,
+                },
+            )
+            .map_err(SmbFilesystemAdapterError::Filesystem)?;
+        if page.entries.is_empty() {
+            return Err(SmbFilesystemAdapterError::NoMoreFiles);
+        }
+        let observed_filetime = unix_micros_to_filetime(context.now)?;
+        let entries = page
+            .entries
+            .iter()
+            .map(|entry| DirectoryResponseEntry {
+                name: entry.name.display().to_owned(),
+                file_id: object_file_id(entry.object_id),
+                is_directory: entry.kind == DirectoryEntryKind::Directory,
+                logical_length: entry.logical_length.unwrap_or(0),
+                creation_time: observed_filetime,
+                last_access_time: observed_filetime,
+                last_write_time: observed_filetime,
+                change_time: observed_filetime,
+            })
+            .collect::<Vec<_>>();
+        let response = QueryDirectoryResponse::encode(request, &entries)
+            .map_err(|_| SmbFilesystemAdapterError::InvalidResponse)?;
+        self.directories
+            .get_mut(&request.file_id)
+            .ok_or(SmbFilesystemAdapterError::UnknownDirectory)?
+            .cursor = page.next_cursor;
+        Ok(response)
     }
 
     /// Reads one verified bounded range from an exact live SMB open.
@@ -451,6 +528,20 @@ where
         request: CloseRequest,
     ) -> Result<CloseResponse, SmbFilesystemAdapterError<F::Error>> {
         self.validate_header(request.header.session_id, request.header.tree_id)?;
+        if self.directories.remove(&request.file_id).is_some() {
+            return Ok(CloseResponse::encode(
+                request,
+                Some(CloseResponseAttributes {
+                    creation_time: 0,
+                    last_access_time: 0,
+                    last_write_time: 0,
+                    change_time: 0,
+                    allocation_size: 0,
+                    end_of_file: 0,
+                    file_attributes: 0x0000_0010,
+                }),
+            ));
+        }
         let open = *self.open(request.file_id)?;
         let flush = if open.dirty {
             Some(AdapterFlushFileRequest {
@@ -495,6 +586,90 @@ where
         ))
     }
 
+    fn create_directory(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &CreateRequest,
+    ) -> Result<SmbCreateOutcome, SmbFilesystemAdapterError<F::Error>> {
+        if request.options.delete_on_close
+            || request.desired_access.write_data
+            || matches!(
+                request.disposition,
+                CreateDisposition::OverwriteExisting | CreateDisposition::OverwriteOrCreate
+            )
+        {
+            return Err(SmbFilesystemAdapterError::UnsupportedTarget);
+        }
+        let path = self.optional_path(&request.path_components)?;
+        let action = match request.disposition {
+            CreateDisposition::OpenExisting => {
+                if let Some(path) = &path {
+                    let stat = self
+                        .filesystem
+                        .stat(
+                            context,
+                            &AdapterStatRequest {
+                                volume_id: self.tree.volume_id,
+                                path: path.clone(),
+                                observed_at: context.now,
+                            },
+                        )
+                        .map_err(SmbFilesystemAdapterError::Filesystem)?;
+                    if stat.kind != DirectoryEntryKind::Directory {
+                        return Err(SmbFilesystemAdapterError::UnsupportedTarget);
+                    }
+                }
+                CreateAction::Opened
+            }
+            CreateDisposition::CreateNew => {
+                let path = path.clone().ok_or(SmbFilesystemAdapterError::InvalidPath)?;
+                self.filesystem
+                    .create_directory(
+                        context,
+                        &AdapterCreateDirectoryRequest {
+                            operation_id: operation_id(request.header, b"create-directory")?,
+                            volume_id: self.tree.volume_id,
+                            path,
+                            observed_at: context.now,
+                        },
+                    )
+                    .map_err(SmbFilesystemAdapterError::Filesystem)?;
+                CreateAction::Created
+            }
+            CreateDisposition::OpenOrCreate
+            | CreateDisposition::OverwriteExisting
+            | CreateDisposition::OverwriteOrCreate => {
+                return Err(SmbFilesystemAdapterError::UnsupportedDisposition);
+            }
+        };
+        let file_id = derive_file_id(
+            request.header.session_id,
+            request.header.tree_id,
+            request.header.message_id,
+        )?;
+        if self.handles.contains_key(&file_id) || self.directories.contains_key(&file_id) {
+            return Err(SmbFilesystemAdapterError::DuplicateFileIdentity);
+        }
+        let response = CreateResponse::encode(
+            request,
+            CreateResponseValues {
+                action,
+                creation_time: unix_micros_to_filetime(context.now)?,
+                last_access_time: unix_micros_to_filetime(context.now)?,
+                last_write_time: unix_micros_to_filetime(context.now)?,
+                change_time: unix_micros_to_filetime(context.now)?,
+                allocation_size: 0,
+                end_of_file: 0,
+                file_attributes: 0x0000_0010,
+                file_id,
+            },
+        )
+        .map_err(|_| SmbFilesystemAdapterError::InvalidResponse)?;
+        self.directories
+            .insert(file_id, OpenDirectory { path, cursor: None });
+        Ok(SmbCreateOutcome { response, file_id })
+    }
+
     fn flush_open(
         &mut self,
         context: FilesystemAccessContext,
@@ -536,6 +711,17 @@ where
             .map_err(|_| SmbFilesystemAdapterError::InvalidPath)
     }
 
+    fn optional_path(
+        &self,
+        request_components: &[String],
+    ) -> Result<Option<NamespacePath>, SmbFilesystemAdapterError<F::Error>> {
+        if self.tree.root_components.is_empty() && request_components.is_empty() {
+            Ok(None)
+        } else {
+            self.path(request_components).map(Some)
+        }
+    }
+
     fn validate_header(
         &self,
         session_id: u64,
@@ -572,6 +758,37 @@ fn map_disposition(disposition: CreateDisposition) -> FilesystemDisposition {
         CreateDisposition::OverwriteExisting => FilesystemDisposition::OverwriteExisting,
         CreateDisposition::OverwriteOrCreate => FilesystemDisposition::OverwriteOrCreate,
     }
+}
+
+fn directory_page_bound<E>(
+    request: &QueryDirectoryRequest,
+    limits: NamespaceLimits,
+) -> Result<u16, SmbFilesystemAdapterError<E>> {
+    let maximum_name_bytes = limits
+        .maximum_component_bytes()
+        .checked_mul(2)
+        .ok_or(SmbFilesystemAdapterError::LimitExceeded)?;
+    let maximum_entry_bytes = 104_usize
+        .checked_add(maximum_name_bytes)
+        .and_then(|length| length.checked_add(7))
+        .map(|length| length & !7)
+        .ok_or(SmbFilesystemAdapterError::LimitExceeded)?;
+    let output_bytes = usize::try_from(request.output_buffer_length)
+        .map_err(|_| SmbFilesystemAdapterError::LimitExceeded)?;
+    let by_size = output_bytes.checked_div(maximum_entry_bytes).unwrap_or(0);
+    let selected = if request.return_single_entry {
+        1
+    } else {
+        by_size.clamp(1, 1_024)
+    };
+    u16::try_from(selected).map_err(|_| SmbFilesystemAdapterError::LimitExceeded)
+}
+
+fn object_file_id(object_id: ObjectId) -> u64 {
+    let bytes = object_id.as_bytes();
+    u64::from_le_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ])
 }
 
 fn derive_file_id<E>(
@@ -690,6 +907,12 @@ pub enum SmbFilesystemAdapterError<E> {
     /// This initial mapping accepts regular-file targets only.
     #[error("SMB target kind is not supported by this mapping")]
     UnsupportedTarget,
+    /// The requested create disposition cannot be made atomic by this directory profile.
+    #[error("SMB directory create disposition is unsupported")]
+    UnsupportedDisposition,
+    /// The requested wildcard profile is not implemented by the bounded namespace adapter.
+    #[error("SMB directory search pattern is unsupported")]
+    UnsupportedSearchPattern,
     /// The requested access cannot form a common handle contract.
     #[error("SMB requested access is invalid")]
     InvalidAccess,
@@ -711,6 +934,12 @@ pub enum SmbFilesystemAdapterError<E> {
     /// The connection-visible file identity is absent or already closed.
     #[error("SMB file identity is not live")]
     UnknownFile,
+    /// The connection-visible directory identity is absent or already closed.
+    #[error("SMB directory identity is not live")]
+    UnknownDirectory,
+    /// Directory enumeration reached the end of its current immutable view.
+    #[error("SMB directory enumeration has no more files")]
+    NoMoreFiles,
     /// Authoritative time or a derived deadline is not representable.
     #[error("SMB filesystem time is invalid")]
     InvalidTime,
