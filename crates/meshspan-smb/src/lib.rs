@@ -7,6 +7,8 @@
 //! authentication and filesystem interfaces.
 
 mod direct_tcp;
+mod file_id;
+mod file_io;
 mod header;
 mod negotiate;
 mod negotiate_response;
@@ -23,6 +25,8 @@ mod tree_connect;
 pub use direct_tcp::{
     DirectTcpFrame, DirectTcpFrameError, DirectTcpFrameHeader, encode_direct_tcp_header,
 };
+pub use file_id::SmbFileId;
+pub use file_io::{ReadRequest, ReadResponse, SmbFileIoError, WriteRequest, WriteResponse};
 pub use header::{Smb2Command, Smb2Header, Smb2HeaderError};
 pub use negotiate::{
     NegotiateContext, NegotiateContextType, NegotiateRequest, NegotiateRequestError,
