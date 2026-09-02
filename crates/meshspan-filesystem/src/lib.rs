@@ -70,7 +70,7 @@ pub use content_catalog::{
     CommittedContentLayoutTransfer, CommittedProtectedStripe, CommittedShardInventory,
     CommittedShardPage, ContentCatalogError, DurableContentCatalog, PendingContentChunkPage,
     PendingProtectedShardPage, PreparedContentChunk, PreparedContentLayout, PreparedProtectedShard,
-    PreparedProtectedStripe, ProtectedShardCursor,
+    PreparedProtectedStripe, ProtectedShardCursor, ShardRepairTransition,
 };
 pub use content_crypto::{
     ContentChunkCipher, ContentChunkLimits, ContentCryptoError, ContentEncryptionKey,

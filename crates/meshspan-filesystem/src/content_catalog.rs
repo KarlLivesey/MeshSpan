@@ -20,7 +20,7 @@ mod transfer;
 
 pub use protection::{
     CommittedProtectedStripe, PendingProtectedShardPage, PreparedProtectedShard,
-    PreparedProtectedStripe, ProtectedShardCursor,
+    PreparedProtectedStripe, ProtectedShardCursor, ShardRepairTransition,
 };
 pub use transfer::CommittedContentLayoutTransfer;
 

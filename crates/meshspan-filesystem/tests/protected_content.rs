@@ -24,7 +24,8 @@ use meshspan_filesystem::{
     ContentReadRequest, ContentShardRouter, ContentStrongFallback, DurableContentPublisher,
     DurableContentReader, ProtectedContentAccess, ProtectedContentPublisher,
     ProtectedShardRepairer, ProtectionConfiguration, ProtectionPolicySource,
-    PublishedContentReference, ShardRepairRequest, VolumeContentKeyring, VolumeKeyEncryptionKey,
+    PublishedContentReference, ShardRepairRequest, ShardRepairTransition, VolumeContentKeyring,
+    VolumeKeyEncryptionKey,
 };
 use meshspan_placement::FaultAwarePlacement;
 use meshspan_storage::{
@@ -115,6 +116,7 @@ fn real_folders_reconstruct_exact_shards_and_reuse_the_repaired_copy()
     let state = root.path().join("repair-filesystem-state");
     let volume_id = VolumeId::from_bytes([61; 16])?;
     let request = publication_request(volume_id, 62)?;
+    let protection = fixture.protection.clone();
     let mut publisher = protected_publisher(
         &state,
         fixture.router,
@@ -146,7 +148,34 @@ fn real_folders_reconstruct_exact_shards_and_reuse_the_repaired_copy()
     assert_eq!(first_replacement.length, first_source.length);
     assert_eq!(first_replacement.digest, first_source.digest);
 
+    let transition = ShardRepairTransition {
+        effect_operation_id: OperationId::from_bytes([72; 16])?,
+        source_layout_generation: 1,
+        replacement_layout_generation: 2,
+        source_receipt: first_source,
+        replacement_receipt: first_replacement,
+        committed_revision: Revision::new(2),
+    };
+    publisher.install_shard_repair(content, &transition)?;
+    publisher.install_shard_repair(content, &transition)?;
+    fixture.control.set_offline(original[2].target_id)?;
+    fixture.control.set_offline(original[3].target_id)?;
+    assert_exact_read(&mut publisher, content, &fixture_bytes(), 73)?;
+    let publisher_router = publisher.into_router();
+    let mut publisher =
+        protected_publisher(&state, publisher_router, volume_id, protection, mesh_id, 63)?;
+    assert_exact_read(&mut publisher, content, &fixture_bytes(), 74)?;
+    let mut obsolete_transition = transition;
+    obsolete_transition.effect_operation_id = OperationId::from_bytes([75; 16])?;
+    assert!(
+        publisher
+            .install_shard_repair(content, &obsolete_transition)
+            .is_err()
+    );
+
     let second_source = original[2];
+    fixture.control.set_all_online()?;
+    fixture.control.set_offline(first_source.target_id)?;
     fixture.control.set_offline(second_source.target_id)?;
     let repaired_routes = CommittedProtectedStripe {
         stripe: committed.stripe,

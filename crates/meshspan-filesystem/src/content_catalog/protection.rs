@@ -23,6 +23,10 @@ use crate::{
     ContentAcknowledgementPolicy, ContentStrongFallback,
 };
 
+mod repair;
+
+pub use repair::ShardRepairTransition;
+
 const LAYOUT_DOMAIN: &[u8] = b"meshspan.content.protected-stripe-layout.v1\0";
 const MAXIMUM_POLICY_BYTES: usize = 4_096;
 const MAXIMUM_STRIPE_SHARDS: usize = 24;
@@ -361,6 +365,27 @@ impl DurableContentCatalog {
         )
     }
 
+    /// Installs one already-authoritative shard-location transition into the local read route.
+    ///
+    /// The immutable manifest and coding layout are never changed. Exact replay is a no-op;
+    /// stale, skipped or substituted location generations fail closed.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown content, non-protected layouts, incomplete source shards, broken
+    /// generation continuity and any receipt which changes the immutable shard bytes.
+    pub fn install_shard_repair(
+        &mut self,
+        content: crate::PublishedContentReference,
+        transition: &ShardRepairTransition,
+    ) -> Result<(), ContentCatalogError> {
+        let committed = self.committed_layout(content)?;
+        if committed.request.format_version != 2 {
+            return Err(ContentCatalogError::InvalidInput);
+        }
+        repair::install(&mut self.connection, committed.request, content, transition)
+    }
+
     /// Loads one committed protected stripe and reconstitutes its exact recorded receipts.
     ///
     /// # Errors
@@ -372,10 +397,19 @@ impl DurableContentCatalog {
         chunk_index: u64,
     ) -> Result<CommittedProtectedStripe, ContentCatalogError> {
         let committed = self.committed_layout(content)?;
-        if committed.request.format_version != 2 {
+        self.active_protected_stripe(committed.request, content, chunk_index)
+    }
+
+    pub(crate) fn active_protected_stripe(
+        &self,
+        request: ContentPublicationRequest,
+        content: crate::PublishedContentReference,
+        chunk_index: u64,
+    ) -> Result<CommittedProtectedStripe, ContentCatalogError> {
+        if request.format_version != 2 || request.operation_id != content.publication_operation_id {
             return Err(ContentCatalogError::InvalidInput);
         }
-        let stripe = load_protected_stripe(&self.connection, committed.request, chunk_index)?;
+        let stripe = load_protected_stripe(&self.connection, request, chunk_index)?;
         let mut statement = self.connection.prepare(
             "SELECT shard_index FROM content_stripe_shards
              WHERE operation_id = ?1 AND chunk_index = ?2 AND receipt_recorded_at IS NOT NULL
@@ -384,7 +418,7 @@ impl DurableContentCatalog {
         let indices = statement
             .query_map(
                 params![
-                    committed.request.operation_id.as_bytes().as_slice(),
+                    request.operation_id.as_bytes().as_slice(),
                     to_i64(chunk_index)?,
                     i64::try_from(MAXIMUM_STRIPE_SHARDS + 1)
                         .map_err(|_| ContentCatalogError::Corrupt)?,
@@ -403,7 +437,7 @@ impl DurableContentCatalog {
                     .copied()
                     .filter(|shard| shard.shard_index == index)
                     .ok_or(ContentCatalogError::Corrupt)?;
-                Ok::<ShardReceipt, ContentCatalogError>(ShardReceipt {
+                let original = ShardReceipt {
                     operation_id: shard.provider_operation_id,
                     shard: meshspan_contracts::ShardIdentity {
                         manifest_digest: content.manifest.root_digest,
@@ -415,7 +449,8 @@ impl DurableContentCatalog {
                     digest: shard.expected_digest,
                     target_id: shard.target_id,
                     target_generation: shard.target_generation,
-                })
+                };
+                repair::current_receipt(&self.connection, request.operation_id, original)
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(CommittedProtectedStripe {

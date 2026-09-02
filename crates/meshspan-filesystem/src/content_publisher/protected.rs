@@ -367,6 +367,21 @@ where
         &self.catalog
     }
 
+    /// Installs one committed authoritative repair into subsequent protected reads.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown content, stale location generations and substituted shard receipts.
+    pub fn install_shard_repair(
+        &mut self,
+        content: crate::PublishedContentReference,
+        transition: &crate::ShardRepairTransition,
+    ) -> Result<(), ContentPublicationError> {
+        self.catalog
+            .install_shard_repair(content, transition)
+            .map_err(map_catalog)
+    }
+
     /// Returns the owned routed storage implementation.
     #[must_use]
     pub fn into_router(self) -> Router {
@@ -825,9 +840,9 @@ where
         for chunk_index in first_chunk..last_chunk {
             let stripe = self
                 .catalog
-                .protected_stripe(committed.request, chunk_index)
+                .active_protected_stripe(committed.request, request.content, chunk_index)
                 .map_err(map_catalog_read)?;
-            let encrypted = self.reconstruct_stripe(request, committed.layout.manifest, &stripe)?;
+            let encrypted = self.reconstruct_stripe(request, &stripe)?;
             let plaintext = cipher
                 .decrypt(
                     committed.layout.manifest.manifest_id,
@@ -842,7 +857,7 @@ where
             let start = usize::try_from(request.offset.max(chunk_start) - chunk_start)
                 .map_err(|_| ContentReadError::Corrupt)?;
             let stop = usize::try_from(
-                end.min(chunk_start + stripe.chunk().plaintext_length) - chunk_start,
+                end.min(chunk_start + stripe.stripe.chunk().plaintext_length) - chunk_start,
             )
             .map_err(|_| ContentReadError::Corrupt)?;
             destination.write_all(&plaintext.as_slice()[start..stop])?;
@@ -860,9 +875,9 @@ where
     fn reconstruct_stripe(
         &self,
         read: ContentReadRequest,
-        manifest: ManifestPublication,
-        stripe: &PreparedProtectedStripe,
+        committed: &crate::CommittedProtectedStripe,
     ) -> Result<EncryptedContentChunk, ContentReadError> {
+        let stripe = &committed.stripe;
         let chunk = stripe.chunk();
         let mut available = std::iter::repeat_with(|| None)
             .take(stripe.shards().len())
@@ -872,23 +887,23 @@ where
             .iter()
             .map(|shard| shard.expected_digest)
             .collect::<Vec<_>>();
-        let mut read_order = (0..stripe.shards().len()).collect::<Vec<_>>();
+        let mut read_order = (0..committed.receipts.len()).collect::<Vec<_>>();
         read_order.sort_by_key(|index| {
-            let shard = stripe.shards()[*index];
+            let receipt = committed.receipts.as_slice()[*index];
             self.router
-                .read_priority(shard.target_id, shard.target_generation)
+                .read_priority(receipt.target_id, receipt.target_generation)
         });
         let mut valid = 0_usize;
         for index in read_order {
             if valid >= usize::from(stripe.coding_layout().data_slices()) {
                 break;
             }
-            let bytes =
-                self.read_shard(read, manifest, chunk.chunk_index, stripe.shards()[index])?;
+            let receipt = committed.receipts.as_slice()[index];
+            let bytes = self.read_shard(read, receipt)?;
             if bytes.is_some() {
                 valid += 1;
             }
-            available[index] = bytes;
+            available[usize::from(receipt.shard.shard_index)] = bytes;
         }
         if valid < usize::from(stripe.coding_layout().data_slices()) {
             return Err(ContentReadError::Unavailable);
@@ -922,12 +937,13 @@ where
     fn read_shard(
         &self,
         read: ContentReadRequest,
-        manifest: ManifestPublication,
-        chunk_index: u64,
-        shard: PreparedProtectedShard,
+        receipt: ShardReceipt,
     ) -> Result<Option<BoundedBytes>, ContentReadError> {
-        let operation_id =
-            protected_read_operation_id(read.operation_id, chunk_index, shard.shard_index)?;
+        let operation_id = protected_read_operation_id(
+            read.operation_id,
+            receipt.shard.stripe_index,
+            receipt.shard.shard_index,
+        )?;
         let context = RequestContext {
             contract_version: ContractVersion::V1_0,
             operation_id,
@@ -937,14 +953,9 @@ where
         let mut permit = ShardReadPermit {
             operation_id,
             mesh_id: self.access.mesh_id,
-            target_id: shard.target_id,
-            target_generation: shard.target_generation,
-            shard: ShardIdentity {
-                manifest_digest: manifest.root_digest,
-                stripe_index: chunk_index,
-                shard_index: shard.shard_index,
-                generation: shard.shard_generation,
-            },
+            target_id: receipt.target_id,
+            target_generation: receipt.target_generation,
+            shard: receipt.shard,
             authorization_revision: read.authorization_revision,
             expires_at: read.deadline,
             permit_digest: [0; 32],
@@ -952,8 +963,8 @@ where
         permit.permit_digest = read_permit_mac(&self.access.read_permit_key, permit);
         match self.router.get_exact(context, permit, read.observed_at) {
             Ok(bytes)
-                if u64::try_from(bytes.len()).ok() == Some(shard.expected_length)
-                    && blake3::hash(bytes.as_slice()).as_bytes() == &shard.expected_digest =>
+                if u64::try_from(bytes.len()).ok() == Some(receipt.length)
+                    && blake3::hash(bytes.as_slice()).as_bytes() == &receipt.digest =>
             {
                 Ok(Some(bytes))
             }
