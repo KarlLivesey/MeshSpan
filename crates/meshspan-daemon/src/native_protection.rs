@@ -7,21 +7,49 @@ use std::collections::BTreeSet;
 use meshspan_contracts::{PlacementCandidate, ShardAcknowledgement};
 use meshspan_domain::{
     FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId, FaultGroupMember, HostId,
-    TargetId, Topology, uuid_v8,
+    TargetId, Topology, VolumeId, machine_fault_class_id, storage_device_fault_class_id, uuid_v8,
 };
-use meshspan_filesystem::{ContentPublicationError, ProtectionConfiguration};
+use meshspan_filesystem::{
+    ContentPublicationError, ProtectionConfiguration, ProtectionPolicySource,
+};
 use meshspan_metadata::{
     AuthoritativeRepository, PageLimit, StorageTargetProviderContext, StorageUsageLimit,
 };
 
-use crate::NativeStorageTarget;
-
 const PAGE_ITEMS: usize = 1_000;
 const PERCENT_CAPACITY_PLANNING_CEILING: u64 = 1_u64 << 50;
 
-pub(crate) fn protection_configuration(
+/// Live authoritative protection resolver used once for each new content publication.
+pub(crate) struct NativeProtectionPolicySource {
+    authority: AuthoritativeRepository,
+    local_targets: Vec<StorageTargetProviderContext>,
+}
+
+impl NativeProtectionPolicySource {
+    pub(crate) fn new(
+        authority: AuthoritativeRepository,
+        local_targets: Vec<StorageTargetProviderContext>,
+    ) -> Self {
+        Self {
+            authority,
+            local_targets,
+        }
+    }
+}
+
+impl ProtectionPolicySource for NativeProtectionPolicySource {
+    fn configuration(
+        &self,
+        volume_id: VolumeId,
+    ) -> Result<ProtectionConfiguration, ContentPublicationError> {
+        protection_configuration(&self.authority, &self.local_targets, volume_id)
+    }
+}
+
+fn protection_configuration(
     authority: &AuthoritativeRepository,
-    local_targets: &[NativeStorageTarget],
+    local_targets: &[StorageTargetProviderContext],
+    volume_id: VolumeId,
 ) -> Result<ProtectionConfiguration, ContentPublicationError> {
     if local_targets.is_empty() {
         return Err(ContentPublicationError::Unavailable);
@@ -33,13 +61,13 @@ pub(crate) fn protection_configuration(
     if !local_targets.iter().all(|local| {
         targets
             .iter()
-            .any(|(context, _)| same_target_generation(*context, local.context()))
+            .any(|(context, _)| same_target_generation(*context, *local))
     }) {
         return Err(ContentPublicationError::Unavailable);
     }
     let mut topology = Topology::default();
-    let machine_class = derived_class(b"meshspan.fault-class.machine.v1\0")?;
-    let device_class = derived_class(b"meshspan.fault-class.storage-device.v1\0")?;
+    let machine_class = machine_fault_class_id();
+    let device_class = storage_device_fault_class_id();
     let mut registered_hosts = BTreeSet::new();
     for (context, host) in &targets {
         register_builtin_topology(
@@ -52,18 +80,13 @@ pub(crate) fn protection_configuration(
         )?;
     }
     register_administrator_fault_groups(authority, &mut topology, &registered_hosts)?;
-    let scenarios = vec![
-        FailureScenario::new(vec![FailureTerm {
-            class_id: machine_class,
-            failure_count: 1,
-        }])
-        .map_err(|_| ContentPublicationError::InvalidInput)?,
-        FailureScenario::new(vec![FailureTerm {
-            class_id: device_class,
-            failure_count: 1,
-        }])
-        .map_err(|_| ContentPublicationError::InvalidInput)?,
-    ];
+    let scenarios = authority
+        .volume_protection_policy(volume_id)
+        .map_err(|_| ContentPublicationError::Unavailable)?
+        .map_or_else(
+            || default_scenarios(machine_class, device_class),
+            |policy| Ok(policy.scenarios),
+        )?;
     let candidates = targets
         .iter()
         .map(|(context, _)| PlacementCandidate {
@@ -75,6 +98,22 @@ pub(crate) fn protection_configuration(
         })
         .collect();
     ProtectionConfiguration::from_untrusted(topology, revision, revision, scenarios, candidates)
+}
+
+fn default_scenarios(
+    machine_class: FaultGroupClassId,
+    device_class: FaultGroupClassId,
+) -> Result<Vec<FailureScenario>, ContentPublicationError> {
+    [machine_class, device_class]
+        .into_iter()
+        .map(|class_id| {
+            FailureScenario::new(vec![FailureTerm {
+                class_id,
+                failure_count: 1,
+            }])
+            .map_err(|_| ContentPublicationError::InvalidInput)
+        })
+        .collect()
 }
 
 fn same_target_generation(
@@ -202,11 +241,6 @@ const fn planning_ceiling(limit: StorageUsageLimit) -> u64 {
         StorageUsageLimit::Bytes(bytes) => bytes,
         StorageUsageLimit::Percent(_) => PERCENT_CAPACITY_PLANNING_CEILING,
     }
-}
-
-fn derived_class(domain: &[u8]) -> Result<FaultGroupClassId, ContentPublicationError> {
-    FaultGroupClassId::from_bytes(derived_identifier(domain, &[]))
-        .map_err(|_| ContentPublicationError::InvalidInput)
 }
 
 fn derived_group(domain: &[u8], input: [u8; 16]) -> Result<FaultGroupId, ContentPublicationError> {

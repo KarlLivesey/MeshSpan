@@ -11,12 +11,12 @@ use meshspan_domain::{
     ActivationId, ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId,
     AuthenticationFactorClasses, AuthenticationMethodId, AuthenticationOperationClass,
     AuthenticationPolicyId, AuthenticationService, ComponentInstanceId, ContentManifestId,
-    DelegatedMetadataScope, DelegationAdmission, DurationMicros, FaultGroupClassId, FaultGroupId,
-    FileVersionId, GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId,
-    MetadataKeyRange, MetadataOperationFamily, NamespaceCommitId, NodeId, ObjectId,
-    ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId, RecoveryCodeId, Revision,
-    Rights, RoleId, ScopeId, SessionId, SmbExportId, SnapshotId, SnapshotScheduleId, TagId,
-    TargetId, UnixMicros, VolumeId,
+    DelegatedMetadataScope, DelegationAdmission, DurationMicros, FailureScenario,
+    FaultGroupClassId, FaultGroupId, FileVersionId, GrantId, GroupId, HandoffEvidence, HostId,
+    JoinGrantId, MeshId, MetadataKeyRange, MetadataOperationFamily, NamespaceCommitId, NodeId,
+    ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId,
+    ProtectionPolicyId, ProtectionScenarioId, RecoveryCodeId, Revision, Rights, RoleId, ScopeId,
+    SessionId, SmbExportId, SnapshotId, SnapshotScheduleId, TagId, TargetId, UnixMicros, VolumeId,
 };
 use meshspan_secret_envelope::{EncryptedSecretParts, RecipientEnvelopeParts};
 use sha2::{Digest, Sha256};
@@ -163,6 +163,10 @@ pub enum AuthoritativeCommand {
     CreateFaultGroup(CreateFaultGroup),
     /// Adds or removes one machine from one shared-failure group.
     SetHostFaultGroupMembership(SetHostFaultGroupMembership),
+    /// Creates one immutable, named set of data-survival failure promises.
+    CreateProtectionPolicy(CreateProtectionPolicy),
+    /// Selects one existing protection policy as the volume-wide survival promise.
+    AssignVolumeProtectionPolicy(AssignVolumeProtectionPolicy),
     /// Publishes one volume or folder through explicitly selected SMB gateways.
     PublishSmbExport(PublishSmbExport),
     /// Withdraws one exact SMB export while retaining its audit history.
@@ -313,6 +317,8 @@ impl AuthoritativeCommand {
             Self::RegisterStorageTarget(value) => value.update_digest(digest),
             Self::CreateFaultGroup(value) => value.update_digest(digest),
             Self::SetHostFaultGroupMembership(value) => value.update_digest(digest),
+            Self::CreateProtectionPolicy(value) => value.update_digest(digest),
+            Self::AssignVolumeProtectionPolicy(value) => value.update_digest(digest),
             Self::PublishSmbExport(value) => value.update_digest(digest),
             Self::WithdrawSmbExport(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
@@ -1690,6 +1696,37 @@ pub struct SetHostFaultGroupMembership {
     pub present: bool,
 }
 
+/// One named simultaneous failure scenario within a protection policy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtectionScenarioConfiguration {
+    /// Stable scenario identity retained in acknowledgement evidence.
+    pub scenario_id: ProtectionScenarioId,
+    /// Human-readable scenario name.
+    pub name: RecordName,
+    /// Non-empty bounded set of fault classes and simultaneous failure counts.
+    pub scenario: FailureScenario,
+}
+
+/// One immutable data-survival policy revision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateProtectionPolicy {
+    /// Stable identity of this policy revision.
+    pub policy_id: ProtectionPolicyId,
+    /// Human-readable policy name.
+    pub name: RecordName,
+    /// Non-empty ordered scenarios which must each be survived.
+    pub scenarios: BoundedItems<ProtectionScenarioConfiguration>,
+}
+
+/// Volume-wide selection of one existing immutable survival policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AssignVolumeProtectionPolicy {
+    /// Existing volume receiving the policy.
+    pub volume_id: VolumeId,
+    /// Existing active protection policy.
+    pub policy_id: ProtectionPolicyId,
+}
+
 /// Explicit gateway selection for one SMB export.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SmbExportGatewaySelection {
@@ -2737,6 +2774,32 @@ digest_simple_record!(
         digest.identifier(value.group_id.as_bytes());
         digest.identifier(value.host_id.as_bytes());
         digest.boolean(value.present);
+    }
+);
+digest_simple_record!(
+    CreateProtectionPolicy,
+    b"create-protection-policy",
+    |value, digest| {
+        digest.identifier(value.policy_id.as_bytes());
+        digest.name(&value.name);
+        digest.unsigned(u64::try_from(value.scenarios.len()).unwrap_or(u64::MAX));
+        for scenario in value.scenarios.as_slice() {
+            digest.identifier(scenario.scenario_id.as_bytes());
+            digest.name(&scenario.name);
+            digest.unsigned(u64::try_from(scenario.scenario.terms().len()).unwrap_or(u64::MAX));
+            for term in scenario.scenario.terms() {
+                digest.identifier(term.class_id.as_bytes());
+                digest.unsigned(u64::from(term.failure_count));
+            }
+        }
+    }
+);
+digest_simple_record!(
+    AssignVolumeProtectionPolicy,
+    b"assign-volume-protection-policy",
+    |value, digest| {
+        digest.identifier(value.volume_id.as_bytes());
+        digest.identifier(value.policy_id.as_bytes());
     }
 );
 digest_simple_record!(PublishSmbExport, b"publish-smb-export", |value, digest| {

@@ -14,9 +14,9 @@ use super::{
     cleanup_reclamation, cluster, component, federation_actor_attestation, federation_assignment,
     federation_grant, federation_mutation_admission, federation_quarantine,
     federation_relationship, federation_storage_allocation, federation_succession, identity,
-    namespace, node_wrapping_key, recovery_authority, retention, root_delegation, routing,
-    secret_generation, session, smb_export_configuration, snapshot_schedule, storage_target, tags,
-    topology, user_snapshot, version_cleanup, volume_head,
+    namespace, node_wrapping_key, protection_policy, recovery_authority, retention,
+    root_delegation, routing, secret_generation, session, smb_export_configuration,
+    snapshot_schedule, storage_target, tags, topology, user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -551,6 +551,8 @@ fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::RegisterStorageTarget(_)
             | AuthoritativeCommand::CreateFaultGroup(_)
             | AuthoritativeCommand::SetHostFaultGroupMembership(_)
+            | AuthoritativeCommand::CreateProtectionPolicy(_)
+            | AuthoritativeCommand::AssignVolumeProtectionPolicy(_)
             | AuthoritativeCommand::PublishSmbExport(_)
             | AuthoritativeCommand::WithdrawSmbExport(_)
             | AuthoritativeCommand::RegisterNodeWrappingKey(_)
@@ -587,6 +589,12 @@ fn execute_infrastructure_command(
         }
         AuthoritativeCommand::SetHostFaultGroupMembership(value) => {
             topology::set_host_membership(transaction, *value, revision)
+        }
+        AuthoritativeCommand::CreateProtectionPolicy(value) => {
+            protection_policy::create(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::AssignVolumeProtectionPolicy(value) => {
+            protection_policy::assign_volume(transaction, *value, revision)
         }
         AuthoritativeCommand::PublishSmbExport(value) => {
             smb_export_configuration::publish(transaction, context, value, revision)
@@ -1114,6 +1122,8 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::SetHostFaultGroupMembership(_) => 89,
         AuthoritativeCommand::PublishSmbExport(_) => 90,
         AuthoritativeCommand::WithdrawSmbExport(_) => 91,
+        AuthoritativeCommand::CreateProtectionPolicy(_) => 92,
+        AuthoritativeCommand::AssignVolumeProtectionPolicy(_) => 93,
     }
 }
 

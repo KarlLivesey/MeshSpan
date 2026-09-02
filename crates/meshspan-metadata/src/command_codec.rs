@@ -11,6 +11,7 @@ mod fault_group;
 mod identity;
 mod namespace;
 mod node_wrapping_key;
+mod protection_policy;
 mod recovery;
 mod secret_generation;
 mod session;
@@ -143,6 +144,12 @@ fn encode_command(
         AuthoritativeCommand::SetHostFaultGroupMembership(value) => {
             fault_group::encode_membership(encoder, *value)
         }
+        AuthoritativeCommand::CreateProtectionPolicy(value) => {
+            protection_policy::encode_create(encoder, value)
+        }
+        AuthoritativeCommand::AssignVolumeProtectionPolicy(value) => {
+            protection_policy::encode_assignment(encoder, *value)
+        }
         AuthoritativeCommand::PublishSmbExport(value) => smb_export::encode_publish(encoder, value),
         AuthoritativeCommand::WithdrawSmbExport(value) => {
             smb_export::encode_withdraw(encoder, value)
@@ -204,6 +211,12 @@ fn decode_command(
         }
         fault_group::SET_HOST_FAULT_GROUP_MEMBERSHIP => fault_group::decode_membership(decoder)
             .map(AuthoritativeCommand::SetHostFaultGroupMembership),
+        protection_policy::CREATE_PROTECTION_POLICY => protection_policy::decode_create(decoder)
+            .map(AuthoritativeCommand::CreateProtectionPolicy),
+        protection_policy::ASSIGN_VOLUME_PROTECTION_POLICY => {
+            protection_policy::decode_assignment(decoder)
+                .map(AuthoritativeCommand::AssignVolumeProtectionPolicy)
+        }
         smb_export::PUBLISH_SMB_EXPORT => {
             smb_export::decode_publish(decoder).map(AuthoritativeCommand::PublishSmbExport)
         }

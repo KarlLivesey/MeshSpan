@@ -84,6 +84,9 @@ mod operation_status_tests;
 mod passkey_registration;
 #[cfg(test)]
 mod passkey_registration_tests;
+mod protection_policy;
+#[cfg(test)]
+mod protection_policy_tests;
 mod query;
 mod quorum_plan;
 mod reachability;
@@ -194,6 +197,7 @@ pub use passkey_registration::{
     AuthenticationMethodCreationReplay, AuthenticationRegistrationProfile,
     PasskeyRegistrationProfile, PasskeyRegistrationReplay,
 };
+pub use protection_policy::VolumeProtectionPolicy;
 pub use query::{
     GroupMemberCursor, GroupMembershipEventKind, GroupMembershipEventRecord, GroupMembershipRecord,
     NamespaceCursor, NamespaceRecord, Page, PageLimit, PrincipalCursor, PrincipalKind,
@@ -1318,6 +1322,21 @@ impl AuthoritativeRepository {
         limit: PageLimit,
     ) -> Result<Page<FaultGroupMembershipRecord, FaultGroupMembershipCursor>, RepositoryError> {
         topology::fault_group_memberships(&self.database, after, limit)
+    }
+
+    /// Returns the active immutable data-survival policy selected by one volume.
+    ///
+    /// `None` means the volume still uses the built-in topology-aware default; it never means that
+    /// storage is unprotected.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when policy, scenario, term or revision state is malformed.
+    pub fn volume_protection_policy(
+        &self,
+        volume_id: meshspan_domain::VolumeId,
+    ) -> Result<Option<VolumeProtectionPolicy>, RepositoryError> {
+        protection_policy::for_volume(&self.database, volume_id)
     }
 
     /// Returns the current public secret-wrapping-key generation for one node.

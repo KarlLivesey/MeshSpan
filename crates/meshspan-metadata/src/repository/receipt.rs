@@ -118,6 +118,8 @@ pub enum EntityKind {
     FaultGroupMembership = 41,
     /// Explicit replicated SMB export desired state.
     SmbExport = 42,
+    /// Immutable data-survival policy revision.
+    ProtectionPolicy = 43,
 }
 
 impl EntityKind {
@@ -165,6 +167,7 @@ impl EntityKind {
             40 => Ok(Self::FaultGroup),
             41 => Ok(Self::FaultGroupMembership),
             42 => Ok(Self::SmbExport),
+            43 => Ok(Self::ProtectionPolicy),
             _ => Err(RepositoryError::CorruptState),
         }
     }

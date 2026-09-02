@@ -3,10 +3,11 @@
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId, AuthenticationMethodId,
-    AuthenticationService, ComponentInstanceId, DurationMicros, EntropyError, FaultGroupClassId,
-    FaultGroupId, GrantId, GroupId, HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId,
-    PrincipalId, RandomSource, RecoveryCodeId, Revision, Rights, RoleId, SessionId, SmbExportId,
-    TargetId, UnixMicros, VolumeId,
+    AuthenticationService, ComponentInstanceId, DurationMicros, EntropyError, FailureScenario,
+    FailureTerm, FaultGroupClassId, FaultGroupId, GrantId, GroupId, HostId, MeshId, NodeId,
+    ObjectId, OperationId, OwnerSetId, PrincipalId, ProtectionPolicyId, ProtectionScenarioId,
+    RandomSource, RecoveryCodeId, Revision, Rights, RoleId, SessionId, SmbExportId, TargetId,
+    UnixMicros, VolumeId,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -15,15 +16,16 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::{
-    AddGroupMember, BootstrapMesh, BootstrapRecoveryIdentity, CommitSecretGeneration,
-    CreateActivationPolicy, CreateAuthenticationMethod, CreateComponent, CreateFaultGroup,
-    CreateGroup, CreateUser, CreateVolume, GrantInheritance, GrantPermission,
-    GrantPermissionWithActivation, IssueAuthenticationSession, NewAuthenticationCredential,
-    NewRecoveryCode, PermissionScope, PublishSmbExport, RecordName, RegisterNodeWrappingKey,
-    RegisterStorageTarget, RemoveGroupMember, RevokeAuthenticationMethod,
-    RevokeAuthenticationSession, SessionAuthenticationFactor, SessionClientLabel,
-    SetHostFaultGroupMembership, SmbExportGatewaySelection, StepUpAuthenticationSession,
-    StorageUsageLimit, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND, WithdrawSmbExport,
+    AddGroupMember, AssignVolumeProtectionPolicy, BootstrapMesh, BootstrapRecoveryIdentity,
+    CommitSecretGeneration, CreateActivationPolicy, CreateAuthenticationMethod, CreateComponent,
+    CreateFaultGroup, CreateGroup, CreateProtectionPolicy, CreateUser, CreateVolume,
+    GrantInheritance, GrantPermission, GrantPermissionWithActivation, IssueAuthenticationSession,
+    NewAuthenticationCredential, NewRecoveryCode, PermissionScope, ProtectionScenarioConfiguration,
+    PublishSmbExport, RecordName, RegisterNodeWrappingKey, RegisterStorageTarget,
+    RemoveGroupMember, RevokeAuthenticationMethod, RevokeAuthenticationSession,
+    SessionAuthenticationFactor, SessionClientLabel, SetHostFaultGroupMembership,
+    SmbExportGatewaySelection, StepUpAuthenticationSession, StorageUsageLimit, TotpAlgorithm,
+    VOLUME_CONTENT_KEY_SECRET_KIND, WithdrawSmbExport,
 };
 
 #[test]
@@ -124,6 +126,43 @@ fn topology_commands_round_trip_canonically() -> Result<(), Box<dyn std::error::
             group_id,
             host_id: HostId::from_bytes([92; 16])?,
             present: true,
+        }),
+    ] {
+        assert_round_trip(context, command)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn protection_policy_commands_round_trip_complete_failure_promises()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let policy_id = ProtectionPolicyId::from_bytes([98; 16])?;
+    for command in [
+        AuthoritativeCommand::CreateProtectionPolicy(CreateProtectionPolicy {
+            policy_id,
+            name: RecordName::new("Two machines and three devices")?,
+            scenarios: BoundedItems::new(
+                vec![ProtectionScenarioConfiguration {
+                    scenario_id: ProtectionScenarioId::from_bytes([99; 16])?,
+                    name: RecordName::new("Combined machine and device loss")?,
+                    scenario: FailureScenario::new(vec![
+                        FailureTerm {
+                            class_id: FaultGroupClassId::from_bytes([100; 16])?,
+                            failure_count: 2,
+                        },
+                        FailureTerm {
+                            class_id: FaultGroupClassId::from_bytes([101; 16])?,
+                            failure_count: 3,
+                        },
+                    ])?,
+                }],
+                16,
+            )?,
+        }),
+        AuthoritativeCommand::AssignVolumeProtectionPolicy(AssignVolumeProtectionPolicy {
+            volume_id: VolumeId::from_bytes([102; 16])?,
+            policy_id,
         }),
     ] {
         assert_round_trip(context, command)?;

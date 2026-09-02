@@ -26,7 +26,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::cluster_storage_provider::ClusterShardRouter;
-use crate::native_protection::protection_configuration;
+use crate::native_protection::NativeProtectionPolicySource;
 use crate::private_consensus_runtime::PrivateConsensusRuntime;
 use crate::{
     ConsensusAuthenticationAuthority, LocalFolderStorageProvider, LocalWrappingKey,
@@ -47,6 +47,7 @@ type ProductionPublisher = ProtectedContentPublisher<
     meshspan_placement::FaultAwarePlacement,
     OperatingSystemRandom,
     VolumeKeyLoadingService<ConsensusAuthenticationAuthority, LocalWrappingKey>,
+    NativeProtectionPolicySource,
 >;
 type ProductionFilesystem =
     BoundFilesystemAdapter<ProductionPublisher, ConsensusAuthenticationAuthority>;
@@ -166,7 +167,6 @@ impl NativeFilesystemRuntimeConfiguration {
             return Err(NativeFilesystemOpeningError::Unavailable);
         }
         let authority = self.repository(now)?;
-        let protection = protection_configuration(&authority, targets)?;
         let permit_key =
             StoragePermitLoadingService::new(self.authority(now)?, self.wrapping_key()?)
                 .load_latest(primary.context.mesh_id)?;
@@ -185,13 +185,17 @@ impl NativeFilesystemRuntimeConfiguration {
             Arc::clone(&self.network),
             self.runtime.clone(),
         );
+        let policies = NativeProtectionPolicySource::new(
+            self.repository(now)?,
+            targets.iter().map(NativeStorageTarget::context).collect(),
+        );
         let publisher = ProtectedContentPublisher::open(
             &self.filesystem_state_directory,
             now,
             router,
             meshspan_coding::ReedSolomonCoding::new(),
             meshspan_placement::FaultAwarePlacement::new(),
-            protection,
+            policies,
             OperatingSystemRandom,
             key_service,
             self.chunk_limits,
