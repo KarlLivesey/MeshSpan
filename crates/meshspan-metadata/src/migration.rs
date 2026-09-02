@@ -11,7 +11,7 @@ use thiserror::Error;
 const MAXIMUM_MIGRATIONS: usize = 256;
 
 pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 66;
-pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 11;
+pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 12;
 
 const PARTITION_MIGRATIONS: [Migration; 66] = [
     Migration {
@@ -280,7 +280,7 @@ const PARTITION_MIGRATIONS: [Migration; 66] = [
     },
 ];
 
-const LOCAL_MIGRATIONS: [Migration; 11] = [
+const LOCAL_MIGRATIONS: [Migration; 12] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/local/001_initial.sql"),
@@ -322,8 +322,12 @@ const LOCAL_MIGRATIONS: [Migration; 11] = [
         sql: include_str!("../schema/local/010_totp_registration_ceremonies.sql"),
     },
     Migration {
-        version: LOCAL_SCHEMA_VERSION,
+        version: 11,
         sql: include_str!("../schema/local/011_storage_target_registration.sql"),
+    },
+    Migration {
+        version: LOCAL_SCHEMA_VERSION,
+        sql: include_str!("../schema/local/012_maintenance_scrub_progress.sql"),
     },
 ];
 
@@ -865,4 +869,9 @@ pub(crate) fn local_totp_registration_ceremony_migration_digest() -> [u8; 32] {
 #[cfg(test)]
 pub(crate) fn local_storage_target_registration_migration_digest() -> [u8; 32] {
     migration_digest(LOCAL_MIGRATIONS[10].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn local_maintenance_scrub_progress_migration_digest() -> [u8; 32] {
+    migration_digest(LOCAL_MIGRATIONS[11].sql)
 }

@@ -28,6 +28,7 @@ mod local_authentication_ceremony_tests;
 mod local_claim;
 #[cfg(test)]
 mod local_claim_tests;
+mod local_scrub_progress;
 mod local_setup;
 #[cfg(test)]
 mod local_setup_tests;
@@ -144,6 +145,9 @@ pub use local_authentication_ceremony::{
 pub use local_claim::{
     LocalClaimError, LocalClaimMutationDisposition, LocalClaimRecord, LocalClaimState,
     NewLocalClaim,
+};
+pub use local_scrub_progress::{
+    LocalScrubProgress, LocalScrubProgressError, LocalScrubProgressUpdate,
 };
 pub use local_setup::{
     LocalSetupDisposition, LocalSetupError, LocalSetupKind, LocalSetupRecord, LocalSetupState,

@@ -325,7 +325,8 @@ mod tests {
         local_federation_storage_capability_migration_digest,
         local_federation_storage_lifecycle_migration_digest,
         local_federation_storage_quota_migration_digest,
-        local_federation_storage_scrub_migration_digest, local_migration_digest,
+        local_federation_storage_scrub_migration_digest,
+        local_maintenance_scrub_progress_migration_digest, local_migration_digest,
         local_setup_operation_migration_digest, local_storage_target_registration_migration_digest,
         local_totp_registration_ceremony_migration_digest, migrate_local, migrate_local_through,
         migrate_partition, migrate_partition_through,
@@ -686,7 +687,7 @@ mod tests {
         let second = NodeId::from_bytes([4; 16])?;
         let database = LocalDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.node_id(), first);
-        assert_eq!(database.schema_version(), 11);
+        assert_eq!(database.schema_version(), 12);
         drop(database);
         assert!(LocalDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         let existing = LocalDatabase::open_existing(&file_path, UnixMicros::new(12))?;
@@ -1097,6 +1098,14 @@ mod tests {
                 0x67, 0x26, 0x17, 0xa3, 0xa0, 0xe8, 0xa5, 0xad, 0xd8, 0x52, 0x58, 0xff, 0xb6, 0x11,
                 0x6f, 0xc9, 0x8f, 0xcb, 0x48, 0x34, 0x41, 0x61, 0x1c, 0x4f, 0x29, 0x7e, 0x5f, 0xeb,
                 0xd0, 0xcf, 0x11, 0xdb,
+            ]
+        );
+        assert_eq!(
+            local_maintenance_scrub_progress_migration_digest(),
+            [
+                0x1d, 0x11, 0xf2, 0x39, 0x9c, 0x46, 0x7b, 0x5b, 0x95, 0xf6, 0xca, 0x7a, 0xd2, 0x95,
+                0x51, 0xad, 0xbb, 0xad, 0x20, 0x02, 0xef, 0x26, 0x97, 0xe5, 0x0a, 0x69, 0x80, 0x45,
+                0x34, 0xe4, 0x53, 0x2b,
             ]
         );
     }
