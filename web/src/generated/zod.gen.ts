@@ -215,6 +215,88 @@ export const zApiError = z
   .strict();
 
 /**
+ * AssignVolumePlacementPolicyRequest
+ *
+ * Exact-retry request selecting a policy for one volume.
+ */
+export const zAssignVolumePlacementPolicyRequest = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * AssignVolumePlacementPolicyResponse
+ *
+ * Durable volume placement-policy selection result.
+ */
+export const zAssignVolumePlacementPolicyResponse = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    policy_id: z
+      .string()
+      .length(36)
+      .regex(/^[0-9a-f-]{36}$/),
+    revision: z.int().gte(1).lte(9007199254740991),
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(/^[0-9a-f-]{36}$/),
+  })
+  .strict();
+
+/**
+ * AssignVolumeProtectionPolicyRequest
+ *
+ * Exact-retry request selecting an immutable policy for one volume.
+ */
+export const zAssignVolumeProtectionPolicyRequest = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * AssignVolumeProtectionPolicyResponse
+ *
+ * Durable volume survival-policy selection result.
+ */
+export const zAssignVolumeProtectionPolicyResponse = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    policy_id: z
+      .string()
+      .length(36)
+      .regex(/^[0-9a-f-]{36}$/),
+    revision: z.int().gte(1).lte(9007199254740991),
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(/^[0-9a-f-]{36}$/),
+  })
+  .strict();
+
+/**
  * BeginUploadRequest
  *
  * Starts one durable private upload session.
@@ -348,6 +430,40 @@ export const zCommitUploadRequest = z
  */
 export const zCommitUploadResponse = z
   .strictObject({
+    acknowledgement: z
+      .strictObject({
+        achieved_protection_blake3: z
+          .string()
+          .length(64)
+          .regex(/^[0-9a-f]{64}$/),
+        acknowledged_consistency: z.union([
+          z.literal("eventual"),
+          z.literal("strong"),
+        ]),
+        configured_consistency: z.union([
+          z.literal("eventual"),
+          z.literal("strong"),
+        ]),
+        durability_scope: z.union([
+          z.literal("node_local"),
+          z.literal("cell_replicated"),
+          z.literal("globally_converged"),
+        ]),
+        eventual_shard_receipts: z.int().gte(0).lte(9007199254740991),
+        fallback_applied: z.boolean(),
+        pending_debt_blake3: z
+          .string()
+          .length(64)
+          .regex(/^[0-9a-f]{64}$/),
+        pending_eventual_shards: z.int().gte(0).lte(9007199254740991),
+        policy_committed: z.boolean(),
+        policy_evidence_blake3: z
+          .string()
+          .length(64)
+          .regex(/^[0-9a-f]{64}$/),
+        required_shard_receipts: z.int().gte(0).lte(9007199254740991),
+      })
+      .strict(),
     object: z
       .strictObject({
         namespace_commit_id: z
@@ -517,6 +633,146 @@ export const zConfirmRecoveryBundleResponse = z
   .strict();
 
 /**
+ * CreateAcknowledgementPolicyRequest
+ *
+ * Exact-retry request to create one immutable acknowledgement policy.
+ */
+export const zCreateAcknowledgementPolicyRequest = z
+  .strictObject({
+    cells: z
+      .array(
+        z
+          .strictObject({
+            cell_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/),
+            local_protection_policy_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/)
+              .nullish(),
+            minimum_distinct_nodes: z.int().gte(1).lte(65535).nullish(),
+            minimum_durable_targets: z.int().gte(1).lte(65535).nullish(),
+            mode: z.union([
+              z.literal("required_before_commit"),
+              z.literal("eventual"),
+              z.literal("excluded"),
+            ]),
+          })
+          .strict(),
+      )
+      .max(256),
+    consistency: z.union([z.literal("eventual"), z.literal("strong")]),
+    fallback: z.union([
+      z.literal("remain_pending"),
+      z.literal("fail_at_deadline"),
+      z.literal("eventual"),
+    ]),
+    minimum_distinct_nodes: z.int().gte(1).lte(65535),
+    minimum_durable_targets: z.int().gte(1).lte(65535),
+    name: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    required_scenario_ids: z
+      .array(
+        z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+      )
+      .max(64),
+    strong_wait_micros: z.int().gte(1).lte(9007199254740991).nullish(),
+  })
+  .strict();
+
+/**
+ * CreateAcknowledgementPolicyResponse
+ *
+ * Durable acknowledgement-policy creation result.
+ */
+export const zCreateAcknowledgementPolicyResponse = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    policy: z
+      .strictObject({
+        cells: z
+          .array(
+            z
+              .strictObject({
+                cell_id: z
+                  .string()
+                  .length(36)
+                  .regex(/^[0-9a-f-]{36}$/),
+                local_protection_policy_id: z
+                  .string()
+                  .length(36)
+                  .regex(/^[0-9a-f-]{36}$/)
+                  .nullable(),
+                minimum_distinct_nodes: z.int().gte(1).lte(65535).nullable(),
+                minimum_durable_targets: z.int().gte(1).lte(65535).nullable(),
+                mode: z.union([
+                  z.literal("required_before_commit"),
+                  z.literal("eventual"),
+                  z.literal("excluded"),
+                ]),
+              })
+              .strict(),
+          )
+          .max(256),
+        consistency: z.union([z.literal("eventual"), z.literal("strong")]),
+        fallback: z.union([
+          z.literal("remain_pending"),
+          z.literal("fail_at_deadline"),
+          z.literal("eventual"),
+        ]),
+        minimum_distinct_nodes: z.int().gte(0).lte(65535),
+        minimum_durable_targets: z.int().gte(0).lte(65535),
+        name: z.string().min(1).max(256),
+        policy_id: z
+          .string()
+          .length(36)
+          .regex(/^[0-9a-f-]{36}$/),
+        required_scenario_ids: z
+          .array(
+            z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+          )
+          .max(64),
+        revision: z.int().gte(1).lte(9007199254740991),
+        strong_wait_micros: z.coerce
+          .bigint()
+          .gte(BigInt(0))
+          .max(BigInt("18446744073709551615"), {
+            error:
+              "Invalid value: Expected uint64 to be <= 18446744073709551615",
+          })
+          .nullable(),
+      })
+      .strict(),
+  })
+  .strict();
+
+/**
  * CreateApiKeyRequest
  *
  * One idempotent request to issue a current-user API key.
@@ -591,6 +847,63 @@ export const zCreateApiKeyResponse = z
       .regex(/^meshspan-key-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
       .readonly(),
     valid_from_epoch_micros: z.int().gte(0).lte(9007199254740991),
+  })
+  .strict();
+
+/**
+ * CreateAvailabilityCellRequest
+ *
+ * Exact-retry request to create one availability locality.
+ */
+export const zCreateAvailabilityCellRequest = z
+  .strictObject({
+    name: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    parent_cell_id: z
+      .string()
+      .length(36)
+      .regex(/^[0-9a-f-]{36}$/)
+      .nullish(),
+  })
+  .strict();
+
+/**
+ * CreateAvailabilityCellResponse
+ *
+ * Durable availability-cell creation result.
+ */
+export const zCreateAvailabilityCellResponse = z
+  .strictObject({
+    cell: z
+      .strictObject({
+        cell_id: z
+          .string()
+          .length(36)
+          .regex(/^[0-9a-f-]{36}$/),
+        name: z.string().min(1).max(256),
+        parent_cell_id: z
+          .string()
+          .length(36)
+          .regex(/^[0-9a-f-]{36}$/)
+          .nullable(),
+        revision: z.int().gte(1).lte(9007199254740991),
+      })
+      .strict(),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
   })
   .strict();
 
@@ -736,6 +1049,95 @@ export const zCreateGroupRequest = z
       .regex(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       ),
+  })
+  .strict();
+
+/**
+ * CreateLocalityPolicyRequest
+ *
+ * Exact-retry request to create one immutable desired-locality policy.
+ */
+export const zCreateLocalityPolicyRequest = z
+  .strictObject({
+    maximum_lag_micros: z.int().gte(1).lte(9007199254740991).nullish(),
+    name: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    requirements: z
+      .array(
+        z
+          .strictObject({
+            cell_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/),
+            local_protection_policy_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/)
+              .nullish(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(64),
+  })
+  .strict();
+
+/**
+ * CreateLocalityPolicyResponse
+ *
+ * Durable locality-policy creation result.
+ */
+export const zCreateLocalityPolicyResponse = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    policy: z
+      .strictObject({
+        maximum_lag_micros: z.int().gte(1).lte(9007199254740991).nullable(),
+        name: z.string().min(1).max(256),
+        policy_id: z
+          .string()
+          .length(36)
+          .regex(/^[0-9a-f-]{36}$/),
+        requirements: z
+          .array(
+            z
+              .strictObject({
+                cell_id: z
+                  .string()
+                  .length(36)
+                  .regex(/^[0-9a-f-]{36}$/),
+                local_protection_policy_id: z
+                  .string()
+                  .length(36)
+                  .regex(/^[0-9a-f-]{36}$/)
+                  .nullable(),
+                requirement_id: z
+                  .string()
+                  .length(36)
+                  .regex(/^[0-9a-f-]{36}$/),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(64),
+        revision: z.int().gte(1).lte(9007199254740991),
+      })
+      .strict(),
   })
   .strict();
 
@@ -1123,6 +1525,110 @@ export const zCreatePrincipalResponse = z
           z.literal("suspended"),
           z.literal("retired"),
         ]),
+      })
+      .strict(),
+  })
+  .strict();
+
+/**
+ * CreateProtectionPolicyRequest
+ *
+ * Exact-retry request to create one immutable survival policy.
+ */
+export const zCreateProtectionPolicyRequest = z
+  .strictObject({
+    name: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    scenarios: z
+      .array(
+        z
+          .strictObject({
+            name: z
+              .string()
+              .min(1)
+              .max(256)
+              .regex(/^[^\x00-\x1f\x2f\x7f\\]+$/),
+            terms: z
+              .array(
+                z
+                  .strictObject({
+                    class_id: z
+                      .string()
+                      .length(36)
+                      .regex(/^[0-9a-f-]{36}$/),
+                    failure_count: z.int().gte(1).lte(65535),
+                  })
+                  .strict(),
+              )
+              .min(1)
+              .max(16),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(16),
+  })
+  .strict();
+
+/**
+ * CreateProtectionPolicyResponse
+ *
+ * Durable survival-policy creation result.
+ */
+export const zCreateProtectionPolicyResponse = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    policy: z
+      .strictObject({
+        name: z.string().min(1).max(256),
+        policy_id: z
+          .string()
+          .length(36)
+          .regex(/^[0-9a-f-]{36}$/),
+        revision: z.int().gte(1).lte(9007199254740991),
+        scenarios: z
+          .array(
+            z
+              .strictObject({
+                name: z.string().min(1).max(256),
+                scenario_id: z
+                  .string()
+                  .length(36)
+                  .regex(/^[0-9a-f-]{36}$/),
+                terms: z
+                  .array(
+                    z
+                      .strictObject({
+                        class_id: z
+                          .string()
+                          .length(36)
+                          .regex(/^[0-9a-f-]{36}$/),
+                        class_name: z.string().min(1).max(128),
+                        failure_count: z.int().gte(1).lte(65535),
+                      })
+                      .strict(),
+                  )
+                  .min(1)
+                  .max(16),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(16),
       })
       .strict(),
   })
@@ -2025,6 +2531,94 @@ export const zJoinMeshSetupResponse = z
   .strict();
 
 /**
+ * ListAcknowledgementPoliciesResponse
+ *
+ * One bounded page of write-acknowledgement policies.
+ */
+export const zListAcknowledgementPoliciesResponse = z
+  .strictObject({
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\/admin\/acknowledgement-policies/)
+      .nullable(),
+    policies: z
+      .array(
+        z
+          .strictObject({
+            cells: z
+              .array(
+                z
+                  .strictObject({
+                    cell_id: z
+                      .string()
+                      .length(36)
+                      .regex(/^[0-9a-f-]{36}$/),
+                    local_protection_policy_id: z
+                      .string()
+                      .length(36)
+                      .regex(/^[0-9a-f-]{36}$/)
+                      .nullable(),
+                    minimum_distinct_nodes: z
+                      .int()
+                      .gte(1)
+                      .lte(65535)
+                      .nullable(),
+                    minimum_durable_targets: z
+                      .int()
+                      .gte(1)
+                      .lte(65535)
+                      .nullable(),
+                    mode: z.union([
+                      z.literal("required_before_commit"),
+                      z.literal("eventual"),
+                      z.literal("excluded"),
+                    ]),
+                  })
+                  .strict(),
+              )
+              .max(256),
+            consistency: z.union([z.literal("eventual"), z.literal("strong")]),
+            fallback: z.union([
+              z.literal("remain_pending"),
+              z.literal("fail_at_deadline"),
+              z.literal("eventual"),
+            ]),
+            minimum_distinct_nodes: z.int().gte(0).lte(65535),
+            minimum_durable_targets: z.int().gte(0).lte(65535),
+            name: z.string().min(1).max(256),
+            policy_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/),
+            required_scenario_ids: z
+              .array(
+                z
+                  .string()
+                  .length(36)
+                  .regex(
+                    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+                  ),
+              )
+              .max(64),
+            revision: z.int().gte(1).lte(9007199254740991),
+            strong_wait_micros: z.coerce
+              .bigint()
+              .gte(BigInt(0))
+              .max(BigInt("18446744073709551615"), {
+                error:
+                  "Invalid value: Expected uint64 to be <= 18446744073709551615",
+              })
+              .nullable(),
+          })
+          .strict(),
+      )
+      .max(256),
+  })
+  .strict();
+
+/**
  * ListAuthenticationMethodsResponse
  *
  * One bounded current-user authentication-method page.
@@ -2114,6 +2708,41 @@ export const zListAuthenticationMethodsResponse = z
       .min(1)
       .max(16384)
       .regex(/^\/api\/latest\/users\/current\/authentication-methods/)
+      .nullable(),
+  })
+  .strict();
+
+/**
+ * ListAvailabilityCellsResponse
+ *
+ * One bounded page of availability localities.
+ */
+export const zListAvailabilityCellsResponse = z
+  .strictObject({
+    cells: z
+      .array(
+        z
+          .strictObject({
+            cell_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/),
+            name: z.string().min(1).max(256),
+            parent_cell_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/)
+              .nullable(),
+            revision: z.int().gte(1).lte(9007199254740991),
+          })
+          .strict(),
+      )
+      .max(256),
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\/admin\/topology\/availability-cells/)
       .nullable(),
   })
   .strict();
@@ -2342,6 +2971,59 @@ export const zListGroupMembershipsResponse = z
   .strict();
 
 /**
+ * ListLocalityPoliciesResponse
+ *
+ * One bounded page of desired-locality policies.
+ */
+export const zListLocalityPoliciesResponse = z
+  .strictObject({
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\/admin\/locality-policies/)
+      .nullable(),
+    policies: z
+      .array(
+        z
+          .strictObject({
+            maximum_lag_micros: z.int().gte(1).lte(9007199254740991).nullable(),
+            name: z.string().min(1).max(256),
+            policy_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/),
+            requirements: z
+              .array(
+                z
+                  .strictObject({
+                    cell_id: z
+                      .string()
+                      .length(36)
+                      .regex(/^[0-9a-f-]{36}$/),
+                    local_protection_policy_id: z
+                      .string()
+                      .length(36)
+                      .regex(/^[0-9a-f-]{36}$/)
+                      .nullable(),
+                    requirement_id: z
+                      .string()
+                      .length(36)
+                      .regex(/^[0-9a-f-]{36}$/),
+                  })
+                  .strict(),
+              )
+              .min(1)
+              .max(64),
+            revision: z.int().gte(1).lte(9007199254740991),
+          })
+          .strict(),
+      )
+      .max(256),
+  })
+  .strict();
+
+/**
  * ListOperationsResponse
  *
  * One bounded reverse-chronological administrator operation page.
@@ -2475,6 +3157,65 @@ export const zListPrincipalsResponse = z
               z.literal("suspended"),
               z.literal("retired"),
             ]),
+          })
+          .strict(),
+      )
+      .max(256),
+  })
+  .strict();
+
+/**
+ * ListProtectionPoliciesResponse
+ *
+ * One bounded page of immutable survival policies.
+ */
+export const zListProtectionPoliciesResponse = z
+  .strictObject({
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\/admin\/protection-policies/)
+      .nullable(),
+    policies: z
+      .array(
+        z
+          .strictObject({
+            name: z.string().min(1).max(256),
+            policy_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/),
+            revision: z.int().gte(1).lte(9007199254740991),
+            scenarios: z
+              .array(
+                z
+                  .strictObject({
+                    name: z.string().min(1).max(256),
+                    scenario_id: z
+                      .string()
+                      .length(36)
+                      .regex(/^[0-9a-f-]{36}$/),
+                    terms: z
+                      .array(
+                        z
+                          .strictObject({
+                            class_id: z
+                              .string()
+                              .length(36)
+                              .regex(/^[0-9a-f-]{36}$/),
+                            class_name: z.string().min(1).max(128),
+                            failure_count: z.int().gte(1).lte(65535),
+                          })
+                          .strict(),
+                      )
+                      .min(1)
+                      .max(16),
+                  })
+                  .strict(),
+              )
+              .min(1)
+              .max(16),
           })
           .strict(),
       )
@@ -3413,6 +4154,32 @@ export const zRevokePermissionGrantResponse = z
   .strict();
 
 /**
+ * SetAvailabilityCellMembershipResponse
+ *
+ * Durable desired membership of a machine or target in one availability cell.
+ */
+export const zSetAvailabilityCellMembershipResponse = z
+  .strictObject({
+    cell_id: z
+      .string()
+      .length(36)
+      .regex(/^[0-9a-f-]{36}$/),
+    member_id: z
+      .string()
+      .length(36)
+      .regex(/^[0-9a-f-]{36}$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    present: z.boolean(),
+    revision: z.int().gte(1).lte(9007199254740991),
+  })
+  .strict();
+
+/**
  * SetFaultGroupMembershipRequest
  *
  * Exact-retry desired machine/group membership.
@@ -4096,6 +4863,45 @@ export const zStepUpCurrentSessionRequestWritable = z
   })
   .strict();
 
+export const zListAcknowledgementPoliciesQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(256).optional(),
+  })
+  .strict();
+
+/**
+ * One bounded topology page
+ */
+export const zListAcknowledgementPoliciesResponse2 =
+  zListAcknowledgementPoliciesResponse;
+
+/**
+ * Immutable placement policy
+ */
+export const zCreateAcknowledgementPolicyBody =
+  zCreateAcknowledgementPolicyRequest;
+
+export const zCreateAcknowledgementPolicyHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Placement policy committed
+ */
+export const zCreateAcknowledgementPolicyResponse2 =
+  zCreateAcknowledgementPolicyResponse;
+
 export const zListGroupsQuery = z
   .object({
     cursor: z
@@ -4217,6 +5023,42 @@ export const zRemoveGroupMemberPath = z
  */
 export const zRemoveGroupMemberResponse2 = zRemoveGroupMemberResponse;
 
+export const zListLocalityPoliciesQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(256).optional(),
+  })
+  .strict();
+
+/**
+ * One bounded topology page
+ */
+export const zListLocalityPoliciesResponse2 = zListLocalityPoliciesResponse;
+
+/**
+ * Immutable placement policy
+ */
+export const zCreateLocalityPolicyBody = zCreateLocalityPolicyRequest;
+
+export const zCreateLocalityPolicyHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Placement policy committed
+ */
+export const zCreateLocalityPolicyResponse2 = zCreateLocalityPolicyResponse;
+
 /**
  * Join invitation policy
  */
@@ -4243,6 +5085,42 @@ export const zListOperationsQuery = z
  * One reverse-chronological operation page
  */
 export const zListOperationsResponse2 = zListOperationsResponse;
+
+export const zListProtectionPoliciesQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(256).optional(),
+  })
+  .strict();
+
+/**
+ * One bounded topology page
+ */
+export const zListProtectionPoliciesResponse2 = zListProtectionPoliciesResponse;
+
+/**
+ * Combined failure scenarios
+ */
+export const zCreateProtectionPolicyBody = zCreateProtectionPolicyRequest;
+
+export const zCreateProtectionPolicyHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Survival policy committed
+ */
+export const zCreateProtectionPolicyResponse2 = zCreateProtectionPolicyResponse;
 
 /**
  * Offline recovery save proof
@@ -4320,6 +5198,118 @@ export const zRegisterStorageFolderHeaders = z
  * Storage folder registered and open
  */
 export const zRegisterStorageFolderResponse2 = zRegisterStorageFolderResponse;
+
+export const zListAvailabilityCellsQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(256).optional(),
+  })
+  .strict();
+
+/**
+ * One bounded topology page
+ */
+export const zListAvailabilityCellsResponse2 = zListAvailabilityCellsResponse;
+
+/**
+ * Availability locality
+ */
+export const zCreateAvailabilityCellBody = zCreateAvailabilityCellRequest;
+
+export const zCreateAvailabilityCellHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Availability cell committed
+ */
+export const zCreateAvailabilityCellResponse2 = zCreateAvailabilityCellResponse;
+
+/**
+ * Desired membership
+ */
+export const zSetAvailabilityCellHostMembershipBody =
+  zSetFaultGroupMembershipRequest;
+
+export const zSetAvailabilityCellHostMembershipHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+export const zSetAvailabilityCellHostMembershipPath = z
+  .object({
+    cell_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    host_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Desired membership committed
+ */
+export const zSetAvailabilityCellHostMembershipResponse =
+  zSetAvailabilityCellMembershipResponse;
+
+/**
+ * Desired membership
+ */
+export const zSetAvailabilityCellTargetMembershipBody =
+  zSetFaultGroupMembershipRequest;
+
+export const zSetAvailabilityCellTargetMembershipHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+export const zSetAvailabilityCellTargetMembershipPath = z
+  .object({
+    cell_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    target_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Desired membership committed
+ */
+export const zSetAvailabilityCellTargetMembershipResponse =
+  zSetAvailabilityCellMembershipResponse;
 
 export const zListFaultGroupMembershipsQuery = z
   .object({
@@ -4492,6 +5482,82 @@ export const zCreateVolumeHeaders = z
  */
 export const zCreateVolumeResponse2 = zCreateVolumeResponse;
 
+/**
+ * Exact-retry assignment
+ */
+export const zAssignVolumeAcknowledgementPolicyBody =
+  zAssignVolumePlacementPolicyRequest;
+
+export const zAssignVolumeAcknowledgementPolicyHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+export const zAssignVolumeAcknowledgementPolicyPath = z
+  .object({
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    policy_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Volume policy selection committed
+ */
+export const zAssignVolumeAcknowledgementPolicyResponse =
+  zAssignVolumePlacementPolicyResponse;
+
+/**
+ * Exact-retry assignment
+ */
+export const zAssignVolumeLocalityPolicyBody =
+  zAssignVolumePlacementPolicyRequest;
+
+export const zAssignVolumeLocalityPolicyHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+export const zAssignVolumeLocalityPolicyPath = z
+  .object({
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    policy_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Volume policy selection committed
+ */
+export const zAssignVolumeLocalityPolicyResponse =
+  zAssignVolumePlacementPolicyResponse;
+
 export const zListVolumePermissionGrantsPath = z
   .object({
     volume_id: z
@@ -4588,6 +5654,44 @@ export const zRevokePermissionGrantPath = z
  * Grant durably revoked or exactly replayed
  */
 export const zRevokePermissionGrantResponse2 = zRevokePermissionGrantResponse;
+
+/**
+ * Exact-retry assignment
+ */
+export const zAssignVolumeProtectionPolicyBody =
+  zAssignVolumeProtectionPolicyRequest;
+
+export const zAssignVolumeProtectionPolicyHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+export const zAssignVolumeProtectionPolicyPath = z
+  .object({
+    volume_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    policy_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Volume policy selection committed
+ */
+export const zAssignVolumeProtectionPolicyResponse2 =
+  zAssignVolumeProtectionPolicyResponse;
 
 /**
  * SMB export publication

@@ -10,13 +10,25 @@ use axum::extract::{Path, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Response, StatusCode};
 use axum::routing::{get, put};
 use meshspan_api_contract::{
-    ApiErrorCode, BoundaryError, ListFaultGroupMembershipsResponse, ListFaultGroupsResponse,
-    ListTopologyNodesResponse, ListTopologyQuery, ListTopologyTargetsResponse,
-    MAX_TOPOLOGY_MUTATION_BYTES, TopologyCursor, decode_create_fault_group_request,
-    decode_set_fault_group_membership_request, encode_create_fault_group_response,
+    ApiErrorCode, BoundaryError, ListAcknowledgementPoliciesResponse,
+    ListAvailabilityCellsResponse, ListFaultGroupMembershipsResponse, ListFaultGroupsResponse,
+    ListLocalityPoliciesResponse, ListProtectionPoliciesResponse, ListTopologyNodesResponse,
+    ListTopologyQuery, ListTopologyTargetsResponse, MAX_PLACEMENT_POLICY_MUTATION_BYTES,
+    MAX_PROTECTION_POLICY_MUTATION_BYTES, TopologyCursor,
+    decode_assign_volume_placement_policy_request, decode_assign_volume_protection_policy_request,
+    decode_create_acknowledgement_policy_request, decode_create_availability_cell_request,
+    decode_create_fault_group_request, decode_create_locality_policy_request,
+    decode_create_protection_policy_request, decode_set_fault_group_membership_request,
+    encode_assign_volume_placement_policy_response,
+    encode_assign_volume_protection_policy_response, encode_create_acknowledgement_policy_response,
+    encode_create_availability_cell_response, encode_create_fault_group_response,
+    encode_create_locality_policy_response, encode_create_protection_policy_response,
+    encode_list_acknowledgement_policies_response, encode_list_availability_cells_response,
     encode_list_fault_group_memberships_response, encode_list_fault_groups_response,
+    encode_list_locality_policies_response, encode_list_protection_policies_response,
     encode_list_topology_nodes_response, encode_list_topology_targets_response,
-    encode_set_fault_group_membership_response, generate_openapi,
+    encode_set_availability_cell_membership_response, encode_set_fault_group_membership_response,
+    generate_openapi,
 };
 use thiserror::Error;
 
@@ -48,6 +60,10 @@ enum InventoryKind {
     Targets,
     FaultGroups,
     Memberships,
+    ProtectionPolicies,
+    AvailabilityCells,
+    LocalityPolicies,
+    AcknowledgementPolicies,
 }
 
 enum InventoryPage {
@@ -55,6 +71,10 @@ enum InventoryPage {
     Targets(ListTopologyTargetsResponse),
     FaultGroups(ListFaultGroupsResponse),
     Memberships(ListFaultGroupMembershipsResponse),
+    ProtectionPolicies(ListProtectionPoliciesResponse),
+    AvailabilityCells(ListAvailabilityCellsResponse),
+    LocalityPolicies(ListLocalityPoliciesResponse),
+    AcknowledgementPolicies(ListAcknowledgementPoliciesResponse),
 }
 
 /// Builds rolling manager-only mesh topology administration routes.
@@ -83,6 +103,42 @@ where
         .route(
             "/api/latest/admin/topology/fault-groups/{group_id}/hosts/{host_id}",
             put(set_membership::<C>),
+        )
+        .route(
+            "/api/latest/admin/protection-policies",
+            get(list_protection_policies::<C>).post(create_protection_policy::<C>),
+        )
+        .route(
+            "/api/latest/admin/volumes/{volume_id}/protection-policies/{policy_id}",
+            put(assign_volume_protection_policy::<C>),
+        )
+        .route(
+            "/api/latest/admin/locality-policies",
+            get(list_locality_policies::<C>).post(create_locality_policy::<C>),
+        )
+        .route(
+            "/api/latest/admin/volumes/{volume_id}/locality-policies/{policy_id}",
+            put(assign_volume_locality_policy::<C>),
+        )
+        .route(
+            "/api/latest/admin/acknowledgement-policies",
+            get(list_acknowledgement_policies::<C>).post(create_acknowledgement_policy::<C>),
+        )
+        .route(
+            "/api/latest/admin/volumes/{volume_id}/acknowledgement-policies/{policy_id}",
+            put(assign_volume_acknowledgement_policy::<C>),
+        )
+        .route(
+            "/api/latest/admin/topology/availability-cells",
+            get(list_availability_cells::<C>).post(create_availability_cell::<C>),
+        )
+        .route(
+            "/api/latest/admin/topology/availability-cells/{cell_id}/hosts/{host_id}",
+            put(set_host_cell_membership::<C>),
+        )
+        .route(
+            "/api/latest/admin/topology/availability-cells/{cell_id}/targets/{target_id}",
+            put(set_target_cell_membership::<C>),
         )
         .with_state(ApiState {
             controller: Arc::new(Mutex::new(controller)),
@@ -116,6 +172,46 @@ where
     C: TopologyAdministrationController,
 {
     list(state, request, InventoryKind::Memberships).await
+}
+
+async fn list_protection_policies<C>(
+    State(state): State<ApiState<C>>,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    list(state, request, InventoryKind::ProtectionPolicies).await
+}
+
+async fn list_availability_cells<C>(
+    State(state): State<ApiState<C>>,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    list(state, request, InventoryKind::AvailabilityCells).await
+}
+
+async fn list_locality_policies<C>(
+    State(state): State<ApiState<C>>,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    list(state, request, InventoryKind::LocalityPolicies).await
+}
+
+async fn list_acknowledgement_policies<C>(
+    State(state): State<ApiState<C>>,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    list(state, request, InventoryKind::AcknowledgementPolicies).await
 }
 
 async fn list<C>(state: ApiState<C>, request: Request, kind: InventoryKind) -> Response<Body>
@@ -162,11 +258,372 @@ where
             InventoryKind::Memberships => controller
                 .list_fault_group_memberships(administrator, query)
                 .map(InventoryPage::Memberships),
+            InventoryKind::ProtectionPolicies => controller
+                .list_protection_policies(administrator, query)
+                .map(InventoryPage::ProtectionPolicies),
+            InventoryKind::AvailabilityCells => controller
+                .list_availability_cells(administrator, query)
+                .map(InventoryPage::AvailabilityCells),
+            InventoryKind::LocalityPolicies => controller
+                .list_locality_policies(administrator, query)
+                .map(InventoryPage::LocalityPolicies),
+            InventoryKind::AcknowledgementPolicies => controller
+                .list_acknowledgement_policies(administrator, query)
+                .map(InventoryPage::AcknowledgementPolicies),
         }
     })
     .await;
     match execution {
         Ok(Ok(page)) => encode_page(&state, page, request_id),
+        Ok(Err(error)) => service_error(&state, error, request_id),
+        Err(_) => service_error(&state, TopologyAdministrationError::Unavailable, request_id),
+    }
+}
+
+async fn create_protection_policy<C>(
+    State(state): State<ApiState<C>>,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    let request_id = request_identifier();
+    let (administrator, body) = match authenticated_body(&state, request, request_id.clone()).await
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let decoded = match decode_create_protection_policy_request(&body) {
+        Ok(value) => value,
+        Err(error) => return boundary_error(&state, error, request_id),
+    };
+    let controller = Arc::clone(&state.controller);
+    let execution = tokio::task::spawn_blocking(move || {
+        controller
+            .lock()
+            .map_err(|_| TopologyAdministrationError::Unavailable)?
+            .create_protection_policy(administrator, decoded)
+    })
+    .await;
+    match execution {
+        Ok(Ok(response)) => match encode_create_protection_policy_response(&response) {
+            Ok(body) => json_response(StatusCode::CREATED, body, state.schema_digest),
+            Err(_) => failed(&state, request_id),
+        },
+        Ok(Err(error)) => service_error(&state, error, request_id),
+        Err(_) => service_error(&state, TopologyAdministrationError::Unavailable, request_id),
+    }
+}
+
+async fn create_availability_cell<C>(
+    State(state): State<ApiState<C>>,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    let request_id = request_identifier();
+    let (administrator, body) = match authenticated_body(&state, request, request_id.clone()).await
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let decoded = match decode_create_availability_cell_request(&body) {
+        Ok(value) => value,
+        Err(error) => return boundary_error(&state, error, request_id),
+    };
+    let controller = Arc::clone(&state.controller);
+    let execution = tokio::task::spawn_blocking(move || {
+        controller
+            .lock()
+            .map_err(|_| TopologyAdministrationError::Unavailable)?
+            .create_availability_cell(administrator, decoded)
+    })
+    .await;
+    match execution {
+        Ok(Ok(response)) => match encode_create_availability_cell_response(&response) {
+            Ok(body) => json_response(StatusCode::CREATED, body, state.schema_digest),
+            Err(_) => failed(&state, request_id),
+        },
+        Ok(Err(error)) => service_error(&state, error, request_id),
+        Err(_) => service_error(&state, TopologyAdministrationError::Unavailable, request_id),
+    }
+}
+
+async fn assign_volume_protection_policy<C>(
+    State(state): State<ApiState<C>>,
+    Path((volume_id, policy_id)): Path<(String, String)>,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    let request_id = request_identifier();
+    let (administrator, body) = match authenticated_body(&state, request, request_id.clone()).await
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let decoded = match decode_assign_volume_protection_policy_request(&body) {
+        Ok(value) => value,
+        Err(error) => return boundary_error(&state, error, request_id),
+    };
+    let controller = Arc::clone(&state.controller);
+    let execution = tokio::task::spawn_blocking(move || {
+        controller
+            .lock()
+            .map_err(|_| TopologyAdministrationError::Unavailable)?
+            .assign_volume_protection_policy(administrator, &volume_id, &policy_id, decoded)
+    })
+    .await;
+    match execution {
+        Ok(Ok(response)) => match encode_assign_volume_protection_policy_response(&response) {
+            Ok(body) => json_response(StatusCode::OK, body, state.schema_digest),
+            Err(_) => failed(&state, request_id),
+        },
+        Ok(Err(error)) => service_error(&state, error, request_id),
+        Err(_) => service_error(&state, TopologyAdministrationError::Unavailable, request_id),
+    }
+}
+
+async fn create_locality_policy<C>(
+    State(state): State<ApiState<C>>,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    let request_id = request_identifier();
+    let (administrator, body) = match authenticated_body(&state, request, request_id.clone()).await
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let decoded = match decode_create_locality_policy_request(&body) {
+        Ok(value) => value,
+        Err(error) => return boundary_error(&state, error, request_id),
+    };
+    let controller = Arc::clone(&state.controller);
+    let execution = tokio::task::spawn_blocking(move || {
+        controller
+            .lock()
+            .map_err(|_| TopologyAdministrationError::Unavailable)?
+            .create_locality_policy(administrator, decoded)
+    })
+    .await;
+    match execution {
+        Ok(Ok(response)) => match encode_create_locality_policy_response(&response) {
+            Ok(body) => json_response(StatusCode::CREATED, body, state.schema_digest),
+            Err(_) => failed(&state, request_id),
+        },
+        Ok(Err(error)) => service_error(&state, error, request_id),
+        Err(_) => service_error(&state, TopologyAdministrationError::Unavailable, request_id),
+    }
+}
+
+async fn create_acknowledgement_policy<C>(
+    State(state): State<ApiState<C>>,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    let request_id = request_identifier();
+    let (administrator, body) = match authenticated_body(&state, request, request_id.clone()).await
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let decoded = match decode_create_acknowledgement_policy_request(&body) {
+        Ok(value) => value,
+        Err(error) => return boundary_error(&state, error, request_id),
+    };
+    let controller = Arc::clone(&state.controller);
+    let execution = tokio::task::spawn_blocking(move || {
+        controller
+            .lock()
+            .map_err(|_| TopologyAdministrationError::Unavailable)?
+            .create_acknowledgement_policy(administrator, decoded)
+    })
+    .await;
+    match execution {
+        Ok(Ok(response)) => match encode_create_acknowledgement_policy_response(&response) {
+            Ok(body) => json_response(StatusCode::CREATED, body, state.schema_digest),
+            Err(_) => failed(&state, request_id),
+        },
+        Ok(Err(error)) => service_error(&state, error, request_id),
+        Err(_) => service_error(&state, TopologyAdministrationError::Unavailable, request_id),
+    }
+}
+
+async fn assign_volume_locality_policy<C>(
+    State(state): State<ApiState<C>>,
+    Path((volume_id, policy_id)): Path<(String, String)>,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    assign_volume_placement_policy(
+        state,
+        volume_id,
+        policy_id,
+        PlacementPolicyKind::Locality,
+        request,
+    )
+    .await
+}
+
+async fn assign_volume_acknowledgement_policy<C>(
+    State(state): State<ApiState<C>>,
+    Path((volume_id, policy_id)): Path<(String, String)>,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    assign_volume_placement_policy(
+        state,
+        volume_id,
+        policy_id,
+        PlacementPolicyKind::Acknowledgement,
+        request,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum PlacementPolicyKind {
+    Locality,
+    Acknowledgement,
+}
+
+async fn assign_volume_placement_policy<C>(
+    state: ApiState<C>,
+    volume_id: String,
+    policy_id: String,
+    kind: PlacementPolicyKind,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    let request_id = request_identifier();
+    let (administrator, body) = match authenticated_body(&state, request, request_id.clone()).await
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let decoded = match decode_assign_volume_placement_policy_request(&body) {
+        Ok(value) => value,
+        Err(error) => return boundary_error(&state, error, request_id),
+    };
+    let controller = Arc::clone(&state.controller);
+    let execution = tokio::task::spawn_blocking(move || {
+        let mut controller = controller
+            .lock()
+            .map_err(|_| TopologyAdministrationError::Unavailable)?;
+        match kind {
+            PlacementPolicyKind::Locality => controller.assign_volume_locality_policy(
+                administrator,
+                &volume_id,
+                &policy_id,
+                decoded,
+            ),
+            PlacementPolicyKind::Acknowledgement => controller
+                .assign_volume_acknowledgement_policy(
+                    administrator,
+                    &volume_id,
+                    &policy_id,
+                    decoded,
+                ),
+        }
+    })
+    .await;
+    match execution {
+        Ok(Ok(response)) => match encode_assign_volume_placement_policy_response(&response) {
+            Ok(body) => json_response(StatusCode::OK, body, state.schema_digest),
+            Err(_) => failed(&state, request_id),
+        },
+        Ok(Err(error)) => service_error(&state, error, request_id),
+        Err(_) => service_error(&state, TopologyAdministrationError::Unavailable, request_id),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CellMemberKind {
+    Host,
+    Target,
+}
+
+async fn set_host_cell_membership<C>(
+    State(state): State<ApiState<C>>,
+    Path((cell_id, host_id)): Path<(String, String)>,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    set_cell_membership(state, cell_id, host_id, CellMemberKind::Host, request).await
+}
+
+async fn set_target_cell_membership<C>(
+    State(state): State<ApiState<C>>,
+    Path((cell_id, target_id)): Path<(String, String)>,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    set_cell_membership(state, cell_id, target_id, CellMemberKind::Target, request).await
+}
+
+async fn set_cell_membership<C>(
+    state: ApiState<C>,
+    cell_id: String,
+    member_id: String,
+    kind: CellMemberKind,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    let request_id = request_identifier();
+    let (administrator, body) = match authenticated_body(&state, request, request_id.clone()).await
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let decoded = match decode_set_fault_group_membership_request(&body) {
+        Ok(value) => value,
+        Err(error) => return boundary_error(&state, error, request_id),
+    };
+    let controller = Arc::clone(&state.controller);
+    let execution = tokio::task::spawn_blocking(move || {
+        let mut controller = controller
+            .lock()
+            .map_err(|_| TopologyAdministrationError::Unavailable)?;
+        match kind {
+            CellMemberKind::Host => controller.set_host_availability_cell_membership(
+                administrator,
+                &cell_id,
+                &member_id,
+                decoded,
+            ),
+            CellMemberKind::Target => controller.set_target_availability_cell_membership(
+                administrator,
+                &cell_id,
+                &member_id,
+                decoded,
+            ),
+        }
+    })
+    .await;
+    match execution {
+        Ok(Ok(response)) => match encode_set_availability_cell_membership_response(&response) {
+            Ok(body) => json_response(StatusCode::OK, body, state.schema_digest),
+            Err(_) => failed(&state, request_id),
+        },
         Ok(Err(error)) => service_error(&state, error, request_id),
         Err(_) => service_error(&state, TopologyAdministrationError::Unavailable, request_id),
     }
@@ -293,18 +750,21 @@ where
             Vec::new(),
         )));
     }
-    let body = to_bytes(request.into_body(), MAX_TOPOLOGY_MUTATION_BYTES)
-        .await
-        .map_err(|_| {
-            Box::new(public_error(
-                state,
-                StatusCode::PAYLOAD_TOO_LARGE,
-                ApiErrorCode::InvalidRequest,
-                "topology mutation body exceeds its bound",
-                request_id,
-                Vec::new(),
-            ))
-        })?;
+    let body = to_bytes(
+        request.into_body(),
+        MAX_PROTECTION_POLICY_MUTATION_BYTES.max(MAX_PLACEMENT_POLICY_MUTATION_BYTES),
+    )
+    .await
+    .map_err(|_| {
+        Box::new(public_error(
+            state,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            ApiErrorCode::InvalidRequest,
+            "topology mutation body exceeds its bound",
+            request_id,
+            Vec::new(),
+        ))
+    })?;
     Ok((administrator, body))
 }
 
@@ -340,6 +800,14 @@ fn encode_page<C>(state: &ApiState<C>, page: InventoryPage, request_id: String) 
         InventoryPage::Targets(value) => encode_list_topology_targets_response(&value),
         InventoryPage::FaultGroups(value) => encode_list_fault_groups_response(&value),
         InventoryPage::Memberships(value) => encode_list_fault_group_memberships_response(&value),
+        InventoryPage::ProtectionPolicies(value) => {
+            encode_list_protection_policies_response(&value)
+        }
+        InventoryPage::AvailabilityCells(value) => encode_list_availability_cells_response(&value),
+        InventoryPage::LocalityPolicies(value) => encode_list_locality_policies_response(&value),
+        InventoryPage::AcknowledgementPolicies(value) => {
+            encode_list_acknowledgement_policies_response(&value)
+        }
     };
     match encoded {
         Ok(body) => json_response(StatusCode::OK, body, state.schema_digest.clone()),

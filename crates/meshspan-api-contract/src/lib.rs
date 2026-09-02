@@ -30,6 +30,10 @@ mod passkey_registration;
 mod passkey_validation;
 mod permission_administration;
 mod permission_administration_validation;
+mod placement_policy_administration;
+mod placement_policy_administration_validation;
+mod protection_administration;
+mod protection_administration_validation;
 mod recovery_bundle_verification;
 mod recovery_bundle_verification_validation;
 mod recovery_code_management;
@@ -57,6 +61,8 @@ mod group_membership_administration_tests;
 mod identity_administration_tests;
 #[cfg(test)]
 mod namespace_mutation_tests;
+#[cfg(test)]
+mod placement_policy_administration_tests;
 #[cfg(test)]
 mod recovery_bundle_verification_tests;
 #[cfg(test)]
@@ -98,7 +104,8 @@ pub use file_upload::{
     AbortUploadRequest, AbortUploadResponse, BeginUploadRequest, BeginUploadResponse,
     CommitUploadRequest, CommitUploadResponse, ListUploadRangesQuery, ListUploadRangesResponse,
     MAX_UPLOAD_RANGE_BYTES, UploadDisposition, UploadId, UploadRange, UploadRangeCursor,
-    UploadState, UploadStatusResponse, WriteUploadRangeResponse,
+    UploadState, UploadStatusResponse, WriteAcknowledgement, WriteDurabilityScope,
+    WriteUploadRangeResponse,
 };
 pub use file_upload_validation::{
     MAX_ABORT_UPLOAD_BYTES, MAX_BEGIN_UPLOAD_BYTES, MAX_COMMIT_UPLOAD_BYTES,
@@ -203,6 +210,34 @@ pub use permission_administration_validation::{
     encode_list_volume_permission_grants_response, encode_revoke_permission_grant_response,
     validate_list_volume_permission_grants_query,
 };
+pub use placement_policy_administration::{
+    AcknowledgementCellMode, AcknowledgementConsistency, AcknowledgementPolicySummary,
+    AssignVolumePlacementPolicyRequest, AssignVolumePlacementPolicyResponse,
+    CreateAcknowledgementCellRequirement, CreateAcknowledgementPolicyRequest,
+    CreateAcknowledgementPolicyResponse, CreateLocalityPolicyRequest, CreateLocalityPolicyResponse,
+    CreateLocalityRequirement, ListAcknowledgementPoliciesResponse, ListLocalityPoliciesResponse,
+    ListPlacementPoliciesQuery, LocalityPolicySummary, LocalityRequirementSummary,
+    PlacementPolicyCursor, ProtectionScenarioReferenceId, StrongFallback,
+};
+pub use placement_policy_administration_validation::{
+    MAX_PLACEMENT_POLICY_MUTATION_BYTES, decode_assign_volume_placement_policy_request,
+    decode_create_acknowledgement_policy_request, decode_create_locality_policy_request,
+    encode_assign_volume_placement_policy_response, encode_create_acknowledgement_policy_response,
+    encode_create_locality_policy_response, encode_list_acknowledgement_policies_response,
+    encode_list_locality_policies_response,
+};
+pub use protection_administration::{
+    AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
+    CreateProtectionPolicyRequest, CreateProtectionPolicyResponse, CreateProtectionScenario,
+    ListProtectionPoliciesQuery, ListProtectionPoliciesResponse, ProtectionFailureTerm,
+    ProtectionFailureTermSummary, ProtectionName, ProtectionPolicyCursor, ProtectionPolicySummary,
+    ProtectionScenarioSummary,
+};
+pub use protection_administration_validation::{
+    MAX_PROTECTION_POLICY_MUTATION_BYTES, decode_assign_volume_protection_policy_request,
+    decode_create_protection_policy_request, encode_assign_volume_protection_policy_response,
+    encode_create_protection_policy_response, encode_list_protection_policies_response,
+};
 pub use recovery_bundle_verification::{
     ConfirmRecoveryBundleRequest, ConfirmRecoveryBundleResponse,
 };
@@ -238,18 +273,22 @@ pub use storage_folder_administration_validation::{
     validate_list_storage_folders_query,
 };
 pub use topology_administration::{
+    AvailabilityCellSummary, CreateAvailabilityCellRequest, CreateAvailabilityCellResponse,
     CreateFaultGroupRequest, CreateFaultGroupResponse, FaultGroupClassName,
-    FaultGroupMembershipSummary, FaultGroupName, FaultGroupSummary,
+    FaultGroupMembershipSummary, FaultGroupName, FaultGroupSummary, ListAvailabilityCellsResponse,
     ListFaultGroupMembershipsResponse, ListFaultGroupsResponse, ListTopologyNodesResponse,
-    ListTopologyQuery, ListTopologyTargetsResponse, SetFaultGroupMembershipRequest,
-    SetFaultGroupMembershipResponse, TopologyCursor, TopologyNodeRoles, TopologyNodeState,
-    TopologyNodeSummary, TopologyTargetState, TopologyTargetSummary,
+    ListTopologyQuery, ListTopologyTargetsResponse, SetAvailabilityCellMembershipResponse,
+    SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse, TopologyCursor,
+    TopologyNodeRoles, TopologyNodeState, TopologyNodeSummary, TopologyTargetState,
+    TopologyTargetSummary,
 };
 pub use topology_administration_validation::{
-    MAX_TOPOLOGY_MUTATION_BYTES, decode_create_fault_group_request,
-    decode_set_fault_group_membership_request, encode_create_fault_group_response,
-    encode_list_fault_group_memberships_response, encode_list_fault_groups_response,
-    encode_list_topology_nodes_response, encode_list_topology_targets_response,
+    MAX_TOPOLOGY_MUTATION_BYTES, decode_create_availability_cell_request,
+    decode_create_fault_group_request, decode_set_fault_group_membership_request,
+    encode_create_availability_cell_response, encode_create_fault_group_response,
+    encode_list_availability_cells_response, encode_list_fault_group_memberships_response,
+    encode_list_fault_groups_response, encode_list_topology_nodes_response,
+    encode_list_topology_targets_response, encode_set_availability_cell_membership_response,
     encode_set_fault_group_membership_response, validate_list_topology_query,
 };
 pub use totp_registration::{

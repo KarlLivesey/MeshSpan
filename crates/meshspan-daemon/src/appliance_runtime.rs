@@ -2036,10 +2036,11 @@ impl StorageTargetRuntime {
                 Err(_) => failures = failures.saturating_add(1),
             }
         }
-        if let Some(target) = self.active.values().min_by_key(|target| target.target_id())
-            && self.native_filesystem.ensure_open(target, now).is_err()
-        {
-            failures = failures.saturating_add(1);
+        if !self.active.is_empty() {
+            let targets = self.active.values().cloned().collect::<Vec<_>>();
+            if self.native_filesystem.ensure_open(&targets, now).is_err() {
+                failures = failures.saturating_add(1);
+            }
         }
         self.readiness.store_degraded(failures > 0);
     }

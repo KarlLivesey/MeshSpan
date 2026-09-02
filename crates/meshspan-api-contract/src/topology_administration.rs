@@ -317,3 +317,78 @@ pub struct SetFaultGroupMembershipResponse {
     #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
     pub revision: u64,
 }
+
+/// One named availability locality used by placement and acknowledgement policy.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AvailabilityCellSummary {
+    /// Stable cell identity.
+    #[schemars(length(equal = 36), pattern(r"^[0-9a-f-]{36}$"))]
+    pub cell_id: String,
+    /// User-visible cell name.
+    #[schemars(length(min = 1, max = 256))]
+    pub name: String,
+    /// Optional parent used for presentation and inherited target membership.
+    #[schemars(length(equal = 36), pattern(r"^[0-9a-f-]{36}$"))]
+    pub parent_cell_id: Option<String>,
+    /// Last authoritative metadata revision.
+    #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
+    pub revision: u64,
+}
+
+/// One bounded page of availability localities.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListAvailabilityCellsResponse {
+    /// Stable name-ordered cells.
+    #[schemars(length(max = 256))]
+    pub cells: Vec<AvailabilityCellSummary>,
+    /// Ready-to-follow same-origin URL, or null at the terminal page.
+    #[schemars(
+        length(min = 1, max = 16_384),
+        pattern(r"^/api/latest/admin/topology/availability-cells")
+    )]
+    pub next_page_url: Option<String>,
+}
+
+/// Exact-retry request to create one availability locality.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateAvailabilityCellRequest {
+    /// Client-generated exact-retry identity.
+    pub operation_id: OperationId,
+    /// Human-readable locality name.
+    pub name: FaultGroupName,
+    /// Optional existing parent cell.
+    #[schemars(length(equal = 36), pattern(r"^[0-9a-f-]{36}$"))]
+    pub parent_cell_id: Option<String>,
+}
+
+/// Durable availability-cell creation result.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateAvailabilityCellResponse {
+    /// Exact idempotency identity whose result was resolved.
+    pub operation_id: OperationId,
+    /// Current created cell.
+    pub cell: AvailabilityCellSummary,
+}
+
+/// Durable desired membership of a machine or target in one availability cell.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetAvailabilityCellMembershipResponse {
+    /// Exact idempotency identity whose result was resolved.
+    pub operation_id: OperationId,
+    /// Availability-cell identity from the route.
+    #[schemars(length(equal = 36), pattern(r"^[0-9a-f-]{36}$"))]
+    pub cell_id: String,
+    /// Machine or target identity from the route.
+    #[schemars(length(equal = 36), pattern(r"^[0-9a-f-]{36}$"))]
+    pub member_id: String,
+    /// `true` when the member is present after this operation.
+    pub present: bool,
+    /// Authoritative mutation revision.
+    #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
+    pub revision: u64,
+}

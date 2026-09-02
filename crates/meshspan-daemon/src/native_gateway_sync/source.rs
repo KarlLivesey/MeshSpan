@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use meshspan_cluster::{
     version_native_content_layout_chunk, version_native_content_layout_header,
-    version_native_shard_receipt,
+    version_native_protected_stripe, version_native_shard_receipt,
 };
 use meshspan_domain::{
     ContentManifestId, DurationMicros, NamespaceCommitId, NodeId, OperationId, UnixMicros, VolumeId,
@@ -130,52 +130,69 @@ pub(super) fn content_layout(
     let transfer = catalog
         .committed_layout_transfer(content)
         .map_err(|_| NativeGatewaySyncError::Unavailable)?;
-    let inventory = catalog
-        .committed_shard_inventory(content)
-        .map_err(|_| NativeGatewaySyncError::Unavailable)?;
-    let (chunks, receipts, next_index) = if transfer.header().chunk_count == 0 {
-        (Vec::new(), Vec::new(), None)
+    let (chunks, receipts, protected_stripes, next_index) = if transfer.header().chunk_count == 0 {
+        (Vec::new(), Vec::new(), Vec::new(), None)
     } else {
         let limit = usize::try_from(request.limit).map_err(|_| NativeGatewaySyncError::Invalid)?;
         let layout_page = transfer
             .page(request.after_index, limit)
             .map_err(|_| NativeGatewaySyncError::Invalid)?;
-        let shard_page = inventory
-            .page(request.after_index, limit)
-            .map_err(|_| NativeGatewaySyncError::Invalid)?;
-        if layout_page.next_index() != shard_page.next_index
-            || layout_page.chunks().len() != shard_page.shards.len()
-            || layout_page
+        let chunks = layout_page
+            .chunks()
+            .iter()
+            .copied()
+            .map(version_native_content_layout_chunk)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| NativeGatewaySyncError::Unavailable)?;
+        if transfer.header().manifest.format_version == 2 {
+            let protected = layout_page
                 .chunks()
                 .iter()
-                .zip(shard_page.shards.as_slice())
-                .any(|(chunk, receipt)| chunk.chunk_index != receipt.shard.stripe_index)
-        {
-            return Err(NativeGatewaySyncError::Unavailable);
-        }
-        (
-            layout_page
-                .chunks()
-                .iter()
-                .copied()
-                .map(version_native_content_layout_chunk)
+                .map(|chunk| {
+                    catalog
+                        .committed_protected_stripe(content, chunk.chunk_index)
+                        .map(|stripe| version_native_protected_stripe(&stripe))
+                })
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|_| NativeGatewaySyncError::Unavailable)?,
-            shard_page
-                .shards
-                .as_slice()
-                .iter()
-                .copied()
-                .map(version_native_shard_receipt)
-                .collect(),
-            layout_page.next_index(),
-        )
+                .map_err(|_| NativeGatewaySyncError::Unavailable)?;
+            (chunks, Vec::new(), protected, layout_page.next_index())
+        } else {
+            let inventory = catalog
+                .committed_shard_inventory(content)
+                .map_err(|_| NativeGatewaySyncError::Unavailable)?;
+            let shard_page = inventory
+                .page(request.after_index, limit)
+                .map_err(|_| NativeGatewaySyncError::Invalid)?;
+            if layout_page.next_index() != shard_page.next_index
+                || layout_page.chunks().len() != shard_page.shards.len()
+                || layout_page
+                    .chunks()
+                    .iter()
+                    .zip(shard_page.shards.as_slice())
+                    .any(|(chunk, receipt)| chunk.chunk_index != receipt.shard.stripe_index)
+            {
+                return Err(NativeGatewaySyncError::Unavailable);
+            }
+            (
+                chunks,
+                shard_page
+                    .shards
+                    .as_slice()
+                    .iter()
+                    .copied()
+                    .map(version_native_shard_receipt)
+                    .collect(),
+                Vec::new(),
+                layout_page.next_index(),
+            )
+        }
     };
     Ok(Message::NativeContentLayoutPage(NativeContentLayoutPage {
         header: Some(version_native_content_layout_header(transfer.header())),
         chunks,
         receipts,
         next_index,
+        protected_stripes,
     }))
 }
 

@@ -411,6 +411,10 @@ Requirements: ACC-001–004, ACC-006, ACC-007, ACC-010, ACC-011, TST-004.
 
 **Depends on:** Stages 4–7.
 
+**Status:** complete. Fault-aware placement, streaming erasure coding, degraded
+reads and the real six-daemon HTTPS/SMB protection proof pass locally. See
+[`stage-8-evidence.md`](stage-8-evidence.md).
+
 Build:
 
 - administrator-defined overlapping fault groups and scenario evaluator;

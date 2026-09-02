@@ -54,11 +54,7 @@ impl FilesystemFileAdapter for NativeFilesystemRuntime {
         request: AdapterFlushFileRequest,
     ) -> Result<NamespacePublicationReceipt, Self::Error> {
         let receipt = self.with_mut(|filesystem| filesystem.flush_file(context, request))?;
-        self.publish_namespace_head(
-            receipt.namespace_commit_id,
-            Some(receipt.file_version_id),
-            request.observed_at,
-        )?;
+        self.publish_file_head(receipt, request.observed_at)?;
         Ok(receipt)
     }
 
@@ -95,11 +91,7 @@ impl FilesystemFileAdapter for NativeFilesystemRuntime {
     ) -> Result<FilesystemHandleCreateReceipt, Self::Error> {
         let receipt = self.with_mut(|filesystem| filesystem.create_file(context, request))?;
         if let Some(creation) = receipt.creation {
-            self.publish_namespace_head(
-                creation.namespace_commit_id,
-                Some(creation.file_version_id),
-                request.observed_at,
-            )?;
+            self.publish_file_head(creation, request.observed_at)?;
         }
         Ok(receipt)
     }
@@ -131,11 +123,7 @@ impl FilesystemFileAdapter for NativeFilesystemRuntime {
     ) -> Result<FilesystemHandleCloseReceipt, Self::Error> {
         let receipt = self.with_mut(|filesystem| filesystem.close_file(context, request))?;
         if let Some(flush) = receipt.flush {
-            self.publish_namespace_head(
-                flush.namespace_commit_id,
-                Some(flush.file_version_id),
-                request.observed_at,
-            )?;
+            self.publish_file_head(flush, request.observed_at)?;
         }
         if let Some(delete) = receipt.delete {
             self.publish_namespace_head(delete.namespace_commit_id, None, request.observed_at)?;
@@ -232,12 +220,22 @@ impl FilesystemUploadAdapter for NativeFilesystemRuntime {
         context: meshspan_filesystem::FilesystemAccessContext,
         request: AdapterUploadCommitRequest,
     ) -> Result<UploadCommitReceipt, Self::Error> {
-        let receipt = self.with_mut(|filesystem| filesystem.commit_upload(context, request))?;
-        self.publish_namespace_head(
-            receipt.publication.namespace_commit_id,
-            Some(receipt.publication.file_version_id),
-            request.observed_at,
-        )?;
+        let mut receipt = self.with_mut(|filesystem| filesystem.commit_upload(context, request))?;
+        let acknowledgement = self.publish_file_head(receipt.publication, request.observed_at)?;
+        let expected = if receipt.acknowledgement.acknowledged_class
+            == meshspan_filesystem::ContentAcknowledgementClass::Strong
+        {
+            receipt
+                .acknowledgement
+                .globally_converged()
+                .ok_or(NativeFilesystemRuntimeError::StrongBarrierFailed)?
+        } else {
+            receipt.acknowledgement
+        };
+        if acknowledgement != expected {
+            return Err(NativeFilesystemRuntimeError::StrongBarrierFailed);
+        }
+        receipt.acknowledgement = acknowledgement;
         Ok(receipt)
     }
 }

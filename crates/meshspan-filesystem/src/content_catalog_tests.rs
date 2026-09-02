@@ -1,17 +1,23 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-use meshspan_contracts::{ShardIdentity, ShardReceipt};
+use meshspan_contracts::{
+    BoundedBytes, CodingLayout, ShardAcknowledgement, ShardIdentity, ShardReceipt, VersionedPayload,
+};
 use meshspan_domain::{
-    ContentManifestId, EntropyError, NodeId, OperationId, RandomSource, Revision, TargetId,
-    UnixMicros, VolumeId,
+    ContentManifestId, DurationMicros, EntropyError, NodeId, OperationId, RandomSource, Revision,
+    TargetId, UnixMicros, VolumeId,
 };
 use tempfile::tempdir;
 
-use super::{ContentCatalogError, DurableContentCatalog, PreparedContentChunk};
+use super::{
+    ContentCatalogError, DurableContentCatalog, PreparedContentChunk, PreparedProtectedShard,
+    PreparedProtectedStripe, ProtectedShardCursor,
+};
 use crate::{
-    CompletedStage, ContentEncryptionKey, ContentKeyEnvelopeCipher, ContentLayoutChunk,
+    CompletedStage, ContentAcknowledgementClass, ContentAcknowledgementPolicy,
+    ContentEncryptionKey, ContentKeyEnvelopeCipher, ContentLayoutChunk,
     ContentLayoutTransferHeader, ContentLayoutTransferPage, ContentPublicationRequest,
-    PublishedContentReference, VolumeKeyEncryptionKey,
+    ContentStrongFallback, PublishedContentReference, VolumeKeyEncryptionKey,
 };
 
 struct SourceLayoutFixture {
@@ -20,6 +26,345 @@ struct SourceLayoutFixture {
     first_page: ContentLayoutTransferPage,
     second_page: ContentLayoutTransferPage,
     chunks: [PreparedContentChunk; 3],
+}
+
+#[test]
+fn protected_stripe_plan_and_receipts_survive_restart_before_commit()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let (request, stripe) = protected_fixture()?;
+    assert_ne!(stripe.chunk().storage_layout_digest, [0; 32]);
+
+    let manifest = {
+        let mut catalog = DurableContentCatalog::open(directory.path(), UnixMicros::new(1))?;
+        catalog.begin(request)?;
+        assert!(matches!(
+            catalog.append_chunks(request, &[stripe.chunk()]),
+            Err(ContentCatalogError::InvalidInput)
+        ));
+        catalog.append_protected_stripes(request, std::slice::from_ref(&stripe))?;
+        let manifest = catalog.seal_layout(
+            request,
+            CompletedStage {
+                logical_length: 2,
+                content_digest: [9; 32],
+            },
+            2,
+            wrapped_key()?,
+        )?;
+        assert!(matches!(
+            catalog.finish(request, UnixMicros::new(4)),
+            Err(ContentCatalogError::Incomplete)
+        ));
+        let first = catalog.pending_protected_shards(request, None, 2)?;
+        assert_eq!(first.shards.len(), 2);
+        assert_eq!(
+            first.next,
+            Some(ProtectedShardCursor {
+                chunk_index: 0,
+                shard_index: 1,
+            })
+        );
+        manifest
+    };
+
+    let mut catalog = DurableContentCatalog::open(directory.path(), UnixMicros::new(5))?;
+    assert_eq!(catalog.protected_stripe(request, 0)?, stripe);
+    let pending = catalog.pending_protected_shards(request, None, 10)?;
+    assert_eq!(pending.shards.len(), 4);
+    for (cursor, shard) in pending
+        .shards
+        .as_slice()
+        .iter()
+        .filter(|(_, shard)| shard.acknowledgement == ShardAcknowledgement::Required)
+    {
+        let receipt = protected_receipt(manifest.root_digest, *cursor, *shard);
+        catalog.record_protected_receipt(request, receipt, UnixMicros::new(6))?;
+        catalog.record_protected_receipt(request, receipt, UnixMicros::new(7))?;
+    }
+    let eventual = catalog.pending_protected_shards(request, None, 10)?;
+    assert_eq!(eventual.shards.len(), 1);
+    assert_eq!(catalog.finish(request, UnixMicros::new(8))?, manifest);
+    let (cursor, shard) = eventual.shards.as_slice()[0];
+    catalog.record_protected_receipt(
+        request,
+        protected_receipt(manifest.root_digest, cursor, shard),
+        UnixMicros::new(9),
+    )?;
+    assert!(
+        catalog
+            .pending_protected_shards(request, None, 10)?
+            .shards
+            .is_empty()
+    );
+    drop(catalog);
+
+    let catalog = DurableContentCatalog::open(directory.path(), UnixMicros::new(9))?;
+    assert_eq!(catalog.resolve(request)?, Some(manifest));
+    Ok(())
+}
+
+#[test]
+fn strong_deadline_never_silently_falls_back_and_persists_an_explicit_eventual_receipt()
+-> Result<(), Box<dyn std::error::Error>> {
+    for fallback in [
+        ContentStrongFallback::RemainPending,
+        ContentStrongFallback::FailAtDeadline,
+    ] {
+        let directory = tempdir()?;
+        let (request, _) = protected_fixture()?;
+        let mut catalog = DurableContentCatalog::open(directory.path(), UnixMicros::new(1))?;
+        catalog.begin(request)?;
+        catalog.configure_protected_acknowledgement(
+            request,
+            strong_policy(fallback),
+            meshspan_domain::DurabilityScope::CellReplicated,
+        )?;
+        let before_deadline = ContentPublicationRequest {
+            observed_at: UnixMicros::new(14),
+            ..request
+        };
+        assert_eq!(
+            catalog.strong_fallback_for_attempt(before_deadline)?,
+            Some(ContentStrongFallback::RemainPending)
+        );
+        let at_deadline = ContentPublicationRequest {
+            observed_at: UnixMicros::new(15),
+            ..request
+        };
+        assert_eq!(
+            catalog.strong_fallback_for_attempt(at_deadline)?,
+            Some(fallback)
+        );
+        assert!(matches!(
+            catalog.finish_eventual_fallback(at_deadline),
+            Err(ContentCatalogError::InvalidInput)
+        ));
+    }
+
+    let directory = tempdir()?;
+    let (request, stripe) = protected_fixture()?;
+    let mut catalog = DurableContentCatalog::open(directory.path(), UnixMicros::new(1))?;
+    catalog.begin(request)?;
+    catalog.configure_protected_acknowledgement(
+        request,
+        strong_policy(ContentStrongFallback::Eventual),
+        meshspan_domain::DurabilityScope::CellReplicated,
+    )?;
+    catalog.append_protected_stripes(request, std::slice::from_ref(&stripe))?;
+    let manifest = catalog.seal_layout(
+        request,
+        CompletedStage {
+            logical_length: 2,
+            content_digest: [9; 32],
+        },
+        2,
+        wrapped_key()?,
+    )?;
+    for (index, shard) in stripe.shards().iter().enumerate().take(2) {
+        let cursor = ProtectedShardCursor {
+            chunk_index: 0,
+            shard_index: u16::try_from(index)?,
+        };
+        catalog.record_protected_receipt(
+            request,
+            protected_receipt(manifest.root_digest, cursor, *shard),
+            UnixMicros::new(12),
+        )?;
+    }
+    let at_deadline = ContentPublicationRequest {
+        observed_at: UnixMicros::new(15),
+        ..request
+    };
+    assert_eq!(catalog.finish_eventual_fallback(at_deadline)?, manifest);
+    let evidence = catalog.protected_acknowledgement_evidence(at_deadline)?;
+    assert_eq!(
+        evidence.configured_class,
+        ContentAcknowledgementClass::Strong
+    );
+    assert_eq!(
+        evidence.acknowledged_class,
+        ContentAcknowledgementClass::Eventual
+    );
+    assert!(evidence.fallback_applied);
+    assert_eq!(evidence.required_shard_receipts, 2);
+    assert_eq!(evidence.pending_eventual_shards, 2);
+    drop(catalog);
+
+    let reopened = DurableContentCatalog::open(directory.path(), UnixMicros::new(20))?;
+    assert_eq!(
+        reopened.protected_acknowledgement_evidence(at_deadline)?,
+        evidence
+    );
+    Ok(())
+}
+
+fn strong_policy(fallback: ContentStrongFallback) -> ContentAcknowledgementPolicy {
+    ContentAcknowledgementPolicy {
+        class: ContentAcknowledgementClass::Strong,
+        strong_wait: Some(DurationMicros::new(13)),
+        fallback,
+    }
+}
+
+#[test]
+fn protected_layout_import_replays_exact_pages_and_receipts()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source_directory = tempdir()?;
+    let (request, stripe) = protected_fixture()?;
+    let mut source = DurableContentCatalog::open(source_directory.path(), UnixMicros::new(1))?;
+    source.begin(request)?;
+    source.append_protected_stripes(request, std::slice::from_ref(&stripe))?;
+    let manifest = source.seal_layout(
+        request,
+        CompletedStage {
+            logical_length: 2,
+            content_digest: [9; 32],
+        },
+        2,
+        wrapped_key()?,
+    )?;
+    for (cursor, shard) in source
+        .pending_protected_shards(request, None, 10)?
+        .shards
+        .as_slice()
+    {
+        if shard.acknowledgement == ShardAcknowledgement::Required {
+            source.record_protected_receipt(
+                request,
+                protected_receipt(manifest.root_digest, *cursor, *shard),
+                UnixMicros::new(3),
+            )?;
+        }
+    }
+    source.finish(request, UnixMicros::new(4))?;
+    let committed = source.committed_protected_stripe(
+        PublishedContentReference {
+            publication_operation_id: request.operation_id,
+            manifest,
+        },
+        0,
+    )?;
+    let transfer = source.committed_layout_transfer(PublishedContentReference {
+        publication_operation_id: request.operation_id,
+        manifest,
+    })?;
+    let header = transfer.header();
+    let page = transfer.page(None, 1)?;
+
+    let receiver_directory = tempdir()?;
+    let import_request = ContentPublicationRequest {
+        observed_at: UnixMicros::new(5),
+        ..request
+    };
+    let mut receiver = DurableContentCatalog::open(receiver_directory.path(), UnixMicros::new(5))?;
+    receiver.begin_layout_import(import_request, header)?;
+    receiver.append_layout_import_page(import_request, header, &page)?;
+    receiver.append_layout_import_page(import_request, header, &page)?;
+    let mut imported_chunk = receiver.content_chunk(import_request, 0)?;
+    imported_chunk.storage_layout_digest = [0; 32];
+    let imported_stripe = PreparedProtectedStripe::from_untrusted(
+        import_request,
+        imported_chunk,
+        committed.stripe.coding_layout(),
+        committed.stripe.topology_revision(),
+        committed.stripe.capacity_revision(),
+        committed.stripe.policy_evidence().clone(),
+        committed.stripe.shards().to_vec(),
+    )?;
+    receiver.append_protected_layout_import_page(
+        import_request,
+        std::slice::from_ref(&imported_stripe),
+    )?;
+    receiver.append_protected_layout_import_page(
+        import_request,
+        std::slice::from_ref(&imported_stripe),
+    )?;
+    receiver.seal_layout_import(import_request, header)?;
+    for receipt in committed.receipts.as_slice() {
+        receiver.record_protected_receipt(import_request, *receipt, UnixMicros::new(6))?;
+        receiver.record_protected_receipt(import_request, *receipt, UnixMicros::new(7))?;
+    }
+    receiver.finish(import_request, UnixMicros::new(8))?;
+    let received_stripe = receiver.committed_protected_stripe(
+        PublishedContentReference {
+            publication_operation_id: import_request.operation_id,
+            manifest,
+        },
+        0,
+    )?;
+    assert_eq!(received_stripe.stripe, imported_stripe);
+    assert_eq!(received_stripe.receipts, committed.receipts);
+    Ok(())
+}
+
+fn protected_fixture()
+-> Result<(ContentPublicationRequest, PreparedProtectedStripe), Box<dyn std::error::Error>> {
+    let request = ContentPublicationRequest {
+        format_version: 2,
+        logical_length: 2,
+        ..request()?
+    };
+    let chunk = PreparedContentChunk {
+        storage_layout_digest: [0; 32],
+        ..chunk(0, 20)?
+    };
+    let shards = (0_u8..4)
+        .map(|index| {
+            Ok(PreparedProtectedShard {
+                shard_index: u16::from(index),
+                shard_generation: 1,
+                provider_operation_id: OperationId::from_bytes([30 + index; 16])?,
+                expected_length: 16,
+                expected_digest: [50 + index; 32],
+                target_id: TargetId::from_bytes([70 + index; 16])?,
+                target_generation: 2,
+                acknowledgement: if index == 3 {
+                    ShardAcknowledgement::Eventual
+                } else {
+                    ShardAcknowledgement::Required
+                },
+                eventual_fallback: if index < 2 {
+                    ShardAcknowledgement::Required
+                } else {
+                    ShardAcknowledgement::Eventual
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+    let stripe = PreparedProtectedStripe::from_untrusted(
+        request,
+        chunk,
+        CodingLayout::new(2, 2, 16)?,
+        Revision::new(5),
+        Revision::new(6),
+        VersionedPayload {
+            format_version: 1,
+            bytes: BoundedBytes::copy_from(b"two-device-loss", 64)?,
+        },
+        shards,
+    )?;
+    Ok((request, stripe))
+}
+
+const fn protected_receipt(
+    manifest_digest: [u8; 32],
+    cursor: ProtectedShardCursor,
+    shard: PreparedProtectedShard,
+) -> ShardReceipt {
+    ShardReceipt {
+        operation_id: shard.provider_operation_id,
+        shard: ShardIdentity {
+            manifest_digest,
+            stripe_index: cursor.chunk_index,
+            shard_index: shard.shard_index,
+            generation: shard.shard_generation,
+        },
+        length: shard.expected_length,
+        digest: shard.expected_digest,
+        target_id: shard.target_id,
+        target_generation: shard.target_generation,
+    }
 }
 
 #[test]
@@ -496,6 +841,7 @@ fn chunk(
         plaintext_digest: [operation_byte; 32],
         ciphertext_length: 18,
         ciphertext_digest: [operation_byte.saturating_add(10); 32],
+        storage_layout_digest: [0; 32],
         provider_operation_id: OperationId::from_bytes([operation_byte; 16])?,
     })
 }

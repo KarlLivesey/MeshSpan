@@ -3,7 +3,9 @@
 //! Stable public failure classification for the production native filesystem.
 
 use meshspan_cluster::MetadataFilesystemAuthorityError;
-use meshspan_filesystem::{AuthorisedFilesystemError, HandleError};
+use meshspan_filesystem::{
+    AuthorisedFilesystemError, ContentPublicationError, FilesystemCommitError, HandleError,
+};
 use meshspan_metadata::RepositoryError;
 
 use super::{NativeFilesystemRuntimeError, ProductionFilesystemError};
@@ -14,7 +16,9 @@ pub(crate) fn classify_native_filesystem_error(
     error: &NativeFilesystemRuntimeError,
 ) -> FileApiFailure {
     match error {
-        NativeFilesystemRuntimeError::Unavailable => FileApiFailure::Unavailable,
+        NativeFilesystemRuntimeError::Unavailable
+        | NativeFilesystemRuntimeError::StrongBarrierPending => FileApiFailure::Unavailable,
+        NativeFilesystemRuntimeError::StrongBarrierFailed => FileApiFailure::Failed,
         NativeFilesystemRuntimeError::Operation(error) => classify_operation_error(error),
     }
 }
@@ -25,8 +29,8 @@ fn classify_operation_error(error: &ProductionFilesystemError) -> FileApiFailure
         AuthorisedFilesystemError::TargetUnavailable => FileApiFailure::NotFound,
         AuthorisedFilesystemError::InvalidGrant
         | AuthorisedFilesystemError::HandleIo(_)
-        | AuthorisedFilesystemError::Commit(_)
         | AuthorisedFilesystemError::Read(_) => FileApiFailure::Failed,
+        AuthorisedFilesystemError::Commit(commit) => classify_commit_error(commit),
         AuthorisedFilesystemError::Authority(authority) => match authority {
             MetadataFilesystemAuthorityError::Denied(_) => FileApiFailure::AccessDenied,
             MetadataFilesystemAuthorityError::VolumeUnavailable => FileApiFailure::NotFound,
@@ -44,6 +48,30 @@ fn classify_operation_error(error: &ProductionFilesystemError) -> FileApiFailure
             | meshspan_filesystem::NamespaceQueryError::Directory(_) => FileApiFailure::Failed,
         },
         AuthorisedFilesystemError::Upload(upload) => classify_upload_error(upload),
+    }
+}
+
+fn classify_commit_error(error: &FilesystemCommitError) -> FileApiFailure {
+    match error {
+        FilesystemCommitError::Content(
+            ContentPublicationError::Unavailable | ContentPublicationError::StrongBarrierPending,
+        ) => FileApiFailure::Unavailable,
+        FilesystemCommitError::InvalidInput => FileApiFailure::InvalidInput,
+        FilesystemCommitError::Content(ContentPublicationError::Conflict) => {
+            FileApiFailure::Conflict
+        }
+        FilesystemCommitError::Content(ContentPublicationError::StrongBarrierDeadline) => {
+            FileApiFailure::StaleCursor
+        }
+        FilesystemCommitError::Stage(_)
+        | FilesystemCommitError::Upload(_)
+        | FilesystemCommitError::Content(
+            ContentPublicationError::InvalidInput
+            | ContentPublicationError::Corrupt
+            | ContentPublicationError::Io(_),
+        )
+        | FilesystemCommitError::Publication(_)
+        | FilesystemCommitError::Handle(_) => FileApiFailure::Failed,
     }
 }
 

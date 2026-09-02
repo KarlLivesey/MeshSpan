@@ -9,12 +9,13 @@ use sha2::{Digest, Sha256};
 use super::receipt::{decode_receipt, encode_result, result_digest, validate_position};
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError,
-    authentication_method, authentication_method_creation, authentication_policy, bootstrap,
-    cleanup_attestation, cleanup_completion, cleanup_inventory, cleanup_permit,
-    cleanup_reclamation, cluster, component, federation_actor_attestation, federation_assignment,
-    federation_grant, federation_mutation_admission, federation_quarantine,
-    federation_relationship, federation_storage_allocation, federation_succession, identity,
-    namespace, node_wrapping_key, recovery_authority, retention, root_delegation, routing,
+    acknowledgement_policy, authentication_method, authentication_method_creation,
+    authentication_policy, availability_cell, bootstrap, cleanup_attestation, cleanup_completion,
+    cleanup_inventory, cleanup_permit, cleanup_reclamation, cluster, component,
+    federation_actor_attestation, federation_assignment, federation_grant,
+    federation_mutation_admission, federation_quarantine, federation_relationship,
+    federation_storage_allocation, federation_succession, identity, locality_policy, namespace,
+    node_wrapping_key, protection_policy, recovery_authority, retention, root_delegation, routing,
     secret_generation, session, smb_export_configuration, snapshot_schedule, storage_target, tags,
     topology, user_snapshot, version_cleanup, volume_head,
 };
@@ -551,6 +552,15 @@ fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::RegisterStorageTarget(_)
             | AuthoritativeCommand::CreateFaultGroup(_)
             | AuthoritativeCommand::SetHostFaultGroupMembership(_)
+            | AuthoritativeCommand::CreateProtectionPolicy(_)
+            | AuthoritativeCommand::AssignVolumeProtectionPolicy(_)
+            | AuthoritativeCommand::CreateAvailabilityCell(_)
+            | AuthoritativeCommand::SetHostAvailabilityCellMembership(_)
+            | AuthoritativeCommand::SetTargetAvailabilityCellMembership(_)
+            | AuthoritativeCommand::CreateLocalityPolicy(_)
+            | AuthoritativeCommand::AssignVolumeLocalityPolicy(_)
+            | AuthoritativeCommand::CreateAcknowledgementPolicy(_)
+            | AuthoritativeCommand::AssignVolumeAcknowledgementPolicy(_)
             | AuthoritativeCommand::PublishSmbExport(_)
             | AuthoritativeCommand::WithdrawSmbExport(_)
             | AuthoritativeCommand::RegisterNodeWrappingKey(_)
@@ -587,6 +597,33 @@ fn execute_infrastructure_command(
         }
         AuthoritativeCommand::SetHostFaultGroupMembership(value) => {
             topology::set_host_membership(transaction, *value, revision)
+        }
+        AuthoritativeCommand::CreateProtectionPolicy(value) => {
+            protection_policy::create(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::AssignVolumeProtectionPolicy(value) => {
+            protection_policy::assign_volume(transaction, *value, revision)
+        }
+        AuthoritativeCommand::CreateAvailabilityCell(value) => {
+            availability_cell::create(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::SetHostAvailabilityCellMembership(value) => {
+            availability_cell::set_host_membership(transaction, *value, revision)
+        }
+        AuthoritativeCommand::SetTargetAvailabilityCellMembership(value) => {
+            availability_cell::set_target_membership(transaction, *value, revision)
+        }
+        AuthoritativeCommand::CreateLocalityPolicy(value) => {
+            locality_policy::create(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::AssignVolumeLocalityPolicy(value) => {
+            locality_policy::assign_volume(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::CreateAcknowledgementPolicy(value) => {
+            acknowledgement_policy::create(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::AssignVolumeAcknowledgementPolicy(value) => {
+            acknowledgement_policy::assign_volume(transaction, context, *value, revision)
         }
         AuthoritativeCommand::PublishSmbExport(value) => {
             smb_export_configuration::publish(transaction, context, value, revision)
@@ -1021,6 +1058,9 @@ fn advance_applied_position(
     }
 }
 
+// Stable persisted discriminants belong in one exhaustive table so a new command cannot compile
+// without receiving an explicit non-reused operation kind.
+#[allow(clippy::too_many_lines)]
 fn command_kind(command: &AuthoritativeCommand) -> u8 {
     match command {
         AuthoritativeCommand::BootstrapMesh(_) | AuthoritativeCommand::BootstrapAppliance(_) => 1,
@@ -1114,6 +1154,15 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::SetHostFaultGroupMembership(_) => 89,
         AuthoritativeCommand::PublishSmbExport(_) => 90,
         AuthoritativeCommand::WithdrawSmbExport(_) => 91,
+        AuthoritativeCommand::CreateProtectionPolicy(_) => 92,
+        AuthoritativeCommand::AssignVolumeProtectionPolicy(_) => 93,
+        AuthoritativeCommand::CreateAvailabilityCell(_) => 94,
+        AuthoritativeCommand::SetHostAvailabilityCellMembership(_) => 95,
+        AuthoritativeCommand::SetTargetAvailabilityCellMembership(_) => 96,
+        AuthoritativeCommand::CreateLocalityPolicy(_) => 97,
+        AuthoritativeCommand::AssignVolumeLocalityPolicy(_) => 98,
+        AuthoritativeCommand::CreateAcknowledgementPolicy(_) => 99,
+        AuthoritativeCommand::AssignVolumeAcknowledgementPolicy(_) => 100,
     }
 }
 

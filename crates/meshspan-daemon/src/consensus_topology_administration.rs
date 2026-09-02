@@ -3,12 +3,17 @@
 //! Consensus-owned adapter for mesh topology administration.
 
 use meshspan_cluster::MetadataAuthorityRequestError;
-use meshspan_domain::{FaultGroupId, OperationId};
+use meshspan_domain::{
+    AcknowledgementPolicyId, AvailabilityCellId, FaultGroupId, LocalityPolicyId, OperationId,
+    ProtectionPolicyId,
+};
 use meshspan_metadata::{
-    AuthoritativeCommand, CommandContext, CommandReceipt, FaultGroupCursor,
-    FaultGroupMembershipCursor, FaultGroupMembershipRecord, FaultGroupRecord, Page, PageLimit,
-    RepositoryError, TopologyNodeCursor, TopologyNodeRecord, TopologyTargetCursor,
-    TopologyTargetRecord,
+    AcknowledgementPolicyCursor, AcknowledgementPolicyRecord, AuthoritativeCommand,
+    AvailabilityCellCursor, AvailabilityCellRecord, CommandContext, CommandReceipt,
+    FaultGroupCursor, FaultGroupMembershipCursor, FaultGroupMembershipRecord, FaultGroupRecord,
+    LocalityPolicyCursor, LocalityPolicyRecord, Page, PageLimit, ProtectionPolicyCursor,
+    ProtectionPolicyRecord, RepositoryError, TopologyNodeCursor, TopologyNodeRecord,
+    TopologyTargetCursor, TopologyTargetRecord,
 };
 
 use crate::{
@@ -71,6 +76,94 @@ impl TopologyAdministrationAuthority for ConsensusAuthenticationAuthority {
     > {
         self.reader()
             .fault_group_memberships(after, limit)
+            .map_err(|error| map_repository_error(&error))
+    }
+
+    fn protection_policies(
+        &self,
+        after: Option<&ProtectionPolicyCursor>,
+        limit: PageLimit,
+    ) -> Result<
+        Page<ProtectionPolicyRecord, ProtectionPolicyCursor>,
+        TopologyAdministrationAuthorityError,
+    > {
+        self.reader()
+            .protection_policies(after, limit)
+            .map_err(|error| map_repository_error(&error))
+    }
+
+    fn protection_policy(
+        &self,
+        policy_id: ProtectionPolicyId,
+    ) -> Result<Option<ProtectionPolicyRecord>, TopologyAdministrationAuthorityError> {
+        self.reader()
+            .protection_policy(policy_id)
+            .map_err(|error| map_repository_error(&error))
+    }
+
+    fn availability_cells(
+        &self,
+        after: Option<&AvailabilityCellCursor>,
+        limit: PageLimit,
+    ) -> Result<
+        Page<AvailabilityCellRecord, AvailabilityCellCursor>,
+        TopologyAdministrationAuthorityError,
+    > {
+        self.reader()
+            .availability_cells(after, limit)
+            .map_err(|error| map_repository_error(&error))
+    }
+
+    fn availability_cell(
+        &self,
+        cell_id: AvailabilityCellId,
+    ) -> Result<Option<AvailabilityCellRecord>, TopologyAdministrationAuthorityError> {
+        self.reader()
+            .availability_cell(cell_id)
+            .map_err(|error| map_repository_error(&error))
+    }
+
+    fn locality_policies(
+        &self,
+        after: Option<&LocalityPolicyCursor>,
+        limit: PageLimit,
+    ) -> Result<
+        Page<LocalityPolicyRecord, LocalityPolicyCursor>,
+        TopologyAdministrationAuthorityError,
+    > {
+        self.reader()
+            .locality_policies(after, limit)
+            .map_err(|error| map_repository_error(&error))
+    }
+
+    fn locality_policy(
+        &self,
+        policy_id: LocalityPolicyId,
+    ) -> Result<Option<LocalityPolicyRecord>, TopologyAdministrationAuthorityError> {
+        self.reader()
+            .locality_policy(policy_id)
+            .map_err(|error| map_repository_error(&error))
+    }
+
+    fn acknowledgement_policies(
+        &self,
+        after: Option<&AcknowledgementPolicyCursor>,
+        limit: PageLimit,
+    ) -> Result<
+        Page<AcknowledgementPolicyRecord, AcknowledgementPolicyCursor>,
+        TopologyAdministrationAuthorityError,
+    > {
+        self.reader()
+            .acknowledgement_policies(after, limit)
+            .map_err(|error| map_repository_error(&error))
+    }
+
+    fn acknowledgement_policy(
+        &self,
+        policy_id: AcknowledgementPolicyId,
+    ) -> Result<Option<AcknowledgementPolicyRecord>, TopologyAdministrationAuthorityError> {
+        self.reader()
+            .acknowledgement_policy(policy_id)
             .map_err(|error| map_repository_error(&error))
     }
 

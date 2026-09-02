@@ -4,6 +4,8 @@
 
 #[path = "support/passkey.rs"]
 mod passkey_support;
+#[path = "headless_process/stage8.rs"]
+mod stage8;
 
 use std::error::Error;
 use std::fs;
@@ -578,7 +580,10 @@ async fn clean_machine_operator_flow_uses_only_cli_and_public_https() -> Result<
 
         let content = b"clean machine native HTTPS round trip";
         upload_file(root.address, &root_client, api_key, &volume_id, content).await?;
-        wait_for_file_surfaces(peer.address, &peer_client, api_key, &volume_id, content).await
+        wait_for_file_surfaces(peer.address, &peer_client, api_key, &volume_id, content).await?;
+        processes[0].kill()?;
+        processes[0].wait()?;
+        assert_file_surfaces(peer.address, &peer_client, api_key, &volume_id, content).await
     }
     .await;
     stop_processes(&mut processes);
@@ -975,9 +980,18 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
     assert_volume_inventory_empty(fixture.address, &client, api_key).await?;
     create_user(fixture.address, &client, api_key).await?;
     let volume_id = create_volume(fixture.address, &client, api_key, &administrator_id).await?;
+    assign_single_node_strong_acknowledgement(fixture.address, &client, api_key, &volume_id)
+        .await?;
     assert_volume_visible(fixture.address, &client, api_key).await?;
     let content = b"headless native file bytes";
-    upload_file(fixture.address, &client, api_key, &volume_id, content).await?;
+    let committed = upload_file(fixture.address, &client, api_key, &volume_id, content).await?;
+    if committed["acknowledgement"]["configured_consistency"] != "strong"
+        || committed["acknowledgement"]["acknowledged_consistency"] != "strong"
+        || committed["acknowledgement"]["durability_scope"] != "globally_converged"
+        || committed["acknowledgement"]["policy_committed"] != true
+    {
+        return Err("strong upload returned no globally converged acknowledgement".into());
+    }
     assert_file_surfaces(fixture.address, &client, api_key, &volume_id, content).await?;
 
     process.kill()?;
@@ -1881,7 +1895,7 @@ async fn upload_file(
     api_key: &str,
     volume_id: &str,
     content: &[u8],
-) -> Result<(), Box<dyn Error>> {
+) -> Result<serde_json::Value, Box<dyn Error>> {
     let authorization = format!("Bearer {api_key}");
     let begin_body = serde_json::to_vec(&serde_json::json!({
         "operation_id": "00000000-0000-4000-8000-000000000006",
@@ -1952,9 +1966,62 @@ async fn upload_file(
     )
     .await?;
     require_status(&commit, "200 OK", "commit native upload")?;
-    if !response_body(&commit)?.contains("\"state\":\"committed\"") {
+    let committed: serde_json::Value = serde_json::from_str(response_body(&commit)?)?;
+    if committed["upload"]["state"] != "committed" {
         return Err("native upload did not return a committed file".into());
     }
+    Ok(committed)
+}
+
+async fn assign_single_node_strong_acknowledgement(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    volume_id: &str,
+) -> Result<(), Box<dyn Error>> {
+    let authorization = format!("Bearer {api_key}");
+    let create_body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000060",
+        "name": "Single node strong proof",
+        "consistency": "strong",
+        "minimum_durable_targets": 1,
+        "minimum_distinct_nodes": 1,
+        "strong_wait_micros": 5_000_000,
+        "fallback": "remain_pending",
+        "required_scenario_ids": [],
+        "cells": []
+    }))?;
+    let created = request_with_headers(
+        address,
+        client,
+        "POST",
+        "/api/latest/admin/acknowledgement-policies",
+        Some(&create_body),
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    require_status(
+        &created,
+        "201 Created",
+        "create strong acknowledgement policy",
+    )?;
+    let created: serde_json::Value = serde_json::from_str(response_body(&created)?)?;
+    let policy_id = created["policy"]["policy_id"]
+        .as_str()
+        .ok_or("strong acknowledgement policy omitted its identity")?;
+    let assign_body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000061"
+    }))?;
+    let assigned = request_with_headers(
+        address,
+        client,
+        "PUT",
+        &format!("/api/latest/admin/volumes/{volume_id}/acknowledgement-policies/{policy_id}"),
+        Some(&assign_body),
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    require_status(&assigned, "200 OK", "assign strong acknowledgement policy")?;
     Ok(())
 }
 

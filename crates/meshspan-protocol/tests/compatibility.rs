@@ -6,9 +6,9 @@ use meshspan_protocol::v1::control_envelope::Message;
 use meshspan_protocol::v1::data_control_envelope::Message as DataMessage;
 use meshspan_protocol::v1::{
     ComponentSupport, ControlEnvelope, DataControlEnvelope, DataFrame, DeleteShardRequest,
-    DeleteShardResult, NodeHello, NodeRole, OperationOutcome, OperationResult, Ping,
-    ProtocolVersion, PublishPresence, PutShardBegin, ReclaimShardRequest, ReclaimShardResult,
-    RequestHeader, ShardIdentity, VersionedPayload, VoteRequest, VoteResponse,
+    DeleteShardResult, NativeContentLayoutPage, NodeHello, NodeRole, OperationOutcome,
+    OperationResult, Ping, ProtocolVersion, PublishPresence, PutShardBegin, ReclaimShardRequest,
+    ReclaimShardResult, RequestHeader, ShardIdentity, VersionedPayload, VoteRequest, VoteResponse,
 };
 use meshspan_protocol::{
     WireContractError, WireLimits, decode_control_frame, decode_data_control_frame,
@@ -174,6 +174,38 @@ fn consensus_responses_are_bound_to_an_exact_quorum_plan() -> Result<(), Box<dyn
     response.quorum_plan_digest.clear();
     assert_eq!(
         encode_control_frame(&envelope(response), limits()?),
+        Err(WireContractError::InvalidMessage)
+    );
+    Ok(())
+}
+
+#[test]
+fn native_layout_pages_accept_exactly_one_durability_record_kind()
+-> Result<(), Box<dyn std::error::Error>> {
+    let envelope = |page: NativeContentLayoutPage| ControlEnvelope {
+        header: Some(valid_header()),
+        message: Some(Message::NativeContentLayoutPage(page)),
+    };
+    let page = NativeContentLayoutPage {
+        header: Some(versioned_payload()),
+        chunks: vec![versioned_payload()],
+        receipts: Vec::new(),
+        next_index: None,
+        protected_stripes: vec![versioned_payload()],
+    };
+    assert!(encode_control_frame(&envelope(page.clone()), limits()?).is_ok());
+
+    let mut both = page.clone();
+    both.receipts.push(versioned_payload());
+    assert_eq!(
+        encode_control_frame(&envelope(both), limits()?),
+        Err(WireContractError::InvalidMessage)
+    );
+
+    let mut missing = page;
+    missing.protected_stripes.clear();
+    assert_eq!(
+        encode_control_frame(&envelope(missing), limits()?),
         Err(WireContractError::InvalidMessage)
     );
     Ok(())

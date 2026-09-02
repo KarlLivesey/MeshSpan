@@ -2,11 +2,13 @@
 
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId, AuthenticationMethodId,
-    AuthenticationService, ComponentInstanceId, DurationMicros, EntropyError, FaultGroupClassId,
-    FaultGroupId, GrantId, GroupId, HostId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId,
-    PrincipalId, RandomSource, RecoveryCodeId, Revision, Rights, RoleId, SessionId, SmbExportId,
-    TargetId, UnixMicros, VolumeId,
+    AcknowledgementPolicyId, ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId,
+    AuthenticationMethodId, AuthenticationService, AvailabilityCellId, ComponentInstanceId,
+    DurationMicros, EntropyError, FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId,
+    GrantId, GroupId, HostId, LocalityPolicyId, LocalityRequirementId, MeshId, NamespaceCommitId,
+    NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PrincipalId, ProtectionPolicyId,
+    ProtectionScenarioId, RandomSource, RecoveryCodeId, Revision, Rights, RoleId, SessionId,
+    SmbExportId, TargetId, UnixMicros, VolumeId,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -15,15 +17,21 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::{
-    AddGroupMember, BootstrapMesh, BootstrapRecoveryIdentity, CommitSecretGeneration,
-    CreateActivationPolicy, CreateAuthenticationMethod, CreateComponent, CreateFaultGroup,
-    CreateGroup, CreateUser, CreateVolume, GrantInheritance, GrantPermission,
-    GrantPermissionWithActivation, IssueAuthenticationSession, NewAuthenticationCredential,
-    NewRecoveryCode, PermissionScope, PublishSmbExport, RecordName, RegisterNodeWrappingKey,
-    RegisterStorageTarget, RemoveGroupMember, RevokeAuthenticationMethod,
-    RevokeAuthenticationSession, SessionAuthenticationFactor, SessionClientLabel,
-    SetHostFaultGroupMembership, SmbExportGatewaySelection, StepUpAuthenticationSession,
-    StorageUsageLimit, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND, WithdrawSmbExport,
+    AcknowledgementCellRequirement, AcknowledgementCellRole, AcknowledgementConsistencyClass,
+    AddGroupMember, AssignVolumeAcknowledgementPolicy, AssignVolumeLocalityPolicy,
+    AssignVolumeProtectionPolicy, BootstrapMesh, BootstrapRecoveryIdentity,
+    CommitConvergedVolumeHead, CommitSecretGeneration, ConvergedHeadEvidence,
+    CreateAcknowledgementPolicy, CreateActivationPolicy, CreateAuthenticationMethod,
+    CreateAvailabilityCell, CreateComponent, CreateFaultGroup, CreateGroup, CreateLocalityPolicy,
+    CreateProtectionPolicy, CreateUser, CreateVolume, GrantInheritance, GrantPermission,
+    GrantPermissionWithActivation, IssueAuthenticationSession, LocalityRequirementConfiguration,
+    NewAuthenticationCredential, NewRecoveryCode, PermissionScope, ProtectionScenarioConfiguration,
+    PublishSmbExport, RecordName, RegisterNodeWrappingKey, RegisterStorageTarget,
+    RemoveGroupMember, RevokeAuthenticationMethod, RevokeAuthenticationSession,
+    SessionAuthenticationFactor, SessionClientLabel, SetHostAvailabilityCellMembership,
+    SetHostFaultGroupMembership, SetTargetAvailabilityCellMembership, SmbExportGatewaySelection,
+    StepUpAuthenticationSession, StorageUsageLimit, StrongFallbackMode, TotpAlgorithm,
+    VOLUME_CONTENT_KEY_SECRET_KIND, WithdrawSmbExport,
 };
 
 #[test]
@@ -72,6 +80,38 @@ fn unsupported_command_never_produces_partial_wire_bytes() -> Result<(), Box<dyn
         encode_authoritative_command(context, &command),
         Err(MetadataCommandCodecError::Unsupported)
     );
+    Ok(())
+}
+
+#[test]
+fn converged_volume_head_evidence_round_trips_canonically() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (context, _) = fixture()?;
+    for evidence in [
+        ConvergedHeadEvidence::Publication {
+            operation_id: OperationId::from_bytes([31; 16])?,
+            request_digest: [32; 32],
+            result_digest: [33; 32],
+        },
+        ConvergedHeadEvidence::Reconciliation {
+            operation_id: OperationId::from_bytes([34; 16])?,
+            request_digest: [35; 32],
+            causal_plan_digest: [36; 32],
+            replay_plan_digest: [37; 32],
+            result_digest: [38; 32],
+        },
+    ] {
+        assert_round_trip(
+            context,
+            AuthoritativeCommand::CommitConvergedVolumeHead(CommitConvergedVolumeHead {
+                volume_id: VolumeId::from_bytes([39; 16])?,
+                expected_namespace_commit_id: Some(NamespaceCommitId::from_bytes([40; 16])?),
+                namespace_commit_id: NamespaceCommitId::from_bytes([41; 16])?,
+                root_object_revision_id: ObjectRevisionId::from_bytes([42; 16])?,
+                evidence,
+            }),
+        )?;
+    }
     Ok(())
 }
 
@@ -125,6 +165,132 @@ fn topology_commands_round_trip_canonically() -> Result<(), Box<dyn std::error::
             host_id: HostId::from_bytes([92; 16])?,
             present: true,
         }),
+        AuthoritativeCommand::CreateAvailabilityCell(CreateAvailabilityCell {
+            cell_id: AvailabilityCellId::from_bytes([103; 16])?,
+            name: RecordName::new("Building A")?,
+            parent_cell_id: Some(AvailabilityCellId::from_bytes([104; 16])?),
+        }),
+        AuthoritativeCommand::SetHostAvailabilityCellMembership(
+            SetHostAvailabilityCellMembership {
+                cell_id: AvailabilityCellId::from_bytes([103; 16])?,
+                host_id: HostId::from_bytes([105; 16])?,
+                present: true,
+            },
+        ),
+        AuthoritativeCommand::SetTargetAvailabilityCellMembership(
+            SetTargetAvailabilityCellMembership {
+                cell_id: AvailabilityCellId::from_bytes([103; 16])?,
+                target_id: TargetId::from_bytes([106; 16])?,
+                present: false,
+            },
+        ),
+    ] {
+        assert_round_trip(context, command)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn protection_policy_commands_round_trip_complete_failure_promises()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let policy_id = ProtectionPolicyId::from_bytes([98; 16])?;
+    for command in [
+        AuthoritativeCommand::CreateProtectionPolicy(CreateProtectionPolicy {
+            policy_id,
+            name: RecordName::new("Two machines and three devices")?,
+            scenarios: BoundedItems::new(
+                vec![ProtectionScenarioConfiguration {
+                    scenario_id: ProtectionScenarioId::from_bytes([99; 16])?,
+                    name: RecordName::new("Combined machine and device loss")?,
+                    scenario: FailureScenario::new(vec![
+                        FailureTerm {
+                            class_id: FaultGroupClassId::from_bytes([100; 16])?,
+                            failure_count: 2,
+                        },
+                        FailureTerm {
+                            class_id: FaultGroupClassId::from_bytes([101; 16])?,
+                            failure_count: 3,
+                        },
+                    ])?,
+                }],
+                16,
+            )?,
+        }),
+        AuthoritativeCommand::AssignVolumeProtectionPolicy(AssignVolumeProtectionPolicy {
+            volume_id: VolumeId::from_bytes([102; 16])?,
+            policy_id,
+        }),
+    ] {
+        assert_round_trip(context, command)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn locality_policy_commands_round_trip_complete_local_requirements()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let policy_id = LocalityPolicyId::from_bytes([107; 16])?;
+    for command in [
+        AuthoritativeCommand::CreateLocalityPolicy(CreateLocalityPolicy {
+            policy_id,
+            name: RecordName::new("Both shops locally readable")?,
+            maximum_lag: Some(DurationMicros::new(30_000_000)),
+            requirements: BoundedItems::new(
+                vec![LocalityRequirementConfiguration {
+                    requirement_id: LocalityRequirementId::from_bytes([108; 16])?,
+                    cell_id: AvailabilityCellId::from_bytes([109; 16])?,
+                    local_protection_policy_id: Some(ProtectionPolicyId::from_bytes([110; 16])?),
+                }],
+                64,
+            )?,
+        }),
+        AuthoritativeCommand::AssignVolumeLocalityPolicy(AssignVolumeLocalityPolicy {
+            volume_id: VolumeId::from_bytes([111; 16])?,
+            policy_id,
+        }),
+    ] {
+        assert_round_trip(context, command)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn acknowledgement_policy_commands_round_trip_exact_barriers()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let policy_id = AcknowledgementPolicyId::from_bytes([112; 16])?;
+    for command in [
+        AuthoritativeCommand::CreateAcknowledgementPolicy(CreateAcknowledgementPolicy {
+            policy_id,
+            name: RecordName::new("Required office, eventual archive")?,
+            consistency: AcknowledgementConsistencyClass::Strong,
+            minimum_durable_targets: 2,
+            minimum_distinct_nodes: 2,
+            strong_wait: Some(DurationMicros::new(5_000_000)),
+            fallback: StrongFallbackMode::FailAtDeadline,
+            required_scenarios: BoundedItems::new(
+                vec![ProtectionScenarioId::from_bytes([113; 16])?],
+                64,
+            )?,
+            cells: BoundedItems::new(
+                vec![AcknowledgementCellRequirement {
+                    cell_id: AvailabilityCellId::from_bytes([114; 16])?,
+                    role: AcknowledgementCellRole::RequiredBeforeCommit,
+                    minimum_durable_targets: Some(2),
+                    minimum_distinct_nodes: Some(2),
+                    local_protection_policy_id: Some(ProtectionPolicyId::from_bytes([115; 16])?),
+                }],
+                256,
+            )?,
+        }),
+        AuthoritativeCommand::AssignVolumeAcknowledgementPolicy(
+            AssignVolumeAcknowledgementPolicy {
+                volume_id: VolumeId::from_bytes([116; 16])?,
+                policy_id,
+            },
+        ),
     ] {
         assert_round_trip(context, command)?;
     }

@@ -6,28 +6,44 @@ use std::{cell::RefCell, collections::BTreeMap, io::Write, rc::Rc};
 
 use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{
-    AssuranceLevel, AuthenticationService, BranchId, ContentManifestId, FileVersionId, HandleId,
-    LockId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId,
-    Revision, Rights, UnixMicros, VolumeId,
+    AssuranceLevel, AuthenticationService, BranchId, ContentManifestId, DurabilityScope,
+    FileVersionId, HandleId, LockId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId,
+    OperationId, PrincipalId, Revision, Rights, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
     AdapterFlushFileRequest, AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest,
     AdapterOpenFileRequest, AdapterReadFileRequest, AdapterRenameRequest, AdapterStatRequest,
     AdapterUnlinkRequest, AdapterUnlockRequest, AdapterWriteFileRequest, AuthorisedFilesystemError,
-    AuthorisedFilesystemService, BoundFilesystemAdapter, ByteRange, ContentPublicationError,
-    ContentPublicationRequest, ContentReadError, ContentReadRequest, DurableContentPublisher,
-    DurableContentReader, FilePublication, FilesystemAccessAuthority, FilesystemAccessContext,
-    FilesystemAdapterPolicy, FilesystemAuthorityGrant, FilesystemAuthorityRequest,
-    FilesystemCommitService, FilesystemFileAdapter, FilesystemHandleReadReceipt, HandleAccess,
-    HandleError, HandleIoError, HandleShare, ManifestPublication, NamespaceLimits, NamespacePath,
-    NamespacePublicationPath, OpenHandleReceipt, PublicationDisposition, PublishedContentReference,
-    RangeLockKind, RootFilePublication, VersionPublicationStore,
+    AuthorisedFilesystemService, BoundFilesystemAdapter, ByteRange, ContentAcknowledgementClass,
+    ContentAcknowledgementEvidence, ContentPublicationError, ContentPublicationRequest,
+    ContentReadError, ContentReadRequest, DurableContentPublisher, DurableContentReader,
+    FilePublication, FilesystemAccessAuthority, FilesystemAccessContext, FilesystemAdapterPolicy,
+    FilesystemAuthorityGrant, FilesystemAuthorityRequest, FilesystemCommitService,
+    FilesystemFileAdapter, FilesystemHandleReadReceipt, HandleAccess, HandleError, HandleIoError,
+    HandleShare, ManifestPublication, NamespaceLimits, NamespacePath, NamespacePublicationPath,
+    OpenHandleReceipt, PublicationDisposition, PublishedContentReference, RangeLockKind,
+    RootFilePublication, VersionPublicationStore,
 };
 use tempfile::tempdir;
 
 type DurableContents = Rc<RefCell<BTreeMap<OperationId, StoredContent>>>;
 type StoredContent = (ContentPublicationRequest, ManifestPublication, Vec<u8>);
+
+fn test_acknowledgement() -> ContentAcknowledgementEvidence {
+    ContentAcknowledgementEvidence {
+        configured_class: ContentAcknowledgementClass::Eventual,
+        acknowledged_class: ContentAcknowledgementClass::Eventual,
+        fallback_applied: false,
+        content_scope: DurabilityScope::NodeLocal,
+        required_shard_receipts: 1,
+        eventual_shard_receipts: 0,
+        pending_eventual_shards: 0,
+        policy_evidence_digest: [1; 32],
+        achieved_protection_digest: [2; 32],
+        pending_debt_digest: [3; 32],
+    }
+}
 
 #[test]
 fn two_gateway_adapters_enforce_sharing_and_preserve_only_committed_bytes_after_restart()
@@ -849,6 +865,13 @@ impl DurableContentReader for MemoryPublisher {
 
 impl DurableContentPublisher for MemoryPublisher {
     type Sink = Vec<u8>;
+
+    fn acknowledgement_evidence(
+        &self,
+        _request: ContentPublicationRequest,
+    ) -> Result<ContentAcknowledgementEvidence, ContentPublicationError> {
+        Ok(test_acknowledgement())
+    }
 
     fn resolve(
         &mut self,

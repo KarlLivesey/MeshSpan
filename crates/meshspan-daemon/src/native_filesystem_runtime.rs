@@ -10,22 +10,27 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use meshspan_cluster::{MetadataAuthorityHandle, MetadataFilesystemAuthorityError};
 use meshspan_domain::{
-    BranchId, FileVersionId, InitialBootstrapMaterial, NamespaceCommitId, OperationId, PartitionId,
-    UnixMicros,
+    AuditEventId, BranchId, FileVersionId, InitialBootstrapMaterial, NamespaceCommitId,
+    OperationId, PartitionId, UnixMicros,
 };
 use meshspan_filesystem::{
     AuthorisedFilesystemError, AuthorisedFilesystemService, BoundFilesystemAdapter,
-    ContentChunkLimits, ContentPublicationError, FilesystemAdapterConfigurationError,
-    FilesystemAdapterPolicy, FilesystemCommitError, FilesystemCommitService,
-    UnprotectedContentAccess, UnprotectedContentPublisher, VersionPublicationStore,
+    ContentAcknowledgementClass, ContentChunkLimits, ContentPublicationError,
+    FilesystemAdapterConfigurationError, FilesystemAdapterPolicy, FilesystemCommitError,
+    FilesystemCommitService, NamespacePublicationReceipt, ProtectedContentAccess,
+    ProtectedContentPublisher, PublicationAcknowledgement, VerifiedPublicationHead,
+    VersionPublicationStore,
 };
 use meshspan_metadata::{
-    AuthoritativeRepository, MetadataStoreError, PartitionDatabase, StorageTargetProviderContext,
+    AuthoritativeCommand, AuthoritativeRepository, CommandContext, CommitConvergedVolumeHead,
+    ConvergedHeadEvidence, EntityKind, MetadataStoreError, PartitionDatabase,
+    StorageTargetProviderContext,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::cluster_storage_provider::ClusterStorageProvider;
+use crate::cluster_storage_provider::ClusterShardRouter;
+use crate::native_protection::NativeProtectionPolicySource;
 use crate::private_consensus_runtime::PrivateConsensusRuntime;
 use crate::{
     ConsensusAuthenticationAuthority, LocalFolderStorageProvider, LocalWrappingKey,
@@ -38,12 +43,16 @@ pub(crate) use classification::classify_native_filesystem_error;
 const CONTENT_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 const HEAD_PUBLICATION_ATTEMPTS: usize = 32;
 const HEAD_PUBLICATION_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
+const HEAD_AUDIT_ID_DOMAIN: &[u8] = b"meshspan.native.converged-head-audit.v1\0";
 pub(crate) const MAXIMUM_NATIVE_SHARD_BYTES: usize = CONTENT_CHUNK_BYTES + 16;
 
-type ProductionPublisher = UnprotectedContentPublisher<
-    ClusterStorageProvider,
+type ProductionPublisher = ProtectedContentPublisher<
+    ClusterShardRouter,
+    meshspan_coding::ReedSolomonCoding,
+    meshspan_placement::FaultAwarePlacement,
     OperatingSystemRandom,
     VolumeKeyLoadingService<ConsensusAuthenticationAuthority, LocalWrappingKey>,
+    NativeProtectionPolicySource,
 >;
 type ProductionFilesystem =
     BoundFilesystemAdapter<ProductionPublisher, ConsensusAuthenticationAuthority>;
@@ -65,12 +74,6 @@ impl NativeStorageTarget {
         provider: LocalFolderStorageProvider,
     ) -> Self {
         Self { context, provider }
-    }
-
-    /// Returns the stable target identity used for deterministic initial placement.
-    #[must_use]
-    pub(crate) const fn target_id(&self) -> meshspan_domain::TargetId {
-        self.context.target_id
     }
 
     /// Returns the committed storage route bound to this live provider incarnation.
@@ -124,7 +127,7 @@ impl NativeFilesystemRuntimeConfiguration {
             authority,
             network,
             runtime,
-            policy: FilesystemAdapterPolicy::new(true, 1, 1)?,
+            policy: FilesystemAdapterPolicy::new(true, 1, 2)?,
             chunk_limits: ContentChunkLimits::new(CONTENT_CHUNK_BYTES)
                 .map_err(|_| NativeFilesystemRuntimeConfigurationError::ChunkSize)?,
         })
@@ -156,31 +159,48 @@ impl NativeFilesystemRuntimeConfiguration {
 
     fn open(
         &self,
-        target: &NativeStorageTarget,
+        targets: &[NativeStorageTarget],
         now: UnixMicros,
     ) -> Result<ProductionFilesystem, NativeFilesystemOpeningError> {
+        let primary = targets
+            .first()
+            .ok_or(NativeFilesystemOpeningError::Unavailable)?;
+        if targets
+            .iter()
+            .any(|target| target.context.mesh_id != primary.context.mesh_id)
+        {
+            return Err(NativeFilesystemOpeningError::Unavailable);
+        }
+        let authority = self.repository(now)?;
         let permit_key =
             StoragePermitLoadingService::new(self.authority(now)?, self.wrapping_key()?)
-                .load_latest(target.context.mesh_id)?;
-        let content_access = UnprotectedContentAccess::new(
-            target.context.mesh_id,
-            target.context.target_id,
-            target.context.generation,
-            permit_key,
-        )?;
+                .load_latest(primary.context.mesh_id)?;
+        let read_permit_key =
+            StoragePermitLoadingService::new(self.authority(now)?, self.wrapping_key()?)
+                .load_latest(primary.context.mesh_id)?;
+        let content_access = ProtectedContentAccess::new(primary.context.mesh_id, read_permit_key);
         let key_service = VolumeKeyLoadingService::new(self.authority(now)?, self.wrapping_key()?);
-        let provider = ClusterStorageProvider::new(
-            target.provider(),
-            target.context.target_id,
-            target.context.generation,
-            self.repository(now)?,
+        let router = ClusterShardRouter::new(
+            primary.context.mesh_id,
+            targets
+                .iter()
+                .map(|target| (target.context(), target.provider())),
+            permit_key,
+            authority,
             Arc::clone(&self.network),
             self.runtime.clone(),
         );
-        let publisher = UnprotectedContentPublisher::open(
+        let policies = NativeProtectionPolicySource::new(
+            self.repository(now)?,
+            targets.iter().map(NativeStorageTarget::context).collect(),
+        );
+        let publisher = ProtectedContentPublisher::open(
             &self.filesystem_state_directory,
             now,
-            provider,
+            router,
+            meshspan_coding::ReedSolomonCoding::new(),
+            meshspan_placement::FaultAwarePlacement::new(),
+            policies,
             OperatingSystemRandom,
             key_service,
             self.chunk_limits,
@@ -199,7 +219,7 @@ impl NativeFilesystemRuntimeConfiguration {
 struct NativeFilesystemRuntimeState {
     configuration: NativeFilesystemRuntimeConfiguration,
     filesystem: Option<ProductionFilesystem>,
-    active_target: Option<StorageTargetProviderContext>,
+    active_targets: Vec<StorageTargetProviderContext>,
 }
 
 /// Cloneable connector boundary backed by exactly one production filesystem state machine.
@@ -216,7 +236,7 @@ impl NativeFilesystemRuntime {
             inner: Arc::new(Mutex::new(NativeFilesystemRuntimeState {
                 configuration,
                 filesystem: None,
-                active_target: None,
+                active_targets: Vec::new(),
             })),
         }
     }
@@ -227,16 +247,20 @@ impl NativeFilesystemRuntime {
     /// storage reconciler can retry without exposing a partly composed service.
     pub(crate) fn ensure_open(
         &self,
-        target: &NativeStorageTarget,
+        targets: &[NativeStorageTarget],
         now: UnixMicros,
     ) -> Result<(), NativeFilesystemOpeningError> {
         let mut state = self.lock_opening()?;
-        if state.filesystem.is_some() {
+        let contexts = targets
+            .iter()
+            .map(NativeStorageTarget::context)
+            .collect::<Vec<_>>();
+        if state.filesystem.is_some() && state.active_targets == contexts {
             return Ok(());
         }
-        let filesystem = state.configuration.open(target, now)?;
+        let filesystem = state.configuration.open(targets, now)?;
         state.filesystem = Some(filesystem);
-        state.active_target = Some(target.context());
+        state.active_targets = contexts;
         Ok(())
     }
 
@@ -291,7 +315,9 @@ impl NativeFilesystemRuntime {
             (
                 state.configuration.filesystem_state_directory.clone(),
                 state
-                    .active_target
+                    .active_targets
+                    .first()
+                    .copied()
                     .ok_or(NativeFilesystemRuntimeError::Unavailable)?,
                 Arc::clone(&state.configuration.network),
                 state.configuration.runtime.clone(),
@@ -345,6 +371,123 @@ impl NativeFilesystemRuntime {
         }
         Ok(())
     }
+
+    fn publish_file_head(
+        &self,
+        receipt: NamespacePublicationReceipt,
+        observed_at: UnixMicros,
+    ) -> Result<PublicationAcknowledgement, NativeFilesystemRuntimeError> {
+        let state_directory = self
+            .lock()?
+            .configuration
+            .filesystem_state_directory
+            .clone();
+        let store = VersionPublicationStore::open(&state_directory, observed_at)
+            .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?;
+        let verified = store
+            .verify_publication_head(receipt)
+            .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?;
+        let content = store
+            .published_content_for_version(receipt.file_version_id)
+            .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?
+            .ok_or(NativeFilesystemRuntimeError::StrongBarrierFailed)?;
+        let acknowledgement =
+            meshspan_filesystem::DurableContentCatalog::open(&state_directory, observed_at)
+                .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?
+                .committed_acknowledgement_evidence(content)
+                .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?
+                .branch_committed();
+        self.publish_namespace_head(
+            receipt.namespace_commit_id,
+            Some(receipt.file_version_id),
+            observed_at,
+        )?;
+        if acknowledgement.acknowledged_class == ContentAcknowledgementClass::Strong {
+            self.commit_converged_head(verified, observed_at)?;
+            acknowledgement
+                .globally_converged()
+                .ok_or(NativeFilesystemRuntimeError::StrongBarrierFailed)
+        } else {
+            Ok(acknowledgement)
+        }
+    }
+
+    fn commit_converged_head(
+        &self,
+        verified: VerifiedPublicationHead,
+        observed_at: UnixMicros,
+    ) -> Result<(), NativeFilesystemRuntimeError> {
+        let authority = self
+            .lock()?
+            .configuration
+            .authority(observed_at)
+            .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?;
+        let receipt = verified.receipt();
+        let command = AuthoritativeCommand::CommitConvergedVolumeHead(CommitConvergedVolumeHead {
+            volume_id: verified.volume_id(),
+            expected_namespace_commit_id: verified.expected_namespace_commit_id(),
+            namespace_commit_id: receipt.namespace_commit_id,
+            root_object_revision_id: verified.root_object_revision_id(),
+            evidence: ConvergedHeadEvidence::Publication {
+                operation_id: receipt.operation_id,
+                request_digest: receipt.request_digest,
+                result_digest: receipt.result_digest,
+            },
+        });
+        let context = CommandContext {
+            operation_id: receipt.operation_id,
+            actor_principal_id: verified.created_by(),
+            audit_event_id: head_audit_event_id(receipt.operation_id)?,
+            occurred_at: verified.created_at(),
+            expected_revision: None,
+        };
+        let expected_digest = command.request_digest(context);
+        let committed = authority
+            .commit_authoritative(context, &command)
+            .map_err(|error| match error {
+                meshspan_cluster::MetadataAuthorityRequestError::NotLeader { .. }
+                | meshspan_cluster::MetadataAuthorityRequestError::Unavailable
+                | meshspan_cluster::MetadataAuthorityRequestError::Conflict
+                | meshspan_cluster::MetadataAuthorityRequestError::Rejected => {
+                    NativeFilesystemRuntimeError::StrongBarrierPending
+                }
+                meshspan_cluster::MetadataAuthorityRequestError::Unsupported
+                | meshspan_cluster::MetadataAuthorityRequestError::Failed => {
+                    NativeFilesystemRuntimeError::StrongBarrierFailed
+                }
+            })?;
+        if committed.entity.kind != EntityKind::Volume
+            || committed.entity.id != verified.volume_id().as_bytes()
+            || committed.request_digest != expected_digest
+        {
+            return Err(NativeFilesystemRuntimeError::StrongBarrierFailed);
+        }
+        let head = authority
+            .reader()
+            .converged_volume_head(verified.volume_id())
+            .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?
+            .ok_or(NativeFilesystemRuntimeError::StrongBarrierFailed)?;
+        if head.namespace_commit_id != receipt.namespace_commit_id
+            || head.root_object_revision_id != verified.root_object_revision_id()
+            || head.metadata_operation_id != receipt.operation_id
+        {
+            return Err(NativeFilesystemRuntimeError::StrongBarrierFailed);
+        }
+        Ok(())
+    }
+}
+
+fn head_audit_event_id(
+    operation_id: OperationId,
+) -> Result<AuditEventId, NativeFilesystemRuntimeError> {
+    let mut digest = Sha256::new();
+    digest.update(HEAD_AUDIT_ID_DOMAIN);
+    digest.update(operation_id.as_bytes());
+    let bytes: [u8; 16] = digest.finalize()[..16]
+        .try_into()
+        .map(meshspan_domain::uuid_v8)
+        .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?;
+    AuditEventId::from_bytes(bytes).map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)
 }
 
 fn spawn_head_publication(
@@ -423,6 +566,12 @@ pub(crate) enum NativeFilesystemRuntimeError {
     /// Setup, storage or the shared runtime lock is not currently available.
     #[error("native filesystem runtime is unavailable")]
     Unavailable,
+    /// A strong publication is durably staged but metadata authority cannot currently commit it.
+    #[error("strong publication is waiting for metadata authority")]
+    StrongBarrierPending,
+    /// Strong-publication evidence or its committed metadata result was invalid.
+    #[error("strong publication verification failed")]
+    StrongBarrierFailed,
     /// The composed authority or filesystem rejected the operation.
     #[error("native filesystem operation failed")]
     Operation(#[from] ProductionFilesystemError),

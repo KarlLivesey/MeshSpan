@@ -806,11 +806,11 @@ impl ConsensusCore {
                     term: self.current_term,
                 }])
             }
-            AfterPersistence::ActivateJoint(joint_plan, member_incarnations) => Ok(self
-                .finish_plan_activation(ActiveQuorumPlan::Joint(joint_plan), member_incarnations)),
-            AfterPersistence::ActivateStable(plan, member_incarnations) => Ok(
+            AfterPersistence::ActivateJoint(joint_plan, member_incarnations) => self
+                .finish_plan_activation(ActiveQuorumPlan::Joint(joint_plan), member_incarnations),
+            AfterPersistence::ActivateStable(plan, member_incarnations) => {
                 self.finish_plan_activation(ActiveQuorumPlan::Stable(plan), member_incarnations)
-            ),
+            }
         }
     }
 
@@ -818,27 +818,48 @@ impl ConsensusCore {
         &mut self,
         active_plan: ActiveQuorumPlan,
         member_incarnations: MemberIncarnations,
-    ) -> Vec<CoreEffect> {
+    ) -> Result<Vec<CoreEffect>, CoreError> {
         self.active_plan = active_plan;
         self.config.member_incarnations = member_incarnations;
+        let members = self.active_members();
+        let last_index = self.last_position().index;
+        let next_index = last_index.checked_add(1).ok_or(CoreError::Exhausted)?;
         let may_lead = self
             .active_eligible_leaders()
             .contains(&self.config.local_node_id);
         if let RoleState::Leader(leader) = &mut self.role {
             leader.read_barriers.clear();
+            leader.matched.retain(|member, _| members.contains(member));
+            leader.next.retain(|member, _| members.contains(member));
+            for member in &members {
+                let initial_match = if *member == self.config.local_node_id {
+                    last_index
+                } else {
+                    0
+                };
+                leader.matched.entry(*member).or_insert(initial_match);
+                leader.next.entry(*member).or_insert(next_index);
+            }
+        }
+        if self.role() == Role::Leader && may_lead && self.is_local_voter() {
+            return self
+                .peers()
+                .into_iter()
+                .map(|peer| self.append_effect(peer, None))
+                .collect();
         }
         if may_lead && self.is_local_voter() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let changed = self.role() != Role::Follower;
         self.follow_leader(None);
-        changed
+        Ok(changed
             .then_some(CoreEffect::RoleChanged {
                 role: Role::Follower,
                 term: self.current_term,
             })
             .into_iter()
-            .collect()
+            .collect())
     }
 
     fn finish_campaign(&mut self) -> Result<Vec<CoreEffect>, CoreError> {

@@ -23,6 +23,8 @@ unicode-normalization.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+meshspan-coding = { path = "../meshspan-coding" }
+meshspan-placement = { path = "../meshspan-placement" }
 meshspan-storage = { path = "../meshspan-storage" }
 tempfile = "3.27.0"
 

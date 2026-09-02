@@ -225,6 +225,78 @@ export type ApiError = {
 };
 
 /**
+ * AssignVolumePlacementPolicyRequest
+ *
+ * Exact-retry request selecting a policy for one volume.
+ */
+export type AssignVolumePlacementPolicyRequest = {
+  /**
+   * Client-generated exact-retry identity.
+   */
+  operation_id: string;
+};
+
+/**
+ * AssignVolumePlacementPolicyResponse
+ *
+ * Durable volume placement-policy selection result.
+ */
+export type AssignVolumePlacementPolicyResponse = {
+  /**
+   * Exact idempotency identity whose result was resolved.
+   */
+  operation_id: string;
+  /**
+   * Selected immutable policy.
+   */
+  policy_id: string;
+  /**
+   * Authoritative assignment revision.
+   */
+  revision: number;
+  /**
+   * Volume receiving the immutable policy.
+   */
+  volume_id: string;
+};
+
+/**
+ * AssignVolumeProtectionPolicyRequest
+ *
+ * Exact-retry request selecting an immutable policy for one volume.
+ */
+export type AssignVolumeProtectionPolicyRequest = {
+  /**
+   * Client-generated exact-retry identity.
+   */
+  operation_id: string;
+};
+
+/**
+ * AssignVolumeProtectionPolicyResponse
+ *
+ * Durable volume survival-policy selection result.
+ */
+export type AssignVolumeProtectionPolicyResponse = {
+  /**
+   * Exact idempotency identity whose result was resolved.
+   */
+  operation_id: string;
+  /**
+   * Selected immutable policy.
+   */
+  policy_id: string;
+  /**
+   * Authoritative assignment revision.
+   */
+  revision: number;
+  /**
+   * Volume receiving the immutable policy.
+   */
+  volume_id: string;
+};
+
+/**
  * BeginUploadRequest
  *
  * Starts one durable private upload session.
@@ -355,6 +427,55 @@ export type CommitUploadRequest = {
  * Complete successful upload publication.
  */
 export type CommitUploadResponse = {
+  /**
+   * Exact policy, receipt and outstanding-debt evidence for the success response.
+   */
+  acknowledgement: {
+    /**
+     * BLAKE3 digest binding the exact durable shard receipts.
+     */
+    achieved_protection_blake3: string;
+    /**
+     * Consistency class actually reached by this successful acknowledgement.
+     */
+    acknowledged_consistency: "eventual" | "strong";
+    /**
+     * Consistency class selected by the immutable policy snapshot.
+     */
+    configured_consistency: "eventual" | "strong";
+    /**
+     * Honest durability scope reached by this publication.
+     */
+    durability_scope: "node_local" | "cell_replicated" | "globally_converged";
+    /**
+     * Number of non-blocking shard placements already completed.
+     */
+    eventual_shard_receipts: number;
+    /**
+     * True only when an explicit strong-policy eventual fallback was applied.
+     */
+    fallback_applied: boolean;
+    /**
+     * BLAKE3 digest binding the exact non-blocking shard debt at acknowledgement.
+     */
+    pending_debt_blake3: string;
+    /**
+     * Number of non-blocking shard placements still owed by automatic reconciliation.
+     */
+    pending_eventual_shards: number;
+    /**
+     * True only after every predicate required by the selected policy has committed.
+     */
+    policy_committed: boolean;
+    /**
+     * BLAKE3 digest binding the fixed-revision acknowledgement predicates.
+     */
+    policy_evidence_blake3: string;
+    /**
+     * Number of required durable shard receipts included in the achieved evidence.
+     */
+    required_shard_receipts: number;
+  };
   /**
    * Immutable metadata for the newly published exact version.
    */
@@ -505,6 +626,149 @@ export type ConfirmRecoveryBundleResponse = {
 };
 
 /**
+ * CreateAcknowledgementPolicyRequest
+ *
+ * Exact-retry request to create one immutable acknowledgement policy.
+ */
+export type CreateAcknowledgementPolicyRequest = {
+  /**
+   * Cell-specific acknowledgement and placement predicates.
+   */
+  cells: Array<{
+    /**
+     * Stable availability-cell identity.
+     */
+    cell_id: string;
+    /**
+     * Optional survival policy evaluated within this cell.
+     */
+    local_protection_policy_id?: string | null;
+    /**
+     * Optional minimum distinct machines within this cell.
+     */
+    minimum_distinct_nodes?: number | null;
+    /**
+     * Optional minimum durable targets within this cell.
+     */
+    minimum_durable_targets?: number | null;
+    /**
+     * Synchronous, eventual, or excluded participation.
+     */
+    mode: "required_before_commit" | "eventual" | "excluded";
+  }>;
+  /**
+   * Availability-first or strong publication semantics.
+   */
+  consistency: "eventual" | "strong";
+  /**
+   * Explicit deadline result.
+   */
+  fallback: "remain_pending" | "fail_at_deadline" | "eventual";
+  /**
+   * Minimum distinct machine count represented by durable targets.
+   */
+  minimum_distinct_nodes: number;
+  /**
+   * Minimum durable target count required before acknowledgement.
+   */
+  minimum_durable_targets: number;
+  /**
+   * User-visible policy name.
+   */
+  name: string;
+  /**
+   * Client-generated exact-retry identity.
+   */
+  operation_id: string;
+  /**
+   * Protection-scenario identities which must be proved before acknowledgement.
+   */
+  required_scenario_ids: Array<string>;
+  /**
+   * Optional deadline used only by strong policies.
+   */
+  strong_wait_micros?: number | null;
+};
+
+/**
+ * CreateAcknowledgementPolicyResponse
+ *
+ * Durable acknowledgement-policy creation result.
+ */
+export type CreateAcknowledgementPolicyResponse = {
+  /**
+   * Exact idempotency identity whose result was resolved.
+   */
+  operation_id: string;
+  /**
+   * Current created immutable policy.
+   */
+  policy: {
+    /**
+     * Cell-specific acknowledgement and placement predicates.
+     */
+    cells: Array<{
+      /**
+       * Stable availability-cell identity.
+       */
+      cell_id: string;
+      /**
+       * Optional survival policy evaluated within this cell.
+       */
+      local_protection_policy_id: string | null;
+      /**
+       * Optional minimum distinct machines within this cell.
+       */
+      minimum_distinct_nodes: number | null;
+      /**
+       * Optional minimum durable targets within this cell.
+       */
+      minimum_durable_targets: number | null;
+      /**
+       * Synchronous, eventual, or excluded participation.
+       */
+      mode: "required_before_commit" | "eventual" | "excluded";
+    }>;
+    /**
+     * Availability-first or strong publication semantics.
+     */
+    consistency: "eventual" | "strong";
+    /**
+     * Explicit deadline result.
+     */
+    fallback: "remain_pending" | "fail_at_deadline" | "eventual";
+    /**
+     * Minimum distinct machine count.
+     */
+    minimum_distinct_nodes: number;
+    /**
+     * Minimum durable target count.
+     */
+    minimum_durable_targets: number;
+    /**
+     * User-visible policy name.
+     */
+    name: string;
+    /**
+     * Stable policy identity.
+     */
+    policy_id: string;
+    /**
+     * Protection scenarios required before acknowledgement.
+     */
+    required_scenario_ids: Array<string>;
+    /**
+     * Immutable authoritative policy revision.
+     */
+    revision: number;
+    /**
+     * Optional strong acknowledgement deadline.
+     */
+    strong_wait_micros: number | null;
+  };
+};
+
+/**
  * CreateApiKeyRequest
  *
  * One idempotent request to issue a current-user API key.
@@ -566,6 +830,59 @@ export type CreateApiKeyResponse = {
    * Inclusive first accepted instant as epoch microseconds.
    */
   valid_from_epoch_micros: number;
+};
+
+/**
+ * CreateAvailabilityCellRequest
+ *
+ * Exact-retry request to create one availability locality.
+ */
+export type CreateAvailabilityCellRequest = {
+  /**
+   * Human-readable locality name.
+   */
+  name: string;
+  /**
+   * Client-generated exact-retry identity.
+   */
+  operation_id: string;
+  /**
+   * Optional existing parent cell.
+   */
+  parent_cell_id?: string | null;
+};
+
+/**
+ * CreateAvailabilityCellResponse
+ *
+ * Durable availability-cell creation result.
+ */
+export type CreateAvailabilityCellResponse = {
+  /**
+   * Current created cell.
+   */
+  cell: {
+    /**
+     * Stable cell identity.
+     */
+    cell_id: string;
+    /**
+     * User-visible cell name.
+     */
+    name: string;
+    /**
+     * Optional parent used for presentation and inherited target membership.
+     */
+    parent_cell_id: string | null;
+    /**
+     * Last authoritative metadata revision.
+     */
+    revision: number;
+  };
+  /**
+   * Exact idempotency identity whose result was resolved.
+   */
+  operation_id: string;
 };
 
 /**
@@ -691,6 +1008,89 @@ export type CreateGroupRequest = {
    * Client-generated exact-retry identity.
    */
   operation_id: string;
+};
+
+/**
+ * CreateLocalityPolicyRequest
+ *
+ * Exact-retry request to create one immutable desired-locality policy.
+ */
+export type CreateLocalityPolicyRequest = {
+  /**
+   * Optional lag limit used to prioritise incomplete-locality repair.
+   */
+  maximum_lag_micros?: number | null;
+  /**
+   * User-visible policy name.
+   */
+  name: string;
+  /**
+   * Client-generated exact-retry identity.
+   */
+  operation_id: string;
+  /**
+   * Cells which must each independently reconstruct the selected version.
+   */
+  requirements: Array<{
+    /**
+     * Stable availability-cell identity.
+     */
+    cell_id: string;
+    /**
+     * Optional data-survival policy evaluated only inside this cell.
+     */
+    local_protection_policy_id?: string | null;
+  }>;
+};
+
+/**
+ * CreateLocalityPolicyResponse
+ *
+ * Durable locality-policy creation result.
+ */
+export type CreateLocalityPolicyResponse = {
+  /**
+   * Exact idempotency identity whose result was resolved.
+   */
+  operation_id: string;
+  /**
+   * Current created immutable policy.
+   */
+  policy: {
+    /**
+     * Optional lag limit used to prioritise repair debt.
+     */
+    maximum_lag_micros: number | null;
+    /**
+     * User-visible policy name.
+     */
+    name: string;
+    /**
+     * Stable policy identity.
+     */
+    policy_id: string;
+    /**
+     * Ordered complete-local requirements.
+     */
+    requirements: Array<{
+      /**
+       * Stable availability-cell identity.
+       */
+      cell_id: string;
+      /**
+       * Optional survival policy evaluated within the cell.
+       */
+      local_protection_policy_id: string | null;
+      /**
+       * Stable requirement identity.
+       */
+      requirement_id: string;
+    }>;
+    /**
+     * Immutable authoritative policy revision.
+     */
+    revision: number;
+  };
 };
 
 /**
@@ -1035,6 +1435,103 @@ export type CreatePrincipalResponse = {
      * Current lifecycle state.
      */
     state: "active" | "suspended" | "retired";
+  };
+};
+
+/**
+ * CreateProtectionPolicyRequest
+ *
+ * Exact-retry request to create one immutable survival policy.
+ */
+export type CreateProtectionPolicyRequest = {
+  /**
+   * User-visible policy name.
+   */
+  name: string;
+  /**
+   * Client-generated exact-retry identity.
+   */
+  operation_id: string;
+  /**
+   * Alternative combined failure scenarios; every scenario must remain decodable.
+   */
+  scenarios: Array<{
+    /**
+     * User-visible scenario name.
+     */
+    name: string;
+    /**
+     * Failure terms which occur together, such as two machines and three devices.
+     */
+    terms: Array<{
+      /**
+       * Stable failure-class identity, including built-in machine and storage-device classes.
+       */
+      class_id: string;
+      /**
+       * Number of members of this failure class which may fail simultaneously.
+       */
+      failure_count: number;
+    }>;
+  }>;
+};
+
+/**
+ * CreateProtectionPolicyResponse
+ *
+ * Durable survival-policy creation result.
+ */
+export type CreateProtectionPolicyResponse = {
+  /**
+   * Exact idempotency identity whose result was resolved.
+   */
+  operation_id: string;
+  /**
+   * Current created immutable policy.
+   */
+  policy: {
+    /**
+     * User-visible policy name.
+     */
+    name: string;
+    /**
+     * Stable policy identity.
+     */
+    policy_id: string;
+    /**
+     * Immutable authoritative policy revision.
+     */
+    revision: number;
+    /**
+     * Alternative failure scenarios; every scenario is independently promised.
+     */
+    scenarios: Array<{
+      /**
+       * User-visible scenario name.
+       */
+      name: string;
+      /**
+       * Stable scenario identity.
+       */
+      scenario_id: string;
+      /**
+       * Failure terms which happen together in this scenario.
+       */
+      terms: Array<{
+        /**
+         * Stable failure-class identity.
+         */
+        class_id: string;
+        /**
+         * User-visible failure-class name.
+         */
+        class_name: string;
+        /**
+         * Simultaneous failures promised by this term.
+         */
+        failure_count: number;
+      }>;
+    }>;
   };
 };
 
@@ -1765,6 +2262,84 @@ export type JoinMeshSetupResponse = {
 };
 
 /**
+ * ListAcknowledgementPoliciesResponse
+ *
+ * One bounded page of write-acknowledgement policies.
+ */
+export type ListAcknowledgementPoliciesResponse = {
+  /**
+   * Ready-to-follow same-origin URL, or null at the terminal page.
+   */
+  next_page_url: string | null;
+  /**
+   * Stable name-ordered policy summaries.
+   */
+  policies: Array<{
+    /**
+     * Cell-specific acknowledgement and placement predicates.
+     */
+    cells: Array<{
+      /**
+       * Stable availability-cell identity.
+       */
+      cell_id: string;
+      /**
+       * Optional survival policy evaluated within this cell.
+       */
+      local_protection_policy_id: string | null;
+      /**
+       * Optional minimum distinct machines within this cell.
+       */
+      minimum_distinct_nodes: number | null;
+      /**
+       * Optional minimum durable targets within this cell.
+       */
+      minimum_durable_targets: number | null;
+      /**
+       * Synchronous, eventual, or excluded participation.
+       */
+      mode: "required_before_commit" | "eventual" | "excluded";
+    }>;
+    /**
+     * Availability-first or strong publication semantics.
+     */
+    consistency: "eventual" | "strong";
+    /**
+     * Explicit deadline result.
+     */
+    fallback: "remain_pending" | "fail_at_deadline" | "eventual";
+    /**
+     * Minimum distinct machine count.
+     */
+    minimum_distinct_nodes: number;
+    /**
+     * Minimum durable target count.
+     */
+    minimum_durable_targets: number;
+    /**
+     * User-visible policy name.
+     */
+    name: string;
+    /**
+     * Stable policy identity.
+     */
+    policy_id: string;
+    /**
+     * Protection scenarios required before acknowledgement.
+     */
+    required_scenario_ids: Array<string>;
+    /**
+     * Immutable authoritative policy revision.
+     */
+    revision: number;
+    /**
+     * Optional strong acknowledgement deadline.
+     */
+    strong_wait_micros: number | null;
+  }>;
+};
+
+/**
  * ListAuthenticationMethodsResponse
  *
  * One bounded current-user authentication-method page.
@@ -1845,6 +2420,39 @@ export type ListAuthenticationMethodsResponse = {
   }>;
   /**
    * Ready-to-follow relative URL, or null at the terminal page.
+   */
+  next_page_url: string | null;
+};
+
+/**
+ * ListAvailabilityCellsResponse
+ *
+ * One bounded page of availability localities.
+ */
+export type ListAvailabilityCellsResponse = {
+  /**
+   * Stable name-ordered cells.
+   */
+  cells: Array<{
+    /**
+     * Stable cell identity.
+     */
+    cell_id: string;
+    /**
+     * User-visible cell name.
+     */
+    name: string;
+    /**
+     * Optional parent used for presentation and inherited target membership.
+     */
+    parent_cell_id: string | null;
+    /**
+     * Last authoritative metadata revision.
+     */
+    revision: number;
+  }>;
+  /**
+   * Ready-to-follow same-origin URL, or null at the terminal page.
    */
   next_page_url: string | null;
 };
@@ -2059,6 +2667,56 @@ export type ListGroupMembershipsResponse = {
 };
 
 /**
+ * ListLocalityPoliciesResponse
+ *
+ * One bounded page of desired-locality policies.
+ */
+export type ListLocalityPoliciesResponse = {
+  /**
+   * Ready-to-follow same-origin URL, or null at the terminal page.
+   */
+  next_page_url: string | null;
+  /**
+   * Stable name-ordered policy summaries.
+   */
+  policies: Array<{
+    /**
+     * Optional lag limit used to prioritise repair debt.
+     */
+    maximum_lag_micros: number | null;
+    /**
+     * User-visible policy name.
+     */
+    name: string;
+    /**
+     * Stable policy identity.
+     */
+    policy_id: string;
+    /**
+     * Ordered complete-local requirements.
+     */
+    requirements: Array<{
+      /**
+       * Stable availability-cell identity.
+       */
+      cell_id: string;
+      /**
+       * Optional survival policy evaluated within the cell.
+       */
+      local_protection_policy_id: string | null;
+      /**
+       * Stable requirement identity.
+       */
+      requirement_id: string;
+    }>;
+    /**
+     * Immutable authoritative policy revision.
+     */
+    revision: number;
+  }>;
+};
+
+/**
  * ListOperationsResponse
  *
  * One bounded reverse-chronological administrator operation page.
@@ -2207,6 +2865,65 @@ export type ListPrincipalsResponse = {
      * Current lifecycle state.
      */
     state: "active" | "suspended" | "retired";
+  }>;
+};
+
+/**
+ * ListProtectionPoliciesResponse
+ *
+ * One bounded page of immutable survival policies.
+ */
+export type ListProtectionPoliciesResponse = {
+  /**
+   * Ready-to-follow same-origin URL, or null at the terminal page.
+   */
+  next_page_url: string | null;
+  /**
+   * Stable name-ordered policy summaries.
+   */
+  policies: Array<{
+    /**
+     * User-visible policy name.
+     */
+    name: string;
+    /**
+     * Stable policy identity.
+     */
+    policy_id: string;
+    /**
+     * Immutable authoritative policy revision.
+     */
+    revision: number;
+    /**
+     * Alternative failure scenarios; every scenario is independently promised.
+     */
+    scenarios: Array<{
+      /**
+       * User-visible scenario name.
+       */
+      name: string;
+      /**
+       * Stable scenario identity.
+       */
+      scenario_id: string;
+      /**
+       * Failure terms which happen together in this scenario.
+       */
+      terms: Array<{
+        /**
+         * Stable failure-class identity.
+         */
+        class_id: string;
+        /**
+         * User-visible failure-class name.
+         */
+        class_name: string;
+        /**
+         * Simultaneous failures promised by this term.
+         */
+        failure_count: number;
+      }>;
+    }>;
   }>;
 };
 
@@ -3049,6 +3766,34 @@ export type RevokePermissionGrantResponse = {
 };
 
 /**
+ * SetAvailabilityCellMembershipResponse
+ *
+ * Durable desired membership of a machine or target in one availability cell.
+ */
+export type SetAvailabilityCellMembershipResponse = {
+  /**
+   * Availability-cell identity from the route.
+   */
+  cell_id: string;
+  /**
+   * Machine or target identity from the route.
+   */
+  member_id: string;
+  /**
+   * Exact idempotency identity whose result was resolved.
+   */
+  operation_id: string;
+  /**
+   * `true` when the member is present after this operation.
+   */
+  present: boolean;
+  /**
+   * Authoritative mutation revision.
+   */
+  revision: number;
+};
+
+/**
  * SetFaultGroupMembershipRequest
  *
  * Exact-retry desired machine/group membership.
@@ -3673,6 +4418,116 @@ export type StepUpCurrentSessionRequestWritable = {
   operation_id: string;
 };
 
+export type ListAcknowledgementPoliciesData = {
+  body?: never;
+  path?: never;
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/admin/acknowledgement-policies";
+};
+
+export type ListAcknowledgementPoliciesErrors = {
+  /**
+   * Invalid query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Outgoing contract or topology integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListAcknowledgementPoliciesError =
+  ListAcknowledgementPoliciesErrors[keyof ListAcknowledgementPoliciesErrors];
+
+export type ListAcknowledgementPoliciesResponses = {
+  /**
+   * One bounded topology page
+   */
+  200: ListAcknowledgementPoliciesResponse;
+};
+
+export type ListAcknowledgementPoliciesResponse2 =
+  ListAcknowledgementPoliciesResponses[keyof ListAcknowledgementPoliciesResponses];
+
+export type CreateAcknowledgementPolicyData = {
+  /**
+   * Immutable placement policy
+   */
+  body: CreateAcknowledgementPolicyRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/admin/acknowledgement-policies";
+};
+
+export type CreateAcknowledgementPolicyErrors = {
+  /**
+   * Invalid policy request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Referenced policy or cell not found
+   */
+  404: ApiError;
+  /**
+   * Name or operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or policy integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateAcknowledgementPolicyError =
+  CreateAcknowledgementPolicyErrors[keyof CreateAcknowledgementPolicyErrors];
+
+export type CreateAcknowledgementPolicyResponses = {
+  /**
+   * Placement policy committed
+   */
+  201: CreateAcknowledgementPolicyResponse;
+};
+
+export type CreateAcknowledgementPolicyResponse2 =
+  CreateAcknowledgementPolicyResponses[keyof CreateAcknowledgementPolicyResponses];
+
 export type ListGroupsData = {
   body?: never;
   path?: never;
@@ -3967,6 +4822,116 @@ export type RemoveGroupMemberResponses = {
 export type RemoveGroupMemberResponse2 =
   RemoveGroupMemberResponses[keyof RemoveGroupMemberResponses];
 
+export type ListLocalityPoliciesData = {
+  body?: never;
+  path?: never;
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/admin/locality-policies";
+};
+
+export type ListLocalityPoliciesErrors = {
+  /**
+   * Invalid query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Outgoing contract or topology integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListLocalityPoliciesError =
+  ListLocalityPoliciesErrors[keyof ListLocalityPoliciesErrors];
+
+export type ListLocalityPoliciesResponses = {
+  /**
+   * One bounded topology page
+   */
+  200: ListLocalityPoliciesResponse;
+};
+
+export type ListLocalityPoliciesResponse2 =
+  ListLocalityPoliciesResponses[keyof ListLocalityPoliciesResponses];
+
+export type CreateLocalityPolicyData = {
+  /**
+   * Immutable placement policy
+   */
+  body: CreateLocalityPolicyRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/admin/locality-policies";
+};
+
+export type CreateLocalityPolicyErrors = {
+  /**
+   * Invalid policy request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Referenced policy or cell not found
+   */
+  404: ApiError;
+  /**
+   * Name or operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or policy integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateLocalityPolicyError =
+  CreateLocalityPolicyErrors[keyof CreateLocalityPolicyErrors];
+
+export type CreateLocalityPolicyResponses = {
+  /**
+   * Placement policy committed
+   */
+  201: CreateLocalityPolicyResponse;
+};
+
+export type CreateLocalityPolicyResponse2 =
+  CreateLocalityPolicyResponses[keyof CreateLocalityPolicyResponses];
+
 export type CreateNodeJoinGrantData = {
   /**
    * Join invitation policy
@@ -4066,6 +5031,112 @@ export type ListOperationsResponses = {
 
 export type ListOperationsResponse2 =
   ListOperationsResponses[keyof ListOperationsResponses];
+
+export type ListProtectionPoliciesData = {
+  body?: never;
+  path?: never;
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/admin/protection-policies";
+};
+
+export type ListProtectionPoliciesErrors = {
+  /**
+   * Invalid query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Outgoing contract or topology integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListProtectionPoliciesError =
+  ListProtectionPoliciesErrors[keyof ListProtectionPoliciesErrors];
+
+export type ListProtectionPoliciesResponses = {
+  /**
+   * One bounded topology page
+   */
+  200: ListProtectionPoliciesResponse;
+};
+
+export type ListProtectionPoliciesResponse2 =
+  ListProtectionPoliciesResponses[keyof ListProtectionPoliciesResponses];
+
+export type CreateProtectionPolicyData = {
+  /**
+   * Combined failure scenarios
+   */
+  body: CreateProtectionPolicyRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/admin/protection-policies";
+};
+
+export type CreateProtectionPolicyErrors = {
+  /**
+   * Invalid policy request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Name or operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or policy integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateProtectionPolicyError =
+  CreateProtectionPolicyErrors[keyof CreateProtectionPolicyErrors];
+
+export type CreateProtectionPolicyResponses = {
+  /**
+   * Survival policy committed
+   */
+  201: CreateProtectionPolicyResponse;
+};
+
+export type CreateProtectionPolicyResponse2 =
+  CreateProtectionPolicyResponses[keyof CreateProtectionPolicyResponses];
 
 export type ConfirmRecoveryBundleSavedData = {
   /**
@@ -4292,6 +5363,262 @@ export type RegisterStorageFolderResponses = {
 
 export type RegisterStorageFolderResponse2 =
   RegisterStorageFolderResponses[keyof RegisterStorageFolderResponses];
+
+export type ListAvailabilityCellsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/admin/topology/availability-cells";
+};
+
+export type ListAvailabilityCellsErrors = {
+  /**
+   * Invalid query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Outgoing contract or topology integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListAvailabilityCellsError =
+  ListAvailabilityCellsErrors[keyof ListAvailabilityCellsErrors];
+
+export type ListAvailabilityCellsResponses = {
+  /**
+   * One bounded topology page
+   */
+  200: ListAvailabilityCellsResponse;
+};
+
+export type ListAvailabilityCellsResponse2 =
+  ListAvailabilityCellsResponses[keyof ListAvailabilityCellsResponses];
+
+export type CreateAvailabilityCellData = {
+  /**
+   * Availability locality
+   */
+  body: CreateAvailabilityCellRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/admin/topology/availability-cells";
+};
+
+export type CreateAvailabilityCellErrors = {
+  /**
+   * Invalid cell request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Parent cell not found
+   */
+  404: ApiError;
+  /**
+   * Name or operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or topology integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateAvailabilityCellError =
+  CreateAvailabilityCellErrors[keyof CreateAvailabilityCellErrors];
+
+export type CreateAvailabilityCellResponses = {
+  /**
+   * Availability cell committed
+   */
+  201: CreateAvailabilityCellResponse;
+};
+
+export type CreateAvailabilityCellResponse2 =
+  CreateAvailabilityCellResponses[keyof CreateAvailabilityCellResponses];
+
+export type SetAvailabilityCellHostMembershipData = {
+  /**
+   * Desired membership
+   */
+  body: SetFaultGroupMembershipRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    /**
+     * Availability-cell identity
+     */
+    cell_id: string;
+    /**
+     * Machine identity
+     */
+    host_id: string;
+  };
+  query?: never;
+  url: "/admin/topology/availability-cells/{cell_id}/hosts/{host_id}";
+};
+
+export type SetAvailabilityCellHostMembershipErrors = {
+  /**
+   * Invalid membership request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Cell or member not found
+   */
+  404: ApiError;
+  /**
+   * Operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or topology integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type SetAvailabilityCellHostMembershipError =
+  SetAvailabilityCellHostMembershipErrors[keyof SetAvailabilityCellHostMembershipErrors];
+
+export type SetAvailabilityCellHostMembershipResponses = {
+  /**
+   * Desired membership committed
+   */
+  200: SetAvailabilityCellMembershipResponse;
+};
+
+export type SetAvailabilityCellHostMembershipResponse =
+  SetAvailabilityCellHostMembershipResponses[keyof SetAvailabilityCellHostMembershipResponses];
+
+export type SetAvailabilityCellTargetMembershipData = {
+  /**
+   * Desired membership
+   */
+  body: SetFaultGroupMembershipRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    /**
+     * Availability-cell identity
+     */
+    cell_id: string;
+    /**
+     * Storage-target identity
+     */
+    target_id: string;
+  };
+  query?: never;
+  url: "/admin/topology/availability-cells/{cell_id}/targets/{target_id}";
+};
+
+export type SetAvailabilityCellTargetMembershipErrors = {
+  /**
+   * Invalid membership request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Cell or member not found
+   */
+  404: ApiError;
+  /**
+   * Operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or topology integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type SetAvailabilityCellTargetMembershipError =
+  SetAvailabilityCellTargetMembershipErrors[keyof SetAvailabilityCellTargetMembershipErrors];
+
+export type SetAvailabilityCellTargetMembershipResponses = {
+  /**
+   * Desired membership committed
+   */
+  200: SetAvailabilityCellMembershipResponse;
+};
+
+export type SetAvailabilityCellTargetMembershipResponse =
+  SetAvailabilityCellTargetMembershipResponses[keyof SetAvailabilityCellTargetMembershipResponses];
 
 export type ListFaultGroupMembershipsData = {
   body?: never;
@@ -4765,6 +6092,146 @@ export type CreateVolumeResponses = {
 export type CreateVolumeResponse2 =
   CreateVolumeResponses[keyof CreateVolumeResponses];
 
+export type AssignVolumeAcknowledgementPolicyData = {
+  /**
+   * Exact-retry assignment
+   */
+  body: AssignVolumePlacementPolicyRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    volume_id: string;
+    /**
+     * Immutable policy identity
+     */
+    policy_id: string;
+  };
+  query?: never;
+  url: "/admin/volumes/{volume_id}/acknowledgement-policies/{policy_id}";
+};
+
+export type AssignVolumeAcknowledgementPolicyErrors = {
+  /**
+   * Invalid assignment request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Volume or policy not found
+   */
+  404: ApiError;
+  /**
+   * Operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or policy integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type AssignVolumeAcknowledgementPolicyError =
+  AssignVolumeAcknowledgementPolicyErrors[keyof AssignVolumeAcknowledgementPolicyErrors];
+
+export type AssignVolumeAcknowledgementPolicyResponses = {
+  /**
+   * Volume policy selection committed
+   */
+  200: AssignVolumePlacementPolicyResponse;
+};
+
+export type AssignVolumeAcknowledgementPolicyResponse =
+  AssignVolumeAcknowledgementPolicyResponses[keyof AssignVolumeAcknowledgementPolicyResponses];
+
+export type AssignVolumeLocalityPolicyData = {
+  /**
+   * Exact-retry assignment
+   */
+  body: AssignVolumePlacementPolicyRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    volume_id: string;
+    /**
+     * Immutable policy identity
+     */
+    policy_id: string;
+  };
+  query?: never;
+  url: "/admin/volumes/{volume_id}/locality-policies/{policy_id}";
+};
+
+export type AssignVolumeLocalityPolicyErrors = {
+  /**
+   * Invalid assignment request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Volume or policy not found
+   */
+  404: ApiError;
+  /**
+   * Operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or policy integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type AssignVolumeLocalityPolicyError =
+  AssignVolumeLocalityPolicyErrors[keyof AssignVolumeLocalityPolicyErrors];
+
+export type AssignVolumeLocalityPolicyResponses = {
+  /**
+   * Volume policy selection committed
+   */
+  200: AssignVolumePlacementPolicyResponse;
+};
+
+export type AssignVolumeLocalityPolicyResponse =
+  AssignVolumeLocalityPolicyResponses[keyof AssignVolumeLocalityPolicyResponses];
+
 export type ListVolumePermissionGrantsData = {
   body?: never;
   path: {
@@ -4952,6 +6419,76 @@ export type RevokePermissionGrantResponses = {
 
 export type RevokePermissionGrantResponse2 =
   RevokePermissionGrantResponses[keyof RevokePermissionGrantResponses];
+
+export type AssignVolumeProtectionPolicyData = {
+  /**
+   * Exact-retry assignment
+   */
+  body: AssignVolumeProtectionPolicyRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    volume_id: string;
+    /**
+     * Immutable survival-policy identity
+     */
+    policy_id: string;
+  };
+  query?: never;
+  url: "/admin/volumes/{volume_id}/protection-policies/{policy_id}";
+};
+
+export type AssignVolumeProtectionPolicyErrors = {
+  /**
+   * Invalid assignment request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Volume or policy not found
+   */
+  404: ApiError;
+  /**
+   * Operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or policy integrity failure
+   */
+  500: ApiError;
+  /**
+   * Metadata authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type AssignVolumeProtectionPolicyError =
+  AssignVolumeProtectionPolicyErrors[keyof AssignVolumeProtectionPolicyErrors];
+
+export type AssignVolumeProtectionPolicyResponses = {
+  /**
+   * Volume policy selection committed
+   */
+  200: AssignVolumeProtectionPolicyResponse;
+};
+
+export type AssignVolumeProtectionPolicyResponse2 =
+  AssignVolumeProtectionPolicyResponses[keyof AssignVolumeProtectionPolicyResponses];
 
 export type PublishSmbExportData = {
   /**

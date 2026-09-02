@@ -432,9 +432,21 @@ fn committed_membership_change_admits_a_learner_through_durable_joint_and_stable
     };
     assert_eq!(mutation.membership_epoch, Some(2));
     assert_eq!(core.plan_digest(), fixture.joint.proof_digest());
-    core.step(CoreInput::Persisted(*id))?;
+    let effects = core.step(CoreInput::Persisted(*id))?;
     assert_eq!(core.membership_epoch(), 2);
     assert_eq!(core.plan_digest(), fixture.new.proof_digest());
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        CoreEffect::Send {
+            to,
+            message: CoreMessage::AppendRequest(AppendRequest {
+                previous: LogPosition { term: 1, index: 1 },
+                entries,
+                ..
+            }),
+        } if *to == fixture.third
+            && matches!(entries.as_slice(), [entry] if entry.position.index == 2)
+    )));
     Ok(())
 }
 

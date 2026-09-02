@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use meshspan_cluster::{
     ConsensusNetwork, decode_native_content_layout_chunk, decode_native_content_layout_header,
-    decode_native_shard_receipt,
+    decode_native_protected_stripe, decode_native_shard_receipt,
 };
 use meshspan_domain::{
     ContentManifestId, InitialBootstrapMaterial, NamespaceCommitId, NodeId, OperationId, Revision,
@@ -18,7 +18,7 @@ use meshspan_filesystem::{
     ContentLayoutTransferHeader, ContentLayoutTransferPage, ContentPublicationRequest,
     DurableContentCatalog, NamespaceHistoryCommitRecord, NamespaceHistoryImmutableRecord,
     NamespaceHistoryLimits, NamespaceHistoryPage, NamespaceHistoryReceiveRequest,
-    NamespaceHistoryReceiveStatus, VersionPublicationStore,
+    NamespaceHistoryReceiveStatus, VersionPublicationStore, provider_operation_id,
 };
 use meshspan_metadata::{AuthoritativeRepository, PartitionDatabase};
 use meshspan_protocol::v1::control_envelope::Message;
@@ -424,11 +424,22 @@ async fn receive_content_layout(
     open_catalog(state_directory, now)?
         .seal_layout_import(contract, header)
         .map_err(|_| NativeGatewaySyncError::Invalid)?;
-    import_remote_routes(network, state_directory, source, contract, route).await?;
     let now = current_time()?;
-    open_catalog(state_directory, now)?
-        .finish_remote_layout_import(contract, now)
-        .map_err(|_| NativeGatewaySyncError::Invalid)?;
+    if header.manifest.format_version == 2 {
+        if header.chunk_count != 0 {
+            import_protected_receipts(network, state_directory, source, contract, header, route)
+                .await?;
+        }
+        open_catalog(state_directory, now)?
+            .finish(contract, now)
+            .map_err(|_| NativeGatewaySyncError::Invalid)?;
+    } else {
+        import_remote_routes(network, state_directory, source, contract, route).await?;
+        let now = current_time()?;
+        open_catalog(state_directory, now)?
+            .finish_remote_layout_import(contract, now)
+            .map_err(|_| NativeGatewaySyncError::Invalid)?;
+    }
     Ok(())
 }
 
@@ -451,7 +462,10 @@ async fn import_layout_pages(
         let contract = import_contract(source, volume_id, route, header)?;
         let layout_page = if page.chunks.is_empty() {
             decode_receipts(&page, route)?;
-            if header.chunk_count != 0 || page.next_index.is_some() {
+            if header.chunk_count != 0
+                || page.next_index.is_some()
+                || !page.protected_stripes.is_empty()
+            {
                 return Err(NativeGatewaySyncError::Invalid);
             }
             None
@@ -467,10 +481,54 @@ async fn import_layout_pages(
             catalog
                 .append_layout_import_page(contract, header, &layout_page)
                 .map_err(|_| NativeGatewaySyncError::Invalid)?;
+            if header.manifest.format_version == 2 {
+                let protected = decode_protected_stripes(&page, contract, header, &layout_page)?;
+                catalog
+                    .append_protected_layout_import_page(
+                        contract,
+                        &protected
+                            .iter()
+                            .map(|value| value.stripe.clone())
+                            .collect::<Vec<_>>(),
+                    )
+                    .map_err(|_| NativeGatewaySyncError::Invalid)?;
+            }
         }
         after_index = page.next_index;
         if after_index.is_none() {
             return Ok((contract, header));
+        }
+    }
+}
+
+async fn import_protected_receipts(
+    network: &ConsensusNetwork,
+    state_directory: &Path,
+    source: NodeId,
+    contract: ContentPublicationRequest,
+    header: ContentLayoutTransferHeader,
+    route: &ParsedContentRoute,
+) -> Result<(), NativeGatewaySyncError> {
+    let mut after_index = None;
+    loop {
+        let page = fetch_layout_page(network, source, route, after_index, 5).await?;
+        if decode_layout_header(&page)? != header {
+            return Err(NativeGatewaySyncError::Invalid);
+        }
+        let layout_page = decode_layout_page(&page, route)?;
+        let protected = decode_protected_stripes(&page, contract, header, &layout_page)?;
+        let now = current_time()?;
+        let mut catalog = open_catalog(state_directory, now)?;
+        for value in protected {
+            for receipt in value.receipts.as_slice() {
+                catalog
+                    .record_protected_receipt(contract, *receipt, now)
+                    .map_err(|_| NativeGatewaySyncError::Invalid)?;
+            }
+        }
+        after_index = page.next_index;
+        if after_index.is_none() {
+            return Ok(());
         }
     }
 }
@@ -542,7 +600,11 @@ fn decode_layout_page(
     page: &NativeContentLayoutPage,
     route: &ParsedContentRoute,
 ) -> Result<ContentLayoutTransferPage, NativeGatewaySyncError> {
-    decode_receipts(page, route)?;
+    if page.protected_stripes.is_empty() {
+        decode_receipts(page, route)?;
+    } else if !page.receipts.is_empty() || page.protected_stripes.len() != page.chunks.len() {
+        return Err(NativeGatewaySyncError::Invalid);
+    }
     let chunks = page
         .chunks
         .iter()
@@ -551,6 +613,33 @@ fn decode_layout_page(
         .map_err(|_| NativeGatewaySyncError::Invalid)?;
     ContentLayoutTransferPage::from_untrusted(chunks, page.next_index)
         .map_err(|_| NativeGatewaySyncError::Invalid)
+}
+
+fn decode_protected_stripes(
+    page: &NativeContentLayoutPage,
+    contract: ContentPublicationRequest,
+    header: ContentLayoutTransferHeader,
+    layout: &ContentLayoutTransferPage,
+) -> Result<Vec<meshspan_filesystem::CommittedProtectedStripe>, NativeGatewaySyncError> {
+    if page.protected_stripes.len() != layout.chunks().len() || !page.receipts.is_empty() {
+        return Err(NativeGatewaySyncError::Invalid);
+    }
+    layout
+        .chunks()
+        .iter()
+        .zip(&page.protected_stripes)
+        .map(|(chunk, payload)| {
+            let operation_id = provider_operation_id(contract.operation_id, chunk.chunk_index)
+                .map_err(|_| NativeGatewaySyncError::Invalid)?;
+            decode_native_protected_stripe(
+                payload,
+                contract,
+                chunk.with_provider_operation(operation_id),
+                header.manifest,
+            )
+            .map_err(|_| NativeGatewaySyncError::Invalid)
+        })
+        .collect()
 }
 
 fn decode_receipts(

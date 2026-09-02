@@ -5,18 +5,33 @@
 use axum::http::HeaderMap;
 use axum::http::header::{AUTHORIZATION, COOKIE};
 use meshspan_api_contract::{
-    CreateFaultGroupRequest, CreateFaultGroupResponse, ListFaultGroupMembershipsResponse,
-    ListFaultGroupsResponse, ListTopologyNodesResponse, ListTopologyQuery,
-    ListTopologyTargetsResponse, SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse,
-    validate_list_topology_query,
+    AssignVolumePlacementPolicyRequest, AssignVolumePlacementPolicyResponse,
+    AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
+    CreateAcknowledgementPolicyRequest, CreateAcknowledgementPolicyResponse,
+    CreateAvailabilityCellRequest, CreateAvailabilityCellResponse, CreateFaultGroupRequest,
+    CreateFaultGroupResponse, CreateLocalityPolicyRequest, CreateLocalityPolicyResponse,
+    CreateProtectionPolicyRequest, CreateProtectionPolicyResponse,
+    ListAcknowledgementPoliciesResponse, ListAvailabilityCellsResponse,
+    ListFaultGroupMembershipsResponse, ListFaultGroupsResponse, ListLocalityPoliciesResponse,
+    ListProtectionPoliciesResponse, ListTopologyNodesResponse, ListTopologyQuery,
+    ListTopologyTargetsResponse, SetAvailabilityCellMembershipResponse,
+    SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse, validate_list_topology_query,
 };
 use meshspan_domain::{AssuranceLevel, UnixMicros};
 use meshspan_metadata::{EntityKind, PageLimit};
 
 use super::model::{
-    command_context, create_command, decode_group_cursor, decode_membership_cursor,
-    decode_node_cursor, decode_target_cursor, group_response, group_summary, membership_command,
-    membership_response, node_response, target_response,
+    acknowledgement_assignment_command, acknowledgement_policy_command,
+    acknowledgement_policy_response, acknowledgement_policy_summary, assignment_response,
+    availability_cell_command, availability_cell_response, cell_membership_response, cell_summary,
+    command_context, create_command, decode_acknowledgement_cursor, decode_cell_cursor,
+    decode_group_cursor, decode_locality_cursor, decode_membership_cursor, decode_node_cursor,
+    decode_policy_cursor, decode_target_cursor, group_response, group_summary,
+    host_cell_membership_command, locality_assignment_command, locality_policy_command,
+    locality_policy_response, locality_policy_summary, membership_command, membership_response,
+    node_response, placement_assignment_response, policy_summary, protection_assignment_command,
+    protection_policy_command, protection_policy_response, target_cell_membership_command,
+    target_response,
 };
 use super::{
     TopologyAdministrationAuthority, TopologyAdministrationAuthorityError,
@@ -149,6 +164,78 @@ where
         membership_response(&query, page)
     }
 
+    fn list_protection_policies(
+        &self,
+        _administrator: IdentityAdministrator,
+        query: ListTopologyQuery,
+    ) -> Result<ListProtectionPoliciesResponse, TopologyAdministrationError> {
+        validate_list_topology_query(&query)
+            .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+        let cursor = query
+            .cursor
+            .as_ref()
+            .map(decode_policy_cursor)
+            .transpose()?;
+        let page = self
+            .authority
+            .protection_policies(cursor.as_ref(), page_limit(&query)?)
+            .map_err(map_authority_error)?;
+        protection_policy_response(&query, page)
+    }
+
+    fn list_availability_cells(
+        &self,
+        _administrator: IdentityAdministrator,
+        query: ListTopologyQuery,
+    ) -> Result<ListAvailabilityCellsResponse, TopologyAdministrationError> {
+        validate_list_topology_query(&query)
+            .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+        let cursor = query.cursor.as_ref().map(decode_cell_cursor).transpose()?;
+        let page = self
+            .authority
+            .availability_cells(cursor.as_ref(), page_limit(&query)?)
+            .map_err(map_authority_error)?;
+        availability_cell_response(&query, page)
+    }
+
+    fn list_locality_policies(
+        &self,
+        _administrator: IdentityAdministrator,
+        query: ListTopologyQuery,
+    ) -> Result<ListLocalityPoliciesResponse, TopologyAdministrationError> {
+        validate_list_topology_query(&query)
+            .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+        let cursor = query
+            .cursor
+            .as_ref()
+            .map(decode_locality_cursor)
+            .transpose()?;
+        let page = self
+            .authority
+            .locality_policies(cursor.as_ref(), page_limit(&query)?)
+            .map_err(map_authority_error)?;
+        locality_policy_response(&query, page)
+    }
+
+    fn list_acknowledgement_policies(
+        &self,
+        _administrator: IdentityAdministrator,
+        query: ListTopologyQuery,
+    ) -> Result<ListAcknowledgementPoliciesResponse, TopologyAdministrationError> {
+        validate_list_topology_query(&query)
+            .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+        let cursor = query
+            .cursor
+            .as_ref()
+            .map(decode_acknowledgement_cursor)
+            .transpose()?;
+        let page = self
+            .authority
+            .acknowledgement_policies(cursor.as_ref(), page_limit(&query)?)
+            .map_err(map_authority_error)?;
+        acknowledgement_policy_response(&query, page)
+    }
+
     fn create_fault_group(
         &mut self,
         administrator: IdentityAdministrator,
@@ -209,6 +296,295 @@ where
             revision: receipt.committed_revision.get(),
         })
     }
+
+    fn create_protection_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        request: CreateProtectionPolicyRequest,
+    ) -> Result<CreateProtectionPolicyResponse, TopologyAdministrationError> {
+        let operation = request.operation_id.clone();
+        let (operation_id, policy_id, command) = protection_policy_command(&request)?;
+        let context = command_context(administrator, operation_id)?;
+        let expected_digest = command.request_digest(context);
+        let receipt = self
+            .authority
+            .commit_topology_operation(context, &command)
+            .map_err(map_authority_error)?;
+        if receipt.request_digest != expected_digest
+            || receipt.entity.kind != EntityKind::ProtectionPolicy
+            || receipt.entity.id != policy_id.as_bytes()
+        {
+            return Err(TopologyAdministrationError::Conflict);
+        }
+        let record = self
+            .authority
+            .protection_policy(policy_id)
+            .map_err(map_authority_error)?
+            .ok_or(TopologyAdministrationError::Failed)?;
+        Ok(CreateProtectionPolicyResponse {
+            operation_id: operation,
+            policy: policy_summary(record),
+        })
+    }
+
+    fn assign_volume_protection_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        volume_id: &str,
+        policy_id: &str,
+        request: AssignVolumeProtectionPolicyRequest,
+    ) -> Result<AssignVolumeProtectionPolicyResponse, TopologyAdministrationError> {
+        let operation = request.operation_id.clone();
+        let (operation_id, volume_id, policy_id, command) =
+            protection_assignment_command(volume_id, policy_id, &request)?;
+        let context = command_context(administrator, operation_id)?;
+        let expected_digest = command.request_digest(context);
+        let receipt = self
+            .authority
+            .commit_topology_operation(context, &command)
+            .map_err(map_authority_error)?;
+        if receipt.request_digest != expected_digest
+            || receipt.entity.kind != EntityKind::Volume
+            || receipt.entity.id != volume_id.as_bytes()
+        {
+            return Err(TopologyAdministrationError::Conflict);
+        }
+        Ok(assignment_response(
+            operation,
+            volume_id,
+            policy_id,
+            receipt.committed_revision.get(),
+        ))
+    }
+
+    fn create_locality_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        request: CreateLocalityPolicyRequest,
+    ) -> Result<CreateLocalityPolicyResponse, TopologyAdministrationError> {
+        let operation = request.operation_id.clone();
+        let (operation_id, policy_id, command) = locality_policy_command(&request)?;
+        let context = command_context(administrator, operation_id)?;
+        let receipt = commit_policy(
+            &mut self.authority,
+            context,
+            &command,
+            EntityKind::LocalityPolicy,
+            policy_id.as_bytes(),
+        )?;
+        let record = self
+            .authority
+            .locality_policy(policy_id)
+            .map_err(map_authority_error)?
+            .filter(|record| record.revision == receipt.committed_revision)
+            .ok_or(TopologyAdministrationError::Failed)?;
+        Ok(CreateLocalityPolicyResponse {
+            operation_id: operation,
+            policy: locality_policy_summary(record),
+        })
+    }
+
+    fn assign_volume_locality_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        volume_id: &str,
+        policy_id: &str,
+        request: AssignVolumePlacementPolicyRequest,
+    ) -> Result<AssignVolumePlacementPolicyResponse, TopologyAdministrationError> {
+        let operation = request.operation_id.clone();
+        let (operation_id, volume_id, policy_id, command) =
+            locality_assignment_command(volume_id, policy_id, &request)?;
+        let receipt = commit_policy(
+            &mut self.authority,
+            command_context(administrator, operation_id)?,
+            &command,
+            EntityKind::Volume,
+            volume_id.as_bytes(),
+        )?;
+        Ok(placement_assignment_response(
+            operation,
+            volume_id,
+            policy_id.as_bytes(),
+            receipt.committed_revision.get(),
+        ))
+    }
+
+    fn create_acknowledgement_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        request: CreateAcknowledgementPolicyRequest,
+    ) -> Result<CreateAcknowledgementPolicyResponse, TopologyAdministrationError> {
+        let operation = request.operation_id.clone();
+        let (operation_id, policy_id, command) = acknowledgement_policy_command(&request)?;
+        let context = command_context(administrator, operation_id)?;
+        let receipt = commit_policy(
+            &mut self.authority,
+            context,
+            &command,
+            EntityKind::AcknowledgementPolicy,
+            policy_id.as_bytes(),
+        )?;
+        let record = self
+            .authority
+            .acknowledgement_policy(policy_id)
+            .map_err(map_authority_error)?
+            .filter(|record| record.revision == receipt.committed_revision)
+            .ok_or(TopologyAdministrationError::Failed)?;
+        Ok(CreateAcknowledgementPolicyResponse {
+            operation_id: operation,
+            policy: acknowledgement_policy_summary(record)?,
+        })
+    }
+
+    fn assign_volume_acknowledgement_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        volume_id: &str,
+        policy_id: &str,
+        request: AssignVolumePlacementPolicyRequest,
+    ) -> Result<AssignVolumePlacementPolicyResponse, TopologyAdministrationError> {
+        let operation = request.operation_id.clone();
+        let (operation_id, volume_id, policy_id, command) =
+            acknowledgement_assignment_command(volume_id, policy_id, &request)?;
+        let receipt = commit_policy(
+            &mut self.authority,
+            command_context(administrator, operation_id)?,
+            &command,
+            EntityKind::Volume,
+            volume_id.as_bytes(),
+        )?;
+        Ok(placement_assignment_response(
+            operation,
+            volume_id,
+            policy_id.as_bytes(),
+            receipt.committed_revision.get(),
+        ))
+    }
+
+    fn create_availability_cell(
+        &mut self,
+        administrator: IdentityAdministrator,
+        request: CreateAvailabilityCellRequest,
+    ) -> Result<CreateAvailabilityCellResponse, TopologyAdministrationError> {
+        let operation = request.operation_id.clone();
+        let (operation_id, cell_id, command) = availability_cell_command(&request)?;
+        let context = command_context(administrator, operation_id)?;
+        let expected_digest = command.request_digest(context);
+        let receipt = self
+            .authority
+            .commit_topology_operation(context, &command)
+            .map_err(map_authority_error)?;
+        if receipt.request_digest != expected_digest
+            || receipt.entity.kind != EntityKind::AvailabilityCell
+            || receipt.entity.id != cell_id.as_bytes()
+        {
+            return Err(TopologyAdministrationError::Conflict);
+        }
+        let record = self
+            .authority
+            .availability_cell(cell_id)
+            .map_err(map_authority_error)?
+            .ok_or(TopologyAdministrationError::Failed)?;
+        Ok(CreateAvailabilityCellResponse {
+            operation_id: operation,
+            cell: cell_summary(record),
+        })
+    }
+
+    fn set_host_availability_cell_membership(
+        &mut self,
+        administrator: IdentityAdministrator,
+        cell_id: &str,
+        host_id: &str,
+        request: SetFaultGroupMembershipRequest,
+    ) -> Result<SetAvailabilityCellMembershipResponse, TopologyAdministrationError> {
+        let operation = request.operation_id.clone();
+        let present = request.present;
+        let (operation_id, cell_id, host_id, command) =
+            host_cell_membership_command(cell_id, host_id, &request)?;
+        let receipt = commit_cell_membership(
+            &mut self.authority,
+            administrator,
+            operation_id,
+            cell_id.as_bytes(),
+            &command,
+        )?;
+        Ok(cell_membership_response(
+            operation,
+            cell_id,
+            host_id.as_bytes(),
+            present,
+            receipt.committed_revision.get(),
+        ))
+    }
+
+    fn set_target_availability_cell_membership(
+        &mut self,
+        administrator: IdentityAdministrator,
+        cell_id: &str,
+        target_id: &str,
+        request: SetFaultGroupMembershipRequest,
+    ) -> Result<SetAvailabilityCellMembershipResponse, TopologyAdministrationError> {
+        let operation = request.operation_id.clone();
+        let present = request.present;
+        let (operation_id, cell_id, target_id, command) =
+            target_cell_membership_command(cell_id, target_id, &request)?;
+        let receipt = commit_cell_membership(
+            &mut self.authority,
+            administrator,
+            operation_id,
+            cell_id.as_bytes(),
+            &command,
+        )?;
+        Ok(cell_membership_response(
+            operation,
+            cell_id,
+            target_id.as_bytes(),
+            present,
+            receipt.committed_revision.get(),
+        ))
+    }
+}
+
+fn commit_cell_membership<A: TopologyAdministrationAuthority>(
+    authority: &mut A,
+    administrator: IdentityAdministrator,
+    operation_id: meshspan_domain::OperationId,
+    cell_id: [u8; 16],
+    command: &meshspan_metadata::AuthoritativeCommand,
+) -> Result<meshspan_metadata::CommandReceipt, TopologyAdministrationError> {
+    let context = command_context(administrator, operation_id)?;
+    let expected_digest = command.request_digest(context);
+    let receipt = authority
+        .commit_topology_operation(context, command)
+        .map_err(map_authority_error)?;
+    if receipt.request_digest != expected_digest
+        || receipt.entity.kind != EntityKind::AvailabilityCellMembership
+        || receipt.entity.id != cell_id
+    {
+        return Err(TopologyAdministrationError::Conflict);
+    }
+    Ok(receipt)
+}
+
+fn commit_policy<A: TopologyAdministrationAuthority>(
+    authority: &mut A,
+    context: meshspan_metadata::CommandContext,
+    command: &meshspan_metadata::AuthoritativeCommand,
+    expected_kind: EntityKind,
+    expected_id: [u8; 16],
+) -> Result<meshspan_metadata::CommandReceipt, TopologyAdministrationError> {
+    let expected_digest = command.request_digest(context);
+    let receipt = authority
+        .commit_topology_operation(context, command)
+        .map_err(map_authority_error)?;
+    if receipt.request_digest != expected_digest
+        || receipt.entity.kind != expected_kind
+        || receipt.entity.id != expected_id
+    {
+        return Err(TopologyAdministrationError::Conflict);
+    }
+    Ok(receipt)
 }
 
 fn page_limit(query: &ListTopologyQuery) -> Result<PageLimit, TopologyAdministrationError> {

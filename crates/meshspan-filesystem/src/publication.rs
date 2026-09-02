@@ -542,6 +542,73 @@ pub struct NamespacePublicationReceipt {
     pub result_digest: [u8; 32],
 }
 
+/// Locally revalidated file publication safe to present to replicated head authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedPublicationHead {
+    receipt: NamespacePublicationReceipt,
+    volume_id: VolumeId,
+    expected_namespace_commit_id: Option<NamespaceCommitId>,
+    root_object_revision_id: ObjectRevisionId,
+    created_by: PrincipalId,
+    created_at: UnixMicros,
+}
+
+impl VerifiedPublicationHead {
+    pub(crate) const fn new(
+        receipt: NamespacePublicationReceipt,
+        volume_id: VolumeId,
+        expected_namespace_commit_id: Option<NamespaceCommitId>,
+        root_object_revision_id: ObjectRevisionId,
+        created_by: PrincipalId,
+        created_at: UnixMicros,
+    ) -> Self {
+        Self {
+            receipt,
+            volume_id,
+            expected_namespace_commit_id,
+            root_object_revision_id,
+            created_by,
+            created_at,
+        }
+    }
+
+    /// Exact durable publication receipt reloaded from local storage.
+    #[must_use]
+    pub const fn receipt(self) -> NamespacePublicationReceipt {
+        self.receipt
+    }
+
+    /// Volume whose converged head may advance.
+    #[must_use]
+    pub const fn volume_id(self) -> VolumeId {
+        self.volume_id
+    }
+
+    /// Current converged head which the local publication directly extends.
+    #[must_use]
+    pub const fn expected_namespace_commit_id(self) -> Option<NamespaceCommitId> {
+        self.expected_namespace_commit_id
+    }
+
+    /// Root object revision selected by the immutable namespace commit.
+    #[must_use]
+    pub const fn root_object_revision_id(self) -> ObjectRevisionId {
+        self.root_object_revision_id
+    }
+
+    /// Principal responsible for the local publication.
+    #[must_use]
+    pub const fn created_by(self) -> PrincipalId {
+        self.created_by
+    }
+
+    /// Durable local publication instant.
+    #[must_use]
+    pub const fn created_at(self) -> UnixMicros {
+        self.created_at
+    }
+}
+
 /// Durable result of one atomic directory creation and namespace-head transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DirectoryPublicationReceipt {
@@ -1591,6 +1658,18 @@ impl VersionPublicationStore {
     ) -> Result<(VolumeId, ObjectRevisionId), PublicationError> {
         let commit = namespace::repository::load_commit(&self.connection, namespace_commit_id)?;
         Ok((commit.volume_id, commit.root_object_revision_id))
+    }
+
+    /// Reloads and verifies one file publication at the replicated-head boundary.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a missing, substituted, superseded or corrupt local publication receipt.
+    pub fn verify_publication_head(
+        &self,
+        receipt: NamespacePublicationReceipt,
+    ) -> Result<VerifiedPublicationHead, PublicationError> {
+        namespace::verify_publication_head(&self.connection, receipt)
     }
 
     /// Resolves one immutable file version to its content-publication operation and manifest.

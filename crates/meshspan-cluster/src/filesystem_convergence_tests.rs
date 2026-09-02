@@ -3,13 +3,14 @@
 use std::{cell::RefCell, collections::BTreeMap, io::Write, path::Path, rc::Rc};
 
 use meshspan_domain::{
-    AssuranceLevel, AuthenticationService, BranchId, ContentManifestId, FileVersionId, HandleId,
-    NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Revision,
-    Rights, UnixMicros, VolumeId,
+    AssuranceLevel, AuthenticationService, BranchId, ContentManifestId, DurabilityScope,
+    FileVersionId, HandleId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId,
+    PrincipalId, Revision, Rights, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
     AdapterCloseFileRequest, AdapterCreateFileRequest, AuthorisedFilesystemService,
-    BoundFilesystemAdapter, CompletedStage, ContentPublicationError, ContentPublicationRequest,
+    BoundFilesystemAdapter, CompletedStage, ContentAcknowledgementClass,
+    ContentAcknowledgementEvidence, ContentPublicationError, ContentPublicationRequest,
     ContentReadError, ContentReadRequest, CreateDisposition, DurableContentPublisher,
     DurableContentReader, FilePublication, FilesystemAccessAuthority, FilesystemAccessContext,
     FilesystemAdapterPolicy, FilesystemAuthorityGrant, FilesystemAuthorityRequest,
@@ -338,6 +339,27 @@ struct EmptyContentPublisher {
 
 impl DurableContentPublisher for EmptyContentPublisher {
     type Sink = Vec<u8>;
+
+    fn acknowledgement_evidence(
+        &self,
+        request: ContentPublicationRequest,
+    ) -> Result<ContentAcknowledgementEvidence, ContentPublicationError> {
+        if !self.stored.borrow().contains_key(&request.operation_id) {
+            return Err(ContentPublicationError::Corrupt);
+        }
+        Ok(ContentAcknowledgementEvidence {
+            configured_class: ContentAcknowledgementClass::Eventual,
+            acknowledged_class: ContentAcknowledgementClass::Eventual,
+            fallback_applied: false,
+            content_scope: DurabilityScope::NodeLocal,
+            required_shard_receipts: 0,
+            eventual_shard_receipts: 0,
+            pending_eventual_shards: 0,
+            policy_evidence_digest: [1; 32],
+            achieved_protection_digest: [2; 32],
+            pending_debt_digest: [3; 32],
+        })
+    }
 
     fn resolve(
         &mut self,

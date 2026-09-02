@@ -135,7 +135,26 @@ pub fn encode_list_upload_ranges_response(
 pub fn encode_commit_upload_response(
     response: &CommitUploadResponse,
 ) -> Result<Vec<u8>, BoundaryError> {
-    if response.upload.state != UploadState::Committed {
+    let acknowledgement = &response.acknowledgement;
+    let policy_success = acknowledgement.policy_committed
+        && !acknowledgement.fallback_applied
+        && acknowledgement.configured_consistency == acknowledgement.acknowledged_consistency;
+    let explicit_fallback = !acknowledgement.policy_committed
+        && acknowledgement.fallback_applied
+        && acknowledgement.configured_consistency == crate::AcknowledgementConsistency::Strong
+        && acknowledgement.acknowledged_consistency == crate::AcknowledgementConsistency::Eventual;
+    let scope_matches = match acknowledgement.acknowledged_consistency {
+        crate::AcknowledgementConsistency::Strong => {
+            acknowledgement.durability_scope == crate::WriteDurabilityScope::GloballyConverged
+        }
+        crate::AcknowledgementConsistency::Eventual => {
+            acknowledgement.durability_scope != crate::WriteDurabilityScope::GloballyConverged
+        }
+    };
+    if response.upload.state != UploadState::Committed
+        || !(policy_success || explicit_fallback)
+        || !scope_matches
+    {
         return Err(BoundaryError::EncodeMismatch);
     }
     encode_response(response, commit_response_validator())

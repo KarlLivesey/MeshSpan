@@ -9,9 +9,17 @@ mod service;
 
 use axum::http::HeaderMap;
 use meshspan_api_contract::{
-    CreateFaultGroupRequest, CreateFaultGroupResponse, ListFaultGroupMembershipsResponse,
-    ListFaultGroupsResponse, ListTopologyNodesResponse, ListTopologyQuery,
-    ListTopologyTargetsResponse, SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse,
+    AssignVolumePlacementPolicyRequest, AssignVolumePlacementPolicyResponse,
+    AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
+    CreateAcknowledgementPolicyRequest, CreateAcknowledgementPolicyResponse,
+    CreateAvailabilityCellRequest, CreateAvailabilityCellResponse, CreateFaultGroupRequest,
+    CreateFaultGroupResponse, CreateLocalityPolicyRequest, CreateLocalityPolicyResponse,
+    CreateProtectionPolicyRequest, CreateProtectionPolicyResponse,
+    ListAcknowledgementPoliciesResponse, ListAvailabilityCellsResponse,
+    ListFaultGroupMembershipsResponse, ListFaultGroupsResponse, ListLocalityPoliciesResponse,
+    ListProtectionPoliciesResponse, ListTopologyNodesResponse, ListTopologyQuery,
+    ListTopologyTargetsResponse, SetAvailabilityCellMembershipResponse,
+    SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse,
 };
 use meshspan_domain::UnixMicros;
 use thiserror::Error;
@@ -80,6 +88,50 @@ pub trait TopologyAdministrationController: Send + 'static {
         query: ListTopologyQuery,
     ) -> Result<ListFaultGroupMembershipsResponse, TopologyAdministrationError>;
 
+    /// Returns one bounded immutable survival-policy page.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid input or unavailable/corrupt committed policy state.
+    fn list_protection_policies(
+        &self,
+        administrator: IdentityAdministrator,
+        query: ListTopologyQuery,
+    ) -> Result<ListProtectionPoliciesResponse, TopologyAdministrationError>;
+
+    /// Returns one bounded availability-locality page.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid input or unavailable/corrupt committed cell state.
+    fn list_availability_cells(
+        &self,
+        administrator: IdentityAdministrator,
+        query: ListTopologyQuery,
+    ) -> Result<ListAvailabilityCellsResponse, TopologyAdministrationError>;
+
+    /// Returns one bounded immutable desired-locality policy page.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid input or unavailable/corrupt committed policy state.
+    fn list_locality_policies(
+        &self,
+        administrator: IdentityAdministrator,
+        query: ListTopologyQuery,
+    ) -> Result<ListLocalityPoliciesResponse, TopologyAdministrationError>;
+
+    /// Returns one bounded immutable write-acknowledgement policy page.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid input or unavailable/corrupt committed policy state.
+    fn list_acknowledgement_policies(
+        &self,
+        administrator: IdentityAdministrator,
+        query: ListTopologyQuery,
+    ) -> Result<ListAcknowledgementPoliciesResponse, TopologyAdministrationError>;
+
     /// Creates or exactly resolves one named shared-failure group.
     ///
     /// # Errors
@@ -103,6 +155,115 @@ pub trait TopologyAdministrationController: Send + 'static {
         host_id: &str,
         request: SetFaultGroupMembershipRequest,
     ) -> Result<SetFaultGroupMembershipResponse, TopologyAdministrationError>;
+
+    /// Creates or exactly resolves one immutable data-survival policy.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, conflicting, unauthorised or uncommitted mutations.
+    fn create_protection_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        request: CreateProtectionPolicyRequest,
+    ) -> Result<CreateProtectionPolicyResponse, TopologyAdministrationError>;
+
+    /// Selects or exactly resolves one immutable policy for a volume.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, missing, conflicting, unauthorised or uncommitted mutations.
+    fn assign_volume_protection_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        volume_id: &str,
+        policy_id: &str,
+        request: AssignVolumeProtectionPolicyRequest,
+    ) -> Result<AssignVolumeProtectionPolicyResponse, TopologyAdministrationError>;
+
+    /// Creates or exactly resolves one immutable desired-locality policy.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, conflicting, unauthorised or uncommitted mutations.
+    fn create_locality_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        request: CreateLocalityPolicyRequest,
+    ) -> Result<CreateLocalityPolicyResponse, TopologyAdministrationError>;
+
+    /// Selects one immutable desired-locality policy for a volume.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, missing, conflicting, unauthorised or uncommitted mutations.
+    fn assign_volume_locality_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        volume_id: &str,
+        policy_id: &str,
+        request: AssignVolumePlacementPolicyRequest,
+    ) -> Result<AssignVolumePlacementPolicyResponse, TopologyAdministrationError>;
+
+    /// Creates or exactly resolves one immutable write-acknowledgement policy.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, conflicting, unauthorised or uncommitted mutations.
+    fn create_acknowledgement_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        request: CreateAcknowledgementPolicyRequest,
+    ) -> Result<CreateAcknowledgementPolicyResponse, TopologyAdministrationError>;
+
+    /// Selects one immutable write-acknowledgement policy for a volume.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, missing, conflicting, unauthorised or uncommitted mutations.
+    fn assign_volume_acknowledgement_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        volume_id: &str,
+        policy_id: &str,
+        request: AssignVolumePlacementPolicyRequest,
+    ) -> Result<AssignVolumePlacementPolicyResponse, TopologyAdministrationError>;
+
+    /// Creates or exactly resolves one named availability locality.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, missing-parent, conflicting, unauthorised or uncommitted mutations.
+    fn create_availability_cell(
+        &mut self,
+        administrator: IdentityAdministrator,
+        request: CreateAvailabilityCellRequest,
+    ) -> Result<CreateAvailabilityCellResponse, TopologyAdministrationError>;
+
+    /// Sets one machine's desired availability-cell membership.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, missing, conflicting, unauthorised or uncommitted mutations.
+    fn set_host_availability_cell_membership(
+        &mut self,
+        administrator: IdentityAdministrator,
+        cell_id: &str,
+        host_id: &str,
+        request: SetFaultGroupMembershipRequest,
+    ) -> Result<SetAvailabilityCellMembershipResponse, TopologyAdministrationError>;
+
+    /// Sets one storage target's desired availability-cell membership.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, missing, conflicting, unauthorised or uncommitted mutations.
+    fn set_target_availability_cell_membership(
+        &mut self,
+        administrator: IdentityAdministrator,
+        cell_id: &str,
+        target_id: &str,
+        request: SetFaultGroupMembershipRequest,
+    ) -> Result<SetAvailabilityCellMembershipResponse, TopologyAdministrationError>;
 }
 
 /// Closed non-secret topology-administration failure categories.

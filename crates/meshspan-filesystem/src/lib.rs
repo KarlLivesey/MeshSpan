@@ -2,6 +2,7 @@
 
 //! Protocol-neutral namespace, staging, permissions and copy-on-write filesystem semantics.
 
+mod acknowledgement;
 mod adapter;
 mod authority;
 mod cleanup_cancellation;
@@ -35,6 +36,10 @@ mod version_retention;
 #[cfg(test)]
 mod upload_service_tests;
 
+pub use acknowledgement::{
+    ContentAcknowledgementClass, ContentAcknowledgementEvidence, ContentAcknowledgementOutcome,
+    ContentAcknowledgementPolicy, ContentStrongFallback, PublicationAcknowledgement,
+};
 pub use adapter::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
     AdapterFlushFileRequest, AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest,
@@ -61,9 +66,10 @@ pub use commit_service::{
     FilesystemCommitError, FilesystemCommitService, RootFileCommitRequest,
 };
 pub use content_catalog::{
-    CommittedContentLayoutTransfer, CommittedShardInventory, CommittedShardPage,
-    ContentCatalogError, DurableContentCatalog, PendingContentChunkPage, PreparedContentChunk,
-    PreparedContentLayout,
+    CommittedContentLayoutTransfer, CommittedProtectedStripe, CommittedShardInventory,
+    CommittedShardPage, ContentCatalogError, DurableContentCatalog, PendingContentChunkPage,
+    PendingProtectedShardPage, PreparedContentChunk, PreparedContentLayout, PreparedProtectedShard,
+    PreparedProtectedStripe, ProtectedShardCursor,
 };
 pub use content_crypto::{
     ContentChunkCipher, ContentChunkLimits, ContentCryptoError, ContentEncryptionKey,
@@ -77,14 +83,16 @@ pub use content_key_transit::{
     ContentKeyTransitCipher, ContentKeyTransitError, TransitWrappedContentKey,
 };
 pub use content_publisher::{
-    DurableContentSink, UnprotectedContentAccess, UnprotectedContentPublisher,
+    ContentShardRouter, DurableContentSink, ProtectedContentAccess, ProtectedContentPublisher,
+    ProtectionConfiguration, ProtectionPolicySource, UnprotectedContentAccess,
+    UnprotectedContentPublisher,
 };
 pub use content_reader::{
     ContentReadError, ContentReadRequest, DurableContentReader, PublishedContentReference,
 };
 pub use content_transfer::{
     ContentLayoutChunk, ContentLayoutTransferError, ContentLayoutTransferHeader,
-    ContentLayoutTransferPage, MAXIMUM_CONTENT_LAYOUT_PAGE_ITEMS,
+    ContentLayoutTransferPage, MAXIMUM_CONTENT_LAYOUT_PAGE_ITEMS, provider_operation_id,
 };
 pub use directory::{
     DirectoryEntry, DirectoryEntryKind, DirectoryMutation, DirectoryNodeDigest,
@@ -124,8 +132,8 @@ pub use publication::{
     NamespaceReconciliationReceipt, NamespaceRenamePublication, NamespaceRenameReceipt,
     NamespaceUnlinkAuthority, NamespaceUnlinkPublication, NamespaceUnlinkReceipt,
     PublicationDisposition, PublicationError, PublicationPathError, RootFilePublication,
-    SnapshotRestorePublication, SnapshotRestoreReceipt, VerifiedReconciliationHead,
-    VerifiedSnapshotRestoreHead, VersionPublicationStore,
+    SnapshotRestorePublication, SnapshotRestoreReceipt, VerifiedPublicationHead,
+    VerifiedReconciliationHead, VerifiedSnapshotRestoreHead, VersionPublicationStore,
 };
 pub use reachability::{
     ReachabilityRoot, ReachabilityRootPage, ReachabilityRootSource, VersionReachabilityError,

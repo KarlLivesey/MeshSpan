@@ -11,12 +11,12 @@ use meshspan_filesystem::{
 use meshspan_protocol::v1::VersionedPayload;
 use thiserror::Error;
 
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 const HEADER_DOMAIN: &[u8] = b"meshspan.native.content-layout-header\0";
 const CHUNK_DOMAIN: &[u8] = b"meshspan.native.content-layout-chunk\0";
 const RECEIPT_DOMAIN: &[u8] = b"meshspan.native.content-shard-receipt\0";
 const HEADER_FIELDS_LENGTH: usize = 16 + 2 + 8 + 32 + 32 + 8 + 8 + 8 + 24 + 48 + 32;
-const CHUNK_FIELDS_LENGTH: usize = 8 + 8 + 32 + 8 + 32;
+const CHUNK_FIELDS_LENGTH: usize = 8 + 8 + 32 + 8 + 32 + 32;
 const RECEIPT_FIELDS_LENGTH: usize = 16 + 32 + 8 + 2 + 4 + 8 + 32 + 16 + 8;
 
 /// Encodes immutable geometry and its already volume-wrapped same-swarm content key.
@@ -91,6 +91,7 @@ pub fn version_native_content_layout_chunk(
     bytes.extend_from_slice(&chunk.plaintext_digest);
     bytes.extend_from_slice(&chunk.ciphertext_length.to_be_bytes());
     bytes.extend_from_slice(&chunk.ciphertext_digest);
+    bytes.extend_from_slice(&chunk.storage_layout_digest);
     Ok(VersionedPayload {
         format_version: FORMAT_VERSION,
         canonical_bytes: bytes,
@@ -112,6 +113,7 @@ pub fn decode_native_content_layout_chunk(
         plaintext_digest: reader.array()?,
         ciphertext_length: reader.u64()?,
         ciphertext_digest: reader.array()?,
+        storage_layout_digest: reader.array()?,
     };
     reader.finish()?;
     ContentLayoutTransferPage::from_untrusted(vec![chunk], None)

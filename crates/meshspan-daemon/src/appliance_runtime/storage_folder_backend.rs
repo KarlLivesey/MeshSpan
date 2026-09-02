@@ -83,6 +83,10 @@ impl StorageTargetRuntime {
         if !self.configured_paths.contains(&canonical_path) {
             self.configured_paths.push(canonical_path);
         }
+        let targets = self.active.values().cloned().collect::<Vec<_>>();
+        self.native_filesystem
+            .ensure_open(&targets, now)
+            .map_err(|_| StorageFolderAdministrationBackendError::Unavailable)?;
         let public_target_id = format_uuid(context.target_id.as_bytes());
         self.folder_summaries()?
             .into_iter()

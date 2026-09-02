@@ -2,20 +2,25 @@
 
 //! Bounded canonical bytes for authoritative commands carried by consensus.
 
+mod acknowledgement_policy;
 mod authentication;
+mod availability_cell;
 mod bootstrap;
 mod decoder;
 mod encoder;
 mod enrolment;
 mod fault_group;
 mod identity;
+mod locality_policy;
 mod namespace;
 mod node_wrapping_key;
+mod protection_policy;
 mod recovery;
 mod secret_generation;
 mod session;
 mod smb_export;
 mod storage_target;
+mod volume_head;
 
 use meshspan_domain::{AuditEventId, OperationId, PrincipalId, Revision, UnixMicros};
 use thiserror::Error;
@@ -143,6 +148,33 @@ fn encode_command(
         AuthoritativeCommand::SetHostFaultGroupMembership(value) => {
             fault_group::encode_membership(encoder, *value)
         }
+        AuthoritativeCommand::CreateProtectionPolicy(value) => {
+            protection_policy::encode_create(encoder, value)
+        }
+        AuthoritativeCommand::AssignVolumeProtectionPolicy(value) => {
+            protection_policy::encode_assignment(encoder, *value)
+        }
+        AuthoritativeCommand::CreateAvailabilityCell(value) => {
+            availability_cell::encode_create(encoder, value)
+        }
+        AuthoritativeCommand::SetHostAvailabilityCellMembership(value) => {
+            availability_cell::encode_host_membership(encoder, *value)
+        }
+        AuthoritativeCommand::SetTargetAvailabilityCellMembership(value) => {
+            availability_cell::encode_target_membership(encoder, *value)
+        }
+        AuthoritativeCommand::CreateLocalityPolicy(value) => {
+            locality_policy::encode_create(encoder, value)
+        }
+        AuthoritativeCommand::AssignVolumeLocalityPolicy(value) => {
+            locality_policy::encode_assignment(encoder, *value)
+        }
+        AuthoritativeCommand::CreateAcknowledgementPolicy(value) => {
+            acknowledgement_policy::encode_create(encoder, value)
+        }
+        AuthoritativeCommand::AssignVolumeAcknowledgementPolicy(value) => {
+            acknowledgement_policy::encode_assignment(encoder, *value)
+        }
         AuthoritativeCommand::PublishSmbExport(value) => smb_export::encode_publish(encoder, value),
         AuthoritativeCommand::WithdrawSmbExport(value) => {
             smb_export::encode_withdraw(encoder, value)
@@ -156,6 +188,9 @@ fn encode_command(
         AuthoritativeCommand::IssueJoinGrant(value) => enrolment::encode_issue(encoder, value),
         AuthoritativeCommand::ConsumeJoinGrant(value) => enrolment::encode_consume(encoder, value),
         AuthoritativeCommand::ActivateNode(value) => enrolment::encode_activate(encoder, value),
+        AuthoritativeCommand::CommitConvergedVolumeHead(value) => {
+            volume_head::encode(encoder, *value)
+        }
         _ => Err(MetadataCommandCodecError::Unsupported),
     }
 }
@@ -204,6 +239,37 @@ fn decode_command(
         }
         fault_group::SET_HOST_FAULT_GROUP_MEMBERSHIP => fault_group::decode_membership(decoder)
             .map(AuthoritativeCommand::SetHostFaultGroupMembership),
+        protection_policy::CREATE_PROTECTION_POLICY => protection_policy::decode_create(decoder)
+            .map(AuthoritativeCommand::CreateProtectionPolicy),
+        protection_policy::ASSIGN_VOLUME_PROTECTION_POLICY => {
+            protection_policy::decode_assignment(decoder)
+                .map(AuthoritativeCommand::AssignVolumeProtectionPolicy)
+        }
+        availability_cell::CREATE_AVAILABILITY_CELL => availability_cell::decode_create(decoder)
+            .map(AuthoritativeCommand::CreateAvailabilityCell),
+        availability_cell::SET_HOST_AVAILABILITY_CELL_MEMBERSHIP => {
+            availability_cell::decode_host_membership(decoder)
+                .map(AuthoritativeCommand::SetHostAvailabilityCellMembership)
+        }
+        availability_cell::SET_TARGET_AVAILABILITY_CELL_MEMBERSHIP => {
+            availability_cell::decode_target_membership(decoder)
+                .map(AuthoritativeCommand::SetTargetAvailabilityCellMembership)
+        }
+        locality_policy::CREATE_LOCALITY_POLICY => {
+            locality_policy::decode_create(decoder).map(AuthoritativeCommand::CreateLocalityPolicy)
+        }
+        locality_policy::ASSIGN_VOLUME_LOCALITY_POLICY => {
+            locality_policy::decode_assignment(decoder)
+                .map(AuthoritativeCommand::AssignVolumeLocalityPolicy)
+        }
+        acknowledgement_policy::CREATE_ACKNOWLEDGEMENT_POLICY => {
+            acknowledgement_policy::decode_create(decoder)
+                .map(AuthoritativeCommand::CreateAcknowledgementPolicy)
+        }
+        acknowledgement_policy::ASSIGN_VOLUME_ACKNOWLEDGEMENT_POLICY => {
+            acknowledgement_policy::decode_assignment(decoder)
+                .map(AuthoritativeCommand::AssignVolumeAcknowledgementPolicy)
+        }
         smb_export::PUBLISH_SMB_EXPORT => {
             smb_export::decode_publish(decoder).map(AuthoritativeCommand::PublishSmbExport)
         }
@@ -224,6 +290,9 @@ fn decode_command(
         }
         enrolment::ACTIVATE_NODE => {
             enrolment::decode_activate(decoder).map(AuthoritativeCommand::ActivateNode)
+        }
+        volume_head::COMMIT_CONVERGED_VOLUME_HEAD => {
+            volume_head::decode(decoder).map(AuthoritativeCommand::CommitConvergedVolumeHead)
         }
         _ => Err(MetadataCommandCodecError::Unsupported),
     }

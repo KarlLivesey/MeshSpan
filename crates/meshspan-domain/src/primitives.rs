@@ -122,6 +122,38 @@ define_identifier!(
     TargetId,
     "Stable identity of one registered storage target."
 );
+define_identifier!(
+    AvailabilityCellId,
+    "Stable identity of one administrator-defined availability cell."
+);
+define_identifier!(
+    ProtectionPolicyId,
+    "Stable identity of one data-survival protection policy."
+);
+define_identifier!(
+    ProtectionScenarioId,
+    "Stable identity of one simultaneous failure scenario."
+);
+define_identifier!(
+    ProtectionTermId,
+    "Stable identity of one fault-class term in a failure scenario."
+);
+define_identifier!(
+    LocalityPolicyId,
+    "Stable identity of one regional data-locality policy."
+);
+define_identifier!(
+    LocalityRequirementId,
+    "Stable identity of one cell requirement in a locality policy."
+);
+define_identifier!(
+    AcknowledgementPolicyId,
+    "Stable identity of one write acknowledgement policy."
+);
+define_identifier!(
+    StoragePolicyBindingId,
+    "Stable identity of one inheritable storage-policy binding."
+);
 define_identifier!(PartitionId, "Stable identity of one metadata partition.");
 define_identifier!(ScopeId, "Stable identity of one routed metadata scope.");
 define_identifier!(

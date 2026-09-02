@@ -14,9 +14,14 @@ use crate::{
     WrappedContentKey,
 };
 
+mod protection;
 mod repository;
 mod transfer;
 
+pub use protection::{
+    CommittedProtectedStripe, PendingProtectedShardPage, PreparedProtectedShard,
+    PreparedProtectedStripe, ProtectedShardCursor,
+};
 pub use transfer::CommittedContentLayoutTransfer;
 
 use repository::{
@@ -41,6 +46,8 @@ pub struct PreparedContentChunk {
     pub ciphertext_length: u64,
     /// BLAKE3 identity of the complete encrypted bytes.
     pub ciphertext_digest: [u8; 32],
+    /// Immutable coding, placement and shard-integrity identity; zero for legacy format 1.
+    pub storage_layout_digest: [u8; 32],
     /// Stable provider mutation identity derived for this chunk.
     pub provider_operation_id: OperationId,
 }
@@ -180,7 +187,15 @@ impl DurableContentCatalog {
     ) -> Result<(), ContentCatalogError> {
         validate_live_request(request)?;
         validate_exact_request(&self.connection, request)?;
-        if chunks.is_empty()
+        let importing_protected_layout = request.format_version == 2
+            && self.connection.query_row(
+                "SELECT import_header_digest IS NOT NULL FROM content_publications
+                 WHERE operation_id = ?1",
+                [request.operation_id.as_bytes().as_slice()],
+                |row| row.get::<_, bool>(0),
+            )?;
+        if !(request.format_version == 1 || importing_protected_layout)
+            || chunks.is_empty()
             || chunks.len() > MAXIMUM_PAGE_ITEMS
             || layout_is_sealed(&self.connection, request.operation_id)?
         {
@@ -194,12 +209,15 @@ impl DurableContentCatalog {
             let index = expected
                 .checked_add(u64::try_from(offset).map_err(|_| ContentCatalogError::InvalidInput)?)
                 .ok_or(ContentCatalogError::InvalidInput)?;
-            validate_chunk(*chunk, index)?;
+            validate_chunk(*chunk, index, request.format_version)?;
+            let storage_layout_digest = (chunk.storage_layout_digest != [0; 32])
+                .then_some(chunk.storage_layout_digest.as_slice());
             transaction.execute(
                 "INSERT INTO content_chunks(
                     operation_id, chunk_index, plaintext_length, plaintext_digest,
-                    ciphertext_length, ciphertext_digest, provider_operation_id
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    ciphertext_length, ciphertext_digest, storage_layout_digest,
+                    provider_operation_id
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     request.operation_id.as_bytes().as_slice(),
                     to_i64(chunk.chunk_index)?,
@@ -207,6 +225,7 @@ impl DurableContentCatalog {
                     chunk.plaintext_digest.as_slice(),
                     to_i64(chunk.ciphertext_length)?,
                     chunk.ciphertext_digest.as_slice(),
+                    storage_layout_digest,
                     chunk.provider_operation_id.as_bytes().as_slice()
                 ],
             )?;
@@ -289,6 +308,9 @@ impl DurableContentCatalog {
         receipt: ShardReceipt,
         recorded_at: UnixMicros,
     ) -> Result<(), ContentCatalogError> {
+        if request.format_version != 1 {
+            return Err(ContentCatalogError::InvalidInput);
+        }
         let manifest = match load_prepared_manifest(&self.connection, request)? {
             Some(manifest) => manifest,
             None => {
@@ -456,13 +478,16 @@ impl DurableContentCatalog {
         limit: usize,
     ) -> Result<PendingContentChunkPage, ContentCatalogError> {
         validate_exact_request(&self.connection, request)?;
+        if request.format_version != 1 {
+            return Err(ContentCatalogError::InvalidInput);
+        }
         if limit == 0 || limit > MAXIMUM_PAGE_ITEMS {
             return Err(ContentCatalogError::InvalidInput);
         }
         let after = after_index.map_or(-1, |value| i64::try_from(value).unwrap_or(i64::MAX));
         let mut statement = self.connection.prepare(
             "SELECT chunk_index, plaintext_length, plaintext_digest, ciphertext_length,
-                    ciphertext_digest, provider_operation_id
+                    ciphertext_digest, storage_layout_digest, provider_operation_id
              FROM content_chunks
              WHERE operation_id = ?1 AND chunk_index > ?2 AND receipt_recorded_at IS NULL
              ORDER BY chunk_index LIMIT ?3",
@@ -569,6 +594,22 @@ impl DurableContentCatalog {
         })
     }
 
+    /// Reconstructs immutable write acknowledgement evidence for one committed protected file.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown, incomplete, legacy or corrupt content and missing durable receipts.
+    pub fn committed_acknowledgement_evidence(
+        &self,
+        content: PublishedContentReference,
+    ) -> Result<crate::ContentAcknowledgementEvidence, ContentCatalogError> {
+        let committed = self.committed_layout(content)?;
+        if committed.request.format_version != 2 {
+            return Err(ContentCatalogError::InvalidInput);
+        }
+        self.protected_acknowledgement_evidence(committed.request)
+    }
+
     /// Resolves and independently verifies one committed manifest without source-local operation
     /// knowledge.
     ///
@@ -622,22 +663,69 @@ impl DurableContentCatalog {
         request: ContentPublicationRequest,
         committed_at: UnixMicros,
     ) -> Result<ManifestPublication, ContentCatalogError> {
+        self.finish_with_outcome(
+            request,
+            committed_at,
+            crate::ContentAcknowledgementOutcome::PolicyCommitted,
+        )
+    }
+
+    pub(super) fn finish_with_outcome(
+        &mut self,
+        request: ContentPublicationRequest,
+        committed_at: UnixMicros,
+        outcome: crate::ContentAcknowledgementOutcome,
+    ) -> Result<ManifestPublication, ContentCatalogError> {
         let manifest = load_prepared_manifest(&self.connection, request)?
             .ok_or(ContentCatalogError::InvalidInput)?;
-        let pending: i64 = self.connection.query_row(
-            "SELECT COUNT(*) FROM content_chunks
-             WHERE operation_id = ?1 AND receipt_recorded_at IS NULL",
-            [request.operation_id.as_bytes().as_slice()],
-            |row| row.get(0),
-        )?;
+        if request.format_version == 1
+            && outcome == crate::ContentAcknowledgementOutcome::EventualFallback
+        {
+            return Err(ContentCatalogError::InvalidInput);
+        }
+        let pending: i64 = if request.format_version == 1 {
+            self.connection.query_row(
+                "SELECT COUNT(*) FROM content_chunks
+                 WHERE operation_id = ?1 AND receipt_recorded_at IS NULL",
+                [request.operation_id.as_bytes().as_slice()],
+                |row| row.get(0),
+            )?
+        } else {
+            self.connection.query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM content_chunks AS chunks
+                     LEFT JOIN content_stripe_layouts AS layouts
+                       ON layouts.operation_id = chunks.operation_id
+                      AND layouts.chunk_index = chunks.chunk_index
+                     WHERE chunks.operation_id = ?1 AND layouts.operation_id IS NULL)
+                    +
+                    (SELECT COUNT(*) FROM content_stripe_shards
+                     WHERE operation_id = ?1 AND receipt_recorded_at IS NULL AND
+                       CASE WHEN ?2 = 2 THEN eventual_fallback_required
+                            ELSE required_for_commit END = 1)",
+                params![
+                    request.operation_id.as_bytes().as_slice(),
+                    match outcome {
+                        crate::ContentAcknowledgementOutcome::PolicyCommitted => 1,
+                        crate::ContentAcknowledgementOutcome::EventualFallback => 2,
+                    },
+                ],
+                |row| row.get(0),
+            )?
+        };
         if pending != 0 {
             return Err(ContentCatalogError::Incomplete);
         }
         self.connection.execute(
-            "UPDATE content_publications SET state = 2, committed_at = ?1
-             WHERE operation_id = ?2 AND state = 1",
+            "UPDATE content_publications
+             SET state = 2, committed_at = ?1, acknowledgement_outcome = ?2
+             WHERE operation_id = ?3 AND state = 1",
             params![
                 committed_at.get(),
+                match outcome {
+                    crate::ContentAcknowledgementOutcome::PolicyCommitted => 1,
+                    crate::ContentAcknowledgementOutcome::EventualFallback => 2,
+                },
                 request.operation_id.as_bytes().as_slice()
             ],
         )?;

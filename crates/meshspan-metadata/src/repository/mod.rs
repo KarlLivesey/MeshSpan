@@ -4,6 +4,9 @@
 
 mod access_evaluation;
 mod access_query;
+mod acknowledgement_policy;
+#[cfg(test)]
+mod acknowledgement_policy_tests;
 mod apply;
 mod authentication_method;
 mod authentication_method_creation;
@@ -17,6 +20,9 @@ mod authentication_method_tests;
 mod authentication_policy;
 #[cfg(test)]
 mod authentication_policy_tests;
+mod availability_cell;
+#[cfg(test)]
+mod availability_cell_tests;
 mod backup;
 mod bootstrap;
 #[cfg(test)]
@@ -72,6 +78,9 @@ mod federation_succession_trust;
 mod group_closure;
 mod identity;
 mod kernel;
+mod locality_policy;
+#[cfg(test)]
+mod locality_policy_tests;
 mod membership;
 mod mesh_identity;
 mod namespace;
@@ -84,6 +93,9 @@ mod operation_status_tests;
 mod passkey_registration;
 #[cfg(test)]
 mod passkey_registration_tests;
+mod protection_policy;
+#[cfg(test)]
+mod protection_policy_tests;
 mod query;
 mod quorum_plan;
 mod reachability;
@@ -135,6 +147,9 @@ pub use access_query::{
     AccessActivationCursor, AccessActivationRecord, ObjectOwnerCursor, ObjectOwnerRecord,
     PermissionGrantRecord, PermissionGrantRevocationRecord, ScopedGrantCursor, SubjectGrantCursor,
 };
+pub use acknowledgement_policy::{
+    AcknowledgementPolicyCursor, AcknowledgementPolicyRecord, VolumeAcknowledgementPolicy,
+};
 pub use authentication_method::{
     ApiKeyAuthentication, AuthenticationMethodRevocationReplay, PasskeyVerificationMaterial,
     RecoveryCodeVerificationMaterial, SmbVerificationMaterial, TotpVerificationMaterial,
@@ -143,6 +158,7 @@ pub use authentication_method_query::{
     AuthenticationMethodCursor, AuthenticationMethodRecord, AuthenticationMethodRecordDetails,
 };
 pub use authentication_policy::AuthenticationPolicy;
+pub use availability_cell::{AvailabilityCellCursor, AvailabilityCellRecord};
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
 pub use cleanup_attestation::{VersionCleanupAttestationProgress, VersionCleanupParticipant};
 pub use cleanup_completion::{VersionCleanupCompletion, VersionCleanupItemCompletion};
@@ -184,6 +200,9 @@ pub use kernel::{
     AuthoritativeMetadataKernel, RepositoryConformanceCheck, RepositoryConformanceReport,
     RepositoryConformanceVector, run_repository_conformance,
 };
+pub use locality_policy::{
+    LocalityPolicyCursor, LocalityPolicyRecord, LocalityRequirementRecord, VolumeLocalityPolicy,
+};
 pub use membership::AuthoritativeMembership;
 pub use meshspan_domain::AuthenticationService;
 pub use node_wrapping_key::NodeWrappingKeyRecord;
@@ -193,6 +212,10 @@ pub use operation_status::{
 pub use passkey_registration::{
     AuthenticationMethodCreationReplay, AuthenticationRegistrationProfile,
     PasskeyRegistrationProfile, PasskeyRegistrationReplay,
+};
+pub use protection_policy::{
+    ProtectionPolicyCursor, ProtectionPolicyRecord, ProtectionScenarioRecord, ProtectionTermRecord,
+    VolumeProtectionPolicy,
 };
 pub use query::{
     GroupMemberCursor, GroupMembershipEventKind, GroupMembershipEventRecord, GroupMembershipRecord,
@@ -1318,6 +1341,164 @@ impl AuthoritativeRepository {
         limit: PageLimit,
     ) -> Result<Page<FaultGroupMembershipRecord, FaultGroupMembershipCursor>, RepositoryError> {
         topology::fault_group_memberships(&self.database, after, limit)
+    }
+
+    /// Returns the active immutable data-survival policy selected by one volume.
+    ///
+    /// `None` means the volume still uses the built-in topology-aware default; it never means that
+    /// storage is unprotected.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when policy, scenario, term or revision state is malformed.
+    pub fn volume_protection_policy(
+        &self,
+        volume_id: meshspan_domain::VolumeId,
+    ) -> Result<Option<VolumeProtectionPolicy>, RepositoryError> {
+        protection_policy::for_volume(&self.database, volume_id)
+    }
+
+    /// Returns one bounded stable page of immutable data-survival policies.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored names, identities, scenarios or revisions are malformed.
+    pub fn protection_policies(
+        &self,
+        after: Option<&ProtectionPolicyCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<ProtectionPolicyRecord, ProtectionPolicyCursor>, RepositoryError> {
+        protection_policy::policies(&self.database, after, limit)
+    }
+
+    /// Returns one exact immutable data-survival policy.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored names, identities, scenarios or revisions are malformed.
+    pub fn protection_policy(
+        &self,
+        policy_id: meshspan_domain::ProtectionPolicyId,
+    ) -> Result<Option<ProtectionPolicyRecord>, RepositoryError> {
+        protection_policy::policy(&self.database, policy_id)
+    }
+
+    /// Returns one bounded stable page of named availability cells.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored names, identities, hierarchy or revisions are malformed.
+    pub fn availability_cells(
+        &self,
+        after: Option<&AvailabilityCellCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<AvailabilityCellRecord, AvailabilityCellCursor>, RepositoryError> {
+        availability_cell::cells(&self.database, after, limit)
+    }
+
+    /// Returns one exact active availability cell.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored names, identities, hierarchy or revisions are malformed.
+    pub fn availability_cell(
+        &self,
+        cell_id: meshspan_domain::AvailabilityCellId,
+    ) -> Result<Option<AvailabilityCellRecord>, RepositoryError> {
+        availability_cell::cell(&self.database, cell_id)
+    }
+
+    /// Resolves direct and inherited availability cells for one target and machine.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when membership or cell hierarchy state is malformed.
+    pub fn target_availability_cells(
+        &self,
+        target_id: meshspan_domain::TargetId,
+        host_id: meshspan_domain::HostId,
+    ) -> Result<Vec<meshspan_domain::AvailabilityCellId>, RepositoryError> {
+        availability_cell::target_cells(&self.database, target_id, host_id)
+    }
+
+    /// Returns the immutable desired-locality policy selected by one volume.
+    ///
+    /// `None` means no explicit complete-local copy has been requested beyond the built-in local
+    /// placement preference.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when policy, requirement, cell or revision state is malformed.
+    pub fn volume_locality_policy(
+        &self,
+        volume_id: meshspan_domain::VolumeId,
+    ) -> Result<Option<VolumeLocalityPolicy>, RepositoryError> {
+        locality_policy::for_volume(&self.database, volume_id)
+    }
+
+    /// Returns one bounded stable page of immutable desired-locality policies.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored names, identities, requirements or revisions are malformed.
+    pub fn locality_policies(
+        &self,
+        after: Option<&LocalityPolicyCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<LocalityPolicyRecord, LocalityPolicyCursor>, RepositoryError> {
+        locality_policy::policies(&self.database, after, limit)
+    }
+
+    /// Returns one exact immutable desired-locality policy.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored names, identities, requirements or revisions are malformed.
+    pub fn locality_policy(
+        &self,
+        policy_id: meshspan_domain::LocalityPolicyId,
+    ) -> Result<Option<LocalityPolicyRecord>, RepositoryError> {
+        locality_policy::policy(&self.database, policy_id)
+    }
+
+    /// Returns the immutable write-acknowledgement policy selected by one volume.
+    ///
+    /// `None` means the volume uses the built-in availability-first eventual default.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when policy, scenario, cell or revision state is malformed.
+    pub fn volume_acknowledgement_policy(
+        &self,
+        volume_id: meshspan_domain::VolumeId,
+    ) -> Result<Option<VolumeAcknowledgementPolicy>, RepositoryError> {
+        acknowledgement_policy::for_volume(&self.database, volume_id)
+    }
+
+    /// Returns one bounded stable page of immutable write-acknowledgement policies.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored policy predicates or revisions are malformed.
+    pub fn acknowledgement_policies(
+        &self,
+        after: Option<&AcknowledgementPolicyCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<AcknowledgementPolicyRecord, AcknowledgementPolicyCursor>, RepositoryError>
+    {
+        acknowledgement_policy::policies(&self.database, after, limit)
+    }
+
+    /// Returns one exact immutable write-acknowledgement policy.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored policy predicates or revisions are malformed.
+    pub fn acknowledgement_policy(
+        &self,
+        policy_id: meshspan_domain::AcknowledgementPolicyId,
+    ) -> Result<Option<AcknowledgementPolicyRecord>, RepositoryError> {
+        acknowledgement_policy::policy(&self.database, policy_id)
     }
 
     /// Returns the current public secret-wrapping-key generation for one node.

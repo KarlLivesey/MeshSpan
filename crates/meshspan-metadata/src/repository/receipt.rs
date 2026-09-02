@@ -118,6 +118,16 @@ pub enum EntityKind {
     FaultGroupMembership = 41,
     /// Explicit replicated SMB export desired state.
     SmbExport = 42,
+    /// Immutable data-survival policy revision.
+    ProtectionPolicy = 43,
+    /// Named availability locality.
+    AvailabilityCell = 44,
+    /// Desired machine or target membership in one availability cell.
+    AvailabilityCellMembership = 45,
+    /// Immutable desired-locality policy revision.
+    LocalityPolicy = 46,
+    /// Immutable write-acknowledgement policy revision.
+    AcknowledgementPolicy = 47,
 }
 
 impl EntityKind {
@@ -165,6 +175,11 @@ impl EntityKind {
             40 => Ok(Self::FaultGroup),
             41 => Ok(Self::FaultGroupMembership),
             42 => Ok(Self::SmbExport),
+            43 => Ok(Self::ProtectionPolicy),
+            44 => Ok(Self::AvailabilityCell),
+            45 => Ok(Self::AvailabilityCellMembership),
+            46 => Ok(Self::LocalityPolicy),
+            47 => Ok(Self::AcknowledgementPolicy),
             _ => Err(RepositoryError::CorruptState),
         }
     }

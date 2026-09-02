@@ -13,18 +13,25 @@ use meshspan_contracts::{
     ReserveStorageRequest, ShardIdentity, ShardReadPermit, StoragePermitMacKey, StorageProvider,
     read_permit_mac,
 };
-use meshspan_domain::{MeshId, OperationId, RandomSource, TargetId};
+use meshspan_domain::{DurabilityScope, MeshId, OperationId, RandomSource, TargetId};
 
 use crate::content_transfer::provider_operation_id;
 use crate::{
-    CompletedStage, ContentCatalogError, ContentChunkCipher, ContentChunkLimits,
-    ContentEncryptionKey, ContentKeyError, ContentPublicationError, ContentPublicationRequest,
-    ContentReadError, ContentReadRequest, DurableContentCatalog, DurableContentPublisher,
-    DurableContentReader, EncryptedContentChunk, ManifestPublication, PreparedContentChunk,
+    CompletedStage, ContentAcknowledgementClass, ContentAcknowledgementEvidence,
+    ContentCatalogError, ContentChunkCipher, ContentChunkLimits, ContentEncryptionKey,
+    ContentKeyError, ContentPublicationError, ContentPublicationRequest, ContentReadError,
+    ContentReadRequest, DurableContentCatalog, DurableContentPublisher, DurableContentReader,
+    EncryptedContentChunk, ManifestPublication, PreparedContentChunk, PublishedContentReference,
     VolumeContentKeyring, VolumeContentKeys,
 };
 
+mod protected;
 mod recovery;
+
+pub use protected::{
+    ContentShardRouter, ProtectedContentAccess, ProtectedContentPublisher, ProtectionConfiguration,
+    ProtectionPolicySource,
+};
 
 const SPOOL_DIRECTORY: &str = "content-spools";
 const PREPARE_PAGE_ITEMS: usize = 1_000;
@@ -122,17 +129,11 @@ impl<P: StorageProvider, R: RandomSource, K: VolumeContentKeys>
         chunk_limits: ContentChunkLimits,
         access: UnprotectedContentAccess,
     ) -> Result<Self, ContentPublicationError> {
-        fs::create_dir_all(state_directory)?;
-        let root = Dir::open_ambient_dir(state_directory, ambient_authority())?;
-        match root.create_dir(SPOOL_DIRECTORY) {
-            Ok(()) => sync_directory(&root)?,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error.into()),
-        }
+        let spools = open_spools(state_directory)?;
         Ok(Self {
             catalog: DurableContentCatalog::open(state_directory, opened_at)
                 .map_err(map_catalog)?,
-            spools: root.open_dir(SPOOL_DIRECTORY)?,
+            spools,
             provider,
             random,
             key_envelopes,
@@ -300,6 +301,7 @@ impl<P: StorageProvider, R: RandomSource, K: VolumeContentKeys>
                 ciphertext_length: u64::try_from(encrypted.ciphertext.len())
                     .map_err(|_| ContentPublicationError::InvalidInput)?,
                 ciphertext_digest: encrypted.ciphertext_digest,
+                storage_layout_digest: [0; 32],
                 provider_operation_id: provider_operation_id(request.operation_id, index)
                     .map_err(|_| ContentPublicationError::Corrupt)?,
             });
@@ -337,6 +339,65 @@ impl<P: StorageProvider, R: RandomSource, K: VolumeContentKeys> DurableContentPu
     for UnprotectedContentPublisher<P, R, K>
 {
     type Sink = DurableContentSink;
+
+    fn acknowledgement_evidence(
+        &self,
+        request: ContentPublicationRequest,
+    ) -> Result<ContentAcknowledgementEvidence, ContentPublicationError> {
+        let manifest = self
+            .catalog
+            .resolve(request)
+            .map_err(map_catalog)?
+            .ok_or(ContentPublicationError::Unavailable)?;
+        let inventory = self
+            .catalog
+            .committed_shard_inventory(PublishedContentReference {
+                publication_operation_id: request.operation_id,
+                manifest,
+            })
+            .map_err(map_catalog)?;
+        let mut achieved = blake3::Hasher::new();
+        achieved.update(b"meshspan.content-acknowledgement-achieved.v1\0");
+        achieved.update(&request.operation_id.as_bytes());
+        achieved.update(&manifest.root_digest);
+        let mut required_shard_receipts = 0_u64;
+        let mut cursor = None;
+        loop {
+            let page = inventory
+                .page(cursor, PREPARE_PAGE_ITEMS)
+                .map_err(map_catalog)?;
+            for receipt in page.shards.as_slice() {
+                hash_shard_receipt(&mut achieved, receipt);
+                required_shard_receipts = required_shard_receipts
+                    .checked_add(1)
+                    .ok_or(ContentPublicationError::Corrupt)?;
+            }
+            let Some(next) = page.next_index else {
+                break;
+            };
+            cursor = Some(next);
+        }
+        let mut policy = blake3::Hasher::new();
+        policy.update(b"meshspan.content-acknowledgement-policy.v1\0");
+        policy.update(&request.operation_id.as_bytes());
+        policy.update(&[1, 1]);
+        let mut debt = blake3::Hasher::new();
+        debt.update(b"meshspan.content-acknowledgement-debt.v1\0");
+        debt.update(&request.operation_id.as_bytes());
+        debt.update(&manifest.root_digest);
+        Ok(ContentAcknowledgementEvidence {
+            configured_class: ContentAcknowledgementClass::Eventual,
+            acknowledged_class: ContentAcknowledgementClass::Eventual,
+            fallback_applied: false,
+            content_scope: DurabilityScope::NodeLocal,
+            required_shard_receipts,
+            eventual_shard_receipts: 0,
+            pending_eventual_shards: 0,
+            policy_evidence_digest: policy.finalize().into(),
+            achieved_protection_digest: achieved.finalize().into(),
+            pending_debt_digest: debt.finalize().into(),
+        })
+    }
 
     fn resolve(
         &mut self,
@@ -549,11 +610,7 @@ impl<P: StorageProvider, R, K> UnprotectedContentPublisher<P, R, K> {
 
 impl<P, R, K> UnprotectedContentPublisher<P, R, K> {
     fn cleanup_spool(&self, operation_id: OperationId) -> std::io::Result<()> {
-        match self.spools.remove_file(spool_name(operation_id)) {
-            Ok(()) => sync_directory(&self.spools),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
-        }
+        cleanup_spool(&self.spools, operation_id)
     }
 }
 
@@ -571,6 +628,18 @@ fn validate_content_read(request: ContentReadRequest) -> Result<u64, ContentRead
     } else {
         Ok(end)
     }
+}
+
+fn hash_shard_receipt(digest: &mut blake3::Hasher, receipt: &meshspan_contracts::ShardReceipt) {
+    digest.update(&receipt.operation_id.as_bytes());
+    digest.update(&receipt.shard.manifest_digest);
+    digest.update(&receipt.shard.stripe_index.to_be_bytes());
+    digest.update(&receipt.shard.shard_index.to_be_bytes());
+    digest.update(&receipt.shard.generation.to_be_bytes());
+    digest.update(&receipt.length.to_be_bytes());
+    digest.update(&receipt.digest);
+    digest.update(&receipt.target_id.as_bytes());
+    digest.update(&receipt.target_generation.to_be_bytes());
 }
 
 fn read_operation_id(
@@ -638,6 +707,25 @@ fn spool_name(operation_id: OperationId) -> String {
 
 fn sync_directory(directory: &Dir) -> std::io::Result<()> {
     directory.open(".")?.sync_all()
+}
+
+fn open_spools(state_directory: &Path) -> Result<Dir, ContentPublicationError> {
+    fs::create_dir_all(state_directory)?;
+    let root = Dir::open_ambient_dir(state_directory, ambient_authority())?;
+    match root.create_dir(SPOOL_DIRECTORY) {
+        Ok(()) => sync_directory(&root)?,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(root.open_dir(SPOOL_DIRECTORY)?)
+}
+
+fn cleanup_spool(spools: &Dir, operation_id: OperationId) -> std::io::Result<()> {
+    match spools.remove_file(spool_name(operation_id)) {
+        Ok(()) => sync_directory(spools),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn map_catalog(error: ContentCatalogError) -> ContentPublicationError {

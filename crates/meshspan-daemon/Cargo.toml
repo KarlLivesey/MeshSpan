@@ -12,6 +12,7 @@ version.workspace = true
 
 [dependencies]
 axum.workspace = true
+blake3.workspace = true
 chacha20poly1305.workspace = true
 form_urlencoded.workspace = true
 getrandom.workspace = true
@@ -21,6 +22,7 @@ hyper-util.workspace = true
 meshspan-api-contract = { path = "../meshspan-api-contract" }
 meshspan-certificates = { path = "../meshspan-certificates" }
 meshspan-cluster = { path = "../meshspan-cluster" }
+meshspan-coding = { path = "../meshspan-coding" }
 meshspan-consensus = { path = "../meshspan-consensus" }
 meshspan-contracts = { path = "../meshspan-contracts" }
 meshspan-data-plane = { path = "../meshspan-data-plane" }
@@ -29,6 +31,7 @@ meshspan-filesystem = { path = "../meshspan-filesystem" }
 meshspan-metadata = { path = "../meshspan-metadata" }
 meshspan-otp = { path = "../meshspan-otp" }
 meshspan-passkey = { path = "../meshspan-passkey" }
+meshspan-placement = { path = "../meshspan-placement" }
 meshspan-protocol = { path = "../meshspan-protocol" }
 meshspan-recovery-bundle = { path = "../meshspan-recovery-bundle" }
 meshspan-rustls-provider = { path = "../meshspan-rustls-provider" }
@@ -44,7 +47,6 @@ tokio-rustls.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-blake3.workspace = true
 meshspan-test-certificates = { path = "../meshspan-test-certificates" }
 p256.workspace = true
 sha1.workspace = true

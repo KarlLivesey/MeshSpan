@@ -355,6 +355,8 @@ pub struct UploadCommitReceipt {
     pub session: UploadSession,
     /// Exact namespace publication receipt, applied or replayed.
     pub publication: NamespacePublicationReceipt,
+    /// Immutable receipt evidence and honest durability scope for this successful publication.
+    pub acknowledgement: crate::PublicationAcknowledgement,
 }
 
 /// Idempotent request to abandon one unpublished upload.

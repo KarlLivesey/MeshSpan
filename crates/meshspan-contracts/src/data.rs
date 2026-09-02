@@ -5,7 +5,8 @@
 use thiserror::Error;
 
 use meshspan_domain::{
-    FailureScenario, ProtectionLayout, ProtectionProof, Revision, TargetId, Topology,
+    AvailabilityCellId, FailureScenario, HostId, ProtectionLayout, ProtectionProof, Revision,
+    TargetId, Topology,
 };
 
 use crate::{
@@ -92,7 +93,11 @@ pub struct ReconstructionRequest {
     pub layout: CodingLayout,
     /// Indexed optional slices; absent entries are reconstructed.
     pub available_slices: BoundedItems<Option<BoundedBytes>>,
-    /// Expected digest of the reconstructed logical bytes.
+    /// Expected BLAKE3 digest for every indexed slice before decoding.
+    pub slice_digests: BoundedItems<[u8; 32]>,
+    /// Exact unpadded logical bytes represented by the stripe.
+    pub logical_length: u64,
+    /// Expected BLAKE3 digest of the exact unpadded logical bytes.
     pub logical_digest: [u8; 32],
 }
 
@@ -121,16 +126,79 @@ pub trait CodingScheme: ComponentLifecycle {
 /// Revision-bound placement decision with exact proof evidence.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlacementPlan {
+    /// Automatically selected systematic coding geometry.
+    pub coding_layout: CodingLayout,
     /// Target selected for every indexed slice.
     pub slice_targets: BoundedItems<TargetId>,
+    /// Commit requirement for every indexed slice in the same order as `slice_targets`.
+    pub acknowledgement_roles: BoundedItems<ShardAcknowledgement>,
+    /// Weaker eventual-fallback requirement for every indexed slice in the same order.
+    ///
+    /// This retains a decodable, machine-independent minimum without claiming strong-only
+    /// protection scenarios or required availability cells were reached.
+    pub eventual_fallback_roles: BoundedItems<ShardAcknowledgement>,
     /// Topology revision used for eligibility and failure proof.
     pub topology_revision: Revision,
     /// Capacity observation revision used for admission.
     pub capacity_revision: Revision,
-    /// Exact proof against the requested scenario.
-    pub protection_proof: ProtectionProof,
+    /// Exact proofs in the same order as the requested alternative scenarios.
+    pub protection_proofs: BoundedItems<ProtectionProof>,
     /// Independently versioned acknowledgement/locality evidence.
     pub policy_evidence: VersionedPayload,
+}
+
+/// Whether one planned shard gates acknowledgement of the logical write.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShardAcknowledgement {
+    /// The logical write cannot commit until this exact shard is durable.
+    Required,
+    /// The shard remains repair work but does not delay logical commit.
+    Eventual,
+}
+
+/// One fixed-revision target candidate admitted to placement planning.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlacementCandidate {
+    /// Stable target identity.
+    pub target_id: TargetId,
+    /// Machine identity used to prove distinct-node acknowledgement thresholds.
+    pub host_id: HostId,
+    /// Positive current target generation.
+    pub target_generation: u64,
+    /// Bytes available to this write after authoritative reserves and limits.
+    pub writable_bytes: u64,
+    /// Relative performance preference; independence remains a hard constraint.
+    pub performance_weight: u16,
+    /// Direct and inherited availability cells containing this target.
+    pub availability_cells: BoundedItems<AvailabilityCellId>,
+}
+
+/// Whether an availability cell blocks, follows, or is excluded from one placement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlacementCellRole {
+    /// Cell-local predicates gate a strong acknowledgement.
+    RequiredBeforeCommit,
+    /// Desired placement creates repair debt but does not gate acknowledgement.
+    Eventual,
+    /// Targets in the cell are ineligible for this content.
+    Excluded,
+}
+
+/// One fixed-revision cell-local placement and acknowledgement predicate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlacementCellRequirement {
+    /// Stable availability-cell identity.
+    pub cell_id: AvailabilityCellId,
+    /// Synchronous, eventual, or excluded participation.
+    pub role: PlacementCellRole,
+    /// Whether the cell must independently reconstruct every byte from its selected shards.
+    pub complete_local: bool,
+    /// Minimum durable selected targets in this cell.
+    pub minimum_durable_targets: Option<u16>,
+    /// Minimum distinct machines represented by selected targets in this cell.
+    pub minimum_distinct_nodes: Option<u16>,
+    /// Failure scenarios proved using only the selected targets inside this cell.
+    pub local_scenarios: BoundedItems<FailureScenario>,
 }
 
 /// Complete fixed-revision input to one placement decision.
@@ -138,16 +206,26 @@ pub struct PlacementPlan {
 pub struct PlacementRequest<'a> {
     /// Operation/deadline context.
     pub context: RequestContext,
-    /// Exact coding geometry requiring target locations.
-    pub coding_layout: CodingLayout,
-    /// Failure scenario that every returned plan must survive.
-    pub scenario: &'a FailureScenario,
+    /// Exact logical bytes in this bounded stripe before padding.
+    pub logical_stripe_bytes: u32,
+    /// Alternative failure scenarios that every returned plan must survive independently.
+    pub scenarios: &'a [FailureScenario],
+    /// Scenario subset which must survive before acknowledgement rather than becoming debt.
+    pub required_scenarios: &'a [FailureScenario],
     /// Fixed topology snapshot.
     pub topology: &'a Topology,
     /// Revision of the fixed topology snapshot.
     pub topology_revision: Revision,
-    /// Bounded fixed-revision capacity evidence.
-    pub capacity: &'a VersionedPayload,
+    /// Revision of the fixed capacity observations.
+    pub capacity_revision: Revision,
+    /// Bounded target capacity and performance evidence at `capacity_revision`.
+    pub candidates: &'a [PlacementCandidate],
+    /// Minimum number of selected shard targets which must be durable before acknowledgement.
+    pub minimum_durable_targets: u16,
+    /// Minimum number of distinct machines represented by required durable targets.
+    pub minimum_distinct_nodes: u16,
+    /// Bounded cell-local predicates resolved at the same policy revision.
+    pub cells: &'a [PlacementCellRequirement],
 }
 
 /// Fault-aware target selection without shard IO or namespace authority.

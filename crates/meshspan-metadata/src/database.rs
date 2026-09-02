@@ -338,6 +338,7 @@ mod tests {
         partition_authentication_session_delivery_migration_digest,
         partition_authentication_session_factors_migration_digest,
         partition_authentication_session_rotation_migration_digest,
+        partition_builtin_fault_classes_migration_digest,
         partition_cleanup_target_ownership_migration_digest,
         partition_cluster_enrollment_migration_digest,
         partition_component_rollout_migration_digest,
@@ -364,7 +365,8 @@ mod tests {
         partition_snapshot_expiry_migration_digest, partition_snapshot_restores_migration_digest,
         partition_snapshot_retention_selection_migration_digest,
         partition_snapshot_root_removals_migration_digest,
-        partition_snapshot_schedules_migration_digest, partition_storage_targets_migration_digest,
+        partition_snapshot_schedules_migration_digest, partition_storage_policies_migration_digest,
+        partition_storage_targets_migration_digest,
         partition_totp_session_replay_steps_migration_digest,
         partition_typed_authentication_migration_digest,
         partition_version_cleanup_attestations_migration_digest,
@@ -1589,6 +1591,110 @@ mod tests {
                 0x8d, 0x60, 0x53, 0x47,
             ]
         );
+    }
+
+    #[test]
+    fn storage_policies_migration_digest_is_committed() {
+        assert_eq!(
+            partition_storage_policies_migration_digest(),
+            [
+                0x48, 0xde, 0x3f, 0x2d, 0x81, 0x1c, 0x6b, 0xa3, 0x13, 0xc3, 0xb7, 0xb8, 0x57, 0xae,
+                0xb2, 0x6b, 0x1f, 0x67, 0x3b, 0x39, 0xb2, 0x40, 0x97, 0x25, 0x3e, 0x34, 0x94, 0xc3,
+                0x7b, 0x53, 0x06, 0x71,
+            ]
+        );
+    }
+
+    #[test]
+    fn builtin_fault_classes_migration_digest_is_committed() {
+        assert_eq!(
+            partition_builtin_fault_classes_migration_digest(),
+            [
+                0x02, 0x52, 0x94, 0x2c, 0xdc, 0x91, 0x1c, 0xf2, 0xa4, 0xaa, 0x82, 0xf6, 0x86, 0x4b,
+                0x8c, 0xb0, 0x77, 0x24, 0xfe, 0x55, 0xc1, 0xf2, 0x57, 0xf3, 0xee, 0xe8, 0x63, 0x05,
+                0x4a, 0xdb, 0xc0, 0x40,
+            ]
+        );
+    }
+
+    #[test]
+    fn storage_policy_schema_separates_survival_locality_and_acknowledgement()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let database = PartitionDatabase::open(
+            &directory.path().join("storage-policies.sqlite3"),
+            PartitionId::from_bytes([61; 16])?,
+            UnixMicros::new(10),
+        )?;
+        let connection = database.connection();
+        for table in [
+            "availability_cells",
+            "host_cell_memberships",
+            "target_cell_memberships",
+            "protection_policies",
+            "protection_scenarios",
+            "protection_scenario_terms",
+            "locality_policies",
+            "locality_requirements",
+            "object_locality_bindings",
+            "acknowledgement_policies",
+            "acknowledgement_policy_scenarios",
+            "acknowledgement_zone_requirements",
+            "object_acknowledgement_bindings",
+        ] {
+            assert_eq!(
+                connection.query_row(
+                    "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get::<_, u8>(0),
+                )?,
+                1,
+                "missing storage-policy relation {table}",
+            );
+        }
+
+        let columns = connection
+            .prepare("SELECT name FROM pragma_table_info('volumes') ORDER BY cid")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        for expected in [
+            "protection_policy_id",
+            "default_locality_policy_id",
+            "default_acknowledgement_policy_id",
+        ] {
+            assert!(columns.iter().any(|column| column == expected));
+        }
+
+        connection.execute(
+            "INSERT INTO principals(
+                principal_id, principal_kind, display_name, canonical_name,
+                state, created_at, revision
+             ) VALUES (?1, 1, 'Policy administrator', 'policy administrator', 1, 10, 1)",
+            [[1_u8; 16].as_slice()],
+        )?;
+        connection.execute(
+            "INSERT INTO acknowledgement_policies(
+                acknowledgement_policy_id, display_name, canonical_name, consistency_class,
+                minimum_durable_targets, minimum_distinct_nodes, strong_wait_micros,
+                fallback_mode, state, created_by, created_at, revision
+             ) VALUES (?1, 'Availability first', 'availability first', 1, 1, 1, NULL,
+                1, 1, ?2, 10, 1)",
+            params![[2_u8; 16].as_slice(), [1_u8; 16].as_slice()],
+        )?;
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO acknowledgement_policies(
+                        acknowledgement_policy_id, display_name, canonical_name,
+                        consistency_class, minimum_durable_targets, minimum_distinct_nodes,
+                        strong_wait_micros, fallback_mode, state, created_by, created_at, revision
+                     ) VALUES (?1, 'Impossible counts', 'impossible counts', 1, 1, 2, NULL,
+                        1, 1, ?2, 10, 1)",
+                    params![[3_u8; 16].as_slice(), [1_u8; 16].as_slice()],
+                )
+                .is_err()
+        );
+        Ok(())
     }
 
     #[test]

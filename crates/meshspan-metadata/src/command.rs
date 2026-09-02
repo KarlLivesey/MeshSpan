@@ -8,15 +8,16 @@ use meshspan_contracts::{
     BoundedItems, ReclamationReceipt, RemovalPermit, ShardIdentity, TombstoneReceipt,
 };
 use meshspan_domain::{
-    ActivationId, ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId,
-    AuthenticationFactorClasses, AuthenticationMethodId, AuthenticationOperationClass,
-    AuthenticationPolicyId, AuthenticationService, ComponentInstanceId, ContentManifestId,
-    DelegatedMetadataScope, DelegationAdmission, DurationMicros, FaultGroupClassId, FaultGroupId,
-    FileVersionId, GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, MeshId,
-    MetadataKeyRange, MetadataOperationFamily, NamespaceCommitId, NodeId, ObjectId,
-    ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId, RecoveryCodeId, Revision,
-    Rights, RoleId, ScopeId, SessionId, SmbExportId, SnapshotId, SnapshotScheduleId, TagId,
-    TargetId, UnixMicros, VolumeId,
+    AcknowledgementPolicyId, ActivationId, ActivationPolicyId, ApiKeyId, AssuranceLevel,
+    AuditEventId, AuthenticationFactorClasses, AuthenticationMethodId,
+    AuthenticationOperationClass, AuthenticationPolicyId, AuthenticationService,
+    AvailabilityCellId, ComponentInstanceId, ContentManifestId, DelegatedMetadataScope,
+    DelegationAdmission, DurationMicros, FailureScenario, FaultGroupClassId, FaultGroupId,
+    FileVersionId, GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, LocalityPolicyId,
+    LocalityRequirementId, MeshId, MetadataKeyRange, MetadataOperationFamily, NamespaceCommitId,
+    NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId,
+    ProtectionPolicyId, ProtectionScenarioId, RecoveryCodeId, Revision, Rights, RoleId, ScopeId,
+    SessionId, SmbExportId, SnapshotId, SnapshotScheduleId, TagId, TargetId, UnixMicros, VolumeId,
 };
 use meshspan_secret_envelope::{EncryptedSecretParts, RecipientEnvelopeParts};
 use sha2::{Digest, Sha256};
@@ -163,6 +164,24 @@ pub enum AuthoritativeCommand {
     CreateFaultGroup(CreateFaultGroup),
     /// Adds or removes one machine from one shared-failure group.
     SetHostFaultGroupMembership(SetHostFaultGroupMembership),
+    /// Creates one immutable, named set of data-survival failure promises.
+    CreateProtectionPolicy(CreateProtectionPolicy),
+    /// Selects one existing protection policy as the volume-wide survival promise.
+    AssignVolumeProtectionPolicy(AssignVolumeProtectionPolicy),
+    /// Creates one named availability cell used by locality and acknowledgement policies.
+    CreateAvailabilityCell(CreateAvailabilityCell),
+    /// Adds or removes one machine from one availability cell.
+    SetHostAvailabilityCellMembership(SetHostAvailabilityCellMembership),
+    /// Adds or removes one storage target from one availability cell.
+    SetTargetAvailabilityCellMembership(SetTargetAvailabilityCellMembership),
+    /// Creates one immutable desired-locality policy.
+    CreateLocalityPolicy(CreateLocalityPolicy),
+    /// Selects one locality policy as the volume-wide inherited default.
+    AssignVolumeLocalityPolicy(AssignVolumeLocalityPolicy),
+    /// Creates one immutable write-acknowledgement policy.
+    CreateAcknowledgementPolicy(CreateAcknowledgementPolicy),
+    /// Selects one acknowledgement policy as the volume-wide inherited default.
+    AssignVolumeAcknowledgementPolicy(AssignVolumeAcknowledgementPolicy),
     /// Publishes one volume or folder through explicitly selected SMB gateways.
     PublishSmbExport(PublishSmbExport),
     /// Withdraws one exact SMB export while retaining its audit history.
@@ -259,6 +278,9 @@ impl AuthoritativeCommand {
         digest.finish()
     }
 
+    // This is deliberately one exhaustive, side-effect-free dispatch table: splitting command
+    // families across fallible routing layers would weaken the closed-command invariant.
+    #[allow(clippy::too_many_lines)]
     fn update_digest(&self, digest: &mut CanonicalDigest) {
         match self {
             Self::BootstrapMesh(value) => value.update_digest(digest),
@@ -313,6 +335,15 @@ impl AuthoritativeCommand {
             Self::RegisterStorageTarget(value) => value.update_digest(digest),
             Self::CreateFaultGroup(value) => value.update_digest(digest),
             Self::SetHostFaultGroupMembership(value) => value.update_digest(digest),
+            Self::CreateProtectionPolicy(value) => value.update_digest(digest),
+            Self::AssignVolumeProtectionPolicy(value) => value.update_digest(digest),
+            Self::CreateAvailabilityCell(value) => value.update_digest(digest),
+            Self::SetHostAvailabilityCellMembership(value) => value.update_digest(digest),
+            Self::SetTargetAvailabilityCellMembership(value) => value.update_digest(digest),
+            Self::CreateLocalityPolicy(value) => value.update_digest(digest),
+            Self::AssignVolumeLocalityPolicy(value) => value.update_digest(digest),
+            Self::CreateAcknowledgementPolicy(value) => value.update_digest(digest),
+            Self::AssignVolumeAcknowledgementPolicy(value) => value.update_digest(digest),
             Self::PublishSmbExport(value) => value.update_digest(digest),
             Self::WithdrawSmbExport(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
@@ -1690,6 +1721,184 @@ pub struct SetHostFaultGroupMembership {
     pub present: bool,
 }
 
+/// One named simultaneous failure scenario within a protection policy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtectionScenarioConfiguration {
+    /// Stable scenario identity retained in acknowledgement evidence.
+    pub scenario_id: ProtectionScenarioId,
+    /// Human-readable scenario name.
+    pub name: RecordName,
+    /// Non-empty bounded set of fault classes and simultaneous failure counts.
+    pub scenario: FailureScenario,
+}
+
+/// One immutable data-survival policy revision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateProtectionPolicy {
+    /// Stable identity of this policy revision.
+    pub policy_id: ProtectionPolicyId,
+    /// Human-readable policy name.
+    pub name: RecordName,
+    /// Non-empty ordered scenarios which must each be survived.
+    pub scenarios: BoundedItems<ProtectionScenarioConfiguration>,
+}
+
+/// Volume-wide selection of one existing immutable survival policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AssignVolumeProtectionPolicy {
+    /// Existing volume receiving the policy.
+    pub volume_id: VolumeId,
+    /// Existing active protection policy.
+    pub policy_id: ProtectionPolicyId,
+}
+
+/// One administrator-defined availability locality.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateAvailabilityCell {
+    /// Stable availability-cell identity.
+    pub cell_id: AvailabilityCellId,
+    /// Human-readable cell name.
+    pub name: RecordName,
+    /// Optional presentation parent; placement still evaluates explicit membership.
+    pub parent_cell_id: Option<AvailabilityCellId>,
+}
+
+/// Desired membership of one machine in one availability cell.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SetHostAvailabilityCellMembership {
+    /// Existing availability cell.
+    pub cell_id: AvailabilityCellId,
+    /// Existing non-retired machine.
+    pub host_id: HostId,
+    /// `true` to add the machine or `false` to remove it.
+    pub present: bool,
+}
+
+/// Desired membership of one storage target in one availability cell.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SetTargetAvailabilityCellMembership {
+    /// Existing availability cell.
+    pub cell_id: AvailabilityCellId,
+    /// Existing non-retired storage target.
+    pub target_id: TargetId,
+    /// `true` to add the target or `false` to remove it.
+    pub present: bool,
+}
+
+/// One complete-local placement requirement inside an availability cell.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LocalityRequirementConfiguration {
+    /// Stable requirement identity retained in placement and repair evidence.
+    pub requirement_id: LocalityRequirementId,
+    /// Cell which must independently reconstruct the selected version.
+    pub cell_id: AvailabilityCellId,
+    /// Optional failure-survival promise evaluated using only targets inside the cell.
+    pub local_protection_policy_id: Option<ProtectionPolicyId>,
+}
+
+/// One immutable desired-locality policy revision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateLocalityPolicy {
+    /// Stable policy identity.
+    pub policy_id: LocalityPolicyId,
+    /// Human-readable policy name.
+    pub name: RecordName,
+    /// Optional maximum lag before incomplete locality becomes urgent repair debt.
+    pub maximum_lag: Option<DurationMicros>,
+    /// Non-empty ordered set of cells which each require a complete local copy.
+    pub requirements: BoundedItems<LocalityRequirementConfiguration>,
+}
+
+/// Volume-wide selection of one existing immutable locality policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AssignVolumeLocalityPolicy {
+    /// Existing volume receiving the inherited default.
+    pub volume_id: VolumeId,
+    /// Existing active locality policy.
+    pub policy_id: LocalityPolicyId,
+}
+
+/// Whether a write acknowledges local durability or waits for a converged strong barrier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum AcknowledgementConsistencyClass {
+    /// Commit a durable local branch and reconcile wider promises automatically.
+    Eventual = 1,
+    /// Wait for every required predicate and the globally converged metadata commit.
+    Strong = 2,
+}
+
+/// Explicit outcome when a strong acknowledgement cannot meet its deadline.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum StrongFallbackMode {
+    /// Retain the operation as pending for later completion.
+    RemainPending = 1,
+    /// Return failure at the deadline while retaining safe staged work.
+    FailAtDeadline = 2,
+    /// Explicitly permit a weaker eventual branch receipt at the deadline.
+    Eventual = 3,
+}
+
+/// How one cell participates in acknowledgement and placement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum AcknowledgementCellRole {
+    /// This cell's predicates must complete before a strong acknowledgement.
+    RequiredBeforeCommit = 1,
+    /// Copy here automatically without delaying acknowledgement.
+    Eventual = 2,
+    /// Never place this policy's content in this cell.
+    Excluded = 3,
+}
+
+/// One cell-specific acknowledgement predicate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcknowledgementCellRequirement {
+    /// Availability cell receiving this role.
+    pub cell_id: AvailabilityCellId,
+    /// Whether the cell blocks, follows, or is excluded from placement.
+    pub role: AcknowledgementCellRole,
+    /// Optional required durable target count within the cell.
+    pub minimum_durable_targets: Option<u16>,
+    /// Optional required distinct machine count within the cell.
+    pub minimum_distinct_nodes: Option<u16>,
+    /// Optional local failure-survival promise.
+    pub local_protection_policy_id: Option<ProtectionPolicyId>,
+}
+
+/// One immutable write-acknowledgement policy revision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateAcknowledgementPolicy {
+    /// Stable policy identity.
+    pub policy_id: AcknowledgementPolicyId,
+    /// Human-readable policy name.
+    pub name: RecordName,
+    /// Availability-first or strong publication semantics.
+    pub consistency: AcknowledgementConsistencyClass,
+    /// Minimum durable targets before any acknowledgement.
+    pub minimum_durable_targets: u16,
+    /// Minimum distinct machines represented by those targets.
+    pub minimum_distinct_nodes: u16,
+    /// Optional deadline used only by strong policies.
+    pub strong_wait: Option<DurationMicros>,
+    /// Explicit result when a strong deadline cannot be met.
+    pub fallback: StrongFallbackMode,
+    /// Protection scenarios that must be proved before acknowledgement.
+    pub required_scenarios: BoundedItems<ProtectionScenarioId>,
+    /// Per-cell placement and acknowledgement roles.
+    pub cells: BoundedItems<AcknowledgementCellRequirement>,
+}
+
+/// Volume-wide selection of one existing immutable acknowledgement policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AssignVolumeAcknowledgementPolicy {
+    /// Existing volume receiving the inherited default.
+    pub volume_id: VolumeId,
+    /// Existing active acknowledgement policy.
+    pub policy_id: AcknowledgementPolicyId,
+}
+
 /// Explicit gateway selection for one SMB export.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SmbExportGatewaySelection {
@@ -2737,6 +2946,122 @@ digest_simple_record!(
         digest.identifier(value.group_id.as_bytes());
         digest.identifier(value.host_id.as_bytes());
         digest.boolean(value.present);
+    }
+);
+digest_simple_record!(
+    CreateProtectionPolicy,
+    b"create-protection-policy",
+    |value, digest| {
+        digest.identifier(value.policy_id.as_bytes());
+        digest.name(&value.name);
+        digest.unsigned(u64::try_from(value.scenarios.len()).unwrap_or(u64::MAX));
+        for scenario in value.scenarios.as_slice() {
+            digest.identifier(scenario.scenario_id.as_bytes());
+            digest.name(&scenario.name);
+            digest.unsigned(u64::try_from(scenario.scenario.terms().len()).unwrap_or(u64::MAX));
+            for term in scenario.scenario.terms() {
+                digest.identifier(term.class_id.as_bytes());
+                digest.unsigned(u64::from(term.failure_count));
+            }
+        }
+    }
+);
+digest_simple_record!(
+    AssignVolumeProtectionPolicy,
+    b"assign-volume-protection-policy",
+    |value, digest| {
+        digest.identifier(value.volume_id.as_bytes());
+        digest.identifier(value.policy_id.as_bytes());
+    }
+);
+digest_simple_record!(
+    CreateAvailabilityCell,
+    b"create-availability-cell",
+    |value, digest| {
+        digest.identifier(value.cell_id.as_bytes());
+        digest.name(&value.name);
+        digest.optional_identifier(value.parent_cell_id.map(AvailabilityCellId::as_bytes));
+    }
+);
+digest_simple_record!(
+    SetHostAvailabilityCellMembership,
+    b"set-host-availability-cell-membership",
+    |value, digest| {
+        digest.identifier(value.cell_id.as_bytes());
+        digest.identifier(value.host_id.as_bytes());
+        digest.boolean(value.present);
+    }
+);
+digest_simple_record!(
+    SetTargetAvailabilityCellMembership,
+    b"set-target-availability-cell-membership",
+    |value, digest| {
+        digest.identifier(value.cell_id.as_bytes());
+        digest.identifier(value.target_id.as_bytes());
+        digest.boolean(value.present);
+    }
+);
+digest_simple_record!(
+    CreateLocalityPolicy,
+    b"create-locality-policy",
+    |value, digest| {
+        digest.identifier(value.policy_id.as_bytes());
+        digest.name(&value.name);
+        digest.optional_unsigned(value.maximum_lag.map(DurationMicros::get));
+        digest.unsigned(u64::try_from(value.requirements.len()).unwrap_or(u64::MAX));
+        for requirement in value.requirements.as_slice() {
+            digest.identifier(requirement.requirement_id.as_bytes());
+            digest.identifier(requirement.cell_id.as_bytes());
+            digest.optional_identifier(
+                requirement
+                    .local_protection_policy_id
+                    .map(ProtectionPolicyId::as_bytes),
+            );
+        }
+    }
+);
+digest_simple_record!(
+    AssignVolumeLocalityPolicy,
+    b"assign-volume-locality-policy",
+    |value, digest| {
+        digest.identifier(value.volume_id.as_bytes());
+        digest.identifier(value.policy_id.as_bytes());
+    }
+);
+digest_simple_record!(
+    CreateAcknowledgementPolicy,
+    b"create-acknowledgement-policy",
+    |value, digest| {
+        digest.identifier(value.policy_id.as_bytes());
+        digest.name(&value.name);
+        digest.byte(value.consistency as u8);
+        digest.unsigned(u64::from(value.minimum_durable_targets));
+        digest.unsigned(u64::from(value.minimum_distinct_nodes));
+        digest.optional_unsigned(value.strong_wait.map(DurationMicros::get));
+        digest.byte(value.fallback as u8);
+        digest.unsigned(u64::try_from(value.required_scenarios.len()).unwrap_or(u64::MAX));
+        for scenario_id in value.required_scenarios.as_slice() {
+            digest.identifier(scenario_id.as_bytes());
+        }
+        digest.unsigned(u64::try_from(value.cells.len()).unwrap_or(u64::MAX));
+        for cell in value.cells.as_slice() {
+            digest.identifier(cell.cell_id.as_bytes());
+            digest.byte(cell.role as u8);
+            digest.optional_unsigned(cell.minimum_durable_targets.map(u64::from));
+            digest.optional_unsigned(cell.minimum_distinct_nodes.map(u64::from));
+            digest.optional_identifier(
+                cell.local_protection_policy_id
+                    .map(ProtectionPolicyId::as_bytes),
+            );
+        }
+    }
+);
+digest_simple_record!(
+    AssignVolumeAcknowledgementPolicy,
+    b"assign-volume-acknowledgement-policy",
+    |value, digest| {
+        digest.identifier(value.volume_id.as_bytes());
+        digest.identifier(value.policy_id.as_bytes());
     }
 );
 digest_simple_record!(PublishSmbExport, b"publish-smb-export", |value, digest| {
