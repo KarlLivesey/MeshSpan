@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[package]
+name = "meshspan-work"
+description = "Deterministic maintenance-work policy and resource admission for MeshSpan"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+meshspan-domain = { path = "../meshspan-domain" }
+
+[lints]
+workspace = true

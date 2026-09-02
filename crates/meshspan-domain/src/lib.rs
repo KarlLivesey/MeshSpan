@@ -84,7 +84,7 @@ pub use primitives::{
     OperationId, OwnerSetId, PartitionId, PrincipalId, ProtectionPolicyId, ProtectionScenarioId,
     ProtectionTermId, QuarantineId, QuorumPlanId, RecoveryCodeId, Revision, RevisionError, RoleId,
     ScopeId, SessionId, SmbExportId, SnapshotId, SnapshotScheduleId, StageId,
-    StoragePolicyBindingId, TagId, TargetId, UnixMicros, UploadId, VolumeId,
+    StoragePolicyBindingId, TagId, TargetId, UnixMicros, UploadId, VolumeId, WorkId,
 };
 pub use recovery_code::{
     ENCODED_RECOVERY_CODE_LENGTH, RecoveryCodeBundle, RecoveryCodeBundleError,
