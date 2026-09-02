@@ -233,8 +233,11 @@ describe("generated native upload commit client", () => {
           jsonResponse({
             acknowledgement: {
               achieved_protection_blake3: "2".repeat(64),
+              acknowledged_consistency: "eventual",
+              configured_consistency: "eventual",
               durability_scope: "node_local",
               eventual_shard_receipts: 0,
+              fallback_applied: false,
               pending_debt_blake3: "3".repeat(64),
               pending_eventual_shards: 0,
               policy_committed: true,

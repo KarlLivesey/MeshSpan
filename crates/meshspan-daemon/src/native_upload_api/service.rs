@@ -328,6 +328,9 @@ fn acknowledgement_response(
     receipt: meshspan_filesystem::PublicationAcknowledgement,
 ) -> WriteAcknowledgement {
     WriteAcknowledgement {
+        configured_consistency: acknowledgement_class(receipt.configured_class),
+        acknowledged_consistency: acknowledgement_class(receipt.acknowledged_class),
+        fallback_applied: receipt.fallback_applied,
         durability_scope: match receipt.durability_scope {
             DurabilityScope::NodeLocal => WriteDurabilityScope::NodeLocal,
             DurabilityScope::CellReplicated => WriteDurabilityScope::CellReplicated,
@@ -346,6 +349,19 @@ fn acknowledgement_response(
         pending_debt_blake3: blake3::Hash::from_bytes(receipt.pending_debt_digest)
             .to_hex()
             .to_string(),
+    }
+}
+
+const fn acknowledgement_class(
+    class: meshspan_filesystem::ContentAcknowledgementClass,
+) -> meshspan_api_contract::AcknowledgementConsistency {
+    match class {
+        meshspan_filesystem::ContentAcknowledgementClass::Eventual => {
+            meshspan_api_contract::AcknowledgementConsistency::Eventual
+        }
+        meshspan_filesystem::ContentAcknowledgementClass::Strong => {
+            meshspan_api_contract::AcknowledgementConsistency::Strong
+        }
     }
 }
 

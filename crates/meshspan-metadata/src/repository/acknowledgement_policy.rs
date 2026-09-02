@@ -164,7 +164,8 @@ fn validate_new_policy(
         || command.cells.len() > MAXIMUM_CELLS
         || command.strong_wait.is_some_and(|wait| wait.get() == 0)
         || (command.consistency == AcknowledgementConsistencyClass::Eventual
-            && command.strong_wait.is_some())
+            && (command.strong_wait.is_some()
+                || command.fallback != StrongFallbackMode::RemainPending))
     {
         return Err(RepositoryError::InvalidCommand);
     }

@@ -386,7 +386,9 @@ impl<P: StorageProvider, R: RandomSource, K: VolumeContentKeys> DurableContentPu
         debt.update(&request.operation_id.as_bytes());
         debt.update(&manifest.root_digest);
         Ok(ContentAcknowledgementEvidence {
-            class: ContentAcknowledgementClass::Eventual,
+            configured_class: ContentAcknowledgementClass::Eventual,
+            acknowledged_class: ContentAcknowledgementClass::Eventual,
+            fallback_applied: false,
             content_scope: DurabilityScope::NodeLocal,
             required_shard_receipts,
             eventual_shard_receipts: 0,

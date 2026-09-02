@@ -5,7 +5,10 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{FileVersionId, GetObjectResponse, NamespacePath, ObjectId, OperationId, VolumeId};
+use crate::{
+    AcknowledgementConsistency, FileVersionId, GetObjectResponse, NamespacePath, ObjectId,
+    OperationId, VolumeId,
+};
 
 /// Largest raw byte range accepted by one upload request.
 pub const MAX_UPLOAD_RANGE_BYTES: usize = 8 * 1_024 * 1_024;
@@ -235,6 +238,12 @@ pub enum WriteDurabilityScope {
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WriteAcknowledgement {
+    /// Consistency class selected by the immutable policy snapshot.
+    pub configured_consistency: AcknowledgementConsistency,
+    /// Consistency class actually reached by this successful acknowledgement.
+    pub acknowledged_consistency: AcknowledgementConsistency,
+    /// True only when an explicit strong-policy eventual fallback was applied.
+    pub fallback_applied: bool,
     /// Honest durability scope reached by this publication.
     pub durability_scope: WriteDurabilityScope,
     /// True only after every predicate required by the selected policy has committed.

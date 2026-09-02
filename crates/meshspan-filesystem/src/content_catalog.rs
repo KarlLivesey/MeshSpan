@@ -647,8 +647,26 @@ impl DurableContentCatalog {
         request: ContentPublicationRequest,
         committed_at: UnixMicros,
     ) -> Result<ManifestPublication, ContentCatalogError> {
+        self.finish_with_outcome(
+            request,
+            committed_at,
+            crate::ContentAcknowledgementOutcome::PolicyCommitted,
+        )
+    }
+
+    pub(super) fn finish_with_outcome(
+        &mut self,
+        request: ContentPublicationRequest,
+        committed_at: UnixMicros,
+        outcome: crate::ContentAcknowledgementOutcome,
+    ) -> Result<ManifestPublication, ContentCatalogError> {
         let manifest = load_prepared_manifest(&self.connection, request)?
             .ok_or(ContentCatalogError::InvalidInput)?;
+        if request.format_version == 1
+            && outcome == crate::ContentAcknowledgementOutcome::EventualFallback
+        {
+            return Err(ContentCatalogError::InvalidInput);
+        }
         let pending: i64 = if request.format_version == 1 {
             self.connection.query_row(
                 "SELECT COUNT(*) FROM content_chunks
@@ -666,9 +684,16 @@ impl DurableContentCatalog {
                      WHERE chunks.operation_id = ?1 AND layouts.operation_id IS NULL)
                     +
                     (SELECT COUNT(*) FROM content_stripe_shards
-                     WHERE operation_id = ?1 AND receipt_recorded_at IS NULL
-                       AND required_for_commit = 1)",
-                [request.operation_id.as_bytes().as_slice()],
+                     WHERE operation_id = ?1 AND receipt_recorded_at IS NULL AND
+                       CASE WHEN ?2 = 2 THEN eventual_fallback_required
+                            ELSE required_for_commit END = 1)",
+                params![
+                    request.operation_id.as_bytes().as_slice(),
+                    match outcome {
+                        crate::ContentAcknowledgementOutcome::PolicyCommitted => 1,
+                        crate::ContentAcknowledgementOutcome::EventualFallback => 2,
+                    },
+                ],
                 |row| row.get(0),
             )?
         };
@@ -676,10 +701,15 @@ impl DurableContentCatalog {
             return Err(ContentCatalogError::Incomplete);
         }
         self.connection.execute(
-            "UPDATE content_publications SET state = 2, committed_at = ?1
-             WHERE operation_id = ?2 AND state = 1",
+            "UPDATE content_publications
+             SET state = 2, committed_at = ?1, acknowledgement_outcome = ?2
+             WHERE operation_id = ?3 AND state = 1",
             params![
                 committed_at.get(),
+                match outcome {
+                    crate::ContentAcknowledgementOutcome::PolicyCommitted => 1,
+                    crate::ContentAcknowledgementOutcome::EventualFallback => 2,
+                },
                 request.operation_id.as_bytes().as_slice()
             ],
         )?;

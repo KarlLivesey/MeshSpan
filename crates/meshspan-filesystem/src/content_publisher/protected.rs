@@ -10,9 +10,9 @@ use cap_std::fs::{Dir, OpenOptions};
 use meshspan_contracts::{
     BoundedBytes, BoundedItems, CodingScheme, ContractError, ContractVersion, PlacementCandidate,
     PlacementCellRequirement, PlacementPolicy, PlacementRequest, PutShardRequest,
-    ReconstructionRequest, RequestContext, ReservationClass, ReserveStorageRequest,
-    ShardAcknowledgement, ShardIdentity, ShardReadPermit, ShardReceipt, StoragePermitMacKey,
-    StorageProvider, StorageReservation, read_permit_mac,
+    ReconstructionRequest, RequestContext, ReservationClass, ReserveStorageRequest, ShardIdentity,
+    ShardReadPermit, ShardReceipt, StoragePermitMacKey, StorageProvider, StorageReservation,
+    read_permit_mac,
 };
 use meshspan_domain::{
     DurabilityScope, FailureScenario, MeshId, OperationId, RandomSource, Revision, Topology,
@@ -27,11 +27,12 @@ use super::{
 };
 use crate::{
     CompletedStage, ContentAcknowledgementClass, ContentAcknowledgementEvidence,
-    ContentChunkCipher, ContentChunkLimits, ContentEncryptionKey, ContentPublicationError,
-    ContentPublicationRequest, ContentReadError, ContentReadRequest, DurableContentCatalog,
-    DurableContentPublisher, DurableContentReader, DurableContentSink, EncryptedContentChunk,
-    ManifestPublication, PreparedContentChunk, PreparedProtectedShard, PreparedProtectedStripe,
-    ProtectedShardCursor, VolumeContentKeyring, VolumeContentKeys,
+    ContentAcknowledgementPolicy, ContentChunkCipher, ContentChunkLimits, ContentEncryptionKey,
+    ContentPublicationError, ContentPublicationRequest, ContentReadError, ContentReadRequest,
+    ContentStrongFallback, DurableContentCatalog, DurableContentPublisher, DurableContentReader,
+    DurableContentSink, EncryptedContentChunk, ManifestPublication, PreparedContentChunk,
+    PreparedProtectedShard, PreparedProtectedStripe, ProtectedShardCursor, VolumeContentKeyring,
+    VolumeContentKeys,
 };
 
 const MAXIMUM_CANDIDATES: usize = 256;
@@ -117,7 +118,7 @@ pub struct ProtectionConfiguration {
     minimum_durable_targets: u16,
     minimum_distinct_nodes: u16,
     cells: Vec<PlacementCellRequirement>,
-    acknowledgement_class: ContentAcknowledgementClass,
+    acknowledgement_policy: ContentAcknowledgementPolicy,
     content_scope: DurabilityScope,
 }
 
@@ -178,7 +179,11 @@ impl ProtectionConfiguration {
             minimum_durable_targets,
             minimum_distinct_nodes,
             cells,
-            ContentAcknowledgementClass::Eventual,
+            ContentAcknowledgementPolicy {
+                class: ContentAcknowledgementClass::Eventual,
+                strong_wait: None,
+                fallback: ContentStrongFallback::RemainPending,
+            },
         )
     }
 
@@ -201,7 +206,7 @@ impl ProtectionConfiguration {
         minimum_durable_targets: u16,
         minimum_distinct_nodes: u16,
         cells: Vec<PlacementCellRequirement>,
-        acknowledgement_class: ContentAcknowledgementClass,
+        acknowledgement_policy: ContentAcknowledgementPolicy,
     ) -> Result<Self, ContentPublicationError> {
         let mut targets = BTreeSet::new();
         if topology_revision == Revision::ZERO
@@ -241,7 +246,7 @@ impl ProtectionConfiguration {
             minimum_durable_targets,
             minimum_distinct_nodes,
             cells,
-            acknowledgement_class,
+            acknowledgement_policy,
             content_scope,
         })
     }
@@ -393,7 +398,7 @@ where
         self.catalog
             .configure_protected_acknowledgement(
                 request,
-                protection.acknowledgement_class,
+                protection.acknowledgement_policy,
                 protection.content_scope,
             )
             .map_err(map_catalog)?;
@@ -571,8 +576,7 @@ where
                             .map_err(map_catalog)?;
                         progress = true;
                     }
-                    Err(ContentPublicationError::Unavailable)
-                        if shard.acknowledgement == ShardAcknowledgement::Eventual => {}
+                    Err(ContentPublicationError::Unavailable) => {}
                     Err(error) => return Err(error),
                 }
             }
@@ -580,7 +584,23 @@ where
                 Ok(manifest) => return Ok(manifest),
                 Err(crate::ContentCatalogError::Incomplete) if progress => {}
                 Err(crate::ContentCatalogError::Incomplete) => {
-                    return Err(ContentPublicationError::Unavailable);
+                    return match self
+                        .catalog
+                        .strong_fallback_for_attempt(request)
+                        .map_err(map_catalog)?
+                    {
+                        None => Err(ContentPublicationError::Unavailable),
+                        Some(ContentStrongFallback::RemainPending) => {
+                            Err(ContentPublicationError::StrongBarrierPending)
+                        }
+                        Some(ContentStrongFallback::FailAtDeadline) => {
+                            Err(ContentPublicationError::StrongBarrierDeadline)
+                        }
+                        Some(ContentStrongFallback::Eventual) => self
+                            .catalog
+                            .finish_eventual_fallback(request)
+                            .map_err(map_catalog),
+                    };
                 }
                 Err(error) => return Err(map_catalog(error)),
             }
@@ -958,7 +978,9 @@ fn build_stripe(
     slices: &BoundedItems<BoundedBytes>,
     candidates: &[PlacementCandidate],
 ) -> Result<PreparedProtectedStripe, ContentPublicationError> {
-    if slices.len() != plan.slice_targets.len() || slices.len() != plan.acknowledgement_roles.len()
+    if slices.len() != plan.slice_targets.len()
+        || slices.len() != plan.acknowledgement_roles.len()
+        || slices.len() != plan.eventual_fallback_roles.len()
     {
         return Err(ContentPublicationError::Corrupt);
     }
@@ -967,28 +989,33 @@ fn build_stripe(
         .iter()
         .zip(plan.slice_targets.as_slice())
         .zip(plan.acknowledgement_roles.as_slice())
+        .zip(plan.eventual_fallback_roles.as_slice())
         .enumerate()
-        .map(|(index, ((bytes, target_id), acknowledgement))| {
-            let candidate = candidates
-                .iter()
-                .find(|candidate| candidate.target_id == *target_id)
-                .ok_or(ContentPublicationError::Corrupt)?;
-            Ok::<PreparedProtectedShard, ContentPublicationError>(PreparedProtectedShard {
-                shard_index: u16::try_from(index).map_err(|_| ContentPublicationError::Corrupt)?,
-                shard_generation: 1,
-                provider_operation_id: protected_provider_operation_id(
-                    request.operation_id,
-                    chunk.chunk_index,
-                    u16::try_from(index).map_err(|_| ContentPublicationError::Corrupt)?,
-                )?,
-                expected_length: u64::try_from(bytes.len())
-                    .map_err(|_| ContentPublicationError::Corrupt)?,
-                expected_digest: blake3::hash(bytes.as_slice()).into(),
-                target_id: *target_id,
-                target_generation: candidate.target_generation,
-                acknowledgement: *acknowledgement,
-            })
-        })
+        .map(
+            |(index, (((bytes, target_id), acknowledgement), eventual_fallback))| {
+                let candidate = candidates
+                    .iter()
+                    .find(|candidate| candidate.target_id == *target_id)
+                    .ok_or(ContentPublicationError::Corrupt)?;
+                Ok::<PreparedProtectedShard, ContentPublicationError>(PreparedProtectedShard {
+                    shard_index: u16::try_from(index)
+                        .map_err(|_| ContentPublicationError::Corrupt)?,
+                    shard_generation: 1,
+                    provider_operation_id: protected_provider_operation_id(
+                        request.operation_id,
+                        chunk.chunk_index,
+                        u16::try_from(index).map_err(|_| ContentPublicationError::Corrupt)?,
+                    )?,
+                    expected_length: u64::try_from(bytes.len())
+                        .map_err(|_| ContentPublicationError::Corrupt)?,
+                    expected_digest: blake3::hash(bytes.as_slice()).into(),
+                    target_id: *target_id,
+                    target_generation: candidate.target_generation,
+                    acknowledgement: *acknowledgement,
+                    eventual_fallback: *eventual_fallback,
+                })
+            },
+        )
         .collect::<Result<Vec<_>, _>>()?;
     PreparedProtectedStripe::from_untrusted(
         request,

@@ -129,7 +129,9 @@ pub(crate) fn test_acknowledgement_evidence(
     debt.update(b"meshspan.test-content-debt.v1\0");
     debt.update(&request.request_digest);
     crate::ContentAcknowledgementEvidence {
-        class: crate::ContentAcknowledgementClass::Eventual,
+        configured_class: crate::ContentAcknowledgementClass::Eventual,
+        acknowledged_class: crate::ContentAcknowledgementClass::Eventual,
+        fallback_applied: false,
         content_scope: meshspan_domain::DurabilityScope::NodeLocal,
         required_shard_receipts: u64::from(request.logical_length != 0),
         eventual_shard_receipts: 0,
@@ -1097,6 +1099,12 @@ pub enum ContentPublicationError {
     /// Required storage or authority is temporarily unavailable.
     #[error("content publication is unavailable")]
     Unavailable,
+    /// A durable strong publication is still waiting for its configured barrier.
+    #[error("content publication strong barrier is pending")]
+    StrongBarrierPending,
+    /// A durable strong publication reached its configured deadline without fallback.
+    #[error("content publication strong barrier deadline expired")]
+    StrongBarrierDeadline,
     /// Private content IO failed.
     #[error("content publication IO failed")]
     Io(#[from] std::io::Error),

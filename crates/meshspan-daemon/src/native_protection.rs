@@ -13,8 +13,8 @@ use meshspan_domain::{
     VolumeId, machine_fault_class_id, storage_device_fault_class_id, uuid_v8,
 };
 use meshspan_filesystem::{
-    ContentAcknowledgementClass, ContentPublicationError, ProtectionConfiguration,
-    ProtectionPolicySource,
+    ContentAcknowledgementClass, ContentAcknowledgementPolicy, ContentPublicationError,
+    ContentStrongFallback, ProtectionConfiguration, ProtectionPolicySource,
 };
 use meshspan_metadata::{
     AcknowledgementCellRole, AcknowledgementPolicyRecord, AuthoritativeRepository, PageLimit,
@@ -138,16 +138,39 @@ fn protection_configuration(
         minimum_targets,
         minimum_nodes,
         cells,
-        acknowledgement.map_or(ContentAcknowledgementClass::Eventual, |policy| match policy
-            .consistency
-        {
-            meshspan_metadata::AcknowledgementConsistencyClass::Eventual => {
-                ContentAcknowledgementClass::Eventual
-            }
-            meshspan_metadata::AcknowledgementConsistencyClass::Strong => {
-                ContentAcknowledgementClass::Strong
-            }
-        }),
+        content_acknowledgement_policy(acknowledgement.as_ref()),
+    )
+}
+
+fn content_acknowledgement_policy(
+    policy: Option<&AcknowledgementPolicyRecord>,
+) -> ContentAcknowledgementPolicy {
+    policy.map_or(
+        ContentAcknowledgementPolicy {
+            class: ContentAcknowledgementClass::Eventual,
+            strong_wait: None,
+            fallback: ContentStrongFallback::RemainPending,
+        },
+        |policy| ContentAcknowledgementPolicy {
+            class: match policy.consistency {
+                meshspan_metadata::AcknowledgementConsistencyClass::Eventual => {
+                    ContentAcknowledgementClass::Eventual
+                }
+                meshspan_metadata::AcknowledgementConsistencyClass::Strong => {
+                    ContentAcknowledgementClass::Strong
+                }
+            },
+            strong_wait: policy.strong_wait,
+            fallback: match policy.fallback {
+                meshspan_metadata::StrongFallbackMode::RemainPending => {
+                    ContentStrongFallback::RemainPending
+                }
+                meshspan_metadata::StrongFallbackMode::FailAtDeadline => {
+                    ContentStrongFallback::FailAtDeadline
+                }
+                meshspan_metadata::StrongFallbackMode::Eventual => ContentStrongFallback::Eventual,
+            },
+        },
     )
 }
 

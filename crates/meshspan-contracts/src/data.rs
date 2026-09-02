@@ -132,6 +132,11 @@ pub struct PlacementPlan {
     pub slice_targets: BoundedItems<TargetId>,
     /// Commit requirement for every indexed slice in the same order as `slice_targets`.
     pub acknowledgement_roles: BoundedItems<ShardAcknowledgement>,
+    /// Weaker eventual-fallback requirement for every indexed slice in the same order.
+    ///
+    /// This retains a decodable, machine-independent minimum without claiming strong-only
+    /// protection scenarios or required availability cells were reached.
+    pub eventual_fallback_roles: BoundedItems<ShardAcknowledgement>,
     /// Topology revision used for eligibility and failure proof.
     pub topology_revision: Revision,
     /// Capacity observation revision used for admission.

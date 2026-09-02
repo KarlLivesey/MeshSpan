@@ -16,9 +16,12 @@ use super::repository::{
 };
 use super::{
     ContentCatalogError, ContentPublicationRequest, DurableContentCatalog, MAXIMUM_PAGE_ITEMS,
-    PreparedContentChunk,
+    ManifestPublication, PreparedContentChunk,
 };
-use crate::{ContentAcknowledgementClass, ContentAcknowledgementEvidence};
+use crate::{
+    ContentAcknowledgementClass, ContentAcknowledgementEvidence, ContentAcknowledgementOutcome,
+    ContentAcknowledgementPolicy, ContentStrongFallback,
+};
 
 const LAYOUT_DOMAIN: &[u8] = b"meshspan.content.protected-stripe-layout.v1\0";
 const MAXIMUM_POLICY_BYTES: usize = 4_096;
@@ -43,6 +46,8 @@ pub struct PreparedProtectedShard {
     pub target_generation: u64,
     /// Whether this receipt gates acknowledgement of the logical write.
     pub acknowledgement: ShardAcknowledgement,
+    /// Whether this receipt gates an explicitly permitted eventual fallback.
+    pub eventual_fallback: ShardAcknowledgement,
 }
 
 /// One immutable, revision-bound protected stripe plan.
@@ -213,7 +218,7 @@ impl DurableContentCatalog {
     pub fn configure_protected_acknowledgement(
         &mut self,
         request: ContentPublicationRequest,
-        class: ContentAcknowledgementClass,
+        policy: ContentAcknowledgementPolicy,
         scope: DurabilityScope,
     ) -> Result<(), ContentCatalogError> {
         validate_live_request(request)?;
@@ -221,9 +226,16 @@ impl DurableContentCatalog {
         if request.format_version != 2 || scope == DurabilityScope::GloballyConverged {
             return Err(ContentCatalogError::InvalidInput);
         }
-        let encoded = (encode_class(class), encode_scope(scope));
+        let strong_deadline = acknowledgement_deadline(request, policy)?;
+        let encoded = (
+            encode_class(policy.class),
+            encode_scope(scope),
+            strong_deadline.map(UnixMicros::get),
+            encode_fallback(policy.fallback),
+        );
         let stored = self.connection.query_row(
-            "SELECT acknowledgement_class, acknowledgement_scope, state,
+            "SELECT acknowledgement_class, acknowledgement_scope, strong_deadline_at,
+                    strong_fallback_mode, state,
                     EXISTS(SELECT 1 FROM content_stripe_layouts
                            WHERE operation_id = content_publications.operation_id)
              FROM content_publications WHERE operation_id = ?1",
@@ -232,26 +244,31 @@ impl DurableContentCatalog {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, bool>(3)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, bool>(5)?,
                 ))
             },
         )?;
-        if (stored.2 == 2 || stored.3) && (stored.0, stored.1) != encoded {
+        if (stored.4 == 2 || stored.5) && (stored.0, stored.1, stored.2, stored.3) != encoded {
             return Err(ContentCatalogError::Conflict);
         }
-        if (stored.0, stored.1) == encoded {
+        if (stored.0, stored.1, stored.2, stored.3) == encoded {
             return Ok(());
         }
         let updated = self.connection.execute(
             "UPDATE content_publications
-             SET acknowledgement_class = ?1, acknowledgement_scope = ?2
-             WHERE operation_id = ?3 AND state = 1
+             SET acknowledgement_class = ?1, acknowledgement_scope = ?2,
+                 strong_deadline_at = ?3, strong_fallback_mode = ?4
+             WHERE operation_id = ?5 AND state = 1
                AND NOT EXISTS(SELECT 1 FROM content_stripe_layouts
                               WHERE operation_id = content_publications.operation_id)",
             params![
                 encoded.0,
                 encoded.1,
+                encoded.2,
+                encoded.3,
                 request.operation_id.as_bytes().as_slice(),
             ],
         )?;
@@ -276,27 +293,71 @@ impl DurableContentCatalog {
             return Err(ContentCatalogError::InvalidInput);
         }
         let header = self.connection.query_row(
-            "SELECT state, acknowledgement_class, acknowledgement_scope, root_digest
+            "SELECT state, acknowledgement_class, acknowledgement_scope,
+                    acknowledgement_outcome, strong_deadline_at, strong_fallback_mode, root_digest
+             FROM content_publications WHERE operation_id = ?1",
+            [request.operation_id.as_bytes().as_slice()],
+            |row| {
+                Ok(AcknowledgementHeader {
+                    state: row.get(0)?,
+                    configured_class: row.get(1)?,
+                    scope: row.get(2)?,
+                    outcome: row.get(3)?,
+                    strong_deadline: row.get(4)?,
+                    fallback: row.get(5)?,
+                    root_digest: row.get(6)?,
+                })
+            },
+        )?;
+        if header.state != 2 {
+            return Err(ContentCatalogError::Incomplete);
+        }
+        acknowledgement_evidence(&self.connection, request.operation_id, &header)
+    }
+
+    pub(crate) fn strong_fallback_for_attempt(
+        &self,
+        request: ContentPublicationRequest,
+    ) -> Result<Option<ContentStrongFallback>, ContentCatalogError> {
+        validate_exact_request(&self.connection, request)?;
+        let stored = self.connection.query_row(
+            "SELECT acknowledgement_class, strong_deadline_at, strong_fallback_mode, state
              FROM content_publications WHERE operation_id = ?1",
             [request.operation_id.as_bytes().as_slice()],
             |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<i64>>(1)?,
                     row.get::<_, i64>(2)?,
-                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, i64>(3)?,
                 ))
             },
         )?;
-        if header.0 != 2 {
-            return Err(ContentCatalogError::Incomplete);
+        if stored.3 == 2 || decode_class(stored.0)? == ContentAcknowledgementClass::Eventual {
+            return Ok(None);
         }
-        acknowledgement_evidence(
-            &self.connection,
-            request.operation_id,
-            decode_class(header.1)?,
-            decode_scope(header.2)?,
-            copy_array(&header.3)?,
+        let deadline = stored
+            .1
+            .map(UnixMicros::new)
+            .ok_or(ContentCatalogError::Corrupt)?;
+        if request.observed_at < deadline {
+            Ok(Some(ContentStrongFallback::RemainPending))
+        } else {
+            Ok(Some(decode_fallback(stored.2)?))
+        }
+    }
+
+    pub(crate) fn finish_eventual_fallback(
+        &mut self,
+        request: ContentPublicationRequest,
+    ) -> Result<ManifestPublication, ContentCatalogError> {
+        if self.strong_fallback_for_attempt(request)? != Some(ContentStrongFallback::Eventual) {
+            return Err(ContentCatalogError::InvalidInput);
+        }
+        self.finish_with_outcome(
+            request,
+            request.observed_at,
+            ContentAcknowledgementOutcome::EventualFallback,
         )
     }
 
@@ -484,7 +545,7 @@ impl DurableContentCatalog {
         let mut statement = self.connection.prepare(
             "SELECT chunk_index, shard_index, shard_generation, provider_operation_id,
                     expected_length, expected_digest, target_id, target_generation,
-                    required_for_commit
+                    required_for_commit, eventual_fallback_required
              FROM content_stripe_shards
              WHERE operation_id = ?1 AND receipt_recorded_at IS NULL
                AND (chunk_index > ?2 OR (chunk_index = ?2 AND shard_index > ?3))
@@ -592,17 +653,46 @@ impl DurableContentCatalog {
     }
 }
 
+struct AcknowledgementHeader {
+    state: i64,
+    configured_class: i64,
+    scope: i64,
+    outcome: i64,
+    strong_deadline: Option<i64>,
+    fallback: i64,
+    root_digest: Vec<u8>,
+}
+
 fn acknowledgement_evidence(
     connection: &rusqlite::Connection,
     operation_id: OperationId,
-    class: ContentAcknowledgementClass,
-    scope: DurabilityScope,
-    root_digest: [u8; 32],
+    header: &AcknowledgementHeader,
 ) -> Result<ContentAcknowledgementEvidence, ContentCatalogError> {
-    let policy_evidence_digest = policy_evidence_digest(connection, operation_id, class, scope)?;
-    let shard_evidence = shard_evidence(connection, operation_id, root_digest)?;
+    let configured_class = decode_class(header.configured_class)?;
+    let scope = decode_scope(header.scope)?;
+    let outcome = decode_outcome(header.outcome)?;
+    let strong_deadline = header.strong_deadline.map(UnixMicros::new);
+    let fallback = decode_fallback(header.fallback)?;
+    let root_digest = copy_array(&header.root_digest)?;
+    let policy_evidence_digest = policy_evidence_digest(
+        connection,
+        operation_id,
+        configured_class,
+        scope,
+        outcome,
+        strong_deadline,
+        fallback,
+    )?;
+    let shard_evidence = shard_evidence(connection, operation_id, root_digest, outcome)?;
+    let fallback_applied = outcome == ContentAcknowledgementOutcome::EventualFallback;
     Ok(ContentAcknowledgementEvidence {
-        class,
+        configured_class,
+        acknowledged_class: if fallback_applied {
+            ContentAcknowledgementClass::Eventual
+        } else {
+            configured_class
+        },
+        fallback_applied,
         content_scope: scope,
         required_shard_receipts: shard_evidence.required,
         eventual_shard_receipts: shard_evidence.eventual,
@@ -618,11 +708,20 @@ fn policy_evidence_digest(
     operation_id: OperationId,
     class: ContentAcknowledgementClass,
     scope: DurabilityScope,
+    outcome: ContentAcknowledgementOutcome,
+    strong_deadline: Option<UnixMicros>,
+    fallback: ContentStrongFallback,
 ) -> Result<[u8; 32], ContentCatalogError> {
     let mut policy = blake3::Hasher::new();
     policy.update(b"meshspan.content-acknowledgement-policy.v1\0");
     policy.update(&operation_id.as_bytes());
-    policy.update(&[class_tag(class), scope_tag(scope)]);
+    policy.update(&[
+        class_tag(class),
+        scope_tag(scope),
+        outcome_tag(outcome),
+        fallback_tag(fallback),
+    ]);
+    policy.update(&strong_deadline.map_or(0, UnixMicros::get).to_be_bytes());
     let mut layouts = connection.prepare(
         "SELECT chunk_index, topology_revision, capacity_revision, policy_format_version,
                 policy_evidence, layout_digest
@@ -669,6 +768,7 @@ fn shard_evidence(
     connection: &rusqlite::Connection,
     operation_id: OperationId,
     root_digest: [u8; 32],
+    outcome: ContentAcknowledgementOutcome,
 ) -> Result<ShardEvidence, ContentCatalogError> {
     let mut achieved = blake3::Hasher::new();
     achieved.update(b"meshspan.content-acknowledgement-achieved.v1\0");
@@ -684,7 +784,7 @@ fn shard_evidence(
     let mut shards = connection.prepare(
         "SELECT chunk_index, shard_index, provider_operation_id, expected_length,
                 expected_digest, target_id, target_generation, required_for_commit,
-                receipt_recorded_at
+                eventual_fallback_required, receipt_recorded_at
          FROM content_stripe_shards WHERE operation_id = ?1
          ORDER BY chunk_index, shard_index",
     )?;
@@ -698,7 +798,8 @@ fn shard_evidence(
             row.get::<_, Vec<u8>>(5)?,
             row.get::<_, i64>(6)?,
             row.get::<_, bool>(7)?,
-            row.get::<_, Option<i64>>(8)?,
+            row.get::<_, bool>(8)?,
+            row.get::<_, Option<i64>>(9)?,
         ))
     })?;
     for row in rows {
@@ -716,7 +817,12 @@ fn shard_evidence(
         canonical.extend_from_slice(&copy_array::<16>(&row.5)?);
         canonical.extend_from_slice(&from_sql(row.6)?.to_be_bytes());
         canonical.push(u8::from(row.7));
-        match (row.7, row.8) {
+        canonical.push(u8::from(row.8));
+        let required = match outcome {
+            ContentAcknowledgementOutcome::PolicyCommitted => row.7,
+            ContentAcknowledgementOutcome::EventualFallback => row.8,
+        };
+        match (required, row.9) {
             (true, Some(recorded_at)) => {
                 required_shard_receipts = required_shard_receipts
                     .checked_add(1)
@@ -768,6 +874,73 @@ fn decode_class(value: i64) -> Result<ContentAcknowledgementClass, ContentCatalo
     }
 }
 
+fn acknowledgement_deadline(
+    request: ContentPublicationRequest,
+    policy: ContentAcknowledgementPolicy,
+) -> Result<Option<UnixMicros>, ContentCatalogError> {
+    match policy.class {
+        ContentAcknowledgementClass::Eventual => {
+            if policy.strong_wait.is_some()
+                || policy.fallback != ContentStrongFallback::RemainPending
+            {
+                Err(ContentCatalogError::InvalidInput)
+            } else {
+                Ok(None)
+            }
+        }
+        ContentAcknowledgementClass::Strong => {
+            let policy_deadline = policy
+                .strong_wait
+                .map(|wait| {
+                    request
+                        .observed_at
+                        .checked_add(wait)
+                        .ok_or(ContentCatalogError::InvalidInput)
+                })
+                .transpose()?;
+            Ok(Some(policy_deadline.map_or(request.deadline, |deadline| {
+                deadline.min(request.deadline)
+            })))
+        }
+    }
+}
+
+const fn fallback_tag(fallback: ContentStrongFallback) -> u8 {
+    match fallback {
+        ContentStrongFallback::RemainPending => 1,
+        ContentStrongFallback::FailAtDeadline => 2,
+        ContentStrongFallback::Eventual => 3,
+    }
+}
+
+const fn encode_fallback(fallback: ContentStrongFallback) -> i64 {
+    fallback_tag(fallback) as i64
+}
+
+fn decode_fallback(value: i64) -> Result<ContentStrongFallback, ContentCatalogError> {
+    match value {
+        1 => Ok(ContentStrongFallback::RemainPending),
+        2 => Ok(ContentStrongFallback::FailAtDeadline),
+        3 => Ok(ContentStrongFallback::Eventual),
+        _ => Err(ContentCatalogError::Corrupt),
+    }
+}
+
+const fn outcome_tag(outcome: ContentAcknowledgementOutcome) -> u8 {
+    match outcome {
+        ContentAcknowledgementOutcome::PolicyCommitted => 1,
+        ContentAcknowledgementOutcome::EventualFallback => 2,
+    }
+}
+
+fn decode_outcome(value: i64) -> Result<ContentAcknowledgementOutcome, ContentCatalogError> {
+    match value {
+        1 => Ok(ContentAcknowledgementOutcome::PolicyCommitted),
+        2 => Ok(ContentAcknowledgementOutcome::EventualFallback),
+        _ => Err(ContentCatalogError::Corrupt),
+    }
+}
+
 const fn encode_scope(scope: DurabilityScope) -> i64 {
     scope_tag(scope) as i64
 }
@@ -797,6 +970,15 @@ fn validate_shards(
         .filter(|shard| shard.acknowledgement == ShardAcknowledgement::Required)
         .count()
         < usize::from(layout.data_slices())
+        || shards
+            .iter()
+            .filter(|shard| shard.eventual_fallback == ShardAcknowledgement::Required)
+            .count()
+            < usize::from(layout.data_slices())
+        || shards.iter().any(|shard| {
+            shard.eventual_fallback == ShardAcknowledgement::Required
+                && shard.acknowledgement != ShardAcknowledgement::Required
+        })
     {
         return Err(ContentCatalogError::InvalidInput);
     }
@@ -866,6 +1048,10 @@ fn layout_digest(
             ShardAcknowledgement::Required => 1,
             ShardAcknowledgement::Eventual => 0,
         }]);
+        digest.update(&[match shard.eventual_fallback {
+            ShardAcknowledgement::Required => 1,
+            ShardAcknowledgement::Eventual => 0,
+        }]);
     }
     digest.finalize().into()
 }
@@ -924,8 +1110,8 @@ fn insert_stripe_layout(
             "INSERT INTO content_stripe_shards(
                 operation_id, chunk_index, shard_index, shard_generation,
                 provider_operation_id, expected_length, expected_digest, target_id,
-                target_generation, required_for_commit
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                target_generation, required_for_commit, eventual_fallback_required
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
             params![
                 operation_id.as_bytes().as_slice(),
                 to_i64(stripe.chunk.chunk_index)?,
@@ -937,6 +1123,10 @@ fn insert_stripe_layout(
                 shard.target_id.as_bytes().as_slice(),
                 to_i64(shard.target_generation)?,
                 match shard.acknowledgement {
+                    ShardAcknowledgement::Required => 1,
+                    ShardAcknowledgement::Eventual => 0,
+                },
+                match shard.eventual_fallback {
                     ShardAcknowledgement::Required => 1,
                     ShardAcknowledgement::Eventual => 0,
                 },
@@ -971,6 +1161,11 @@ fn decode_pending_shard(
             } else {
                 ShardAcknowledgement::Eventual
             },
+            eventual_fallback: if row.get::<_, bool>(9)? {
+                ShardAcknowledgement::Required
+            } else {
+                ShardAcknowledgement::Eventual
+            },
         },
     ))
 }
@@ -984,7 +1179,7 @@ fn load_protected_shard(
         .query_row(
             "SELECT chunk_index, shard_index, shard_generation, provider_operation_id,
                     expected_length, expected_digest, target_id, target_generation,
-                    required_for_commit
+                    required_for_commit, eventual_fallback_required
              FROM content_stripe_shards
              WHERE operation_id = ?1 AND chunk_index = ?2 AND shard_index = ?3",
             params![
@@ -1045,7 +1240,7 @@ fn load_protected_stripe(
     let mut statement = connection.prepare(
         "SELECT chunk_index, shard_index, shard_generation, provider_operation_id,
                 expected_length, expected_digest, target_id, target_generation,
-                required_for_commit
+                required_for_commit, eventual_fallback_required
          FROM content_stripe_shards WHERE operation_id = ?1 AND chunk_index = ?2
          ORDER BY shard_index LIMIT ?3",
     )?;

@@ -4,8 +4,8 @@ use meshspan_contracts::{
     BoundedBytes, CodingLayout, ShardAcknowledgement, ShardIdentity, ShardReceipt, VersionedPayload,
 };
 use meshspan_domain::{
-    ContentManifestId, EntropyError, NodeId, OperationId, RandomSource, Revision, TargetId,
-    UnixMicros, VolumeId,
+    ContentManifestId, DurationMicros, EntropyError, NodeId, OperationId, RandomSource, Revision,
+    TargetId, UnixMicros, VolumeId,
 };
 use tempfile::tempdir;
 
@@ -14,9 +14,10 @@ use super::{
     PreparedProtectedStripe, ProtectedShardCursor,
 };
 use crate::{
-    CompletedStage, ContentEncryptionKey, ContentKeyEnvelopeCipher, ContentLayoutChunk,
+    CompletedStage, ContentAcknowledgementClass, ContentAcknowledgementPolicy,
+    ContentEncryptionKey, ContentKeyEnvelopeCipher, ContentLayoutChunk,
     ContentLayoutTransferHeader, ContentLayoutTransferPage, ContentPublicationRequest,
-    PublishedContentReference, VolumeKeyEncryptionKey,
+    ContentStrongFallback, PublishedContentReference, VolumeKeyEncryptionKey,
 };
 
 struct SourceLayoutFixture {
@@ -101,6 +102,109 @@ fn protected_stripe_plan_and_receipts_survive_restart_before_commit()
     let catalog = DurableContentCatalog::open(directory.path(), UnixMicros::new(9))?;
     assert_eq!(catalog.resolve(request)?, Some(manifest));
     Ok(())
+}
+
+#[test]
+fn strong_deadline_never_silently_falls_back_and_persists_an_explicit_eventual_receipt()
+-> Result<(), Box<dyn std::error::Error>> {
+    for fallback in [
+        ContentStrongFallback::RemainPending,
+        ContentStrongFallback::FailAtDeadline,
+    ] {
+        let directory = tempdir()?;
+        let (request, _) = protected_fixture()?;
+        let mut catalog = DurableContentCatalog::open(directory.path(), UnixMicros::new(1))?;
+        catalog.begin(request)?;
+        catalog.configure_protected_acknowledgement(
+            request,
+            strong_policy(fallback),
+            meshspan_domain::DurabilityScope::CellReplicated,
+        )?;
+        let before_deadline = ContentPublicationRequest {
+            observed_at: UnixMicros::new(14),
+            ..request
+        };
+        assert_eq!(
+            catalog.strong_fallback_for_attempt(before_deadline)?,
+            Some(ContentStrongFallback::RemainPending)
+        );
+        let at_deadline = ContentPublicationRequest {
+            observed_at: UnixMicros::new(15),
+            ..request
+        };
+        assert_eq!(
+            catalog.strong_fallback_for_attempt(at_deadline)?,
+            Some(fallback)
+        );
+        assert!(matches!(
+            catalog.finish_eventual_fallback(at_deadline),
+            Err(ContentCatalogError::InvalidInput)
+        ));
+    }
+
+    let directory = tempdir()?;
+    let (request, stripe) = protected_fixture()?;
+    let mut catalog = DurableContentCatalog::open(directory.path(), UnixMicros::new(1))?;
+    catalog.begin(request)?;
+    catalog.configure_protected_acknowledgement(
+        request,
+        strong_policy(ContentStrongFallback::Eventual),
+        meshspan_domain::DurabilityScope::CellReplicated,
+    )?;
+    catalog.append_protected_stripes(request, std::slice::from_ref(&stripe))?;
+    let manifest = catalog.seal_layout(
+        request,
+        CompletedStage {
+            logical_length: 2,
+            content_digest: [9; 32],
+        },
+        2,
+        wrapped_key()?,
+    )?;
+    for (index, shard) in stripe.shards().iter().enumerate().take(2) {
+        let cursor = ProtectedShardCursor {
+            chunk_index: 0,
+            shard_index: u16::try_from(index)?,
+        };
+        catalog.record_protected_receipt(
+            request,
+            protected_receipt(manifest.root_digest, cursor, *shard),
+            UnixMicros::new(12),
+        )?;
+    }
+    let at_deadline = ContentPublicationRequest {
+        observed_at: UnixMicros::new(15),
+        ..request
+    };
+    assert_eq!(catalog.finish_eventual_fallback(at_deadline)?, manifest);
+    let evidence = catalog.protected_acknowledgement_evidence(at_deadline)?;
+    assert_eq!(
+        evidence.configured_class,
+        ContentAcknowledgementClass::Strong
+    );
+    assert_eq!(
+        evidence.acknowledged_class,
+        ContentAcknowledgementClass::Eventual
+    );
+    assert!(evidence.fallback_applied);
+    assert_eq!(evidence.required_shard_receipts, 2);
+    assert_eq!(evidence.pending_eventual_shards, 2);
+    drop(catalog);
+
+    let reopened = DurableContentCatalog::open(directory.path(), UnixMicros::new(20))?;
+    assert_eq!(
+        reopened.protected_acknowledgement_evidence(at_deadline)?,
+        evidence
+    );
+    Ok(())
+}
+
+fn strong_policy(fallback: ContentStrongFallback) -> ContentAcknowledgementPolicy {
+    ContentAcknowledgementPolicy {
+        class: ContentAcknowledgementClass::Strong,
+        strong_wait: Some(DurationMicros::new(13)),
+        fallback,
+    }
 }
 
 #[test]
@@ -219,6 +323,11 @@ fn protected_fixture()
                     ShardAcknowledgement::Eventual
                 } else {
                     ShardAcknowledgement::Required
+                },
+                eventual_fallback: if index < 2 {
+                    ShardAcknowledgement::Required
+                } else {
+                    ShardAcknowledgement::Eventual
                 },
             })
         })

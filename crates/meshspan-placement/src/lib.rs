@@ -621,20 +621,25 @@ fn build_plan(
             return Err(ContractError::ResourceExhausted);
         }
     }
-    let acknowledgement_roles =
-        acknowledgement_roles(request, &targets, coding_layout.data_slices())?;
+    let configured_acknowledgement_roles =
+        acknowledgement_roles(request, &targets, coding_layout.data_slices(), true)?;
+    let eventual_fallback_roles =
+        acknowledgement_roles(request, &targets, coding_layout.data_slices(), false)?;
     let evidence = policy_evidence(
         request,
         coding_layout,
         &targets,
-        &acknowledgement_roles,
+        &configured_acknowledgement_roles,
+        &eventual_fallback_roles,
         &proofs,
     )?;
     Ok(PlacementPlan {
         coding_layout,
         slice_targets: BoundedItems::new(targets, MAXIMUM_SLICES)
             .map_err(|_| ContractError::InternalContract)?,
-        acknowledgement_roles: BoundedItems::new(acknowledgement_roles, MAXIMUM_SLICES)
+        acknowledgement_roles: BoundedItems::new(configured_acknowledgement_roles, MAXIMUM_SLICES)
+            .map_err(|_| ContractError::InternalContract)?,
+        eventual_fallback_roles: BoundedItems::new(eventual_fallback_roles, MAXIMUM_SLICES)
             .map_err(|_| ContractError::InternalContract)?,
         topology_revision: request.topology_revision,
         capacity_revision: request.capacity_revision,
@@ -652,30 +657,43 @@ fn acknowledgement_roles(
     request: PlacementRequest<'_>,
     targets: &[TargetId],
     data_slices: u16,
+    include_strong_predicates: bool,
 ) -> Result<Vec<ShardAcknowledgement>, ContractError> {
     let mut required = BTreeSet::new();
-    for requirement in request
-        .cells
-        .iter()
-        .filter(|cell| cell.role == PlacementCellRole::RequiredBeforeCommit)
-    {
-        required.extend(targets.iter().copied().filter(|target| {
-            request.candidates.iter().any(|candidate| {
-                candidate.target_id == *target
-                    && candidate
-                        .availability_cells
-                        .as_slice()
-                        .contains(&requirement.cell_id)
-            })
-        }));
+    if include_strong_predicates {
+        for requirement in request
+            .cells
+            .iter()
+            .filter(|cell| cell.role == PlacementCellRole::RequiredBeforeCommit)
+        {
+            required.extend(targets.iter().copied().filter(|target| {
+                request.candidates.iter().any(|candidate| {
+                    candidate.target_id == *target
+                        && candidate
+                            .availability_cells
+                            .as_slice()
+                            .contains(&requirement.cell_id)
+                })
+            }));
+        }
     }
     for target in targets {
-        if acknowledgement_predicates_satisfied(request, &required, data_slices)? {
+        if acknowledgement_predicates_satisfied(
+            request,
+            &required,
+            data_slices,
+            include_strong_predicates,
+        )? {
             break;
         }
         required.insert(*target);
     }
-    if !acknowledgement_predicates_satisfied(request, &required, data_slices)? {
+    if !acknowledgement_predicates_satisfied(
+        request,
+        &required,
+        data_slices,
+        include_strong_predicates,
+    )? {
         return Err(ContractError::ResourceExhausted);
     }
     Ok(targets
@@ -694,6 +712,7 @@ fn acknowledgement_predicates_satisfied(
     request: PlacementRequest<'_>,
     required: &BTreeSet<TargetId>,
     data_slices: u16,
+    include_strong_predicates: bool,
 ) -> Result<bool, ContractError> {
     let minimum_targets = request.minimum_durable_targets.max(data_slices);
     let required_hosts = required
@@ -711,7 +730,7 @@ fn acknowledgement_predicates_satisfied(
     {
         return Ok(false);
     }
-    if request.required_scenarios.is_empty() {
+    if !include_strong_predicates || request.required_scenarios.is_empty() {
         return Ok(true);
     }
     let layout = ProtectionLayout::new(data_slices, required.iter().copied().collect())
@@ -729,6 +748,7 @@ fn policy_evidence(
     layout: CodingLayout,
     targets: &[TargetId],
     acknowledgement_roles: &[ShardAcknowledgement],
+    eventual_fallback_roles: &[ShardAcknowledgement],
     proofs: &[ProtectionProof],
 ) -> Result<blake3::Hash, ContractError> {
     let mut digest = blake3::Hasher::new();
@@ -759,9 +779,17 @@ fn policy_evidence(
             hash_scenario(&mut digest, scenario);
         }
     }
-    for (target, acknowledgement) in targets.iter().zip(acknowledgement_roles) {
+    for ((target, acknowledgement), fallback) in targets
+        .iter()
+        .zip(acknowledgement_roles)
+        .zip(eventual_fallback_roles)
+    {
         digest.update(&target.as_bytes());
         digest.update(&[match acknowledgement {
+            ShardAcknowledgement::Required => 1,
+            ShardAcknowledgement::Eventual => 0,
+        }]);
+        digest.update(&[match fallback {
             ShardAcknowledgement::Required => 1,
             ShardAcknowledgement::Eventual => 0,
         }]);
@@ -1072,9 +1100,9 @@ mod tests {
         for (index, candidate) in candidates.iter_mut().enumerate() {
             candidate.availability_cells = BoundedItems::new(
                 vec![if index < 2 {
-                    required_cell
-                } else {
                     eventual_cell
+                } else {
+                    required_cell
                 }],
                 256,
             )?;
@@ -1131,6 +1159,23 @@ mod tests {
             };
             assert_eq!(*role, expected);
         }
+        assert_eq!(
+            plan.eventual_fallback_roles
+                .as_slice()
+                .iter()
+                .filter(|role| **role == meshspan_contracts::ShardAcknowledgement::Required)
+                .count(),
+            usize::from(plan.coding_layout.data_slices())
+        );
+        assert!(
+            plan.acknowledgement_roles
+                .as_slice()
+                .iter()
+                .zip(plan.eventual_fallback_roles.as_slice())
+                .any(|(configured, fallback)| configured
+                    == &meshspan_contracts::ShardAcknowledgement::Required
+                    && fallback == &meshspan_contracts::ShardAcknowledgement::Eventual)
+        );
         Ok(())
     }
 

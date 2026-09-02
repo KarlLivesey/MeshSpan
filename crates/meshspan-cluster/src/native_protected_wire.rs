@@ -15,8 +15,8 @@ use meshspan_protocol::v1::VersionedPayload;
 
 use crate::NativeGatewayWireError;
 
-const FORMAT_VERSION: u32 = 1;
-const DOMAIN: &[u8] = b"meshspan.native.protected-stripe.v1\0";
+const FORMAT_VERSION: u32 = 2;
+const DOMAIN: &[u8] = b"meshspan.native.protected-stripe.v2\0";
 const MAXIMUM_BYTES: usize = 16 * 1_024;
 const MAXIMUM_POLICY_BYTES: usize = 4_096;
 const MAXIMUM_SHARDS: usize = 24;
@@ -151,6 +151,10 @@ fn encode_shard(bytes: &mut Vec<u8>, shard: PreparedProtectedShard, receipt: boo
         ShardAcknowledgement::Required => 1,
         ShardAcknowledgement::Eventual => 2,
     });
+    bytes.push(match shard.eventual_fallback {
+        ShardAcknowledgement::Required => 1,
+        ShardAcknowledgement::Eventual => 2,
+    });
     bytes.push(u8::from(receipt));
 }
 
@@ -239,6 +243,11 @@ impl<'a> Reader<'a> {
             2 => ShardAcknowledgement::Eventual,
             _ => return Err(NativeGatewayWireError::Invalid),
         };
+        let eventual_fallback = match self.array::<1>()?[0] {
+            1 => ShardAcknowledgement::Required,
+            2 => ShardAcknowledgement::Eventual,
+            _ => return Err(NativeGatewayWireError::Invalid),
+        };
         let receipt = match self.array::<1>()?[0] {
             0 => false,
             1 => true,
@@ -254,6 +263,7 @@ impl<'a> Reader<'a> {
                 target_id,
                 target_generation,
                 acknowledgement,
+                eventual_fallback,
             },
             receipt,
         ))
@@ -265,5 +275,96 @@ impl<'a> Reader<'a> {
         } else {
             Err(NativeGatewayWireError::Invalid)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use meshspan_contracts::{BoundedBytes, BoundedItems};
+    use meshspan_domain::{ContentManifestId, UnixMicros, VolumeId};
+
+    use super::*;
+
+    #[test]
+    fn round_trip_preserves_strong_and_eventual_fallback_roles()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let request = ContentPublicationRequest {
+            operation_id: OperationId::from_bytes([1; 16])?,
+            volume_id: VolumeId::from_bytes([2; 16])?,
+            request_digest: [3; 32],
+            manifest_id: ContentManifestId::from_bytes([4; 16])?,
+            format_version: 2,
+            logical_length: 32,
+            authorization_revision: Revision::new(5),
+            deadline: UnixMicros::new(20),
+            observed_at: UnixMicros::new(10),
+        };
+        let chunk = PreparedContentChunk {
+            chunk_index: 0,
+            plaintext_length: 32,
+            plaintext_digest: [6; 32],
+            ciphertext_length: 48,
+            ciphertext_digest: [7; 32],
+            storage_layout_digest: [0; 32],
+            provider_operation_id: OperationId::from_bytes([8; 16])?,
+        };
+        let shards = (0_u8..3)
+            .map(|index| {
+                Ok(PreparedProtectedShard {
+                    shard_index: u16::from(index),
+                    shard_generation: 1,
+                    provider_operation_id: OperationId::from_bytes([10 + index; 16])?,
+                    expected_length: 32,
+                    expected_digest: [20 + index; 32],
+                    target_id: TargetId::from_bytes([30 + index; 16])?,
+                    target_generation: 1,
+                    acknowledgement: ShardAcknowledgement::Required,
+                    eventual_fallback: if index < 2 {
+                        ShardAcknowledgement::Required
+                    } else {
+                        ShardAcknowledgement::Eventual
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+        let stripe = PreparedProtectedStripe::from_untrusted(
+            request,
+            chunk,
+            CodingLayout::new(2, 1, 32)?,
+            Revision::new(6),
+            Revision::new(7),
+            ContractPayload {
+                format_version: 1,
+                bytes: BoundedBytes::copy_from(b"strong-with-eventual-fallback", 64)?,
+            },
+            shards,
+        )?;
+        let manifest = ManifestPublication {
+            manifest_id: request.manifest_id,
+            format_version: 2,
+            logical_length: request.logical_length,
+            content_digest: [40; 32],
+            root_digest: [41; 32],
+        };
+        let receipts = stripe
+            .shards()
+            .iter()
+            .take(2)
+            .map(|shard| receipt(manifest, chunk.chunk_index, *shard))
+            .collect();
+        let committed = CommittedProtectedStripe {
+            stripe: stripe.clone(),
+            receipts: BoundedItems::new(receipts, MAXIMUM_SHARDS)?,
+        };
+
+        let decoded = decode_native_protected_stripe(
+            &version_native_protected_stripe(&committed),
+            request,
+            stripe.chunk(),
+            manifest,
+        )?;
+
+        assert_eq!(decoded, committed);
+        Ok(())
     }
 }

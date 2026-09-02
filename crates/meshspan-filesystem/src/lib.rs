@@ -37,7 +37,8 @@ mod version_retention;
 mod upload_service_tests;
 
 pub use acknowledgement::{
-    ContentAcknowledgementClass, ContentAcknowledgementEvidence, PublicationAcknowledgement,
+    ContentAcknowledgementClass, ContentAcknowledgementEvidence, ContentAcknowledgementOutcome,
+    ContentAcknowledgementPolicy, ContentStrongFallback, PublicationAcknowledgement,
 };
 pub use adapter::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,

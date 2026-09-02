@@ -19,11 +19,11 @@ use meshspan_domain::{
     RandomSource, Revision, TargetId, Topology, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
-    CompletedStage, ContentAcknowledgementClass, ContentChunkLimits, ContentPublicationRequest,
-    ContentReadError, ContentReadRequest, ContentShardRouter, DurableContentPublisher,
-    DurableContentReader, ProtectedContentAccess, ProtectedContentPublisher,
-    ProtectionConfiguration, ProtectionPolicySource, PublishedContentReference,
-    VolumeContentKeyring, VolumeKeyEncryptionKey,
+    CompletedStage, ContentAcknowledgementClass, ContentAcknowledgementPolicy, ContentChunkLimits,
+    ContentPublicationRequest, ContentReadError, ContentReadRequest, ContentShardRouter,
+    ContentStrongFallback, DurableContentPublisher, DurableContentReader, ProtectedContentAccess,
+    ProtectedContentPublisher, ProtectionConfiguration, ProtectionPolicySource,
+    PublishedContentReference, VolumeContentKeyring, VolumeKeyEncryptionKey,
 };
 use meshspan_placement::FaultAwarePlacement;
 use meshspan_storage::{
@@ -130,7 +130,7 @@ fn six_machines_keep_exact_bytes_after_combined_loss_and_cell_isolation()
     assert!(strict_stripe.stripe.coding_layout().recovery_slices() >= 7);
     let strict_acknowledgement = strict.acknowledgement_evidence(strict_request)?;
     assert_eq!(
-        strict_acknowledgement.class,
+        strict_acknowledgement.acknowledged_class,
         ContentAcknowledgementClass::Strong
     );
     assert_eq!(
@@ -241,7 +241,11 @@ fn campus_fixture(
         6,
         4,
         cell_requirements.clone(),
-        ContentAcknowledgementClass::Strong,
+        ContentAcknowledgementPolicy {
+            class: ContentAcknowledgementClass::Strong,
+            strong_wait: None,
+            fallback: ContentStrongFallback::RemainPending,
+        },
     )?;
     let cell_availability = ProtectionConfiguration::from_policy_snapshot(
         topology,

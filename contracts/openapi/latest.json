@@ -866,6 +866,36 @@
                 "pattern": "^[0-9a-f]{64}$",
                 "type": "string"
               },
+              "acknowledged_consistency": {
+                "description": "Consistency class actually reached by this successful acknowledgement.",
+                "oneOf": [
+                  {
+                    "const": "eventual",
+                    "description": "Commit a durable branch and reconcile wider promises automatically.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "strong",
+                    "description": "Wait for declared predicates and a globally converged metadata commit.",
+                    "type": "string"
+                  }
+                ]
+              },
+              "configured_consistency": {
+                "description": "Consistency class selected by the immutable policy snapshot.",
+                "oneOf": [
+                  {
+                    "const": "eventual",
+                    "description": "Commit a durable branch and reconcile wider promises automatically.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "strong",
+                    "description": "Wait for declared predicates and a globally converged metadata commit.",
+                    "type": "string"
+                  }
+                ]
+              },
               "durability_scope": {
                 "description": "Honest durability scope reached by this publication.",
                 "oneOf": [
@@ -891,6 +921,10 @@
                 "maximum": 9007199254740991,
                 "minimum": 0,
                 "type": "integer"
+              },
+              "fallback_applied": {
+                "description": "True only when an explicit strong-policy eventual fallback was applied.",
+                "type": "boolean"
               },
               "pending_debt_blake3": {
                 "description": "BLAKE3 digest binding the exact non-blocking shard debt at acknowledgement.",
@@ -924,6 +958,9 @@
               }
             },
             "required": [
+              "configured_consistency",
+              "acknowledged_consistency",
+              "fallback_applied",
               "durability_scope",
               "policy_committed",
               "required_shard_receipts",

@@ -264,8 +264,11 @@ impl NativeUploadController for TestController {
         serde_json::from_value(serde_json::json!({
             "acknowledgement": {
                 "achieved_protection_blake3": "b".repeat(64),
-                "durability_scope": "cell_replicated",
+                "acknowledged_consistency": "strong",
+                "configured_consistency": "strong",
+                "durability_scope": "globally_converged",
                 "eventual_shard_receipts": 1,
+                "fallback_applied": false,
                 "pending_debt_blake3": "c".repeat(64),
                 "pending_eventual_shards": 2,
                 "policy_committed": true,

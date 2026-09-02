@@ -37,7 +37,9 @@ const PERMIT_KEY: [u8; 32] = [42; 32];
 
 fn test_acknowledgement() -> ContentAcknowledgementEvidence {
     ContentAcknowledgementEvidence {
-        class: ContentAcknowledgementClass::Eventual,
+        configured_class: ContentAcknowledgementClass::Eventual,
+        acknowledged_class: ContentAcknowledgementClass::Eventual,
+        fallback_applied: false,
         content_scope: DurabilityScope::NodeLocal,
         required_shard_receipts: 1,
         eventual_shard_receipts: 0,

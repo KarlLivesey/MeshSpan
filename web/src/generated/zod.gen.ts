@@ -436,12 +436,21 @@ export const zCommitUploadResponse = z
           .string()
           .length(64)
           .regex(/^[0-9a-f]{64}$/),
+        acknowledged_consistency: z.union([
+          z.literal("eventual"),
+          z.literal("strong"),
+        ]),
+        configured_consistency: z.union([
+          z.literal("eventual"),
+          z.literal("strong"),
+        ]),
         durability_scope: z.union([
           z.literal("node_local"),
           z.literal("cell_replicated"),
           z.literal("globally_converged"),
         ]),
         eventual_shard_receipts: z.int().gte(0).lte(9007199254740991),
+        fallback_applied: z.boolean(),
         pending_debt_blake3: z
           .string()
           .length(64)

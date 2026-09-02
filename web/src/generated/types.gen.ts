@@ -436,6 +436,14 @@ export type CommitUploadResponse = {
      */
     achieved_protection_blake3: string;
     /**
+     * Consistency class actually reached by this successful acknowledgement.
+     */
+    acknowledged_consistency: "eventual" | "strong";
+    /**
+     * Consistency class selected by the immutable policy snapshot.
+     */
+    configured_consistency: "eventual" | "strong";
+    /**
      * Honest durability scope reached by this publication.
      */
     durability_scope: "node_local" | "cell_replicated" | "globally_converged";
@@ -443,6 +451,10 @@ export type CommitUploadResponse = {
      * Number of non-blocking shard placements already completed.
      */
     eventual_shard_receipts: number;
+    /**
+     * True only when an explicit strong-policy eventual fallback was applied.
+     */
+    fallback_applied: boolean;
     /**
      * BLAKE3 digest binding the exact non-blocking shard debt at acknowledgement.
      */
