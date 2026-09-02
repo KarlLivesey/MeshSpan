@@ -186,6 +186,10 @@ pub enum AuthoritativeCommand {
     AssignVolumeAcknowledgementPolicy(AssignVolumeAcknowledgementPolicy),
     /// Creates or coalesces one durable maintenance job from exact health evidence.
     QueueMaintenanceWork(QueueMaintenanceWork),
+    /// Excludes one target generation from new writes and atomically queues its evacuation.
+    BeginStorageTargetDrain(BeginStorageTargetDrain),
+    /// Records one gateway's exact empty-catalogue proof for a draining target.
+    AttestStorageTargetDrain(AttestStorageTargetDrain),
     /// Fences one eligible worker's bounded lease over a ready maintenance job.
     ClaimMaintenanceWork(ClaimMaintenanceWork),
     /// Extends the same live claim without changing its fence or assignment.
@@ -359,6 +363,8 @@ impl AuthoritativeCommand {
             Self::CreateAcknowledgementPolicy(value) => value.update_digest(digest),
             Self::AssignVolumeAcknowledgementPolicy(value) => value.update_digest(digest),
             Self::QueueMaintenanceWork(value) => value.update_digest(digest),
+            Self::BeginStorageTargetDrain(value) => value.update_digest(digest),
+            Self::AttestStorageTargetDrain(value) => value.update_digest(digest),
             Self::ClaimMaintenanceWork(value) => value.update_digest(digest),
             Self::RenewMaintenanceWork(value) => value.update_digest(digest),
             Self::CompleteMaintenanceWork(value) => value.update_digest(digest),
@@ -1936,6 +1942,41 @@ pub struct QueueMaintenanceWork {
     pub next_attempt_at: UnixMicros,
 }
 
+/// Atomic transition from writable target to durable resumable evacuation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BeginStorageTargetDrain {
+    /// Exact target-drain work; its subject must name the same live target generation.
+    pub work: QueueMaintenanceWork,
+    /// Allows safe removal once bytes remain recoverable even if desired protection is temporarily
+    /// below policy. This never permits data loss.
+    pub allow_temporary_degraded: bool,
+    /// Requests physical cleanup only after authority commits safe-to-detach evidence.
+    pub cleanup_requested: bool,
+}
+
+/// One snapshotted gateway's claim-bound proof that a draining target has no current routes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AttestStorageTargetDrain {
+    /// Drain job whose participant snapshot contains this gateway.
+    pub work_id: WorkId,
+    /// Live claim generation fencing this evacuation attempt.
+    pub claim_generation: u64,
+    /// Exact gateway producing the local catalogue proof.
+    pub worker_node_id: NodeId,
+    /// Current gateway incarnation; stale processes cannot attest.
+    pub worker_incarnation: u64,
+    /// Unpredictable claim fence committed by this worker.
+    pub fence: u64,
+    /// Draining target bound into the work subject.
+    pub target_id: TargetId,
+    /// Exact target incarnation being removed from authority.
+    pub target_generation: u64,
+    /// Metadata revision caught up before the gateway performed its empty-catalogue scan.
+    pub observed_authority_revision: Revision,
+    /// Canonical digest proving an empty current-route catalogue for this target generation.
+    pub empty_catalogue_digest: [u8; 32],
+}
+
 /// One new fenced execution attempt over a durable maintenance job.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClaimMaintenanceWork {
@@ -3259,6 +3300,30 @@ digest_simple_record!(
         digest.optional_instant(value.signals.due_at);
         digest.unsigned(value.demand.in_flight_bytes);
         digest.signed(value.next_attempt_at.get());
+    }
+);
+digest_simple_record!(
+    BeginStorageTargetDrain,
+    b"begin-storage-target-drain",
+    |value, digest| {
+        value.work.update_digest(digest);
+        digest.boolean(value.allow_temporary_degraded);
+        digest.boolean(value.cleanup_requested);
+    }
+);
+digest_simple_record!(
+    AttestStorageTargetDrain,
+    b"attest-storage-target-drain",
+    |value, digest| {
+        digest.identifier(value.work_id.as_bytes());
+        digest.unsigned(value.claim_generation);
+        digest.identifier(value.worker_node_id.as_bytes());
+        digest.unsigned(value.worker_incarnation);
+        digest.unsigned(value.fence);
+        digest.identifier(value.target_id.as_bytes());
+        digest.unsigned(value.target_generation);
+        digest.unsigned(value.observed_authority_revision.get());
+        digest.bytes(&value.empty_catalogue_digest);
     }
 );
 digest_simple_record!(

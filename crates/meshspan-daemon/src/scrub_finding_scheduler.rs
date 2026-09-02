@@ -258,7 +258,7 @@ where
     }
 }
 
-fn deduplication_key(
+pub(crate) fn deduplication_key(
     subject: WorkSubject,
     cycle_domain: Option<&[u8]>,
     observed_at: UnixMicros,

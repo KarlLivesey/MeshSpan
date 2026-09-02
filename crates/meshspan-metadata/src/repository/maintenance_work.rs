@@ -13,6 +13,7 @@ use crate::{
     CompleteMaintenanceWork, MaintenanceWorkCompletion, QueueMaintenanceWork, RenewMaintenanceWork,
 };
 
+mod drain;
 mod repair;
 mod scrub;
 mod scrub_schedule;
@@ -21,12 +22,17 @@ pub use repair::ShardRepairEffectRecord;
 pub use scrub::ScrubPassEffectRecord;
 pub use scrub_schedule::{DueStorageScrub, DueStorageScrubCursor, DueStorageScrubPage};
 
+pub use drain::empty_target_drain_catalogue_digest;
+pub(super) use drain::{attest_target, begin_target};
+
 const JOB_QUEUED: i64 = 1;
 const JOB_CLAIMED: i64 = 2;
 const JOB_COMPLETE: i64 = 3;
 const CLAIM_ACTIVE: i64 = 1;
 const CLAIM_SUPERSEDED: i64 = 2;
 const CLAIM_COMPLETE: i64 = 3;
+const DRAIN_PARTICIPANT_PENDING: i64 = 1;
+const DRAIN_PARTICIPANT_ATTESTED: i64 = 2;
 const ACTIVE_NODE: i64 = 2;
 const MAXIMUM_LEASE_MICROS: i64 = 15 * 60 * 1_000_000;
 const MAXIMUM_READY_PAGE_ITEMS: usize = 1_000;
@@ -36,9 +42,9 @@ const MAXIMUM_READY_PAGE_ITEMS: usize = 1_000;
 // successful work from an unrelated operation receipt.
 const REPAIR_EFFECT_KIND: i64 = 105;
 const SCRUB_EFFECT_KIND: i64 = 106;
-const DRAIN_EFFECT_KIND: i64 = 107;
-const REBALANCE_EFFECT_KIND: i64 = 108;
-const RECONCILE_EFFECT_KIND: i64 = 109;
+const DRAIN_EFFECT_KIND: i64 = 108;
+const REBALANCE_EFFECT_KIND: i64 = 109;
+const RECONCILE_EFFECT_KIND: i64 = 110;
 
 /// Durable lifecycle of one deduplicated maintenance job.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -185,6 +191,45 @@ impl AuthoritativeRepository {
         effect_reference(self.database.connection(), work_id)
     }
 
+    /// Returns whether this exact snapshotted gateway still owes a target-drain attestation.
+    ///
+    /// Nodes outside the immutable participant set and already-attested participants return
+    /// `false`; malformed drain or participant rows fail closed.
+    ///
+    /// # Errors
+    ///
+    /// Rejects corrupt work subjects, participant state and SQLite failures.
+    pub fn target_drain_attestation_pending(
+        &self,
+        work_id: WorkId,
+        node_id: NodeId,
+    ) -> Result<bool, RepositoryError> {
+        let Some(job) = load_record(self.database.connection(), work_id)? else {
+            return Ok(false);
+        };
+        if !matches!(
+            job.subject,
+            WorkSubject::Drain(meshspan_work::DrainScope::Target { .. })
+        ) {
+            return Err(RepositoryError::InvalidCommand);
+        }
+        let state = self
+            .database
+            .connection()
+            .query_row(
+                "SELECT state FROM storage_target_drain_participants
+                 WHERE work_id = ?1 AND node_id = ?2",
+                params![work_id.as_bytes().as_slice(), node_id.as_bytes().as_slice()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        match state {
+            None | Some(DRAIN_PARTICIPANT_ATTESTED) => Ok(false),
+            Some(DRAIN_PARTICIPANT_PENDING) => Ok(true),
+            Some(_) => Err(RepositoryError::CorruptState),
+        }
+    }
+
     /// Returns local active target generations whose last complete scrub is overdue.
     ///
     /// A never-scrubbed generation becomes due relative to its authoritative admission time.
@@ -224,7 +269,8 @@ fn effect_reference(
     let (table, expected_kind) = match job.subject.kind() {
         WorkKind::Repair => ("maintenance_repair_effects", REPAIR_EFFECT_KIND),
         WorkKind::Scrub => ("maintenance_scrub_effects", SCRUB_EFFECT_KIND),
-        WorkKind::Drain | WorkKind::Rebalance | WorkKind::Reconcile => return Ok(None),
+        WorkKind::Drain => ("storage_target_drain_effects", DRAIN_EFFECT_KIND),
+        WorkKind::Rebalance | WorkKind::Reconcile => return Ok(None),
     };
     let sql = format!(
         "SELECT effect.effect_operation_id, operation.revision, operation.result_digest,
@@ -771,7 +817,18 @@ fn validate_effect(
                 |row| row.get::<_, i64>(0),
             )? == 1
         }
-        WorkKind::Drain | WorkKind::Rebalance | WorkKind::Reconcile => false,
+        WorkKind::Drain => {
+            transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM storage_target_drain_effects
+                 WHERE effect_operation_id = ?1 AND work_id = ?2)",
+                params![
+                    operation_id.as_bytes().as_slice(),
+                    work_id.as_bytes().as_slice(),
+                ],
+                |row| row.get::<_, i64>(0),
+            )? == 1
+        }
+        WorkKind::Rebalance | WorkKind::Reconcile => false,
     };
     if operation_matches && effect_matches {
         Ok(())

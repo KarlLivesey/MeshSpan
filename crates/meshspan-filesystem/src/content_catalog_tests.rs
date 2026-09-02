@@ -302,31 +302,7 @@ fn protected_layout_import_replays_exact_pages_and_receipts()
 fn scrub_identity_resolves_only_the_current_protected_shard_route()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
-    let (request, stripe) = protected_fixture()?;
-    let mut catalog = DurableContentCatalog::open(directory.path(), UnixMicros::new(1))?;
-    catalog.begin(request)?;
-    catalog.append_protected_stripes(request, std::slice::from_ref(&stripe))?;
-    let manifest = catalog.seal_layout(
-        request,
-        CompletedStage {
-            logical_length: 2,
-            content_digest: [9; 32],
-        },
-        2,
-        wrapped_key()?,
-    )?;
-    for (cursor, planned) in catalog
-        .pending_protected_shards(request, None, 10)?
-        .shards
-        .as_slice()
-    {
-        catalog.record_protected_receipt(
-            request,
-            protected_receipt(manifest.root_digest, *cursor, *planned),
-            UnixMicros::new(3),
-        )?;
-    }
-    catalog.finish(request, UnixMicros::new(4))?;
+    let (mut catalog, request, stripe, manifest) = committed_protected_catalog(directory.path())?;
 
     let source = protected_receipt(
         manifest.root_digest,
@@ -387,6 +363,130 @@ fn scrub_identity_resolves_only_the_current_protected_shard_route()
     assert_eq!(current.source_layout_generation, 2);
     assert_eq!(current.source_receipt, replacement);
     Ok(())
+}
+
+#[test]
+fn target_inventory_follows_current_routes_and_rejects_invalid_pages()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let (mut catalog, request, stripe, manifest) = committed_protected_catalog(directory.path())?;
+
+    let source = protected_receipt(
+        manifest.root_digest,
+        ProtectedShardCursor {
+            chunk_index: 0,
+            shard_index: 1,
+        },
+        stripe.shards()[1],
+    );
+    let original =
+        catalog.current_target_shards(source.target_id, source.target_generation, None, 1)?;
+    assert_eq!(original.routes.len(), 1);
+    assert_eq!(original.next, None);
+    assert_eq!(
+        original.routes.as_slice()[0].candidate.source_receipt,
+        source
+    );
+    assert_eq!(
+        original.routes.as_slice()[0]
+            .cursor
+            .publication_operation_id,
+        request.operation_id
+    );
+
+    let replacement = ShardReceipt {
+        operation_id: OperationId::from_bytes([98; 16])?,
+        target_id: TargetId::from_bytes([97; 16])?,
+        target_generation: 3,
+        ..source
+    };
+    let content = PublishedContentReference {
+        publication_operation_id: request.operation_id,
+        manifest,
+    };
+    catalog.install_shard_repair(
+        content,
+        &ShardRepairTransition {
+            effect_operation_id: OperationId::from_bytes([96; 16])?,
+            source_layout_generation: 1,
+            replacement_layout_generation: 2,
+            source_receipt: source,
+            replacement_receipt: replacement,
+            committed_revision: Revision::new(7),
+        },
+    )?;
+    assert!(
+        catalog
+            .current_target_shards(source.target_id, source.target_generation, None, 10)?
+            .routes
+            .is_empty()
+    );
+    let moved = catalog.current_target_shards(
+        replacement.target_id,
+        replacement.target_generation,
+        None,
+        10,
+    )?;
+    assert_eq!(moved.routes.len(), 1);
+    assert_eq!(
+        moved.routes.as_slice()[0]
+            .candidate
+            .source_layout_generation,
+        2
+    );
+    assert_eq!(
+        moved.routes.as_slice()[0].candidate.source_receipt,
+        replacement
+    );
+    assert!(matches!(
+        catalog.current_target_shards(
+            replacement.target_id,
+            replacement.target_generation,
+            None,
+            0
+        ),
+        Err(ContentCatalogError::InvalidInput)
+    ));
+    Ok(())
+}
+
+fn committed_protected_catalog(
+    directory: &std::path::Path,
+) -> Result<
+    (
+        DurableContentCatalog,
+        ContentPublicationRequest,
+        PreparedProtectedStripe,
+        crate::ManifestPublication,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    let (request, stripe) = protected_fixture()?;
+    let mut catalog = DurableContentCatalog::open(directory, UnixMicros::new(1))?;
+    catalog.begin(request)?;
+    catalog.append_protected_stripes(request, std::slice::from_ref(&stripe))?;
+    let manifest = catalog.seal_layout(
+        request,
+        CompletedStage {
+            logical_length: 2,
+            content_digest: [9; 32],
+        },
+        2,
+        wrapped_key()?,
+    )?;
+    for (cursor, planned) in catalog
+        .pending_protected_shards(request, None, 10)?
+        .shards
+        .as_slice()
+    {
+        catalog.record_protected_receipt(
+            request,
+            protected_receipt(manifest.root_digest, *cursor, *planned),
+            UnixMicros::new(3),
+        )?;
+    }
+    catalog.finish(request, UnixMicros::new(4))?;
+    Ok((catalog, request, stripe, manifest))
 }
 
 fn protected_fixture()

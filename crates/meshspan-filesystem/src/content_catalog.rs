@@ -21,6 +21,7 @@ mod transfer;
 pub use protection::{
     CommittedProtectedStripe, PendingProtectedShardPage, PreparedProtectedShard,
     PreparedProtectedStripe, ProtectedShardCursor, ShardRepairCandidate, ShardRepairTransition,
+    TargetShardCursor, TargetShardPage, TargetShardRoute,
 };
 pub use transfer::CommittedContentLayoutTransfer;
 

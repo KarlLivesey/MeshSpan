@@ -281,7 +281,7 @@ impl StorageTargetRegistrationAuthority for ConsensusAuthenticationAuthority {
         StorageTargetRegistrationAuthorityError,
     > {
         self.reader()
-            .storage_target_provider_context(node_id, target_id)
+            .readable_storage_target_provider_context(node_id, target_id)
             .map_err(StorageTargetRegistrationAuthorityError::from)
     }
 }

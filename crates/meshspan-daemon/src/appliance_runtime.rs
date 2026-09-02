@@ -88,23 +88,24 @@ use crate::{
     SmbServerLimits, StepUpCurrentSessionApiError, StepUpCurrentSessionService,
     StorageFolderAdministrationApiError, StorageFolderAdministrationService,
     StoragePermitLoadingService, StorageProviderOpeningError, StorageProviderOpeningService,
-    StorageTargetRegistrationService, TopologyAdministrationApiError,
+    StorageTargetRegistrationService, TargetDrainExecution, TopologyAdministrationApiError,
     TopologyAdministrationService, TotpRegistrationApiError, TotpRegistrationConfiguration,
     TotpRegistrationConfigurationError, TotpRegistrationService, VolumeAdministrationApiError,
     VolumeAdministrationService, VolumeInventoryApiError, VolumeInventoryService,
     api_key_issuance_api_router, authentication_method_listing_api_router,
     authentication_method_revocation_api_router, classify_native_filesystem_error,
     current_session_api_router, directory_listing_api_router, execute_resumable_storage_scrub,
-    execute_shard_repair, file_read_api_router, identity_administration_api_router,
-    native_namespace_mutation_api_router, native_upload_api_router, node_enrolment_api_router,
-    node_join_grant_api_router, object_stat_api_router, operation_status_api_router,
-    passkey_challenge_api_router, passkey_registration_api_router,
-    permission_administration_api_router, public_contract_api_router,
-    recovery_bundle_verification_api_router, recovery_code_issuance_api_router,
-    revoke_current_session_api_router, session_api_router, setup_api_router_with_mutations,
-    smb_export_administration_api_router, step_up_current_session_api_router,
-    storage_folder_administration_api_router, topology_administration_api_router,
-    totp_registration_api_router, volume_administration_api_router, volume_inventory_api_router,
+    execute_shard_repair, execute_target_drain_step, file_read_api_router,
+    identity_administration_api_router, native_namespace_mutation_api_router,
+    native_upload_api_router, node_enrolment_api_router, node_join_grant_api_router,
+    object_stat_api_router, operation_status_api_router, passkey_challenge_api_router,
+    passkey_registration_api_router, permission_administration_api_router,
+    public_contract_api_router, recovery_bundle_verification_api_router,
+    recovery_code_issuance_api_router, revoke_current_session_api_router, session_api_router,
+    setup_api_router_with_mutations, smb_export_administration_api_router,
+    step_up_current_session_api_router, storage_folder_administration_api_router,
+    topology_administration_api_router, totp_registration_api_router,
+    volume_administration_api_router, volume_inventory_api_router,
 };
 
 mod storage_folder_backend;
@@ -127,6 +128,8 @@ const SCRUB_PAGE_ITEMS: usize = 32;
 const SCRUB_PAGE_IN_FLIGHT_BYTES: u64 =
     SCRUB_PAGE_ITEMS as u64 * crate::native_filesystem_runtime::MAXIMUM_NATIVE_SHARD_BYTES as u64;
 const MAINTENANCE_LEASE_MICROS: u64 = 5 * 60 * 1_000_000;
+const DRAIN_ROUTE_ITEMS: usize = 1;
+const DRAIN_RETRY_MICROS: u64 = 1_000_000;
 
 type AuthorityTask = (
     MetadataAuthorityHandle,
@@ -2029,6 +2032,7 @@ impl StorageTargetRuntime {
     fn run_maintenance_tick(&mut self, now: UnixMicros) -> Result<(), ()> {
         self.admit_periodic_scrubs(now)?;
         self.execute_one_repair(now)?;
+        self.execute_one_target_drain(now)?;
         self.execute_one_scrub_page(now)
     }
 
@@ -2209,6 +2213,44 @@ impl StorageTargetRuntime {
             .map_err(|_| ())
     }
 
+    fn execute_one_target_drain(&mut self, now: UnixMicros) -> Result<(), ()> {
+        let Some(assignment) = self.next_maintenance_assignment(now, WorkKind::Drain)? else {
+            return Ok(());
+        };
+        let reader = self.maintenance_authority.reader();
+        let owes_attestation = reader
+            .target_drain_attestation_pending(assignment.work_id, self.local_node_id)
+            .map_err(|_| ())?;
+        let completion_recovery = reader
+            .maintenance_effect_reference(assignment.work_id)
+            .map_err(|_| ())?
+            .is_some();
+        if !owes_attestation && !completion_recovery {
+            return Ok(());
+        }
+        let observed_authority_revision = reader.current_revision().map_err(|_| ())?;
+        let catalogue = self
+            .native_filesystem
+            .maintenance_catalogue(now)
+            .map_err(|_| ())?;
+        let actor = self.maintenance_actor(now)?;
+        let execution = maintenance_target_drain_execution(
+            assignment,
+            self.local_node_id,
+            actor,
+            observed_authority_revision,
+            now,
+        )?;
+        execute_target_drain_step(
+            &self.maintenance_authority,
+            &catalogue,
+            &mut OperatingSystemRandom,
+            &execution,
+        )
+        .map(|_| ())
+        .map_err(|_| ())
+    }
+
     fn next_maintenance_assignment(
         &self,
         now: UnixMicros,
@@ -2327,6 +2369,54 @@ fn maintenance_scrub_execution(
         target_generation,
         page_items: SCRUB_PAGE_ITEMS,
         observed_at: now,
+        continuation_at,
+    })
+}
+
+fn maintenance_target_drain_execution(
+    assignment: crate::MaintenanceDispatchAssignment,
+    worker_node_id: NodeId,
+    actor_principal_id: PrincipalId,
+    observed_authority_revision: Revision,
+    now: UnixMicros,
+) -> Result<TargetDrainExecution, ()> {
+    if !matches!(
+        assignment.subject,
+        WorkSubject::Drain(meshspan_work::DrainScope::Target { .. })
+    ) {
+        return Err(());
+    }
+    let lease_expires_at = now
+        .checked_add(DurationMicros::new(MAINTENANCE_LEASE_MICROS))
+        .ok_or(())?;
+    let continuation_at = now
+        .checked_add(DurationMicros::new(DRAIN_RETRY_MICROS))
+        .ok_or(())?;
+    let mut random = OperatingSystemRandom;
+    let claim_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
+    let attestation_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
+    let completion_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
+    let mut fence_bytes = [0_u8; 8];
+    random.fill_bytes(&mut fence_bytes).map_err(|_| ())?;
+    let fence = u64::from_be_bytes(fence_bytes);
+    if fence == 0 {
+        return Err(());
+    }
+    Ok(TargetDrainExecution {
+        claim_context,
+        attestation_context,
+        completion_context,
+        claim: ClaimMaintenanceWork {
+            work_id: assignment.work_id,
+            claim_generation: assignment.claim_generation,
+            worker_node_id,
+            worker_incarnation: 1,
+            fence,
+            lease_expires_at,
+        },
+        subject: assignment.subject,
+        route_limit: DRAIN_ROUTE_ITEMS,
+        observed_authority_revision,
         continuation_at,
     })
 }
