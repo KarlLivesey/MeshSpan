@@ -11,6 +11,7 @@ mod create;
 mod direct_tcp;
 mod file_id;
 mod file_io;
+mod filesystem_adapter;
 mod header;
 mod negotiate;
 mod negotiate_response;
@@ -36,6 +37,10 @@ pub use direct_tcp::{
 };
 pub use file_id::SmbFileId;
 pub use file_io::{ReadRequest, ReadResponse, SmbFileIoError, WriteRequest, WriteResponse};
+pub use filesystem_adapter::{
+    SmbCreateOutcome, SmbFilesystemAdapter, SmbFilesystemAdapterError, SmbFilesystemLimits,
+    SmbTreeBinding,
+};
 pub use header::{Smb2Command, Smb2Header, Smb2HeaderError};
 pub use negotiate::{
     NegotiateContext, NegotiateContextType, NegotiateRequest, NegotiateRequestError,

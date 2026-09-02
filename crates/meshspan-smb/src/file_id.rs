@@ -3,7 +3,7 @@
 //! Connection-visible SMB file identity.
 
 /// Exact 128-bit `SMB2_FILEID` assigned to one open handle.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SmbFileId {
     persistent: u64,
     volatile: u64,
