@@ -87,7 +87,8 @@ use crate::{
     SessionApiError, SetupApiError, SetupLifecycleError, SetupStateSnapshot, SetupStatusSource,
     ShardRepairExecution, SmbExportAdministrationApiError, SmbExportAdministrationService,
     SmbServer, SmbServerConfigurationError, SmbServerError, SmbServerLimits,
-    StepUpCurrentSessionApiError, StepUpCurrentSessionService, StorageFolderAdministrationApiError,
+    StepUpCurrentSessionApiError, StepUpCurrentSessionService, StorageDrainAdministrationApiError,
+    StorageDrainAdministrationService, StorageFolderAdministrationApiError,
     StorageFolderAdministrationService, StoragePermitLoadingService, StorageProviderOpeningError,
     StorageProviderOpeningService, StorageTargetRegistrationService, TargetDrainExecution,
     TopologyAdministrationApiError, TopologyAdministrationService, TotpRegistrationApiError,
@@ -105,9 +106,9 @@ use crate::{
     public_contract_api_router, recovery_bundle_verification_api_router,
     recovery_code_issuance_api_router, revoke_current_session_api_router, session_api_router,
     setup_api_router_with_mutations, smb_export_administration_api_router,
-    step_up_current_session_api_router, storage_folder_administration_api_router,
-    topology_administration_api_router, totp_registration_api_router,
-    volume_administration_api_router, volume_inventory_api_router,
+    step_up_current_session_api_router, storage_drain_administration_api_router,
+    storage_folder_administration_api_router, topology_administration_api_router,
+    totp_registration_api_router, volume_administration_api_router, volume_inventory_api_router,
 };
 
 mod storage_folder_backend;
@@ -1290,6 +1291,17 @@ fn resource_administration_routes(
                     now,
                 )?,
                 storage_targets,
+                gateway,
+            ),
+        )?)
+        .merge(storage_drain_administration_api_router(
+            StorageDrainAdministrationService::new(
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
                 gateway,
             ),
         )?)
@@ -3085,6 +3097,9 @@ pub enum DaemonProcessError {
     /// Manager-only local storage-folder API construction failed.
     #[error("daemon storage-folder administration API failed")]
     StorageFolderAdministrationApi(#[from] StorageFolderAdministrationApiError),
+    /// Storage-drain administration routes could not be constructed.
+    #[error("storage-drain administration API failed")]
+    StorageDrainAdministrationApi(#[from] StorageDrainAdministrationApiError),
     /// Manager-only mesh-topology API construction failed.
     #[error("daemon topology administration API failed")]
     TopologyAdministrationApi(#[from] TopologyAdministrationApiError),

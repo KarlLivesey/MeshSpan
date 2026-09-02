@@ -210,6 +210,7 @@ pub use maintenance_work::{
     DueStorageScrub, DueStorageScrubCursor, DueStorageScrubPage, MaintenanceEffectReference,
     MaintenanceWorkClaim, MaintenanceWorkCursor, MaintenanceWorkRecord, MaintenanceWorkState,
     ReadyMaintenanceWork, ReadyMaintenanceWorkPage, RebalanceScanProgress, ShardRepairEffectRecord,
+    StorageDrainCursor, StorageDrainRecord, StorageDrainState, StorageDrainStatusPage,
     StorageScopeDrainAction, StorageScopeDrainCursor, StorageScopeDrainRecord,
     StorageScopeDrainState, empty_target_drain_catalogue_digest,
 };

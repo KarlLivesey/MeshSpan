@@ -297,6 +297,141 @@ export const zAssignVolumeProtectionPolicyResponse = z
   .strict();
 
 /**
+ * BeginStorageDrainRequest
+ *
+ * Exact-retry request to start one safe storage drain.
+ */
+export const zBeginStorageDrainRequest = z
+  .strictObject({
+    allow_temporary_degraded: z.boolean(),
+    cleanup_requested: z.boolean(),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    scope: z.union([
+      z
+        .strictObject({
+          generation: z
+            .string()
+            .min(1)
+            .max(20)
+            .regex(/^[1-9][0-9]{0,19}$/),
+          kind: z.literal("target"),
+          target_id: z
+            .string()
+            .length(36)
+            .regex(/^[0-9a-f-]{36}$/),
+        })
+        .strict(),
+      z
+        .strictObject({
+          incarnation: z
+            .string()
+            .min(1)
+            .max(20)
+            .regex(/^[1-9][0-9]{0,19}$/),
+          kind: z.literal("node"),
+          node_id: z
+            .string()
+            .length(36)
+            .regex(/^[0-9a-f-]{36}$/),
+        })
+        .strict(),
+      z
+        .strictObject({
+          fault_group_id: z
+            .string()
+            .length(36)
+            .regex(/^[0-9a-f-]{36}$/),
+          kind: z.literal("fault_group"),
+        })
+        .strict(),
+    ]),
+  })
+  .strict();
+
+/**
+ * BeginStorageDrainResponse
+ *
+ * Durable result returned after drain admission.
+ */
+export const zBeginStorageDrainResponse = z
+  .strictObject({
+    drain: z
+      .strictObject({
+        allow_temporary_degraded: z.boolean(),
+        cleanup_requested: z.boolean(),
+        drain_id: z
+          .string()
+          .length(36)
+          .regex(/^[0-9a-f-]{36}$/),
+        requested_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+        revision: z.int().gte(1).lte(9007199254740991),
+        safe_at_epoch_micros: z.int().gte(0).lte(9007199254740991).nullable(),
+        scope: z.union([
+          z
+            .strictObject({
+              generation: z
+                .string()
+                .min(1)
+                .max(20)
+                .regex(/^[1-9][0-9]{0,19}$/),
+              kind: z.literal("target"),
+              target_id: z
+                .string()
+                .length(36)
+                .regex(/^[0-9a-f-]{36}$/),
+            })
+            .strict(),
+          z
+            .strictObject({
+              incarnation: z
+                .string()
+                .min(1)
+                .max(20)
+                .regex(/^[1-9][0-9]{0,19}$/),
+              kind: z.literal("node"),
+              node_id: z
+                .string()
+                .length(36)
+                .regex(/^[0-9a-f-]{36}$/),
+            })
+            .strict(),
+          z
+            .strictObject({
+              fault_group_id: z
+                .string()
+                .length(36)
+                .regex(/^[0-9a-f-]{36}$/),
+              kind: z.literal("fault_group"),
+            })
+            .strict(),
+        ]),
+        state: z.union([
+          z.literal("evacuating"),
+          z.literal("membership_fenced"),
+          z.literal("safe_to_detach"),
+        ]),
+        status_url: z
+          .string()
+          .min(1)
+          .max(512)
+          .regex(/^\/api\/latest\/admin\/storage-drains\//),
+      })
+      .strict(),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * BeginUploadRequest
  *
  * Starts one durable private upload session.
@@ -3224,6 +3359,92 @@ export const zListProtectionPoliciesResponse = z
   .strict();
 
 /**
+ * ListStorageDrainsResponse
+ *
+ * One current manager-only storage-drain page.
+ */
+export const zListStorageDrainsResponse = z
+  .strictObject({
+    drains: z
+      .array(
+        z
+          .strictObject({
+            allow_temporary_degraded: z.boolean(),
+            cleanup_requested: z.boolean(),
+            drain_id: z
+              .string()
+              .length(36)
+              .regex(/^[0-9a-f-]{36}$/),
+            requested_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+            revision: z.int().gte(1).lte(9007199254740991),
+            safe_at_epoch_micros: z
+              .int()
+              .gte(0)
+              .lte(9007199254740991)
+              .nullable(),
+            scope: z.union([
+              z
+                .strictObject({
+                  generation: z
+                    .string()
+                    .min(1)
+                    .max(20)
+                    .regex(/^[1-9][0-9]{0,19}$/),
+                  kind: z.literal("target"),
+                  target_id: z
+                    .string()
+                    .length(36)
+                    .regex(/^[0-9a-f-]{36}$/),
+                })
+                .strict(),
+              z
+                .strictObject({
+                  incarnation: z
+                    .string()
+                    .min(1)
+                    .max(20)
+                    .regex(/^[1-9][0-9]{0,19}$/),
+                  kind: z.literal("node"),
+                  node_id: z
+                    .string()
+                    .length(36)
+                    .regex(/^[0-9a-f-]{36}$/),
+                })
+                .strict(),
+              z
+                .strictObject({
+                  fault_group_id: z
+                    .string()
+                    .length(36)
+                    .regex(/^[0-9a-f-]{36}$/),
+                  kind: z.literal("fault_group"),
+                })
+                .strict(),
+            ]),
+            state: z.union([
+              z.literal("evacuating"),
+              z.literal("membership_fenced"),
+              z.literal("safe_to_detach"),
+            ]),
+            status_url: z
+              .string()
+              .min(1)
+              .max(512)
+              .regex(/^\/api\/latest\/admin\/storage-drains\//),
+          })
+          .strict(),
+      )
+      .max(200),
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\/admin\/storage-drains/)
+      .nullable(),
+  })
+  .strict();
+
+/**
  * ListStorageFoldersResponse
  *
  * Current manager-only page of local storage folders.
@@ -4266,6 +4487,74 @@ export const zStepUpCurrentSessionRequest = z
   .strict();
 
 /**
+ * StorageDrainSummary
+ *
+ * One current manager-visible storage drain.
+ */
+export const zStorageDrainSummary = z
+  .strictObject({
+    allow_temporary_degraded: z.boolean(),
+    cleanup_requested: z.boolean(),
+    drain_id: z
+      .string()
+      .length(36)
+      .regex(/^[0-9a-f-]{36}$/),
+    requested_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    revision: z.int().gte(1).lte(9007199254740991),
+    safe_at_epoch_micros: z.int().gte(0).lte(9007199254740991).nullable(),
+    scope: z.union([
+      z
+        .strictObject({
+          generation: z
+            .string()
+            .min(1)
+            .max(20)
+            .regex(/^[1-9][0-9]{0,19}$/),
+          kind: z.literal("target"),
+          target_id: z
+            .string()
+            .length(36)
+            .regex(/^[0-9a-f-]{36}$/),
+        })
+        .strict(),
+      z
+        .strictObject({
+          incarnation: z
+            .string()
+            .min(1)
+            .max(20)
+            .regex(/^[1-9][0-9]{0,19}$/),
+          kind: z.literal("node"),
+          node_id: z
+            .string()
+            .length(36)
+            .regex(/^[0-9a-f-]{36}$/),
+        })
+        .strict(),
+      z
+        .strictObject({
+          fault_group_id: z
+            .string()
+            .length(36)
+            .regex(/^[0-9a-f-]{36}$/),
+          kind: z.literal("fault_group"),
+        })
+        .strict(),
+    ]),
+    state: z.union([
+      z.literal("evacuating"),
+      z.literal("membership_fenced"),
+      z.literal("safe_to_detach"),
+    ]),
+    status_url: z
+      .string()
+      .min(1)
+      .max(512)
+      .regex(/^\/api\/latest\/admin\/storage-drains\//),
+  })
+  .strict();
+
+/**
  * UploadStatusResponse
  *
  * Common exact upload state returned after every lifecycle operation.
@@ -5162,6 +5451,58 @@ export const zWithdrawSmbExportPath = z
  * SMB export durably withdrawn or exactly replayed
  */
 export const zWithdrawSmbExportResponse2 = zWithdrawSmbExportResponse;
+
+export const zListStorageDrainsQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(200).optional(),
+  })
+  .strict();
+
+/**
+ * One newest-first storage-drain page
+ */
+export const zListStorageDrainsResponse2 = zListStorageDrainsResponse;
+
+/**
+ * Exact storage scope and safe-removal policy
+ */
+export const zBeginStorageDrainBody = zBeginStorageDrainRequest;
+
+export const zBeginStorageDrainHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Storage drain durably admitted
+ */
+export const zBeginStorageDrainResponse2 = zBeginStorageDrainResponse;
+
+export const zGetStorageDrainPath = z
+  .object({
+    drain_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Current authoritative drain state
+ */
+export const zGetStorageDrainResponse = zStorageDrainSummary;
 
 export const zListStorageFoldersQuery = z
   .object({

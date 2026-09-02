@@ -16,7 +16,7 @@ use crate::{
     BeginStorageTargetDrain, BootstrapMesh, ClaimMaintenanceWork, CommandContext,
     CompleteMaintenanceWork, CompleteStorageScopeDrain, CreateComponent, CreateFaultGroup,
     MaintenanceWorkCompletion, PartitionDatabase, QueueMaintenanceWork, RecordName,
-    RegisterStorageTarget, SetHostFaultGroupMembership, StorageScopeDrainAction,
+    RegisterStorageTarget, SetHostFaultGroupMembership, StorageDrainState, StorageScopeDrainAction,
     StorageScopeDrainState, StorageUsageLimit, empty_target_drain_catalogue_digest,
 };
 
@@ -39,6 +39,7 @@ struct ActiveTwoGatewayDrain {
 struct ActiveFaultGroupScopeDrain {
     fixture: Fixture,
     drain_id: WorkId,
+    group_id: FaultGroupId,
     target_id: TargetId,
 }
 
@@ -64,6 +65,7 @@ fn fault_group_drain_fences_writes_and_composes_a_real_target_drain()
     let ActiveFaultGroupScopeDrain {
         mut fixture,
         drain_id,
+        group_id,
         target_id,
     } = prepare_fault_group_scope_drain()?;
     assert_eq!(
@@ -119,6 +121,15 @@ fn fault_group_drain_fences_writes_and_composes_a_real_target_drain()
             safety_evidence_digest,
         }),
     )?;
+    assert_completed_scope_remains_fenced(&mut fixture, drain_id, group_id)?;
+    Ok(())
+}
+
+fn assert_completed_scope_remains_fenced(
+    fixture: &mut Fixture,
+    drain_id: WorkId,
+    group_id: FaultGroupId,
+) -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(
         fixture
             .repository
@@ -127,13 +138,31 @@ fn fault_group_drain_fences_writes_and_composes_a_real_target_drain()
             .state,
         StorageScopeDrainState::SafeToDetach
     );
+    let public_drain = fixture
+        .repository
+        .storage_drain(drain_id)?
+        .ok_or("unified drain record disappeared")?;
+    assert_eq!(public_drain.state, StorageDrainState::SafeToDetach);
+    assert_eq!(
+        public_drain.scope,
+        DrainScope::FaultGroup {
+            fault_group_id: group_id
+        }
+    );
+    let page = fixture
+        .repository
+        .storage_drains(None, super::PageLimit::new(2)?)?;
+    assert_eq!(page.items.len(), 2);
+    assert!(page.items[0].requested_at > page.items[1].requested_at);
+    assert_eq!(page.items[1], public_drain);
+    assert_eq!(page.next, None);
     let replacement = RegisterStorageTarget {
         target_id: TargetId::from_bytes([63; 16])?,
         name: RecordName::new("Unexpected replacement")?,
         marker_fingerprint: [64; 32],
         backing_device_fingerprint: Some([65; 32]),
         filesystem_fingerprint: Some([66; 32]),
-        ..target_value(&fixture, StorageUsageLimit::Percent(95))?
+        ..target_value(fixture, StorageUsageLimit::Percent(95))?
     };
     assert!(matches!(
         fixture.repository.apply_committed(
@@ -190,6 +219,7 @@ fn prepare_fault_group_scope_drain()
     Ok(ActiveFaultGroupScopeDrain {
         fixture,
         drain_id,
+        group_id,
         target_id: TargetId::from_bytes([40; 16])?,
     })
 }

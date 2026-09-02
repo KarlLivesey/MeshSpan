@@ -15,6 +15,7 @@ use crate::{
 };
 
 mod drain;
+mod drain_inventory;
 mod rebalance;
 mod reconcile;
 mod repair;
@@ -33,6 +34,9 @@ pub use scrub_schedule::{DueStorageScrub, DueStorageScrubCursor, DueStorageScrub
 
 pub use drain::empty_target_drain_catalogue_digest;
 pub(super) use drain::{attest_target, begin_target};
+pub use drain_inventory::{
+    StorageDrainCursor, StorageDrainRecord, StorageDrainState, StorageDrainStatusPage,
+};
 pub(super) use rebalance::commit_page as commit_rebalance_page;
 pub(super) use scope_drain::{
     begin as begin_scope, complete as complete_scope,
@@ -133,6 +137,31 @@ pub struct MaintenanceEffectReference {
 }
 
 impl AuthoritativeRepository {
+    /// Returns one exact target, node or fault-group drain.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when persisted scope, lifecycle or identity state is malformed.
+    pub fn storage_drain(
+        &self,
+        drain_id: WorkId,
+    ) -> Result<Option<StorageDrainRecord>, RepositoryError> {
+        drain_inventory::load(&self.database, drain_id)
+    }
+
+    /// Returns a newest-first page of every durable storage drain.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid bounds and malformed persisted drain state.
+    pub fn storage_drains(
+        &self,
+        after: Option<StorageDrainCursor>,
+        limit: super::PageLimit,
+    ) -> Result<StorageDrainStatusPage, RepositoryError> {
+        drain_inventory::page(&self.database, after, limit)
+    }
+
     /// Returns one independently validated node or fault-group drain.
     ///
     /// # Errors

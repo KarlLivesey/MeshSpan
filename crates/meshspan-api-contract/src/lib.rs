@@ -41,6 +41,8 @@ mod recovery_code_validation;
 mod schema;
 mod smb_export_administration;
 mod smb_export_administration_validation;
+mod storage_drain_administration;
+mod storage_drain_administration_validation;
 mod storage_folder_administration;
 mod storage_folder_administration_validation;
 mod topology_administration;
@@ -261,6 +263,16 @@ pub use smb_export_administration_validation::{
     MAX_PUBLISH_SMB_EXPORT_BYTES, MAX_WITHDRAW_SMB_EXPORT_BYTES, decode_publish_smb_export_request,
     decode_withdraw_smb_export_request, encode_publish_smb_export_response,
     encode_withdraw_smb_export_response,
+};
+pub use storage_drain_administration::{
+    BeginStorageDrainRequest, BeginStorageDrainResponse, ListStorageDrainsQuery,
+    ListStorageDrainsResponse, StorageDrainCursor, StorageDrainScope, StorageDrainState,
+    StorageDrainSummary,
+};
+pub use storage_drain_administration_validation::{
+    MAX_BEGIN_STORAGE_DRAIN_BYTES, decode_begin_storage_drain_request,
+    encode_begin_storage_drain_response, encode_list_storage_drains_response,
+    encode_storage_drain_summary, validate_list_storage_drains_query,
 };
 pub use storage_folder_administration::{
     ListStorageFoldersQuery, ListStorageFoldersResponse, RegisterStorageFolderRequest,

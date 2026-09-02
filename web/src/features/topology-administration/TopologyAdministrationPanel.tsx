@@ -5,6 +5,7 @@ import type { JSX } from "@solidjs/web";
 import { CreateFaultGroupForm } from "./CreateFaultGroupForm";
 import { FaultGroupEditor } from "./FaultGroupEditor";
 import { NodeInventory } from "./NodeInventory";
+import { StorageDrainPanel } from "./StorageDrainPanel";
 import { TargetInventory } from "./TargetInventory";
 import {
   createTopologyDirectory,
@@ -57,6 +58,11 @@ export function TopologyAdministrationPanel(
       <NodeInventory directory={directory} />
       <FaultGroupEditor directory={directory} csrfToken={props.csrfToken} />
       <TargetInventory directory={directory} />
+      <StorageDrainPanel
+        client={props.client}
+        csrfToken={props.csrfToken}
+        topology={directory}
+      />
     </div>
   );
 }
