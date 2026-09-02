@@ -5,6 +5,7 @@ members = [
     "crates/meshspan-api-contract",
     "crates/meshspan-certificates",
     "crates/meshspan-cluster",
+    "crates/meshspan-coding",
     "crates/meshspan-contracts",
     "crates/meshspan-consensus",
     "crates/meshspan-data-plane",
@@ -61,6 +62,7 @@ p256 = { version = "0.14.0", default-features = false, features = ["ecdh", "ecds
 quinn = { version = "0.11.11", default-features = false, features = ["runtime-tokio"] }
 quinn-proto = { version = "0.11.17", default-features = false }
 rcgen = { version = "0.14.9", default-features = false }
+reed-solomon-simd = "3.1.0"
 rusqlite = { version = "0.40.2", default-features = false, features = ["backup", "bundled"] }
 rustix = { version = "1.1.4", features = ["fs"] }
 rustls = { version = "0.23.43", default-features = false, features = ["custom-provider", "std"] }

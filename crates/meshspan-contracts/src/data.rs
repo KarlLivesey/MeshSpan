@@ -92,7 +92,11 @@ pub struct ReconstructionRequest {
     pub layout: CodingLayout,
     /// Indexed optional slices; absent entries are reconstructed.
     pub available_slices: BoundedItems<Option<BoundedBytes>>,
-    /// Expected digest of the reconstructed logical bytes.
+    /// Expected BLAKE3 digest for every indexed slice before decoding.
+    pub slice_digests: BoundedItems<[u8; 32]>,
+    /// Exact unpadded logical bytes represented by the stripe.
+    pub logical_length: u64,
+    /// Expected BLAKE3 digest of the exact unpadded logical bytes.
     pub logical_digest: [u8; 32],
 }
 
