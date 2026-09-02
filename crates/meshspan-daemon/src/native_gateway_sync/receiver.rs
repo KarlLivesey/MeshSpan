@@ -426,8 +426,10 @@ async fn receive_content_layout(
         .map_err(|_| NativeGatewaySyncError::Invalid)?;
     let now = current_time()?;
     if header.manifest.format_version == 2 {
-        import_protected_receipts(network, state_directory, source, contract, header, route)
-            .await?;
+        if header.chunk_count != 0 {
+            import_protected_receipts(network, state_directory, source, contract, header, route)
+                .await?;
+        }
         open_catalog(state_directory, now)?
             .finish(contract, now)
             .map_err(|_| NativeGatewaySyncError::Invalid)?;

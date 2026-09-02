@@ -72,15 +72,17 @@ pub use partitioning::{
     MetadataOperationFamily, RootDelegatedRoute,
 };
 pub use primitives::{
-    ActivationId, ActivationPolicyId, ApiKeyId, AuditEventId, AuthenticationChallengeId,
-    AuthenticationMethodId, AuthenticationPolicyId, BackupId, BranchId, ClaimId,
-    ComponentInstanceId, ContentManifestId, DurationMicros, FaultGroupClassId, FaultGroupId,
-    FederationAssignmentId, FederationGrantId, FederationRelationshipId,
-    FederationStorageAllocationId, FederationSuccessionId, FileVersionId, GrantId, GroupId,
-    HandleId, HostId, IdentifierError, JoinGrantId, LockId, MeshId, NamespaceCommitId, NodeId,
-    ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId, QuarantineId,
-    QuorumPlanId, RecoveryCodeId, Revision, RevisionError, RoleId, ScopeId, SessionId, SmbExportId,
-    SnapshotId, SnapshotScheduleId, StageId, TagId, TargetId, UnixMicros, UploadId, VolumeId,
+    AcknowledgementPolicyId, ActivationId, ActivationPolicyId, ApiKeyId, AuditEventId,
+    AuthenticationChallengeId, AuthenticationMethodId, AuthenticationPolicyId, AvailabilityCellId,
+    BackupId, BranchId, ClaimId, ComponentInstanceId, ContentManifestId, DurationMicros,
+    FaultGroupClassId, FaultGroupId, FederationAssignmentId, FederationGrantId,
+    FederationRelationshipId, FederationStorageAllocationId, FederationSuccessionId, FileVersionId,
+    GrantId, GroupId, HandleId, HostId, IdentifierError, JoinGrantId, LocalityPolicyId,
+    LocalityRequirementId, LockId, MeshId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId,
+    OperationId, OwnerSetId, PartitionId, PrincipalId, ProtectionPolicyId, ProtectionScenarioId,
+    ProtectionTermId, QuarantineId, QuorumPlanId, RecoveryCodeId, Revision, RevisionError, RoleId,
+    ScopeId, SessionId, SmbExportId, SnapshotId, SnapshotScheduleId, StageId,
+    StoragePolicyBindingId, TagId, TargetId, UnixMicros, UploadId, VolumeId,
 };
 pub use recovery_code::{
     ENCODED_RECOVERY_CODE_LENGTH, RecoveryCodeBundle, RecoveryCodeBundleError,
