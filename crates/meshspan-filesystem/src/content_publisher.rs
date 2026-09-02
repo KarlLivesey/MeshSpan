@@ -300,6 +300,7 @@ impl<P: StorageProvider, R: RandomSource, K: VolumeContentKeys>
                 ciphertext_length: u64::try_from(encrypted.ciphertext.len())
                     .map_err(|_| ContentPublicationError::InvalidInput)?,
                 ciphertext_digest: encrypted.ciphertext_digest,
+                storage_layout_digest: [0; 32],
                 provider_operation_id: provider_operation_id(request.operation_id, index)
                     .map_err(|_| ContentPublicationError::Corrupt)?,
             });

@@ -11,7 +11,8 @@ use crate::{ManifestPublication, PreparedContentChunk, WrappedContentKey};
 /// Maximum number of immutable chunk identities carried by one layout page.
 pub const MAXIMUM_CONTENT_LAYOUT_PAGE_ITEMS: usize = 1_000;
 
-const MANIFEST_DOMAIN: &[u8] = b"meshspan.content.unprotected-manifest.v1\0";
+const UNPROTECTED_MANIFEST_DOMAIN: &[u8] = b"meshspan.content.unprotected-manifest.v1\0";
+const PROTECTED_MANIFEST_DOMAIN: &[u8] = b"meshspan.content.protected-manifest.v2\0";
 const HEADER_DOMAIN: &[u8] = b"meshspan.content.layout-transfer-header.v1\0";
 
 /// Provider-independent identity of one encrypted chunk.
@@ -30,6 +31,8 @@ pub struct ContentLayoutChunk {
     pub ciphertext_length: u64,
     /// BLAKE3 identity of the complete encrypted bytes.
     pub ciphertext_digest: [u8; 32],
+    /// Immutable coding, placement and shard-integrity identity; zero for legacy format 1.
+    pub storage_layout_digest: [u8; 32],
 }
 
 impl From<PreparedContentChunk> for ContentLayoutChunk {
@@ -40,6 +43,7 @@ impl From<PreparedContentChunk> for ContentLayoutChunk {
             plaintext_digest: value.plaintext_digest,
             ciphertext_length: value.ciphertext_length,
             ciphertext_digest: value.ciphertext_digest,
+            storage_layout_digest: value.storage_layout_digest,
         }
     }
 }
@@ -52,6 +56,7 @@ impl ContentLayoutChunk {
             plaintext_digest: self.plaintext_digest,
             ciphertext_length: self.ciphertext_length,
             ciphertext_digest: self.ciphertext_digest,
+            storage_layout_digest: self.storage_layout_digest,
             provider_operation_id: operation_id,
         }
     }
@@ -205,11 +210,15 @@ impl ContentManifestAccumulator {
         content_digest: [u8; 32],
         chunk_bytes: u64,
     ) -> Result<Self, ContentLayoutTransferError> {
-        if format_version == 0 || chunk_bytes == 0 {
+        if !matches!(format_version, 1 | 2) || chunk_bytes == 0 {
             return Err(ContentLayoutTransferError::Invalid);
         }
         let mut digest = blake3::Hasher::new();
-        digest.update(MANIFEST_DOMAIN);
+        digest.update(if format_version == 1 {
+            UNPROTECTED_MANIFEST_DOMAIN
+        } else {
+            PROTECTED_MANIFEST_DOMAIN
+        });
         digest.update(&manifest_id.as_bytes());
         digest.update(&format_version.to_be_bytes());
         digest.update(&logical_length.to_be_bytes());
@@ -235,6 +244,8 @@ impl ContentManifestAccumulator {
             || chunk.plaintext_length == 0
             || chunk.plaintext_length > self.chunk_bytes
             || chunk.ciphertext_length != chunk.plaintext_length.saturating_add(16)
+            || (self.format_version == 1 && chunk.storage_layout_digest != [0; 32])
+            || (self.format_version == 2 && chunk.storage_layout_digest == [0; 32])
         {
             return Err(ContentLayoutTransferError::Invalid);
         }
@@ -247,6 +258,9 @@ impl ContentManifestAccumulator {
         self.digest.update(&chunk.plaintext_digest);
         self.digest.update(&chunk.ciphertext_length.to_be_bytes());
         self.digest.update(&chunk.ciphertext_digest);
+        if self.format_version == 2 {
+            self.digest.update(&chunk.storage_layout_digest);
+        }
         self.chunk_count = self
             .chunk_count
             .checked_add(1)

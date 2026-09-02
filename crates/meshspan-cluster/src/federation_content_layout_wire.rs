@@ -11,12 +11,12 @@ use meshspan_filesystem::{
 use meshspan_protocol::v1::VersionedPayload;
 use thiserror::Error;
 
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 const HEADER_DOMAIN: &[u8] = b"meshspan.federation.content-layout-header\0";
 const CHUNK_DOMAIN: &[u8] = b"meshspan.federation.content-layout-chunk\0";
 const CURSOR_DOMAIN: &[u8] = b"meshspan.federation.content-layout-cursor\0";
 const HEADER_FIELDS_LENGTH: usize = 16 + 2 + 8 + 32 + 32 + 8 + 8 + 24 + 48 + 32;
-const CHUNK_FIELDS_LENGTH: usize = 8 + 8 + 32 + 8 + 32;
+const CHUNK_FIELDS_LENGTH: usize = 8 + 8 + 32 + 8 + 32 + 32;
 const CURSOR_FIELDS_LENGTH: usize = 8;
 
 /// Encodes immutable geometry plus the connection-bound content-key envelope.
@@ -105,6 +105,7 @@ pub fn version_federated_content_layout_chunk(
     bytes.extend_from_slice(&chunk.plaintext_digest);
     bytes.extend_from_slice(&chunk.ciphertext_length.to_be_bytes());
     bytes.extend_from_slice(&chunk.ciphertext_digest);
+    bytes.extend_from_slice(&chunk.storage_layout_digest);
     Ok(VersionedPayload {
         format_version: FORMAT_VERSION,
         canonical_bytes: bytes,
@@ -132,6 +133,7 @@ pub fn decode_federated_content_layout_chunk(
         plaintext_digest: reader.array()?,
         ciphertext_length: reader.u64()?,
         ciphertext_digest: reader.array()?,
+        storage_layout_digest: reader.array()?,
     };
     reader.finish()?;
     ContentLayoutTransferPage::from_untrusted(vec![chunk], None)
@@ -320,6 +322,7 @@ mod tests {
             plaintext_digest: [5; 32],
             ciphertext_length: 20,
             ciphertext_digest: [6; 32],
+            storage_layout_digest: [7; 32],
         };
         let encoded = version_federated_content_layout_chunk(chunk)?;
         assert_eq!(decode_federated_content_layout_chunk(&encoded)?, chunk);

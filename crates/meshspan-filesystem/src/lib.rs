@@ -62,8 +62,9 @@ pub use commit_service::{
 };
 pub use content_catalog::{
     CommittedContentLayoutTransfer, CommittedShardInventory, CommittedShardPage,
-    ContentCatalogError, DurableContentCatalog, PendingContentChunkPage, PreparedContentChunk,
-    PreparedContentLayout,
+    ContentCatalogError, DurableContentCatalog, PendingContentChunkPage, PendingProtectedShardPage,
+    PreparedContentChunk, PreparedContentLayout, PreparedProtectedShard, PreparedProtectedStripe,
+    ProtectedShardCursor,
 };
 pub use content_crypto::{
     ContentChunkCipher, ContentChunkLimits, ContentCryptoError, ContentEncryptionKey,

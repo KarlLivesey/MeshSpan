@@ -22,6 +22,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../schema/content/002_layout_import.sql"),
     include_str!("../../schema/content/003_publication_volume.sql"),
     include_str!("../../schema/content/004_remote_shard_routes.sql"),
+    include_str!("../../schema/content/005_protected_stripes.sql"),
 ];
 pub(super) const SCHEMA_VERSION: usize = MIGRATIONS.len();
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
@@ -46,7 +47,7 @@ pub(super) fn open_connection(
 pub(super) fn validate_request(
     request: ContentPublicationRequest,
 ) -> Result<(), ContentCatalogError> {
-    if request.format_version == 0
+    if !matches!(request.format_version, 1 | 2)
         || request.logical_length > MAXIMUM_SQLITE_INTEGER
         || request.authorization_revision.get() == 0
     {
@@ -70,11 +71,14 @@ pub(super) fn validate_live_request(
 pub(super) fn validate_chunk(
     chunk: PreparedContentChunk,
     expected: u64,
+    format_version: u16,
 ) -> Result<(), ContentCatalogError> {
     if chunk.chunk_index != expected
         || chunk.plaintext_length == 0
         || chunk.ciphertext_length != chunk.plaintext_length.saturating_add(16)
         || chunk.chunk_index > MAXIMUM_SQLITE_INTEGER
+        || (format_version == 1 && chunk.storage_layout_digest != [0; 32])
+        || (format_version == 2 && chunk.storage_layout_digest == [0; 32])
     {
         Err(ContentCatalogError::InvalidInput)
     } else {
@@ -172,7 +176,7 @@ pub(super) fn layout_summary(
 ) -> Result<LayoutSummary, ContentCatalogError> {
     let mut statement = connection.prepare(
         "SELECT chunk_index, plaintext_length, plaintext_digest, ciphertext_length,
-                ciphertext_digest, provider_operation_id
+                ciphertext_digest, storage_layout_digest, provider_operation_id
          FROM content_chunks WHERE operation_id = ?1 ORDER BY chunk_index",
     )?;
     let mut rows = statement.query([request.operation_id.as_bytes().as_slice()])?;
@@ -253,7 +257,7 @@ pub(super) fn load_chunk(
     connection
         .query_row(
             "SELECT chunk_index, plaintext_length, plaintext_digest, ciphertext_length,
-                    ciphertext_digest, provider_operation_id
+                    ciphertext_digest, storage_layout_digest, provider_operation_id
              FROM content_chunks WHERE operation_id = ?1 AND chunk_index = ?2",
             params![operation_id.as_bytes().as_slice(), to_i64(index)?],
             decode_chunk,
@@ -271,7 +275,10 @@ pub(super) fn decode_chunk(
         plaintext_digest: copy_array(&row.get::<_, Vec<u8>>(2)?)?,
         ciphertext_length: from_sql(row.get(3)?)?,
         ciphertext_digest: copy_array(&row.get::<_, Vec<u8>>(4)?)?,
-        provider_operation_id: decode_operation(&row.get::<_, Vec<u8>>(5)?)?,
+        storage_layout_digest: row
+            .get::<_, Option<Vec<u8>>>(5)?
+            .map_or(Ok([0; 32]), |digest| copy_array(&digest))?,
+        provider_operation_id: decode_operation(&row.get::<_, Vec<u8>>(6)?)?,
     })
 }
 
@@ -383,7 +390,7 @@ pub(super) fn load_content_layout_page(
     let after = after_index.map_or(-1, |value| i64::try_from(value).unwrap_or(i64::MAX));
     let mut statement = connection.prepare(
         "SELECT chunk_index, plaintext_length, plaintext_digest, ciphertext_length,
-                ciphertext_digest
+                ciphertext_digest, storage_layout_digest
          FROM content_chunks
          WHERE operation_id = ?1 AND chunk_index > ?2
          ORDER BY chunk_index LIMIT ?3",
@@ -402,6 +409,9 @@ pub(super) fn load_content_layout_page(
                 plaintext_digest: copy_array(&row.get::<_, Vec<u8>>(2)?)?,
                 ciphertext_length: from_sql(row.get(3)?)?,
                 ciphertext_digest: copy_array(&row.get::<_, Vec<u8>>(4)?)?,
+                storage_layout_digest: row
+                    .get::<_, Option<Vec<u8>>>(5)?
+                    .map_or(Ok([0; 32]), |digest| copy_array(&digest))?,
             })
         },
     )?;
