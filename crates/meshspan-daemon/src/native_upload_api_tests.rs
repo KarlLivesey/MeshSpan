@@ -262,6 +262,16 @@ impl NativeUploadController for TestController {
     ) -> Result<CommitUploadResponse, NativeUploadError> {
         self.evidence.record("commit");
         serde_json::from_value(serde_json::json!({
+            "acknowledgement": {
+                "achieved_protection_blake3": "b".repeat(64),
+                "durability_scope": "cell_replicated",
+                "eventual_shard_receipts": 1,
+                "pending_debt_blake3": "c".repeat(64),
+                "pending_eventual_shards": 2,
+                "policy_committed": true,
+                "policy_evidence_blake3": "a".repeat(64),
+                "required_shard_receipts": 3
+            },
             "object": object_response(),
             "upload": status_value(
                 "committed",

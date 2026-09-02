@@ -104,7 +104,8 @@ pub use file_upload::{
     AbortUploadRequest, AbortUploadResponse, BeginUploadRequest, BeginUploadResponse,
     CommitUploadRequest, CommitUploadResponse, ListUploadRangesQuery, ListUploadRangesResponse,
     MAX_UPLOAD_RANGE_BYTES, UploadDisposition, UploadId, UploadRange, UploadRangeCursor,
-    UploadState, UploadStatusResponse, WriteUploadRangeResponse,
+    UploadState, UploadStatusResponse, WriteAcknowledgement, WriteDurabilityScope,
+    WriteUploadRangeResponse,
 };
 pub use file_upload_validation::{
     MAX_ABORT_UPLOAD_BYTES, MAX_BEGIN_UPLOAD_BYTES, MAX_COMMIT_UPLOAD_BYTES,

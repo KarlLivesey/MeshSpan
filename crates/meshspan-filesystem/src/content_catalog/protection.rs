@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use meshspan_contracts::{
     BoundedItems, CodingLayout, ShardAcknowledgement, ShardReceipt, VersionedPayload,
 };
-use meshspan_domain::{OperationId, Revision, TargetId, UnixMicros};
+use meshspan_domain::{DurabilityScope, OperationId, Revision, TargetId, UnixMicros};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use super::repository::{
@@ -18,6 +18,7 @@ use super::{
     ContentCatalogError, ContentPublicationRequest, DurableContentCatalog, MAXIMUM_PAGE_ITEMS,
     PreparedContentChunk,
 };
+use crate::{ContentAcknowledgementClass, ContentAcknowledgementEvidence};
 
 const LAYOUT_DOMAIN: &[u8] = b"meshspan.content.protected-stripe-layout.v1\0";
 const MAXIMUM_POLICY_BYTES: usize = 4_096;
@@ -203,6 +204,102 @@ pub struct PendingProtectedShardPage {
 }
 
 impl DurableContentCatalog {
+    /// Fixes the acknowledgement meaning before any protected stripe plan is persisted.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a changed class/scope after layout preparation, a committed publication or an
+    /// invalid non-local/non-cell content scope.
+    pub fn configure_protected_acknowledgement(
+        &mut self,
+        request: ContentPublicationRequest,
+        class: ContentAcknowledgementClass,
+        scope: DurabilityScope,
+    ) -> Result<(), ContentCatalogError> {
+        validate_live_request(request)?;
+        validate_exact_request(&self.connection, request)?;
+        if request.format_version != 2 || scope == DurabilityScope::GloballyConverged {
+            return Err(ContentCatalogError::InvalidInput);
+        }
+        let encoded = (encode_class(class), encode_scope(scope));
+        let stored = self.connection.query_row(
+            "SELECT acknowledgement_class, acknowledgement_scope, state,
+                    EXISTS(SELECT 1 FROM content_stripe_layouts
+                           WHERE operation_id = content_publications.operation_id)
+             FROM content_publications WHERE operation_id = ?1",
+            [request.operation_id.as_bytes().as_slice()],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, bool>(3)?,
+                ))
+            },
+        )?;
+        if (stored.2 == 2 || stored.3) && (stored.0, stored.1) != encoded {
+            return Err(ContentCatalogError::Conflict);
+        }
+        if (stored.0, stored.1) == encoded {
+            return Ok(());
+        }
+        let updated = self.connection.execute(
+            "UPDATE content_publications
+             SET acknowledgement_class = ?1, acknowledgement_scope = ?2
+             WHERE operation_id = ?3 AND state = 1
+               AND NOT EXISTS(SELECT 1 FROM content_stripe_layouts
+                              WHERE operation_id = content_publications.operation_id)",
+            params![
+                encoded.0,
+                encoded.1,
+                request.operation_id.as_bytes().as_slice(),
+            ],
+        )?;
+        if updated == 1 {
+            Ok(())
+        } else {
+            Err(ContentCatalogError::Conflict)
+        }
+    }
+
+    /// Reconstructs immutable acknowledgement evidence from one committed protected layout.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an uncommitted/wrong-format publication or malformed/missing required receipts.
+    pub fn protected_acknowledgement_evidence(
+        &self,
+        request: ContentPublicationRequest,
+    ) -> Result<ContentAcknowledgementEvidence, ContentCatalogError> {
+        validate_exact_request(&self.connection, request)?;
+        if request.format_version != 2 {
+            return Err(ContentCatalogError::InvalidInput);
+        }
+        let header = self.connection.query_row(
+            "SELECT state, acknowledgement_class, acknowledgement_scope, root_digest
+             FROM content_publications WHERE operation_id = ?1",
+            [request.operation_id.as_bytes().as_slice()],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                ))
+            },
+        )?;
+        if header.0 != 2 {
+            return Err(ContentCatalogError::Incomplete);
+        }
+        acknowledgement_evidence(
+            &self.connection,
+            request.operation_id,
+            decode_class(header.1)?,
+            decode_scope(header.2)?,
+            copy_array(&header.3)?,
+        )
+    }
+
     /// Loads one committed protected stripe and reconstitutes its exact recorded receipts.
     ///
     /// # Errors
@@ -492,6 +589,202 @@ impl DurableContentCatalog {
         } else {
             Err(ContentCatalogError::Conflict)
         }
+    }
+}
+
+fn acknowledgement_evidence(
+    connection: &rusqlite::Connection,
+    operation_id: OperationId,
+    class: ContentAcknowledgementClass,
+    scope: DurabilityScope,
+    root_digest: [u8; 32],
+) -> Result<ContentAcknowledgementEvidence, ContentCatalogError> {
+    let policy_evidence_digest = policy_evidence_digest(connection, operation_id, class, scope)?;
+    let shard_evidence = shard_evidence(connection, operation_id, root_digest)?;
+    Ok(ContentAcknowledgementEvidence {
+        class,
+        content_scope: scope,
+        required_shard_receipts: shard_evidence.required,
+        eventual_shard_receipts: shard_evidence.eventual,
+        pending_eventual_shards: shard_evidence.pending,
+        policy_evidence_digest,
+        achieved_protection_digest: shard_evidence.achieved_digest,
+        pending_debt_digest: shard_evidence.debt_digest,
+    })
+}
+
+fn policy_evidence_digest(
+    connection: &rusqlite::Connection,
+    operation_id: OperationId,
+    class: ContentAcknowledgementClass,
+    scope: DurabilityScope,
+) -> Result<[u8; 32], ContentCatalogError> {
+    let mut policy = blake3::Hasher::new();
+    policy.update(b"meshspan.content-acknowledgement-policy.v1\0");
+    policy.update(&operation_id.as_bytes());
+    policy.update(&[class_tag(class), scope_tag(scope)]);
+    let mut layouts = connection.prepare(
+        "SELECT chunk_index, topology_revision, capacity_revision, policy_format_version,
+                policy_evidence, layout_digest
+         FROM content_stripe_layouts WHERE operation_id = ?1 ORDER BY chunk_index",
+    )?;
+    let rows = layouts.query_map([operation_id.as_bytes().as_slice()], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, Vec<u8>>(4)?,
+            row.get::<_, Vec<u8>>(5)?,
+        ))
+    })?;
+    for row in rows {
+        let row = row?;
+        policy.update(&from_sql(row.0)?.to_be_bytes());
+        policy.update(&from_sql(row.1)?.to_be_bytes());
+        policy.update(&from_sql(row.2)?.to_be_bytes());
+        policy.update(
+            &u32::try_from(row.3)
+                .map_err(|_| ContentCatalogError::Corrupt)?
+                .to_be_bytes(),
+        );
+        if row.4.is_empty() || row.4.len() > MAXIMUM_POLICY_BYTES {
+            return Err(ContentCatalogError::Corrupt);
+        }
+        policy.update(&row.4);
+        policy.update(&copy_array::<32>(&row.5)?);
+    }
+    Ok(policy.finalize().into())
+}
+
+struct ShardEvidence {
+    required: u64,
+    eventual: u64,
+    pending: u64,
+    achieved_digest: [u8; 32],
+    debt_digest: [u8; 32],
+}
+
+fn shard_evidence(
+    connection: &rusqlite::Connection,
+    operation_id: OperationId,
+    root_digest: [u8; 32],
+) -> Result<ShardEvidence, ContentCatalogError> {
+    let mut achieved = blake3::Hasher::new();
+    achieved.update(b"meshspan.content-acknowledgement-achieved.v1\0");
+    achieved.update(&operation_id.as_bytes());
+    achieved.update(&root_digest);
+    let mut debt = blake3::Hasher::new();
+    debt.update(b"meshspan.content-acknowledgement-debt.v1\0");
+    debt.update(&operation_id.as_bytes());
+    debt.update(&root_digest);
+    let mut required_shard_receipts = 0_u64;
+    let mut eventual_shard_receipts = 0_u64;
+    let mut pending_eventual_shards = 0_u64;
+    let mut shards = connection.prepare(
+        "SELECT chunk_index, shard_index, provider_operation_id, expected_length,
+                expected_digest, target_id, target_generation, required_for_commit,
+                receipt_recorded_at
+         FROM content_stripe_shards WHERE operation_id = ?1
+         ORDER BY chunk_index, shard_index",
+    )?;
+    let rows = shards.query_map([operation_id.as_bytes().as_slice()], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, Vec<u8>>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, Vec<u8>>(4)?,
+            row.get::<_, Vec<u8>>(5)?,
+            row.get::<_, i64>(6)?,
+            row.get::<_, bool>(7)?,
+            row.get::<_, Option<i64>>(8)?,
+        ))
+    })?;
+    for row in rows {
+        let row = row?;
+        let mut canonical = Vec::with_capacity(98);
+        canonical.extend_from_slice(&from_sql(row.0)?.to_be_bytes());
+        canonical.extend_from_slice(
+            &u16::try_from(row.1)
+                .map_err(|_| ContentCatalogError::Corrupt)?
+                .to_be_bytes(),
+        );
+        canonical.extend_from_slice(&copy_array::<16>(&row.2)?);
+        canonical.extend_from_slice(&from_sql(row.3)?.to_be_bytes());
+        canonical.extend_from_slice(&copy_array::<32>(&row.4)?);
+        canonical.extend_from_slice(&copy_array::<16>(&row.5)?);
+        canonical.extend_from_slice(&from_sql(row.6)?.to_be_bytes());
+        canonical.push(u8::from(row.7));
+        match (row.7, row.8) {
+            (true, Some(recorded_at)) => {
+                required_shard_receipts = required_shard_receipts
+                    .checked_add(1)
+                    .ok_or(ContentCatalogError::Corrupt)?;
+                achieved.update(&canonical);
+                achieved.update(&recorded_at.to_be_bytes());
+            }
+            (true, None) => return Err(ContentCatalogError::Corrupt),
+            (false, Some(recorded_at)) => {
+                eventual_shard_receipts = eventual_shard_receipts
+                    .checked_add(1)
+                    .ok_or(ContentCatalogError::Corrupt)?;
+                achieved.update(&canonical);
+                achieved.update(&recorded_at.to_be_bytes());
+            }
+            (false, None) => {
+                pending_eventual_shards = pending_eventual_shards
+                    .checked_add(1)
+                    .ok_or(ContentCatalogError::Corrupt)?;
+                debt.update(&canonical);
+            }
+        }
+    }
+    Ok(ShardEvidence {
+        required: required_shard_receipts,
+        eventual: eventual_shard_receipts,
+        pending: pending_eventual_shards,
+        achieved_digest: achieved.finalize().into(),
+        debt_digest: debt.finalize().into(),
+    })
+}
+
+const fn class_tag(class: ContentAcknowledgementClass) -> u8 {
+    match class {
+        ContentAcknowledgementClass::Eventual => 1,
+        ContentAcknowledgementClass::Strong => 2,
+    }
+}
+
+const fn encode_class(class: ContentAcknowledgementClass) -> i64 {
+    class_tag(class) as i64
+}
+
+fn decode_class(value: i64) -> Result<ContentAcknowledgementClass, ContentCatalogError> {
+    match value {
+        1 => Ok(ContentAcknowledgementClass::Eventual),
+        2 => Ok(ContentAcknowledgementClass::Strong),
+        _ => Err(ContentCatalogError::Corrupt),
+    }
+}
+
+const fn encode_scope(scope: DurabilityScope) -> i64 {
+    scope_tag(scope) as i64
+}
+
+const fn scope_tag(scope: DurabilityScope) -> u8 {
+    match scope {
+        DurabilityScope::NodeLocal => 1,
+        DurabilityScope::CellReplicated => 2,
+        DurabilityScope::GloballyConverged => 3,
+    }
+}
+
+fn decode_scope(value: i64) -> Result<DurabilityScope, ContentCatalogError> {
+    match value {
+        1 => Ok(DurabilityScope::NodeLocal),
+        2 => Ok(DurabilityScope::CellReplicated),
+        _ => Err(ContentCatalogError::Corrupt),
     }
 }
 

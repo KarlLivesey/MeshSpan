@@ -219,6 +219,46 @@ pub struct CommitUploadRequest {
     pub expected_blake3: Option<String>,
 }
 
+/// Strongest durable scope honestly proved by one successful publication.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteDurabilityScope {
+    /// Required bytes and the immutable branch record are durable on one node.
+    NodeLocal,
+    /// Required bytes satisfy a multi-target, multi-node or availability-cell predicate.
+    CellReplicated,
+    /// A strong policy and its globally converged namespace transition both committed.
+    GloballyConverged,
+}
+
+/// Immutable proof summary for the exact successful write acknowledgement.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WriteAcknowledgement {
+    /// Honest durability scope reached by this publication.
+    pub durability_scope: WriteDurabilityScope,
+    /// True only after every predicate required by the selected policy has committed.
+    pub policy_committed: bool,
+    /// Number of required durable shard receipts included in the achieved evidence.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub required_shard_receipts: u64,
+    /// Number of non-blocking shard placements already completed.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub eventual_shard_receipts: u64,
+    /// Number of non-blocking shard placements still owed by automatic reconciliation.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
+    pub pending_eventual_shards: u64,
+    /// BLAKE3 digest binding the fixed-revision acknowledgement predicates.
+    #[schemars(length(equal = 64), pattern(r"^[0-9a-f]{64}$"))]
+    pub policy_evidence_blake3: String,
+    /// BLAKE3 digest binding the exact durable shard receipts.
+    #[schemars(length(equal = 64), pattern(r"^[0-9a-f]{64}$"))]
+    pub achieved_protection_blake3: String,
+    /// BLAKE3 digest binding the exact non-blocking shard debt at acknowledgement.
+    #[schemars(length(equal = 64), pattern(r"^[0-9a-f]{64}$"))]
+    pub pending_debt_blake3: String,
+}
+
 /// Complete successful upload publication.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -227,6 +267,8 @@ pub struct CommitUploadResponse {
     pub upload: UploadStatusResponse,
     /// Immutable metadata for the newly published exact version.
     pub object: GetObjectResponse,
+    /// Exact policy, receipt and outstanding-debt evidence for the success response.
+    pub acknowledgement: WriteAcknowledgement,
 }
 
 /// Permanently abandons one unpublished upload.

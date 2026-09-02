@@ -2,6 +2,7 @@
 
 //! Protocol-neutral namespace, staging, permissions and copy-on-write filesystem semantics.
 
+mod acknowledgement;
 mod adapter;
 mod authority;
 mod cleanup_cancellation;
@@ -35,6 +36,9 @@ mod version_retention;
 #[cfg(test)]
 mod upload_service_tests;
 
+pub use acknowledgement::{
+    ContentAcknowledgementClass, ContentAcknowledgementEvidence, PublicationAcknowledgement,
+};
 pub use adapter::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
     AdapterFlushFileRequest, AdapterLeaseRequest, AdapterListRequest, AdapterLockRequest,

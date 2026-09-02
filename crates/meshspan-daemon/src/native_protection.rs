@@ -13,7 +13,8 @@ use meshspan_domain::{
     VolumeId, machine_fault_class_id, storage_device_fault_class_id, uuid_v8,
 };
 use meshspan_filesystem::{
-    ContentPublicationError, ProtectionConfiguration, ProtectionPolicySource,
+    ContentAcknowledgementClass, ContentPublicationError, ProtectionConfiguration,
+    ProtectionPolicySource,
 };
 use meshspan_metadata::{
     AcknowledgementCellRole, AcknowledgementPolicyRecord, AuthoritativeRepository, PageLimit,
@@ -127,7 +128,7 @@ fn protection_configuration(
             policy.minimum_distinct_nodes,
         )
     });
-    ProtectionConfiguration::from_policy_snapshot(
+    ProtectionConfiguration::from_acknowledgement_snapshot(
         topology,
         revision,
         revision,
@@ -137,6 +138,16 @@ fn protection_configuration(
         minimum_targets,
         minimum_nodes,
         cells,
+        acknowledgement.map_or(ContentAcknowledgementClass::Eventual, |policy| match policy
+            .consistency
+        {
+            meshspan_metadata::AcknowledgementConsistencyClass::Eventual => {
+                ContentAcknowledgementClass::Eventual
+            }
+            meshspan_metadata::AcknowledgementConsistencyClass::Strong => {
+                ContentAcknowledgementClass::Strong
+            }
+        }),
     )
 }
 

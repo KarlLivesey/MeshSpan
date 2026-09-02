@@ -10,15 +10,16 @@ use meshspan_contracts::{
     StorageProvider, read_permit_mac,
 };
 use meshspan_domain::{
-    BranchId, ContentManifestId, EntropyError, FileVersionId, HandleId, MeshId, NamespaceCommitId,
-    NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, RandomSource, Revision, StageId,
-    TargetId, UnixMicros, VolumeId,
+    BranchId, ContentManifestId, DurabilityScope, EntropyError, FileVersionId, HandleId, MeshId,
+    NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, RandomSource,
+    Revision, StageId, TargetId, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
-    CompletedStage, ContentChunkCipher, ContentChunkLimits, ContentEncryptionKey,
-    ContentKeyEnvelopeCipher, ContentPublicationError, ContentPublicationRequest, ContentReadError,
-    ContentReadRequest, CreateDisposition, DirectoryPublication, DirectoryRevisionTransition,
-    DurableContentPublisher, DurableContentReader, EncryptedContentChunk, FilesystemCommitService,
+    CompletedStage, ContentAcknowledgementClass, ContentAcknowledgementEvidence,
+    ContentChunkCipher, ContentChunkLimits, ContentEncryptionKey, ContentKeyEnvelopeCipher,
+    ContentPublicationError, ContentPublicationRequest, ContentReadError, ContentReadRequest,
+    CreateDisposition, DirectoryPublication, DirectoryRevisionTransition, DurableContentPublisher,
+    DurableContentReader, EncryptedContentChunk, FilesystemCommitService,
     FilesystemHandleFlushRequest, FilesystemHandleOpenRequest, FilesystemHandleWriteRequest,
     HandleAccess, HandleShare, ManifestPublication, NamespaceLimits, NamespacePath,
     NamespacePublicationPath, OpenHandleRequest, PublicationDisposition, PublishedContentReference,
@@ -33,6 +34,19 @@ use meshspan_storage::{
 use tempfile::tempdir;
 
 const PERMIT_KEY: [u8; 32] = [42; 32];
+
+fn test_acknowledgement() -> ContentAcknowledgementEvidence {
+    ContentAcknowledgementEvidence {
+        class: ContentAcknowledgementClass::Eventual,
+        content_scope: DurabilityScope::NodeLocal,
+        required_shard_receipts: 1,
+        eventual_shard_receipts: 0,
+        pending_eventual_shards: 0,
+        policy_evidence_digest: [1; 32],
+        achieved_protection_digest: [2; 32],
+        pending_debt_digest: [3; 32],
+    }
+}
 
 #[test]
 fn staged_file_commits_through_the_real_folder_provider_and_reads_exactly()
@@ -606,6 +620,13 @@ struct DurableManifest {
 
 impl DurableContentPublisher for FolderPublisher {
     type Sink = Vec<u8>;
+
+    fn acknowledgement_evidence(
+        &self,
+        _request: ContentPublicationRequest,
+    ) -> Result<ContentAcknowledgementEvidence, ContentPublicationError> {
+        Ok(test_acknowledgement())
+    }
 
     fn resolve(
         &mut self,

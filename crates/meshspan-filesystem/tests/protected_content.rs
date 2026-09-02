@@ -14,16 +14,16 @@ use meshspan_contracts::{
     ShardReceipt, StoragePermitMacKey, StorageProvider, StorageReservation,
 };
 use meshspan_domain::{
-    AvailabilityCellId, ContentManifestId, EntropyError, FailureScenario, FailureTerm,
-    FaultGroupClassId, FaultGroupId, FaultGroupMember, HostId, MeshId, OperationId, RandomSource,
-    Revision, TargetId, Topology, UnixMicros, VolumeId,
+    AvailabilityCellId, ContentManifestId, DurabilityScope, EntropyError, FailureScenario,
+    FailureTerm, FaultGroupClassId, FaultGroupId, FaultGroupMember, HostId, MeshId, OperationId,
+    RandomSource, Revision, TargetId, Topology, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
-    CompletedStage, ContentChunkLimits, ContentPublicationRequest, ContentReadError,
-    ContentReadRequest, ContentShardRouter, DurableContentPublisher, DurableContentReader,
-    ProtectedContentAccess, ProtectedContentPublisher, ProtectionConfiguration,
-    ProtectionPolicySource, PublishedContentReference, VolumeContentKeyring,
-    VolumeKeyEncryptionKey,
+    CompletedStage, ContentAcknowledgementClass, ContentChunkLimits, ContentPublicationRequest,
+    ContentReadError, ContentReadRequest, ContentShardRouter, DurableContentPublisher,
+    DurableContentReader, ProtectedContentAccess, ProtectedContentPublisher,
+    ProtectionConfiguration, ProtectionPolicySource, PublishedContentReference,
+    VolumeContentKeyring, VolumeKeyEncryptionKey,
 };
 use meshspan_placement::FaultAwarePlacement;
 use meshspan_storage::{
@@ -68,6 +68,13 @@ fn real_folders_commit_without_eventual_target_and_read_after_two_target_losses(
             content_digest: blake3::hash(&bytes).into(),
         },
     )?;
+    let acknowledgement = publisher.acknowledgement_evidence(request)?;
+    assert_eq!(
+        acknowledgement.content_scope,
+        DurabilityScope::CellReplicated
+    );
+    assert_eq!(acknowledgement.pending_eventual_shards, 1);
+    assert!(acknowledgement.required_shard_receipts >= 3);
     let stripe = publisher.catalog().protected_stripe(request, 0)?;
     assert_eq!(stripe.coding_layout().data_slices(), 2);
     assert_eq!(stripe.coding_layout().recovery_slices(), 2);
@@ -121,6 +128,15 @@ fn six_machines_keep_exact_bytes_after_combined_loss_and_cell_isolation()
         .committed_protected_stripe(strict_content, 0)?;
     assert_eq!(strict_stripe.stripe.coding_layout().data_slices(), 2);
     assert!(strict_stripe.stripe.coding_layout().recovery_slices() >= 7);
+    let strict_acknowledgement = strict.acknowledgement_evidence(strict_request)?;
+    assert_eq!(
+        strict_acknowledgement.class,
+        ContentAcknowledgementClass::Strong
+    );
+    assert_eq!(
+        strict_acknowledgement.content_scope,
+        DurabilityScope::CellReplicated
+    );
 
     fixture.control.set_offline_many(&[
         fixture.targets[0][0],
@@ -215,7 +231,7 @@ fn campus_fixture(
         },
     ])?;
     let cell_requirements = campus_cell_requirements(cells, device_class)?;
-    let strict_protection = ProtectionConfiguration::from_policy_snapshot(
+    let strict_protection = ProtectionConfiguration::from_acknowledgement_snapshot(
         topology.clone(),
         Revision::new(1),
         Revision::new(1),
@@ -225,6 +241,7 @@ fn campus_fixture(
         6,
         4,
         cell_requirements.clone(),
+        ContentAcknowledgementClass::Strong,
     )?;
     let cell_availability = ProtectionConfiguration::from_policy_snapshot(
         topology,

@@ -72,6 +72,16 @@ pub trait DurableContentPublisher {
     /// Private, unpublished destination for one completion attempt.
     type Sink: Write;
 
+    /// Reconstructs immutable receipt/debt evidence for one completed content publication.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown, incomplete, conflicting or corrupt durable content state.
+    fn acknowledgement_evidence(
+        &self,
+        request: ContentPublicationRequest,
+    ) -> Result<crate::ContentAcknowledgementEvidence, ContentPublicationError>;
+
     /// Resolves an already durable exact publication without restreaming the stage.
     ///
     /// # Errors
@@ -103,6 +113,31 @@ pub trait DurableContentPublisher {
         sink: Self::Sink,
         completed: CompletedStage,
     ) -> Result<ManifestPublication, ContentPublicationError>;
+}
+
+#[cfg(test)]
+pub(crate) fn test_acknowledgement_evidence(
+    request: ContentPublicationRequest,
+) -> crate::ContentAcknowledgementEvidence {
+    let mut policy = blake3::Hasher::new();
+    policy.update(b"meshspan.test-content-policy.v1\0");
+    policy.update(&request.request_digest);
+    let mut achieved = blake3::Hasher::new();
+    achieved.update(b"meshspan.test-content-achieved.v1\0");
+    achieved.update(&request.request_digest);
+    let mut debt = blake3::Hasher::new();
+    debt.update(b"meshspan.test-content-debt.v1\0");
+    debt.update(&request.request_digest);
+    crate::ContentAcknowledgementEvidence {
+        class: crate::ContentAcknowledgementClass::Eventual,
+        content_scope: meshspan_domain::DurabilityScope::NodeLocal,
+        required_shard_receipts: u64::from(request.logical_length != 0),
+        eventual_shard_receipts: 0,
+        pending_eventual_shards: 0,
+        policy_evidence_digest: policy.finalize().into(),
+        achieved_protection_digest: achieved.finalize().into(),
+        pending_debt_digest: debt.finalize().into(),
+    }
 }
 
 /// Complete root-file save intent excluding the manifest produced from the selected stage.
@@ -314,10 +349,15 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         let transition =
             crate::upload_service::begin_commit(&mut self.uploads, &mut self.stages, request)?;
         let publication = self.commit_root_file(&request.publication)?;
+        let acknowledgement = self
+            .content
+            .acknowledgement_evidence(request.publication.content_publication_request())?
+            .namespace_committed();
         let session = crate::upload_service::finish_commit(&mut self.uploads, transition)?;
         Ok(crate::UploadCommitReceipt {
             session,
             publication,
+            acknowledgement,
         })
     }
 

@@ -13,14 +13,15 @@ use meshspan_contracts::{
     ReserveStorageRequest, ShardIdentity, ShardReadPermit, StoragePermitMacKey, StorageProvider,
     read_permit_mac,
 };
-use meshspan_domain::{MeshId, OperationId, RandomSource, TargetId};
+use meshspan_domain::{DurabilityScope, MeshId, OperationId, RandomSource, TargetId};
 
 use crate::content_transfer::provider_operation_id;
 use crate::{
-    CompletedStage, ContentCatalogError, ContentChunkCipher, ContentChunkLimits,
-    ContentEncryptionKey, ContentKeyError, ContentPublicationError, ContentPublicationRequest,
-    ContentReadError, ContentReadRequest, DurableContentCatalog, DurableContentPublisher,
-    DurableContentReader, EncryptedContentChunk, ManifestPublication, PreparedContentChunk,
+    CompletedStage, ContentAcknowledgementClass, ContentAcknowledgementEvidence,
+    ContentCatalogError, ContentChunkCipher, ContentChunkLimits, ContentEncryptionKey,
+    ContentKeyError, ContentPublicationError, ContentPublicationRequest, ContentReadError,
+    ContentReadRequest, DurableContentCatalog, DurableContentPublisher, DurableContentReader,
+    EncryptedContentChunk, ManifestPublication, PreparedContentChunk, PublishedContentReference,
     VolumeContentKeyring, VolumeContentKeys,
 };
 
@@ -339,6 +340,63 @@ impl<P: StorageProvider, R: RandomSource, K: VolumeContentKeys> DurableContentPu
 {
     type Sink = DurableContentSink;
 
+    fn acknowledgement_evidence(
+        &self,
+        request: ContentPublicationRequest,
+    ) -> Result<ContentAcknowledgementEvidence, ContentPublicationError> {
+        let manifest = self
+            .catalog
+            .resolve(request)
+            .map_err(map_catalog)?
+            .ok_or(ContentPublicationError::Unavailable)?;
+        let inventory = self
+            .catalog
+            .committed_shard_inventory(PublishedContentReference {
+                publication_operation_id: request.operation_id,
+                manifest,
+            })
+            .map_err(map_catalog)?;
+        let mut achieved = blake3::Hasher::new();
+        achieved.update(b"meshspan.content-acknowledgement-achieved.v1\0");
+        achieved.update(&request.operation_id.as_bytes());
+        achieved.update(&manifest.root_digest);
+        let mut required_shard_receipts = 0_u64;
+        let mut cursor = None;
+        loop {
+            let page = inventory
+                .page(cursor, PREPARE_PAGE_ITEMS)
+                .map_err(map_catalog)?;
+            for receipt in page.shards.as_slice() {
+                hash_shard_receipt(&mut achieved, receipt);
+                required_shard_receipts = required_shard_receipts
+                    .checked_add(1)
+                    .ok_or(ContentPublicationError::Corrupt)?;
+            }
+            let Some(next) = page.next_index else {
+                break;
+            };
+            cursor = Some(next);
+        }
+        let mut policy = blake3::Hasher::new();
+        policy.update(b"meshspan.content-acknowledgement-policy.v1\0");
+        policy.update(&request.operation_id.as_bytes());
+        policy.update(&[1, 1]);
+        let mut debt = blake3::Hasher::new();
+        debt.update(b"meshspan.content-acknowledgement-debt.v1\0");
+        debt.update(&request.operation_id.as_bytes());
+        debt.update(&manifest.root_digest);
+        Ok(ContentAcknowledgementEvidence {
+            class: ContentAcknowledgementClass::Eventual,
+            content_scope: DurabilityScope::NodeLocal,
+            required_shard_receipts,
+            eventual_shard_receipts: 0,
+            pending_eventual_shards: 0,
+            policy_evidence_digest: policy.finalize().into(),
+            achieved_protection_digest: achieved.finalize().into(),
+            pending_debt_digest: debt.finalize().into(),
+        })
+    }
+
     fn resolve(
         &mut self,
         request: ContentPublicationRequest,
@@ -568,6 +626,18 @@ fn validate_content_read(request: ContentReadRequest) -> Result<u64, ContentRead
     } else {
         Ok(end)
     }
+}
+
+fn hash_shard_receipt(digest: &mut blake3::Hasher, receipt: &meshspan_contracts::ShardReceipt) {
+    digest.update(&receipt.operation_id.as_bytes());
+    digest.update(&receipt.shard.manifest_digest);
+    digest.update(&receipt.shard.stripe_index.to_be_bytes());
+    digest.update(&receipt.shard.shard_index.to_be_bytes());
+    digest.update(&receipt.shard.generation.to_be_bytes());
+    digest.update(&receipt.length.to_be_bytes());
+    digest.update(&receipt.digest);
+    digest.update(&receipt.target_id.as_bytes());
+    digest.update(&receipt.target_generation.to_be_bytes());
 }
 
 fn read_operation_id(

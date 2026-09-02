@@ -220,7 +220,7 @@ pub struct CreateAcknowledgementPolicyRequest {
     pub name: ProtectionName,
     /// Availability-first or strong publication semantics.
     pub consistency: AcknowledgementConsistency,
-    /// Minimum durable target count before any acknowledgement.
+    /// Minimum durable target count required before acknowledgement.
     #[schemars(range(min = 1, max = 65_535))]
     pub minimum_durable_targets: u16,
     /// Minimum distinct machine count represented by durable targets.

@@ -190,6 +190,16 @@ function uploadStatus(
 
 function commitResponse(sequence: number): CommitUploadResponse {
   return {
+    acknowledgement: {
+      achieved_protection_blake3: "2".repeat(64),
+      durability_scope: "node_local",
+      eventual_shard_receipts: 0,
+      pending_debt_blake3: "3".repeat(64),
+      pending_eventual_shards: 0,
+      policy_committed: true,
+      policy_evidence_blake3: "1".repeat(64),
+      required_shard_receipts: 1,
+    },
     object: {
       namespace_commit_id: "04040404-0404-4404-8404-040404040404",
       object: {

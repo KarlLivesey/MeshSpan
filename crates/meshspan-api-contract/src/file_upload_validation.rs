@@ -135,7 +135,8 @@ pub fn encode_list_upload_ranges_response(
 pub fn encode_commit_upload_response(
     response: &CommitUploadResponse,
 ) -> Result<Vec<u8>, BoundaryError> {
-    if response.upload.state != UploadState::Committed {
+    if response.upload.state != UploadState::Committed || !response.acknowledgement.policy_committed
+    {
         return Err(BoundaryError::EncodeMismatch);
     }
     encode_response(response, commit_response_validator())

@@ -238,6 +238,15 @@ impl RecordingPublisher {
 impl DurableContentPublisher for RecordingPublisher {
     type Sink = Vec<u8>;
 
+    fn acknowledgement_evidence(
+        &self,
+        request: ContentPublicationRequest,
+    ) -> Result<crate::ContentAcknowledgementEvidence, ContentPublicationError> {
+        Ok(crate::commit_service::test_acknowledgement_evidence(
+            request,
+        ))
+    }
+
     fn resolve(
         &mut self,
         request: ContentPublicationRequest,

@@ -8,9 +8,11 @@ use meshspan_api_contract::{
     CommitUploadRequest, CommitUploadResponse, GetObjectQuery, ListUploadRangesResponse,
     NamespacePath as ApiNamespacePath, OperationId as ApiOperationId, UploadId as ApiUploadId,
     UploadRange, UploadState as ApiUploadState, UploadStatusResponse, VolumeId as ApiVolumeId,
-    WriteUploadRangeResponse,
+    WriteAcknowledgement, WriteDurabilityScope, WriteUploadRangeResponse,
 };
-use meshspan_domain::{DurationMicros, OperationId, StageId, UnixMicros, UploadId, VolumeId};
+use meshspan_domain::{
+    DurabilityScope, DurationMicros, OperationId, StageId, UnixMicros, UploadId, VolumeId,
+};
 use meshspan_filesystem::{
     AdapterStatRequest, AdapterUploadAbortRequest, AdapterUploadBeginRequest,
     AdapterUploadCommitRequest, AdapterUploadRangePageRequest, AdapterUploadStatusRequest,
@@ -254,7 +256,11 @@ where
             &stat,
         )
         .map_err(|_| NativeUploadError::Failed)?;
-        Ok(CommitUploadResponse { upload, object })
+        Ok(CommitUploadResponse {
+            upload,
+            object,
+            acknowledgement: acknowledgement_response(receipt.acknowledgement),
+        })
     }
 
     fn abort_upload(
@@ -315,6 +321,31 @@ impl<A, F, M> NativeUploadService<A, F, M> {
             )
             .map_err(|error| self.map_error(&error))?;
         status_response(&receipt)
+    }
+}
+
+fn acknowledgement_response(
+    receipt: meshspan_filesystem::PublicationAcknowledgement,
+) -> WriteAcknowledgement {
+    WriteAcknowledgement {
+        durability_scope: match receipt.durability_scope {
+            DurabilityScope::NodeLocal => WriteDurabilityScope::NodeLocal,
+            DurabilityScope::CellReplicated => WriteDurabilityScope::CellReplicated,
+            DurabilityScope::GloballyConverged => WriteDurabilityScope::GloballyConverged,
+        },
+        policy_committed: receipt.policy_committed,
+        required_shard_receipts: receipt.required_shard_receipts,
+        eventual_shard_receipts: receipt.eventual_shard_receipts,
+        pending_eventual_shards: receipt.pending_eventual_shards,
+        policy_evidence_blake3: blake3::Hash::from_bytes(receipt.policy_evidence_digest)
+            .to_hex()
+            .to_string(),
+        achieved_protection_blake3: blake3::Hash::from_bytes(receipt.achieved_protection_digest)
+            .to_hex()
+            .to_string(),
+        pending_debt_blake3: blake3::Hash::from_bytes(receipt.pending_debt_digest)
+            .to_hex()
+            .to_string(),
     }
 }
 

@@ -749,6 +749,15 @@ impl DurableContentReader for SeedPublisher {
 impl DurableContentPublisher for SeedPublisher {
     type Sink = Vec<u8>;
 
+    fn acknowledgement_evidence(
+        &self,
+        request: ContentPublicationRequest,
+    ) -> Result<crate::ContentAcknowledgementEvidence, ContentPublicationError> {
+        Ok(crate::commit_service::test_acknowledgement_evidence(
+            request,
+        ))
+    }
+
     fn resolve(
         &mut self,
         _request: ContentPublicationRequest,
@@ -775,6 +784,15 @@ impl DurableContentPublisher for SeedPublisher {
 
 impl DurableContentPublisher for UnusedPublisher {
     type Sink = Vec<u8>;
+
+    fn acknowledgement_evidence(
+        &self,
+        request: ContentPublicationRequest,
+    ) -> Result<crate::ContentAcknowledgementEvidence, ContentPublicationError> {
+        Ok(crate::commit_service::test_acknowledgement_evidence(
+            request,
+        ))
+    }
 
     fn resolve(
         &mut self,
@@ -812,6 +830,15 @@ impl DurableContentReader for UnusedPublisher {
 
 impl DurableContentPublisher for TestPublisher {
     type Sink = Vec<u8>;
+
+    fn acknowledgement_evidence(
+        &self,
+        request: ContentPublicationRequest,
+    ) -> Result<crate::ContentAcknowledgementEvidence, ContentPublicationError> {
+        Ok(crate::commit_service::test_acknowledgement_evidence(
+            request,
+        ))
+    }
 
     fn resolve(
         &mut self,

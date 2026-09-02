@@ -15,7 +15,8 @@ use meshspan_contracts::{
     StorageProvider, StorageReservation, read_permit_mac,
 };
 use meshspan_domain::{
-    FailureScenario, MeshId, OperationId, RandomSource, Revision, Topology, VolumeId,
+    DurabilityScope, FailureScenario, MeshId, OperationId, RandomSource, Revision, Topology,
+    VolumeId,
 };
 
 use super::{
@@ -25,11 +26,12 @@ use super::{
     verify_spool,
 };
 use crate::{
-    CompletedStage, ContentChunkCipher, ContentChunkLimits, ContentEncryptionKey,
-    ContentPublicationError, ContentPublicationRequest, ContentReadError, ContentReadRequest,
-    DurableContentCatalog, DurableContentPublisher, DurableContentReader, DurableContentSink,
-    EncryptedContentChunk, ManifestPublication, PreparedContentChunk, PreparedProtectedShard,
-    PreparedProtectedStripe, ProtectedShardCursor, VolumeContentKeyring, VolumeContentKeys,
+    CompletedStage, ContentAcknowledgementClass, ContentAcknowledgementEvidence,
+    ContentChunkCipher, ContentChunkLimits, ContentEncryptionKey, ContentPublicationError,
+    ContentPublicationRequest, ContentReadError, ContentReadRequest, DurableContentCatalog,
+    DurableContentPublisher, DurableContentReader, DurableContentSink, EncryptedContentChunk,
+    ManifestPublication, PreparedContentChunk, PreparedProtectedShard, PreparedProtectedStripe,
+    ProtectedShardCursor, VolumeContentKeyring, VolumeContentKeys,
 };
 
 const MAXIMUM_CANDIDATES: usize = 256;
@@ -115,6 +117,8 @@ pub struct ProtectionConfiguration {
     minimum_durable_targets: u16,
     minimum_distinct_nodes: u16,
     cells: Vec<PlacementCellRequirement>,
+    acknowledgement_class: ContentAcknowledgementClass,
+    content_scope: DurabilityScope,
 }
 
 impl ProtectionConfiguration {
@@ -164,6 +168,41 @@ impl ProtectionConfiguration {
         minimum_distinct_nodes: u16,
         cells: Vec<PlacementCellRequirement>,
     ) -> Result<Self, ContentPublicationError> {
+        Self::from_acknowledgement_snapshot(
+            topology,
+            topology_revision,
+            capacity_revision,
+            scenarios,
+            candidates,
+            required_scenarios,
+            minimum_durable_targets,
+            minimum_distinct_nodes,
+            cells,
+            ContentAcknowledgementClass::Eventual,
+        )
+    }
+
+    /// Validates one fixed-revision placement snapshot and its connector-visible consistency class.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the same malformed or impossible inputs as [`Self::from_policy_snapshot`].
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the fixed-revision policy snapshot keeps each independent input explicit"
+    )]
+    pub fn from_acknowledgement_snapshot(
+        topology: Topology,
+        topology_revision: Revision,
+        capacity_revision: Revision,
+        scenarios: Vec<FailureScenario>,
+        candidates: Vec<PlacementCandidate>,
+        required_scenarios: Vec<FailureScenario>,
+        minimum_durable_targets: u16,
+        minimum_distinct_nodes: u16,
+        cells: Vec<PlacementCellRequirement>,
+        acknowledgement_class: ContentAcknowledgementClass,
+    ) -> Result<Self, ContentPublicationError> {
         let mut targets = BTreeSet::new();
         if topology_revision == Revision::ZERO
             || capacity_revision == Revision::ZERO
@@ -183,6 +222,15 @@ impl ProtectionConfiguration {
         {
             return Err(ContentPublicationError::InvalidInput);
         }
+        let content_scope = if minimum_durable_targets > 1
+            || minimum_distinct_nodes > 1
+            || cells.iter().any(|cell| {
+                cell.role == meshspan_contracts::PlacementCellRole::RequiredBeforeCommit
+            }) {
+            DurabilityScope::CellReplicated
+        } else {
+            DurabilityScope::NodeLocal
+        };
         Ok(Self {
             topology,
             topology_revision,
@@ -193,6 +241,8 @@ impl ProtectionConfiguration {
             minimum_durable_targets,
             minimum_distinct_nodes,
             cells,
+            acknowledgement_class,
+            content_scope,
         })
     }
 }
@@ -340,6 +390,13 @@ where
             .map_err(map_key_publication)?;
         let cipher = ContentChunkCipher::new(content_key, self.chunk_limits);
         let protection = self.policies.configuration(request.volume_id)?;
+        self.catalog
+            .configure_protected_acknowledgement(
+                request,
+                protection.acknowledgement_class,
+                protection.content_scope,
+            )
+            .map_err(map_catalog)?;
         let mut candidates = protection.candidates.clone();
         file.seek(SeekFrom::Start(0))?;
         let mut remaining = completed.logical_length;
@@ -619,6 +676,15 @@ where
     Policies: ProtectionPolicySource,
 {
     type Sink = DurableContentSink;
+
+    fn acknowledgement_evidence(
+        &self,
+        request: ContentPublicationRequest,
+    ) -> Result<ContentAcknowledgementEvidence, ContentPublicationError> {
+        self.catalog
+            .protected_acknowledgement_evidence(request)
+            .map_err(map_catalog)
+    }
 
     fn resolve(
         &mut self,

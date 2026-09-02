@@ -855,6 +855,86 @@
         "additionalProperties": false,
         "description": "Complete successful upload publication.",
         "properties": {
+          "acknowledgement": {
+            "additionalProperties": false,
+            "description": "Exact policy, receipt and outstanding-debt evidence for the success response.",
+            "properties": {
+              "achieved_protection_blake3": {
+                "description": "BLAKE3 digest binding the exact durable shard receipts.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "durability_scope": {
+                "description": "Honest durability scope reached by this publication.",
+                "oneOf": [
+                  {
+                    "const": "node_local",
+                    "description": "Required bytes and the immutable branch record are durable on one node.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "cell_replicated",
+                    "description": "Required bytes satisfy a multi-target, multi-node or availability-cell predicate.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "globally_converged",
+                    "description": "A strong policy and its globally converged namespace transition both committed.",
+                    "type": "string"
+                  }
+                ]
+              },
+              "eventual_shard_receipts": {
+                "description": "Number of non-blocking shard placements already completed.",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "pending_debt_blake3": {
+                "description": "BLAKE3 digest binding the exact non-blocking shard debt at acknowledgement.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "pending_eventual_shards": {
+                "description": "Number of non-blocking shard placements still owed by automatic reconciliation.",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "policy_committed": {
+                "description": "True only after every predicate required by the selected policy has committed.",
+                "type": "boolean"
+              },
+              "policy_evidence_blake3": {
+                "description": "BLAKE3 digest binding the fixed-revision acknowledgement predicates.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "required_shard_receipts": {
+                "description": "Number of required durable shard receipts included in the achieved evidence.",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "durability_scope",
+              "policy_committed",
+              "required_shard_receipts",
+              "eventual_shard_receipts",
+              "pending_eventual_shards",
+              "policy_evidence_blake3",
+              "achieved_protection_blake3",
+              "pending_debt_blake3"
+            ],
+            "type": "object"
+          },
           "object": {
             "additionalProperties": false,
             "description": "Immutable metadata for the newly published exact version.",
@@ -1093,7 +1173,8 @@
         },
         "required": [
           "upload",
-          "object"
+          "object",
+          "acknowledgement"
         ],
         "title": "CommitUploadResponse",
         "type": "object"
@@ -1292,7 +1373,7 @@
             "type": "integer"
           },
           "minimum_durable_targets": {
-            "description": "Minimum durable target count before any acknowledgement.",
+            "description": "Minimum durable target count required before acknowledgement.",
             "format": "uint16",
             "maximum": 65535,
             "minimum": 1,

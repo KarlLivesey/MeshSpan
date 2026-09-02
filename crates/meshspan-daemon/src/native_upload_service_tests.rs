@@ -9,21 +9,22 @@ use meshspan_api_contract::{
     DeleteObjectScope, DirectoryEntryKind as ApiDirectoryEntryKind, MAX_NAMESPACE_MUTATION_BYTES,
     NamespacePath as ApiNamespacePath, OperationId as ApiOperationId, RenameObjectRequest,
     RenameObjectResponse, UploadDisposition as ApiUploadDisposition, UploadState as ApiUploadState,
+    WriteDurabilityScope,
 };
 use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{
-    AssuranceLevel, AuthenticationService, BranchId, ContentManifestId, FileVersionId,
-    NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Revision,
-    Rights, UnixMicros, VolumeId,
+    AssuranceLevel, AuthenticationService, BranchId, ContentManifestId, DurabilityScope,
+    FileVersionId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, PrincipalId,
+    Revision, Rights, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
     AuthorisedFilesystemError, AuthorisedFilesystemService, BoundFilesystemAdapter, CompletedStage,
-    ContentPublicationError, ContentPublicationRequest, ContentReadError, ContentReadRequest,
-    DurableContentPublisher, DurableContentReader, FilePublication, FilesystemAccessAuthority,
-    FilesystemAccessContext, FilesystemAdapterPolicy, FilesystemAuthorityGrant,
-    FilesystemAuthorityRequest, FilesystemCommitService, HandleError, ManifestPublication,
-    NamespaceLimits, NamespacePath, NamespacePublicationPath, RootFilePublication,
-    VersionPublicationStore,
+    ContentAcknowledgementClass, ContentAcknowledgementEvidence, ContentPublicationError,
+    ContentPublicationRequest, ContentReadError, ContentReadRequest, DurableContentPublisher,
+    DurableContentReader, FilePublication, FilesystemAccessAuthority, FilesystemAccessContext,
+    FilesystemAdapterPolicy, FilesystemAuthorityGrant, FilesystemAuthorityRequest,
+    FilesystemCommitService, HandleError, ManifestPublication, NamespaceLimits, NamespacePath,
+    NamespacePublicationPath, RootFilePublication, VersionPublicationStore,
 };
 use tempfile::tempdir;
 use tower::ServiceExt;
@@ -84,6 +85,11 @@ fn first_upload_materialises_a_new_volume_root_and_publishes_exact_bytes()
     assert_eq!(committed.upload.state, ApiUploadState::Committed);
     assert_eq!(committed.object.path.as_str(), "first.bin");
     assert_eq!(committed.object.object.logical_length, Some(19));
+    assert_eq!(
+        committed.acknowledgement.durability_scope,
+        WriteDurabilityScope::NodeLocal
+    );
+    assert!(committed.acknowledgement.policy_committed);
     Ok(())
 }
 
@@ -137,6 +143,7 @@ fn specialised_native_service_publishes_a_real_authorised_upload()
     assert_eq!(committed.upload.state, ApiUploadState::Committed);
     assert_eq!(committed.object.object.logical_length, Some(8));
     assert_eq!(committed.object.path.as_str(), "final.bin");
+    assert!(committed.acknowledgement.policy_committed);
     Ok(())
 }
 
@@ -275,6 +282,10 @@ async fn native_http_client_publishes_through_the_real_filesystem_service()
         Some(i64::try_from(content.len())?)
     );
     assert_eq!(committed.object.path.as_str(), "from-client.bin");
+    assert_eq!(
+        committed.acknowledgement.durability_scope,
+        WriteDurabilityScope::NodeLocal
+    );
     Ok(())
 }
 
@@ -553,6 +564,22 @@ struct TestPublisher;
 
 impl DurableContentPublisher for TestPublisher {
     type Sink = Vec<u8>;
+
+    fn acknowledgement_evidence(
+        &self,
+        _request: ContentPublicationRequest,
+    ) -> Result<ContentAcknowledgementEvidence, ContentPublicationError> {
+        Ok(ContentAcknowledgementEvidence {
+            class: ContentAcknowledgementClass::Eventual,
+            content_scope: DurabilityScope::NodeLocal,
+            required_shard_receipts: 1,
+            eventual_shard_receipts: 0,
+            pending_eventual_shards: 0,
+            policy_evidence_digest: [1; 32],
+            achieved_protection_digest: [2; 32],
+            pending_debt_digest: [3; 32],
+        })
+    }
 
     fn resolve(
         &mut self,
