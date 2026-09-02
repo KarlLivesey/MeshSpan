@@ -37,7 +37,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 40] = [
+const MIGRATIONS: [Migration; 41] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -198,8 +198,12 @@ const MIGRATIONS: [Migration; 40] = [
         version: 40,
         sql: include_str!("../schema/branch/040_handle_information_mutations.sql"),
     },
+    Migration {
+        version: 41,
+        sql: include_str!("../schema/branch/041_initial_file_create_plans.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 40;
+const SCHEMA_VERSION: u32 = 41;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -1502,6 +1506,30 @@ impl VersionPublicationStore {
             volume_id,
             after_object_id,
             maximum_results,
+            observed_at,
+        )
+    }
+
+    pub(crate) fn ready_namespace_delete(
+        &mut self,
+        requesting_handle_id: HandleId,
+        observed_at: UnixMicros,
+    ) -> Result<crate::ReadyNamespaceDelete, crate::HandleError> {
+        crate::handles::load_ready_delete(&mut self.connection, requesting_handle_id, observed_at)
+    }
+
+    pub(crate) fn prepare_ready_namespace_delete(
+        &self,
+        operation_id: OperationId,
+        ready: &crate::ReadyNamespaceDelete,
+        created_by: PrincipalId,
+        observed_at: UnixMicros,
+    ) -> Result<NamespaceUnlinkPublication, crate::HandleError> {
+        crate::namespace_planning::unlink::prepare_ready_delete(
+            &self.connection,
+            operation_id,
+            ready,
+            created_by,
             observed_at,
         )
     }

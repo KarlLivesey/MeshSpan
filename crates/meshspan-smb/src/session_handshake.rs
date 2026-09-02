@@ -9,8 +9,9 @@ use crate::{
     NegotiateResponseConfig, NegotiateResponseError, NegotiateSelection, NtlmAuthenticate,
     NtlmChallenge, NtlmChallengeConfig, NtlmNegotiate, NtlmTokenKind, NtlmWireError,
     SessionSetupRequest, SessionSetupResponse, SessionSetupResponseConfig, SigningAlgorithm,
-    Smb311PreauthHash, Smb311SessionKeys, SmbSessionSetupError, SpnegoClientToken,
-    SpnegoTokenError, encode_spnego_challenge, encode_spnego_complete,
+    Smb311PreauthHash, Smb311SessionKeys, SmbPacketSender, SmbSessionSetupError, SmbSigningError,
+    SpnegoClientToken, SpnegoTokenError, encode_spnego_challenge, encode_spnego_complete,
+    sign_smb311,
 };
 
 const STATUS_MORE_PROCESSING_REQUIRED: u32 = 0xc000_0016;
@@ -147,7 +148,7 @@ impl SmbSessionHandshake {
         Ok(response.packet)
     }
 
-    /// Verifies the final proof and derives keys only after the successful response is transcripted.
+    /// Verifies the final proof, derives keys from the request transcript and signs the response.
     ///
     /// # Errors
     ///
@@ -186,7 +187,7 @@ impl SmbSessionHandshake {
         } else {
             Vec::new()
         };
-        let response = SessionSetupResponse::encode(
+        let mut response = SessionSetupResponse::encode(
             &request,
             SessionSetupResponseConfig {
                 status: 0,
@@ -198,13 +199,19 @@ impl SmbSessionHandshake {
         .map_err(SmbSessionHandshakeError::from)?;
         let mut transcript = self.preauth.clone();
         transcript.update(packet);
-        transcript.update(&response.packet);
         let selection = self
             .selection
             .ok_or(SmbSessionHandshakeError::InvalidState)?;
         let (identity, keys) = authenticator
             .establish(verified, &transcript, selection.encryption)
             .map_err(SmbSessionEstablishmentError::Authentication)?;
+        sign_smb311(
+            &mut response.packet,
+            keys.signing_key(),
+            selection.signing,
+            SmbPacketSender::Server,
+        )
+        .map_err(SmbSessionHandshakeError::from)?;
         self.preauth = transcript;
         self.challenge = None;
         self.phase = HandshakePhase::Established;
@@ -319,6 +326,9 @@ pub enum SmbSessionHandshakeError {
     /// NTLM message failed strict semantic parsing.
     #[error(transparent)]
     Ntlm(#[from] NtlmWireError),
+    /// The final successful SMB 3.1.1 session response could not be signed.
+    #[error(transparent)]
+    Signing(#[from] SmbSigningError),
 }
 
 /// Protocol or authority failure while completing the final authentication round.

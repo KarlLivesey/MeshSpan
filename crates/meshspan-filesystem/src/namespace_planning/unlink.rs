@@ -11,6 +11,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 use crate::{
     AdapterUnlinkRequest, DirectoryEntryKind, DirectoryRevisionTransition, HandleError,
     NamespacePublicationPath, NamespaceUnlinkAuthority, NamespaceUnlinkPublication,
+    ReadyNamespaceDelete,
 };
 
 use super::resolution;
@@ -76,6 +77,38 @@ pub(crate) fn prepare(
     persist_plan(&transaction, request_digest, &plan)?;
     transaction.commit()?;
     Ok(plan)
+}
+
+pub(crate) fn prepare_ready_delete(
+    connection: &Connection,
+    operation_id: OperationId,
+    ready: &ReadyNamespaceDelete,
+    created_by: PrincipalId,
+    observed_at: UnixMicros,
+) -> Result<NamespaceUnlinkPublication, HandleError> {
+    let request = AdapterUnlinkRequest {
+        operation_id,
+        volume_id: ready.volume_id,
+        path: ready.path.clone(),
+        requesting_handle_id: None,
+        observed_at,
+    };
+    let current = resolve_current(connection, ready.branch_id, &request)?;
+    let leaf = current.leaf.ok_or(HandleError::Corrupt)?;
+    if leaf.object != ready.object_id
+        || leaf.revision != ready.object_revision_id
+        || leaf.kind != DirectoryEntryKind::File
+        || leaf.version != Some(ready.file_version_id)
+    {
+        return Err(HandleError::StaleHandle);
+    }
+    let mut publication = build_plan(ready.branch_id, &request, created_by, &current)?;
+    publication.authority = NamespaceUnlinkAuthority::DeleteOnClose {
+        requesting_handle_id: ready.requesting_handle_id,
+        requested_at: ready.requested_at,
+        ready_at: ready.ready_at,
+    };
+    Ok(publication)
 }
 
 fn validate_request(request: &AdapterUnlinkRequest) -> Result<(), HandleError> {

@@ -16,21 +16,21 @@ use crate::{
     AdapterUnlinkRequest, AdapterUnlockRequest, AdapterUploadAbortRequest,
     AdapterUploadBeginRequest, AdapterUploadCommitRequest, AdapterUploadRangePageRequest,
     AdapterUploadStatusRequest, AdapterUploadWriteRequest, AdapterWriteFileRequest,
-    DirectoryPublication, DurableContentPublisher, DurableContentReader, FilesystemAdapterPolicy,
-    FilesystemCommitError, FilesystemCommitService, FilesystemHandleCloseReceipt,
-    FilesystemHandleCloseRequest, FilesystemHandleCreateReceipt, FilesystemHandleCreateRequest,
-    FilesystemHandleFlushRequest, FilesystemHandleLengthReceipt, FilesystemHandleOpenRequest,
-    FilesystemHandleReadReceipt, FilesystemHandleReadRequest, FilesystemHandleWriteReceipt,
-    FilesystemHandleWriteRequest, HandleAccess, HandleError, HandleInformationReceipt,
-    HandleIoError, HandleLeaseReceipt, HandleLeaseRequest, HandleReadError, LockRangeReceipt,
-    LockRangeRequest, NamespaceListRequest, NamespacePublicationReceipt, NamespaceQueryError,
-    NamespaceRenamePublication, NamespaceRenameReceipt, NamespaceStatRequest,
-    NamespaceUnlinkPublication, NamespaceUnlinkReceipt, OpenHandleReceipt, OpenHandleRequest,
-    RangeLockKind, SetHandleDispositionRequest, SetHandleLengthRequest, StageWrite,
-    UnlockRangeReceipt, UnlockRangeRequest, UploadAbortRequest, UploadBeginRequest,
-    UploadCommitReceipt, UploadCommitRequest, UploadRangePageReceipt, UploadRangePageRequest,
-    UploadSession, UploadStatusReceipt, UploadStatusRequest, UploadWriteReceipt,
-    UploadWriteRequest,
+    CloseHandleOutcome, DirectoryPublication, DurableContentPublisher, DurableContentReader,
+    FilesystemAdapterPolicy, FilesystemCommitError, FilesystemCommitService,
+    FilesystemHandleCloseReceipt, FilesystemHandleCloseRequest, FilesystemHandleCreateReceipt,
+    FilesystemHandleCreateRequest, FilesystemHandleFlushRequest, FilesystemHandleLengthReceipt,
+    FilesystemHandleOpenRequest, FilesystemHandleReadReceipt, FilesystemHandleReadRequest,
+    FilesystemHandleWriteReceipt, FilesystemHandleWriteRequest, HandleAccess, HandleError,
+    HandleInformationReceipt, HandleIoError, HandleLeaseReceipt, HandleLeaseRequest,
+    HandleReadError, LockRangeReceipt, LockRangeRequest, NamespaceListRequest,
+    NamespacePublicationReceipt, NamespaceQueryError, NamespaceRenamePublication,
+    NamespaceRenameReceipt, NamespaceStatRequest, NamespaceUnlinkPublication,
+    NamespaceUnlinkReceipt, OpenHandleReceipt, OpenHandleRequest, RangeLockKind,
+    SetHandleDispositionRequest, SetHandleLengthRequest, StageWrite, UnlockRangeReceipt,
+    UnlockRangeRequest, UploadAbortRequest, UploadBeginRequest, UploadCommitReceipt,
+    UploadCommitRequest, UploadRangePageReceipt, UploadRangePageRequest, UploadSession,
+    UploadStatusReceipt, UploadStatusRequest, UploadWriteReceipt, UploadWriteRequest,
 };
 
 /// Authenticated connector context supplied independently of a filesystem operation payload.
@@ -731,16 +731,54 @@ where
         policy: FilesystemAdapterPolicy,
     ) -> Result<FilesystemHandleCreateReceipt, AuthorisedFilesystemError<A::Error>> {
         require_adapter_context(context, request.observed_at)?;
-        let target = self
+        let (target, grant) = match self
             .filesystem
             .adapter_file_create_target(branch_id, context, request)
-            .map_err(AuthorisedFilesystemError::Handle)?;
-        let rights = if target.existing_object_id.is_some() {
-            rights_for_access(request.desired_access)
-        } else {
-            Rights::CREATE_CHILD
+        {
+            Ok(target) => {
+                let rights = if target.existing_object_id.is_some() {
+                    rights_for_access(request.desired_access)
+                } else {
+                    Rights::CREATE_CHILD
+                };
+                let grant = self.authorise(context, request.volume_id, target.object_id, rights)?;
+                (target, grant)
+            }
+            Err(HandleError::NotFound)
+                if matches!(
+                    request.create_disposition,
+                    crate::CreateDisposition::CreateNew
+                        | crate::CreateDisposition::OpenOrCreate
+                        | crate::CreateDisposition::OverwriteOrCreate
+                ) =>
+            {
+                let grant = self
+                    .authority
+                    .authorise_volume_root(context, request.volume_id, Rights::CREATE_CHILD)
+                    .map_err(AuthorisedFilesystemError::Authority)?;
+                (
+                    crate::namespace_planning::create_file::FileCreateAuthorityTarget {
+                        object_id: grant.object_id,
+                        existing_object_id: None,
+                    },
+                    grant,
+                )
+            }
+            Err(error) => return Err(AuthorisedFilesystemError::Handle(error)),
         };
-        let grant = self.authorise(context, request.volume_id, target.object_id, rights)?;
+        validate_grant(
+            FilesystemAuthorityRequest {
+                context,
+                volume_id: request.volume_id,
+                object_id: target.object_id,
+                requested_rights: if target.existing_object_id.is_some() {
+                    rights_for_access(request.desired_access)
+                } else {
+                    Rights::CREATE_CHILD
+                },
+            },
+            grant,
+        )?;
         let prepared = self
             .filesystem
             .prepare_adapter_file_create(branch_id, context, request, policy, grant, target)
@@ -804,6 +842,7 @@ where
 
     pub(crate) fn adapter_close(
         &mut self,
+        branch_id: BranchId,
         context: FilesystemAccessContext,
         request: AdapterCloseFileRequest,
         policy: FilesystemAdapterPolicy,
@@ -833,7 +872,7 @@ where
                     })
             })
             .transpose()?;
-        self.close_handle(
+        let receipt = self.close_handle(
             context,
             FilesystemHandleCloseRequest {
                 close: crate::CloseHandleRequest {
@@ -846,7 +885,52 @@ where
                 },
                 flush,
             },
-        )
+        )?;
+        if receipt.close.outcome == CloseHandleOutcome::DeleteReady {
+            self.complete_adapter_delete_on_close(branch_id, context, request, target)?;
+        }
+        Ok(receipt)
+    }
+
+    fn complete_adapter_delete_on_close(
+        &mut self,
+        branch_id: BranchId,
+        context: FilesystemAccessContext,
+        request: AdapterCloseFileRequest,
+        target: crate::HandleAuthorityTarget,
+    ) -> Result<(), AuthorisedFilesystemError<A::Error>> {
+        if let Some(existing) = self
+            .filesystem
+            .resolve_namespace_unlink(request.delete_operation_id)
+            .map_err(AuthorisedFilesystemError::Handle)?
+        {
+            return if existing.object_id == target.object_id {
+                Ok(())
+            } else {
+                Err(AuthorisedFilesystemError::InvalidInput)
+            };
+        }
+        let ready = self
+            .filesystem
+            .ready_namespace_delete(request.handle_id, request.observed_at)
+            .map_err(AuthorisedFilesystemError::Handle)?;
+        if ready.branch_id != branch_id
+            || ready.volume_id != target.volume_id
+            || ready.object_id != target.object_id
+        {
+            return Err(AuthorisedFilesystemError::InvalidInput);
+        }
+        let publication = self
+            .filesystem
+            .prepare_ready_namespace_delete(
+                request.delete_operation_id,
+                &ready,
+                target.principal_id,
+                request.observed_at,
+            )
+            .map_err(AuthorisedFilesystemError::Handle)?;
+        self.unlink_namespace(context, &publication)?;
+        Ok(())
     }
 
     pub(crate) fn adapter_renew_lease(

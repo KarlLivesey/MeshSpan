@@ -187,7 +187,9 @@ it("publishes and withdraws the selected volume through embedded SMB", async () 
 type ClientOverrides = Partial<
   Pick<
     VolumeAdministrationClient,
-    "createVolumePermissionGrant" | "listVolumes" | "revokePermissionGrant"
+    | "createVolumePermissionGrant"
+    | "listVolumes"
+    | "revokePermissionGrant"
     | "publishSmbExport"
     | "withdrawSmbExport"
   >

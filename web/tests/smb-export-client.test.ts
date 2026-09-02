@@ -53,7 +53,10 @@ describe("generated SMB-export client", () => {
       `https://node.example/api/latest/admin/smb-exports/${EXPORT_ID}/withdrawals`,
     ]);
     expect(requests[0]?.body).toEqual(
-      expect.objectContaining({ encryption_required: true, share_name: "Accounts" }),
+      expect.objectContaining({
+        encryption_required: true,
+        share_name: "Accounts",
+      }),
     );
   });
 
@@ -63,7 +66,9 @@ describe("generated SMB-export client", () => {
       baseUrl: "https://node.example/api/latest/",
       fetch: async () => {
         calls += 1;
-        return Promise.resolve(jsonResponse({ ...publicationResponse({}), secret: true }));
+        return Promise.resolve(
+          jsonResponse({ ...publicationResponse({}), secret: true }),
+        );
       },
     });
     await expect(

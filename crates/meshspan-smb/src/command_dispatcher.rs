@@ -158,7 +158,7 @@ where
         let header = Smb2Header::parse_request(&packet)
             .map_err(|_| SmbCommandDispatchError::InvalidAuthenticatedHeader)?;
         if !self.active {
-            return self.error(header, ConnectorFailure::SessionDeleted);
+            return self.error(header, ConnectorFailure::SessionDeleted, encrypted);
         }
         let response = match header.command {
             Smb2Command::TreeConnect => self.tree_connect(&packet),
@@ -185,8 +185,8 @@ where
             | Smb2Command::OplockBreak => Err(ConnectorFailure::Unsupported),
         };
         match response {
-            Ok(response) => self.protect(response),
-            Err(failure) => self.error(header, failure),
+            Ok(response) => self.protect(response, encrypted),
+            Err(failure) => self.error(header, failure, encrypted),
         }
     }
 
@@ -305,18 +305,25 @@ where
         }
     }
 
-    fn protect(&self, response: Vec<u8>) -> Result<Vec<u8>, SmbCommandDispatchError> {
-        self.channel.encode_response(response).map_err(Into::into)
+    fn protect(
+        &self,
+        response: Vec<u8>,
+        request_was_encrypted: bool,
+    ) -> Result<Vec<u8>, SmbCommandDispatchError> {
+        self.channel
+            .encode_response(response, request_was_encrypted)
+            .map_err(Into::into)
     }
 
     fn error(
         &self,
         header: Smb2Header,
         failure: ConnectorFailure,
+        request_was_encrypted: bool,
     ) -> Result<Vec<u8>, SmbCommandDispatchError> {
         let response = SmbErrorResponse::encode(header, failure.nt_status(), &[])
             .map_err(|_| SmbCommandDispatchError::InvalidErrorResponse)?;
-        self.protect(response.packet)
+        self.protect(response.packet, request_was_encrypted)
     }
 }
 

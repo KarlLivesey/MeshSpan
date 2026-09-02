@@ -32,6 +32,33 @@ use tokio_rustls::TlsConnector;
 const CERTIFICATE_NAME: &str = "meshspan.local";
 const WAIT_LIMIT: Duration = Duration::from_secs(15);
 const RETRY_INTERVAL: Duration = Duration::from_millis(50);
+const SMB_CLIENT_IMAGE: &str = "meshspan-smbclient-test:bookworm";
+
+#[tokio::test]
+#[ignore = "requires the local pinned smbclient container image"]
+async fn real_smb311_client_round_trips_one_published_volume() -> Result<(), Box<dyn Error>> {
+    let fixture = ProcessFixture::new()?;
+    let mut processes = vec![fixture.start()?];
+    let proof = async {
+        let claim = wait_for_claim(&fixture.claim_path).await?;
+        let client = wait_for_client(&fixture.identity_path).await?;
+        let administrator_id = bootstrap_administrator_id(&claim, &fixture.identity_path)?;
+        wait_for_status(fixture.address, &client, "claim_required").await?;
+        let created = create_process_mesh(&fixture, &client, &claim).await?;
+        let api_key = created["api_key"]
+            .as_str()
+            .ok_or("setup response omitted the API key")?;
+        save_and_verify_recovery_bundle(&fixture, &client, api_key, &created).await?;
+        let volume =
+            create_volume_details(fixture.address, &client, api_key, &administrator_id).await?;
+        publish_smb_export(fixture.address, &client, api_key, &volume).await?;
+        wait_for_smb_listener(fixture.smb_address).await?;
+        run_real_smb_client(fixture.smb_address.port(), api_key.to_owned()).await
+    }
+    .await;
+    stop_processes(&mut processes);
+    proof
+}
 
 #[tokio::test]
 async fn three_headless_daemons_commit_after_original_node_loss() -> Result<(), Box<dyn Error>> {
@@ -1169,6 +1196,24 @@ async fn create_volume(
     api_key: &str,
     owner_principal_id: &str,
 ) -> Result<String, Box<dyn Error>> {
+    Ok(
+        create_volume_details(address, client, api_key, owner_principal_id)
+            .await?
+            .volume_id,
+    )
+}
+
+struct CreatedVolume {
+    root_object_id: String,
+    volume_id: String,
+}
+
+async fn create_volume_details(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    owner_principal_id: &str,
+) -> Result<CreatedVolume, Box<dyn Error>> {
     let body = serde_json::to_vec(&serde_json::json!({
         "operation_id": "00000000-0000-4000-8000-000000000004",
         "name": "Process files",
@@ -1195,11 +1240,105 @@ async fn create_volume(
         .into())
     } else {
         let created: serde_json::Value = serde_json::from_str(response_body(&response)?)?;
-        created["volume_id"]
+        let volume_id = created["volume_id"]
             .as_str()
             .map(str::to_owned)
-            .ok_or_else(|| "headless volume creation omitted its identity".into())
+            .ok_or("headless volume creation omitted its identity")?;
+        let root_object_id = created["root_object_id"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or("headless volume creation omitted its root identity")?;
+        Ok(CreatedVolume {
+            root_object_id,
+            volume_id,
+        })
     }
+}
+
+async fn publish_smb_export(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    volume: &CreatedVolume,
+) -> Result<(), Box<dyn Error>> {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000040",
+        "root_object_id": volume.root_object_id,
+        "share_name": "process-files",
+        "gateways": { "kind": "all_eligible" },
+        "encryption_required": true
+    }))?;
+    let authorization = format!("Bearer {api_key}");
+    let response = request_with_headers(
+        address,
+        client,
+        "POST",
+        &format!("/api/latest/admin/volumes/{}/smb-exports", volume.volume_id),
+        Some(&body),
+        &[("Authorization", authorization.as_str())],
+    )
+    .await?;
+    require_status(&response, "201 Created", "publish SMB export")
+}
+
+async fn wait_for_smb_listener(address: SocketAddr) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        if TcpStream::connect(address).await.is_ok() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("embedded SMB listener did not accept TCP connections".into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+async fn run_real_smb_client(port: u16, api_key: String) -> Result<(), Box<dyn Error>> {
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new("docker")
+            .args([
+                "run",
+                "--rm",
+                "--entrypoint",
+                "/bin/sh",
+                "--env",
+                "MESHSPAN_SMB_PASSWORD",
+                SMB_CLIENT_IMAGE,
+                "-ec",
+                real_smb_client_script(),
+                "smb-proof",
+                &port.to_string(),
+            ])
+            .env("MESHSPAN_SMB_PASSWORD", api_key)
+            .output()
+    })
+    .await??;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(format!("real SMB 3.1.1 client failed; stdout: {stdout}; stderr: {stderr}").into())
+}
+
+const fn real_smb_client_script() -> &'static str {
+    r#"
+set -eu
+port="$1"
+printf 'username = Administrator\npassword = %s\n' "$MESHSPAN_SMB_PASSWORD" > /tmp/credentials
+chmod 600 /tmp/credentials
+printf 'exact external SMB 3.1.1 bytes' > /tmp/upload.bin
+smbclient '//host.docker.internal/process-files' \
+  --port "$port" \
+  --max-protocol SMB3 \
+  --option 'client min protocol=SMB3_11' \
+  --option 'client max protocol=SMB3_11' \
+  --client-protection encrypt \
+  --authentication-file /tmp/credentials \
+  --command 'put /tmp/upload.bin proof.bin; get proof.bin /tmp/download.bin; rename proof.bin renamed.bin; del renamed.bin'
+cmp /tmp/upload.bin /tmp/download.bin
+"#
 }
 
 async fn create_volume_permission_grant(

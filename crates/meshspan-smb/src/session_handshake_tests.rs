@@ -6,7 +6,7 @@ use super::{SmbSessionAuthenticator, SmbSessionHandshake, SmbSessionHandshakeErr
 use crate::{
     EncryptionCipher, NegotiateResponseConfig, NtlmAuthenticate, NtlmChallenge,
     NtlmChallengeConfig, NtlmPasswordVerifier, NtlmSessionBaseKey, Smb311PreauthHash,
-    Smb311SessionKeys, SmbSecureChannel, SmbSecureChannelError,
+    Smb311SessionKeys, SmbPacketSender, SmbSecureChannel, SmbSecureChannelError, verify_smb311,
 };
 
 #[test]
@@ -40,6 +40,13 @@ fn exact_negotiate_challenge_and_proof_establish_one_encrypted_session()
     assert!(session.encryption_required());
     assert_eq!(&session.response()[8..12], &[0; 4]);
     assert_eq!(session.keys().signing_key().len(), 16);
+    let mut signed_response = session.response().to_vec();
+    verify_smb311(
+        &mut signed_response,
+        session.keys().signing_key(),
+        session.signing_algorithm(),
+        SmbPacketSender::Server,
+    )?;
     let final_response = session.response().to_vec();
     let channel = SmbSecureChannel::new(session);
     assert!(matches!(
@@ -47,7 +54,7 @@ fn exact_negotiate_challenge_and_proof_establish_one_encrypted_session()
         Err(SmbSecureChannelError::EncryptionRequired)
     ));
     assert_eq!(
-        channel.encode_response(final_response)?.get(..4),
+        channel.encode_response(final_response, false)?.get(..4),
         Some([0xfd, b'S', b'M', b'B'].as_slice())
     );
     assert!(matches!(

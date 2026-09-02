@@ -49,7 +49,8 @@ pub use create::{
     CreateResponseValues, CreateTargetKind, SmbCreateError, SmbRequestedAccess, SmbShareAccess,
 };
 pub use direct_tcp::{
-    DirectTcpFrame, DirectTcpFrameError, DirectTcpFrameHeader, encode_direct_tcp_header,
+    DIRECT_TCP_MAX_PAYLOAD_LENGTH, DIRECT_TCP_MAX_PAYLOAD_LENGTH_U32, DirectTcpFrame,
+    DirectTcpFrameError, DirectTcpFrameHeader, encode_direct_tcp_header,
 };
 pub use file_id::SmbFileId;
 pub use file_information::{

@@ -10,10 +10,10 @@ use meshspan_domain::{
 };
 use meshspan_filesystem::{
     AdapterCloseFileRequest, AdapterCreateDirectoryRequest, AdapterCreateFileRequest,
-    AdapterFlushFileRequest, AdapterListRequest, AdapterLockRequest, AdapterReadFileRequest,
-    AdapterRenameRequest, AdapterSetDispositionRequest, AdapterSetLengthRequest,
-    AdapterStatRequest, AdapterUnlockRequest, AdapterWriteFileRequest, ByteRange,
-    CreateDisposition as FilesystemDisposition, DirectoryEntryKind, DirectoryListCursor,
+    AdapterFlushFileRequest, AdapterListRequest, AdapterLockRequest, AdapterOpenFileRequest,
+    AdapterReadFileRequest, AdapterRenameRequest, AdapterSetDispositionRequest,
+    AdapterSetLengthRequest, AdapterStatRequest, AdapterUnlockRequest, AdapterWriteFileRequest,
+    ByteRange, CreateDisposition as FilesystemDisposition, DirectoryEntryKind, DirectoryListCursor,
     FilesystemAccessContext, FilesystemFileAdapter, HandleAccess, HandleShare, NamespaceLimits,
     NamespacePath, RangeLockKind,
 };
@@ -151,6 +151,16 @@ struct RelocationPlan {
     directories: Vec<(SmbFileId, NamespacePath)>,
 }
 
+struct FileOpenOutcome {
+    handle_id: HandleId,
+    object_id: ObjectId,
+    fence: u64,
+    logical_length: u64,
+    lease_expires_at: UnixMicros,
+    dirty: bool,
+    action: CreateAction,
+}
+
 impl<F> SmbFilesystemAdapter<F>
 where
     F: FilesystemFileAdapter,
@@ -191,6 +201,14 @@ where
         {
             return self.create_directory(context, request);
         }
+        self.create_file(context, request)
+    }
+
+    fn create_file(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &CreateRequest,
+    ) -> Result<SmbCreateOutcome, SmbFilesystemAdapterError<F::Error>> {
         let path = self.path(&request.path_components)?;
         let file_id = derive_file_id(
             request.header.session_id,
@@ -200,66 +218,17 @@ where
         if self.handles.contains_key(&file_id) {
             return Err(SmbFilesystemAdapterError::DuplicateFileIdentity);
         }
-        let handle_id = HandleId::from_bytes(file_id.identity_bytes())
-            .map_err(|_| SmbFilesystemAdapterError::InvalidIdentity)?;
-        let desired_access = HandleAccess::new(
-            request.desired_access.read_data,
-            request.desired_access.write_data,
-            request.desired_access.delete,
-        )
-        .map_err(|_| SmbFilesystemAdapterError::InvalidAccess)?;
-        let lease_expires_at = deadline(context.now, self.limits.handle_lease)?;
-        let content_deadline = deadline(context.now, self.limits.content_timeout)?;
-        let operation_id = operation_id(request.header, b"create")?;
-        let receipt = self
-            .filesystem
-            .create_file(
-                context,
-                &AdapterCreateFileRequest {
-                    operation_id,
-                    handle_id,
-                    volume_id: self.tree.volume_id,
-                    path: path.clone(),
-                    create_disposition: map_disposition(request.disposition),
-                    desired_access,
-                    share_access: HandleShare::new(
-                        request.share_access.read,
-                        request.share_access.write,
-                        request.share_access.delete,
-                    ),
-                    delete_on_close: request.options.delete_on_close,
-                    maximum_stage_bytes: request
-                        .desired_access
-                        .write_data
-                        .then_some(self.limits.maximum_writable_file_bytes),
-                    lease_expires_at,
-                    content_deadline,
-                    observed_at: context.now,
-                },
-            )
-            .map_err(SmbFilesystemAdapterError::Filesystem)?;
-        let logical_length = if receipt.handle.truncate_on_first_write {
-            0
-        } else {
-            receipt.handle.opened_logical_length
-        };
-        let action = if receipt.creation.is_some() {
-            CreateAction::Created
-        } else if receipt.handle.truncate_on_first_write {
-            CreateAction::Overwritten
-        } else {
-            CreateAction::Opened
-        };
+        let opened = self.open_file_handle(context, request, &path, file_id)?;
         let response = CreateResponse::encode(
             request,
             CreateResponseValues {
-                action,
+                action: opened.action,
                 creation_time: unix_micros_to_filetime(context.now)?,
                 last_access_time: unix_micros_to_filetime(context.now)?,
                 last_write_time: unix_micros_to_filetime(context.now)?,
                 change_time: unix_micros_to_filetime(context.now)?,
-                allocation_size: logical_length,
-                end_of_file: logical_length,
+                allocation_size: opened.logical_length,
+                end_of_file: opened.logical_length,
                 file_attributes: if request.file_attributes == 0 {
                     FILE_ATTRIBUTE_NORMAL
                 } else {
@@ -272,19 +241,117 @@ where
         self.handles.insert(
             file_id,
             OpenFile {
-                handle_id,
-                object_id: receipt.handle.object_id,
+                handle_id: opened.handle_id,
+                object_id: opened.object_id,
                 path,
-                fence: receipt.handle.handle_fence,
+                fence: opened.fence,
                 checkpoint_sequence: 0,
-                logical_length,
-                lease_expires_at,
+                logical_length: opened.logical_length,
+                lease_expires_at: opened.lease_expires_at,
                 granted_access: request.desired_access.wire_mask,
                 delete_pending: request.options.delete_on_close,
-                dirty: receipt.handle.truncate_on_first_write,
+                dirty: opened.dirty,
             },
         );
         Ok(SmbCreateOutcome { response, file_id })
+    }
+
+    fn open_file_handle(
+        &mut self,
+        context: FilesystemAccessContext,
+        request: &CreateRequest,
+        path: &NamespacePath,
+        file_id: SmbFileId,
+    ) -> Result<FileOpenOutcome, SmbFilesystemAdapterError<F::Error>> {
+        let handle_id = HandleId::from_bytes(file_id.identity_bytes())
+            .map_err(|_| SmbFilesystemAdapterError::InvalidIdentity)?;
+        let desired_access = HandleAccess::new(
+            request.desired_access.read_data,
+            request.desired_access.write_data,
+            request.desired_access.delete,
+        )
+        .map_err(|_| SmbFilesystemAdapterError::InvalidAccess)?;
+        let lease_expires_at = deadline(context.now, self.limits.handle_lease)?;
+        let operation_id = operation_id(request.header, b"create")?;
+        let share_access = HandleShare::new(
+            request.share_access.read,
+            request.share_access.write,
+            request.share_access.delete,
+        );
+        let maximum_stage_bytes = request
+            .desired_access
+            .write_data
+            .then_some(self.limits.maximum_writable_file_bytes);
+        if request.disposition == CreateDisposition::OpenExisting {
+            let receipt = self
+                .filesystem
+                .open_existing_file(
+                    context,
+                    &AdapterOpenFileRequest {
+                        operation_id,
+                        handle_id,
+                        volume_id: self.tree.volume_id,
+                        path: path.clone(),
+                        desired_access,
+                        share_access,
+                        delete_on_close: request.options.delete_on_close,
+                        maximum_stage_bytes,
+                        lease_expires_at,
+                        observed_at: context.now,
+                    },
+                )
+                .map_err(SmbFilesystemAdapterError::Filesystem)?;
+            Ok(FileOpenOutcome {
+                handle_id,
+                object_id: receipt.object_id,
+                fence: receipt.handle_fence,
+                logical_length: receipt.opened_logical_length,
+                lease_expires_at,
+                dirty: false,
+                action: CreateAction::Opened,
+            })
+        } else {
+            let receipt = self
+                .filesystem
+                .create_file(
+                    context,
+                    &AdapterCreateFileRequest {
+                        operation_id,
+                        handle_id,
+                        volume_id: self.tree.volume_id,
+                        path: path.clone(),
+                        create_disposition: map_disposition(request.disposition),
+                        desired_access,
+                        share_access,
+                        delete_on_close: request.options.delete_on_close,
+                        maximum_stage_bytes,
+                        lease_expires_at,
+                        content_deadline: deadline(context.now, self.limits.content_timeout)?,
+                        observed_at: context.now,
+                    },
+                )
+                .map_err(SmbFilesystemAdapterError::Filesystem)?;
+            let dirty = receipt.handle.truncate_on_first_write;
+            Ok(FileOpenOutcome {
+                handle_id,
+                object_id: receipt.handle.object_id,
+                fence: receipt.handle.handle_fence,
+                logical_length: if dirty {
+                    0
+                } else {
+                    receipt.handle.opened_logical_length
+                },
+                lease_expires_at,
+                dirty,
+                action: if receipt.creation.is_some() {
+                    CreateAction::Created
+                } else if dirty {
+                    CreateAction::Overwritten
+                } else {
+                    CreateAction::Opened
+                },
+            })
+        }
     }
 
     /// Enumerates one immutable bounded directory page through the shared namespace service.
@@ -299,6 +366,9 @@ where
         request: &QueryDirectoryRequest,
     ) -> Result<QueryDirectoryResponse, SmbFilesystemAdapterError<F::Error>> {
         self.validate_header(request.header.session_id, request.header.tree_id)?;
+        if let Some(pattern) = exact_search_pattern(request.search_pattern.as_deref())? {
+            return self.query_exact_directory_entry(context, request, pattern);
+        }
         if !matches!(request.search_pattern.as_deref(), None | Some("*" | "*.*")) {
             return Err(SmbFilesystemAdapterError::UnsupportedSearchPattern);
         }
@@ -349,6 +419,56 @@ where
             .ok_or(SmbFilesystemAdapterError::UnknownDirectory)?
             .cursor = page.next_cursor;
         Ok(response)
+    }
+
+    fn query_exact_directory_entry(
+        &self,
+        context: FilesystemAccessContext,
+        request: &QueryDirectoryRequest,
+        pattern: &str,
+    ) -> Result<QueryDirectoryResponse, SmbFilesystemAdapterError<F::Error>> {
+        let directory = self
+            .directories
+            .get(&request.file_id)
+            .ok_or(SmbFilesystemAdapterError::UnknownDirectory)?;
+        let mut components = directory.path.as_ref().map_or_else(Vec::new, |path| {
+            path.components()
+                .iter()
+                .map(|component| component.display().to_owned())
+                .collect()
+        });
+        components.push(pattern.to_owned());
+        let path = NamespacePath::from_components(
+            components.iter().map(String::as_str),
+            self.tree.namespace_limits,
+        )
+        .map_err(|_| SmbFilesystemAdapterError::InvalidPath)?;
+        let stat = self
+            .filesystem
+            .stat(
+                context,
+                &AdapterStatRequest {
+                    volume_id: self.tree.volume_id,
+                    path,
+                    observed_at: context.now,
+                },
+            )
+            .map_err(SmbFilesystemAdapterError::Filesystem)?;
+        let observed_filetime = unix_micros_to_filetime(context.now)?;
+        QueryDirectoryResponse::encode(
+            request,
+            &[DirectoryResponseEntry {
+                name: stat.name.display().to_owned(),
+                file_id: object_file_id(stat.object_id),
+                is_directory: stat.kind == DirectoryEntryKind::Directory,
+                logical_length: stat.logical_length.unwrap_or(0),
+                creation_time: observed_filetime,
+                last_access_time: observed_filetime,
+                last_write_time: observed_filetime,
+                change_time: observed_filetime,
+            }],
+        )
+        .map_err(|_| SmbFilesystemAdapterError::InvalidResponse)
     }
 
     /// Reads bounded file information for one exact live open.
@@ -508,7 +628,11 @@ where
                     handle_fence: open.fence,
                     offset: request.offset,
                     length: u64::from(request.length),
-                    content_deadline: deadline(context.now, self.limits.content_timeout)?,
+                    content_deadline: content_deadline(
+                        context.now,
+                        self.limits.content_timeout,
+                        open.lease_expires_at,
+                    )?,
                     observed_at: context.now,
                 },
             )
@@ -703,7 +827,11 @@ where
                 expected_stage_sequence: open.checkpoint_sequence,
                 final_length: open.logical_length,
                 sparse: true,
-                content_deadline: deadline(context.now, self.limits.content_timeout)?,
+                content_deadline: content_deadline(
+                    context.now,
+                    self.limits.content_timeout,
+                    open.lease_expires_at,
+                )?,
                 observed_at: context.now,
             })
         } else {
@@ -714,6 +842,7 @@ where
                 context,
                 AdapterCloseFileRequest {
                     operation_id: operation_id(request.header, b"close")?,
+                    delete_operation_id: operation_id(request.header, b"close-delete")?,
                     handle_id: open.handle_id,
                     handle_fence: open.fence,
                     flush,
@@ -993,7 +1122,11 @@ where
                     expected_stage_sequence: open.checkpoint_sequence,
                     final_length: open.logical_length,
                     sparse: true,
-                    content_deadline: deadline(context.now, self.limits.content_timeout)?,
+                    content_deadline: content_deadline(
+                        context.now,
+                        self.limits.content_timeout,
+                        open.lease_expires_at,
+                    )?,
                     observed_at: context.now,
                 },
             )
@@ -1062,6 +1195,25 @@ fn allocation_size<E>(logical_length: u64) -> Result<u64, SmbFilesystemAdapterEr
         .checked_add(ALLOCATION_UNIT - 1)
         .map(|length| length / ALLOCATION_UNIT * ALLOCATION_UNIT)
         .ok_or(SmbFilesystemAdapterError::LimitExceeded)
+}
+
+fn exact_search_pattern<E>(
+    pattern: Option<&str>,
+) -> Result<Option<&str>, SmbFilesystemAdapterError<E>> {
+    match pattern {
+        Some("*" | "*.*") | None => Ok(None),
+        Some(value) if value.contains(['*', '?']) => Ok(None),
+        Some(value)
+            if value.is_empty()
+                || matches!(value, "." | "..")
+                || value
+                    .chars()
+                    .any(|character| character.is_control() || matches!(character, '/' | '\\')) =>
+        {
+            Err(SmbFilesystemAdapterError::InvalidPath)
+        }
+        Some(value) => Ok(Some(value)),
+    }
 }
 
 fn root_directory_object_id<E>(
@@ -1229,6 +1381,17 @@ fn deadline<E>(
 ) -> Result<UnixMicros, SmbFilesystemAdapterError<E>> {
     now.checked_add(duration)
         .ok_or(SmbFilesystemAdapterError::InvalidTime)
+}
+
+fn content_deadline<E>(
+    now: UnixMicros,
+    duration: DurationMicros,
+    lease_expires_at: UnixMicros,
+) -> Result<UnixMicros, SmbFilesystemAdapterError<E>> {
+    if lease_expires_at <= now {
+        return Err(SmbFilesystemAdapterError::InvalidTime);
+    }
+    Ok(deadline(now, duration)?.min(lease_expires_at))
 }
 
 fn unix_micros_to_filetime<E>(instant: UnixMicros) -> Result<u64, SmbFilesystemAdapterError<E>> {

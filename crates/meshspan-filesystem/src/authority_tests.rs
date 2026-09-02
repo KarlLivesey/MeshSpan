@@ -105,6 +105,66 @@ fn open_authorises_the_resolved_object_and_binds_the_returned_principal()
 }
 
 #[test]
+fn adapter_close_completes_durable_delete_on_close_before_success()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    seed_file(directory.path())?;
+    let allowed = Rc::new(Cell::new(true));
+    let authority = TestAuthority::new(allowed, PrincipalId::from_bytes([18; 16])?);
+    let filesystem =
+        FilesystemCommitService::open(directory.path(), UnixMicros::new(2), UnusedPublisher)?;
+    let authorised = AuthorisedFilesystemService::new(filesystem, authority);
+    let mut adapter = BoundFilesystemAdapter::new(
+        authorised,
+        BranchId::from_bytes([11; 16])?,
+        FilesystemAdapterPolicy::new(true, 1, 1)?,
+    );
+    let path = NamespacePath::from_components(["report"], NamespaceLimits::PORTABLE)?;
+    let open = adapter.open_existing_file(
+        context(UnixMicros::new(10))?,
+        &AdapterOpenFileRequest {
+            operation_id: OperationId::from_bytes([70; 16])?,
+            handle_id: HandleId::from_bytes([71; 16])?,
+            volume_id: VolumeId::from_bytes([12; 16])?,
+            path: path.clone(),
+            desired_access: HandleAccess::new(true, false, true)?,
+            share_access: HandleShare::new(true, true, true),
+            delete_on_close: true,
+            maximum_stage_bytes: None,
+            lease_expires_at: UnixMicros::new(80),
+            observed_at: UnixMicros::new(10),
+        },
+    )?;
+    let closed = adapter.close_file(
+        context(UnixMicros::new(20))?,
+        AdapterCloseFileRequest {
+            operation_id: OperationId::from_bytes([72; 16])?,
+            delete_operation_id: OperationId::from_bytes([73; 16])?,
+            handle_id: open.handle_id,
+            handle_fence: open.handle_fence,
+            flush: None,
+            observed_at: UnixMicros::new(20),
+        },
+    )?;
+
+    assert_eq!(closed.close.outcome, CloseHandleOutcome::DeleteReady);
+    assert!(matches!(
+        adapter.stat(
+            context(UnixMicros::new(21))?,
+            &AdapterStatRequest {
+                volume_id: VolumeId::from_bytes([12; 16])?,
+                path,
+                observed_at: UnixMicros::new(21),
+            },
+        ),
+        Err(AuthorisedFilesystemError::Query(
+            NamespaceQueryError::NotFound
+        ))
+    ));
+    Ok(())
+}
+
+#[test]
 fn revoked_write_never_reaches_the_stage_and_restored_authority_can_resume()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;

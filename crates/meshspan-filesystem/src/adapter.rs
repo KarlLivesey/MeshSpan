@@ -244,6 +244,8 @@ pub struct AdapterRenameRequest {
 pub struct AdapterCloseFileRequest {
     /// Stable idempotency identity for final handle release.
     pub operation_id: OperationId,
+    /// Distinct stable identity for synchronous delete-on-close finalisation, when required.
+    pub delete_operation_id: OperationId,
     /// Opaque open handle returned by this service.
     pub handle_id: HandleId,
     /// Exact current handle fence.
@@ -724,7 +726,8 @@ where
         context: FilesystemAccessContext,
         request: AdapterCloseFileRequest,
     ) -> Result<FilesystemHandleCloseReceipt, Self::Error> {
-        self.filesystem.adapter_close(context, request, self.policy)
+        self.filesystem
+            .adapter_close(self.branch_id, context, request, self.policy)
     }
 
     fn renew_lease(

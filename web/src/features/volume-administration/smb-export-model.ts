@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-import { createEffect, createSignal, type Accessor, type Setter } from "solid-js";
+import {
+  createEffect,
+  createSignal,
+  type Accessor,
+  type Setter,
+} from "solid-js";
 
 import type { PublishSmbExportResponse } from "../../generated/types.gen";
 import type { AdminVolume, VolumeAdministrationClient } from "./model";
@@ -25,10 +30,13 @@ export type SmbExportModel = Readonly<{
   withdrawalReason: Accessor<string>;
 }>;
 
-export function createSmbExportModel(context: SmbExportContext): SmbExportModel {
+export function createSmbExportModel(
+  context: SmbExportContext,
+): SmbExportModel {
   const [shareName, setShareName] = createSignal("");
   const [encryptionRequired, setEncryptionRequired] = createSignal(true);
-  const [publication, setPublication] = createSignal<PublishSmbExportResponse>();
+  const [publication, setPublication] =
+    createSignal<PublishSmbExportResponse>();
   const [withdrawalReason, setWithdrawalReason] = createSignal("");
   const [pending, setPending] = createSignal<"publish" | "withdraw">();
   const [error, setError] = createSignal<string>();
@@ -65,7 +73,11 @@ export function createSmbExportModel(context: SmbExportContext): SmbExportModel 
   const withdraw = async (): Promise<void> => {
     const current = publication();
     const reason = withdrawalReason().trim();
-    if (current === undefined || reason.length === 0 || pending() !== undefined) {
+    if (
+      current === undefined ||
+      reason.length === 0 ||
+      pending() !== undefined
+    ) {
       setError("Enter a reason before withdrawing the share.");
       return;
     }

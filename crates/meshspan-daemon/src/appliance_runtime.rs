@@ -114,7 +114,7 @@ const TOTP_ISSUER: &str = "MeshSpan";
 const PASSKEY_RELYING_PARTY_ID: &str = "meshspan.local";
 const PASSKEY_RELYING_PARTY_NAME: &str = "MeshSpan";
 const PASSKEY_CEREMONY_LIFETIME_MICROS: u64 = 5 * 60 * 1_000_000;
-const SMB_PACKET_BYTES: usize = 16 * 1_024 * 1_024;
+const SMB_PACKET_BYTES: usize = meshspan_smb::DIRECT_TCP_MAX_PAYLOAD_LENGTH;
 const SMB_INACTIVITY_TIMEOUT: Duration = Duration::from_mins(5);
 
 type AuthorityTask = (

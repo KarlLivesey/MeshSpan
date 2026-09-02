@@ -206,6 +206,7 @@ where
             context,
             AdapterCloseFileRequest {
                 operation_id: identities.close_operation,
+                delete_operation_id: identities.delete_operation,
                 handle_id: identities.handle,
                 handle_fence: open.handle_fence,
                 flush: None,
@@ -252,12 +253,13 @@ struct FileReadIdentities {
     open_operation: OperationId,
     read_operation: OperationId,
     close_operation: OperationId,
+    delete_operation: OperationId,
     handle: HandleId,
 }
 
 impl FileReadIdentities {
     fn allocate(random: &mut impl RandomSource) -> Result<Self, FileReadError> {
-        let mut bytes = [[0_u8; 16]; 4];
+        let mut bytes = [[0_u8; 16]; 5];
         for value in &mut bytes {
             random
                 .fill_bytes(value)
@@ -275,7 +277,9 @@ impl FileReadIdentities {
                 .map_err(|_| FileReadError::Unavailable)?,
             close_operation: OperationId::from_bytes(bytes[2])
                 .map_err(|_| FileReadError::Unavailable)?,
-            handle: HandleId::from_bytes(bytes[3]).map_err(|_| FileReadError::Unavailable)?,
+            delete_operation: OperationId::from_bytes(bytes[3])
+                .map_err(|_| FileReadError::Unavailable)?,
+            handle: HandleId::from_bytes(bytes[4]).map_err(|_| FileReadError::Unavailable)?,
         })
     }
 }

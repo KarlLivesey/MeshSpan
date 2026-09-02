@@ -4,10 +4,7 @@ import { Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 
 import type { AdminVolume, VolumeAdministrationClient } from "./model";
-import {
-  createSmbExportModel,
-  type SmbExportModel,
-} from "./smb-export-model";
+import { createSmbExportModel, type SmbExportModel } from "./smb-export-model";
 
 type SmbExportPanelProps = Readonly<{
   client: VolumeAdministrationClient;

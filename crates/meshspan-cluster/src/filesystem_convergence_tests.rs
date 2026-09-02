@@ -161,6 +161,10 @@ impl IsolatedServiceFixture {
                     NodeSide::Home => [43; 16],
                     NodeSide::Office => [53; 16],
                 })?,
+                delete_operation_id: OperationId::from_bytes(match side {
+                    NodeSide::Home => [44; 16],
+                    NodeSide::Office => [54; 16],
+                })?,
                 handle_id: request.handle_id,
                 handle_fence: 1,
                 flush: None,

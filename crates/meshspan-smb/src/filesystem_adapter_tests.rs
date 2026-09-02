@@ -162,9 +162,24 @@ impl FilesystemFileAdapter for TestFilesystem {
     fn stat(
         &self,
         _context: FilesystemAccessContext,
-        _request: &AdapterStatRequest,
+        request: &AdapterStatRequest,
     ) -> Result<NamespaceObjectStat, Self::Error> {
-        Err(TestError)
+        let name = request.path.components().last().ok_or(TestError)?.clone();
+        let is_directory = name.display() == "shared";
+        Ok(NamespaceObjectStat {
+            namespace_commit_id: namespace_commit()?,
+            object_id: ObjectId::from_bytes([21; 16]).map_err(|_| TestError)?,
+            object_revision_id: ObjectRevisionId::from_bytes([22; 16]).map_err(|_| TestError)?,
+            name,
+            entry_generation: 1,
+            kind: if is_directory {
+                meshspan_filesystem::DirectoryEntryKind::Directory
+            } else {
+                meshspan_filesystem::DirectoryEntryKind::File
+            },
+            file_version_id: (!is_directory).then(file_version).transpose()?,
+            logical_length: (!is_directory).then_some(16),
+        })
     }
 
     fn list(
@@ -628,6 +643,37 @@ fn directory_create_enumerate_and_close_use_the_logical_namespace()
             components: vec!["shared".to_owned(), "documents".to_owned()]
         }]
     );
+    Ok(())
+}
+
+#[test]
+fn exact_directory_search_resolves_one_case_preserved_logical_name()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut adapter = adapter(64)?;
+    let mut directory = create_request(43, Vec::new());
+    directory.disposition = CreateDisposition::OpenExisting;
+    directory.desired_access.write_data = false;
+    directory.file_attributes = 0x0000_0010;
+    directory.options.target_kind = CreateTargetKind::Directory;
+    let root = adapter.create(context()?, &directory)?;
+    let response = adapter.query_directory(
+        context()?,
+        &QueryDirectoryRequest {
+            header: header(Smb2Command::QueryDirectory, 44),
+            information_class: DirectoryInformationClass::Names,
+            restart_scan: true,
+            return_single_entry: true,
+            reopen: false,
+            file_id: root.file_id,
+            search_pattern: Some("Exact.txt".to_owned()),
+            output_buffer_length: 4_096,
+        },
+    )?;
+    let expected_name = "Exact.txt"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    assert_eq!(&response.packet[84..], expected_name);
     Ok(())
 }
 

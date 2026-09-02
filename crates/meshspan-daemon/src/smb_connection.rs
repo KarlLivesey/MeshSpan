@@ -32,7 +32,7 @@ use crate::{
     SmbSessionAuthority, classify_native_filesystem_error,
 };
 
-const MAXIMUM_PACKET_BYTES: u32 = 16 * 1_024 * 1_024;
+const MAXIMUM_PACKET_BYTES: u32 = meshspan_smb::DIRECT_TCP_MAX_PAYLOAD_LENGTH_U32;
 const MAXIMUM_WRITABLE_FILE_BYTES: u64 = i64::MAX as u64;
 const HANDLE_LEASE_MICROS: u64 = 60 * 1_000_000;
 const CONTENT_TIMEOUT_MICROS: u64 = 60 * 1_000_000;

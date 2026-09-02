@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::time::Duration;
 
-use meshspan_smb::{DirectTcpFrameHeader, encode_direct_tcp_header};
+use meshspan_smb::{DIRECT_TCP_MAX_PAYLOAD_LENGTH, DirectTcpFrameHeader, encode_direct_tcp_header};
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -17,7 +17,7 @@ use tokio::time::timeout;
 
 const DIRECT_TCP_HEADER_BYTES: usize = 4;
 const MINIMUM_SMB_PACKET_BYTES: usize = 64;
-const MAXIMUM_SMB_PACKET_BYTES: usize = 16 * 1_024 * 1_024;
+const MAXIMUM_SMB_PACKET_BYTES: usize = DIRECT_TCP_MAX_PAYLOAD_LENGTH;
 const CONNECTION_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Per-connection bounded message and inactivity policy.

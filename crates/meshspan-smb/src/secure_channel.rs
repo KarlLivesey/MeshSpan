@@ -8,6 +8,7 @@ use crate::{
 };
 
 const TRANSFORM_PROTOCOL: [u8; 4] = [0xfd, b'S', b'M', b'B'];
+const SIGNED_RESPONSE_FLAG: u32 = 0x0000_0008;
 
 /// One established session's mandatory inbound and outbound protection.
 pub struct SmbSecureChannel<I> {
@@ -68,9 +69,14 @@ impl<I> SmbSecureChannel<I> {
     /// # Errors
     ///
     /// Rejects malformed/session-confused plaintext, signing failure or transform failure.
-    pub fn encode_response(&self, mut packet: Vec<u8>) -> Result<Vec<u8>, SmbSecureChannelError> {
+    pub fn encode_response(
+        &self,
+        mut packet: Vec<u8>,
+        request_was_encrypted: bool,
+    ) -> Result<Vec<u8>, SmbSecureChannelError> {
         validate_response_session(&packet, self.session.session_id())?;
-        if self.session.encryption_required() {
+        if self.session.encryption_required() || request_was_encrypted {
+            mark_response_signed(&mut packet)?;
             self.transform()?.encrypt(&packet).map_err(Into::into)
         } else {
             sign_smb311(
@@ -91,6 +97,19 @@ impl<I> SmbSecureChannel<I> {
         )
         .map_err(Into::into)
     }
+}
+
+fn mark_response_signed(packet: &mut [u8]) -> Result<(), SmbSecureChannelError> {
+    let flags = packet
+        .get_mut(16..20)
+        .ok_or(SmbSecureChannelError::InvalidPlaintext)?;
+    let value = u32::from_le_bytes(
+        flags
+            .try_into()
+            .map_err(|_| SmbSecureChannelError::InvalidPlaintext)?,
+    ) | SIGNED_RESPONSE_FLAG;
+    flags.copy_from_slice(&value.to_le_bytes());
+    Ok(())
 }
 
 fn validate_response_session(packet: &[u8], expected: u64) -> Result<(), SmbSecureChannelError> {

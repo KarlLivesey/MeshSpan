@@ -160,6 +160,7 @@ fn create_file(
         service,
         AdapterCloseFileRequest {
             operation_id: OperationId::from_bytes([59; 16])?,
+            delete_operation_id: OperationId::from_bytes([60; 16])?,
             handle_id: request.handle_id,
             handle_fence: 1,
             flush: None,
@@ -315,6 +316,7 @@ fn close_created_handle(
         service,
         AdapterCloseFileRequest {
             operation_id: OperationId::from_bytes([operation; 16])?,
+            delete_operation_id: OperationId::from_bytes([operation.wrapping_add(1); 16])?,
             handle_id: request.handle_id,
             handle_fence: 1,
             flush,
@@ -559,6 +561,7 @@ fn assert_handle_controls(
         service,
         AdapterCloseFileRequest {
             operation_id: OperationId::from_bytes([53; 16])?,
+            delete_operation_id: OperationId::from_bytes([54; 16])?,
             handle_id: transferable.handle_id,
             handle_fence: 2,
             flush: None,

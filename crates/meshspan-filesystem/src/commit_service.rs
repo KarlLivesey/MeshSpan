@@ -6,8 +6,8 @@ use std::io::Write;
 use std::path::Path;
 
 use meshspan_domain::{
-    BranchId, ContentManifestId, FileVersionId, NamespaceCommitId, ObjectId, ObjectRevisionId,
-    PrincipalId, Revision, UnixMicros, VolumeId,
+    BranchId, ContentManifestId, FileVersionId, HandleId, NamespaceCommitId, ObjectId,
+    ObjectRevisionId, OperationId, PrincipalId, Revision, UnixMicros, VolumeId,
 };
 use thiserror::Error;
 
@@ -926,6 +926,39 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         publication: &crate::NamespaceUnlinkPublication,
     ) -> Result<crate::NamespaceUnlinkReceipt, crate::HandleError> {
         self.publications.unlink_namespace(publication)
+    }
+
+    pub(crate) fn resolve_namespace_unlink(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<crate::NamespaceUnlinkReceipt>, crate::HandleError> {
+        self.publications
+            .resolve_namespace_unlink(operation_id)
+            .map_err(crate::HandleError::from)
+    }
+
+    pub(crate) fn ready_namespace_delete(
+        &mut self,
+        requesting_handle_id: HandleId,
+        observed_at: UnixMicros,
+    ) -> Result<crate::ReadyNamespaceDelete, crate::HandleError> {
+        self.publications
+            .ready_namespace_delete(requesting_handle_id, observed_at)
+    }
+
+    pub(crate) fn prepare_ready_namespace_delete(
+        &self,
+        operation_id: OperationId,
+        ready: &crate::ReadyNamespaceDelete,
+        created_by: PrincipalId,
+        observed_at: UnixMicros,
+    ) -> Result<crate::NamespaceUnlinkPublication, crate::HandleError> {
+        self.publications.prepare_ready_namespace_delete(
+            operation_id,
+            ready,
+            created_by,
+            observed_at,
+        )
     }
 
     pub(crate) fn adapter_unlink_target(

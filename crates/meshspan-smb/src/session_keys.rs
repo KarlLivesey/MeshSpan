@@ -66,7 +66,8 @@ pub struct Smb311SessionKeys {
 }
 
 impl Smb311SessionKeys {
-    /// Derives all SMB 3.1.1 keys from the authentication session key and final transcript.
+    /// Derives all SMB 3.1.1 keys from the authentication session key and the transcript through
+    /// the final session-setup request.
     ///
     /// # Errors
     ///
@@ -160,7 +161,9 @@ fn kdf<const LENGTH: usize>(
         .map_err(|_| SmbSessionKeyError::InvalidSessionKey)?;
     mac.update(&1_u32.to_be_bytes());
     mac.update(label);
-    mac.update(&[0]);
+    // SMB specifies a NUL-terminated label as the SP800-108 Label input; counter mode then
+    // appends its distinct zero-byte separator before Context.
+    mac.update(&[0, 0]);
     mac.update(context);
     mac.update(&output_bits.to_be_bytes());
     let block = mac.finalize().into_bytes();
@@ -219,19 +222,19 @@ mod tests {
         assert_eq!(keys.incoming_decryption_key().len(), 16);
         assert_eq!(
             keys.signing_key(),
-            &hex16("11a46c4cc9c14599e5ab7d1a048293ca")
+            &hex16("35b047f89e48fcaade7572ca8af7fef7")
         );
         assert_eq!(
             keys.application_key(),
-            &hex16("183b22b880fa0252bebe99e33dad7f6e")
+            &hex16("ef096232d85d6178886a4b0fee73aca6")
         );
         assert_eq!(
             keys.outgoing_encryption_key(),
-            &hex16("ff09715fe1199c169efe43fe9f647dcc")
+            &hex16("a1072b374b03d7db092e23eefa731684")
         );
         assert_eq!(
             keys.incoming_decryption_key(),
-            &hex16("d9de928bf980a0197b72ea35f57ed2ee")
+            &hex16("890acadd941762e99ee9cec986268665")
         );
         Ok(())
     }
@@ -248,11 +251,11 @@ mod tests {
         assert_eq!(keys.incoming_decryption_key().len(), 32);
         assert_eq!(
             keys.outgoing_encryption_key(),
-            &hex32("5d0fbd5c21e0bcd5d09a4decd4dead5eec082de1375316a35a8c5f52d6f05e2d")
+            &hex32("065c59993b64af578d24f95cf4960bacd706e27f447a9f34f974651ed7f6028a")
         );
         assert_eq!(
             keys.incoming_decryption_key(),
-            &hex32("a44af7e805bd583773b616d546973df18c545a22bcbf16ab93fd9fea1510ecf2")
+            &hex32("73241b72c254c3747226328cd809fa73e8d88518c197724164d7c0c7122717c0")
         );
         Ok(())
     }
