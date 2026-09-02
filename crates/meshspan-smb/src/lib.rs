@@ -12,6 +12,7 @@ mod negotiate;
 mod negotiate_response;
 mod ntlm_v2;
 mod session_keys;
+mod signing;
 mod status;
 
 pub use direct_tcp::{
@@ -27,4 +28,5 @@ pub use negotiate_response::{
 };
 pub use ntlm_v2::{NtlmPasswordVerifier, NtlmSessionBaseKey, NtlmVerificationError};
 pub use session_keys::{Smb311PreauthHash, Smb311SessionKeys, SmbSessionKeyError};
+pub use signing::{SmbPacketSender, SmbSigningError, sign_smb311, verify_smb311};
 pub use status::{ConnectorFailure, NtStatus};

@@ -48,6 +48,7 @@ source/advisory policy automation arrive before a release artefact is built.
 | `aes-gcm`                                |           0.11.1 | `Apache-2.0 OR MIT`        |
 | `axum`                                   |            0.8.9 | `MIT`                      |
 | `chacha20`                               |           0.10.2 | `MIT OR Apache-2.0`        |
+| `cmac`                                   |            0.8.0 | `MIT OR Apache-2.0`        |
 | `jsonschema`                             |           0.52.0 | `MIT`                      |
 | `hmac`                                   |           0.13.0 | `MIT OR Apache-2.0`        |
 | `md-5`                                   |           0.11.0 | `MIT OR Apache-2.0`        |
@@ -205,6 +206,7 @@ the first implementation.
 | `blake3`           | Content, manifest, proof and operation digests where the design selects BLAKE3 |
 | `ed25519-dalek`    | Signed routing, grants, receipts and offline-authority projections             |
 | `chacha20poly1305` | Authenticated envelope encryption for protected application material           |
+| `cmac`             | SMB 3.1.1 AES-CMAC packet signing for compatible standard clients               |
 | `hkdf`             | Domain-separated key derivation                                                |
 | `sha2`             | Standards that mandate SHA-2, including certificate and SMB constructions      |
 | `getrandom`        | Operating-system cryptographic randomness                                      |
@@ -228,8 +230,10 @@ verification. It uses the current RustCrypto `hmac`, `sha1` and `sha2` releases
 under their MIT option, has no MeshSpan application dependency and returns the
 exact accepted counter for authoritative replay prevention.
 
-The `GPL-2.0-only` `meshspan-smb` crate uses current RustCrypto `md4` and `md-5`
-0.11 releases under their MIT/Apache-2.0 licence choice solely because standard
+The `GPL-2.0-only` `meshspan-smb` crate uses current RustCrypto `cmac` 0.8,
+`md4` 0.11 and `md-5` 0.11 releases under their MIT/Apache-2.0 licence choice.
+CMAC supplies SMB 3.1.1's mandatory AES-CMAC compatibility signing path rather
+than duplicating a cryptographic primitive. The legacy digests exist solely because standard
 SMB clients require NTLMv2 challenge authentication when no external Kerberos
 realm exists. The obsolete digests never protect content, API requests or stored
 plaintext. They derive and verify password-equivalent material for the same
