@@ -152,6 +152,7 @@ mod passkey_test_support;
 mod pending_recovery_bundle;
 #[cfg(test)]
 mod pending_recovery_bundle_tests;
+mod periodic_scrub_scheduler;
 mod permission_administration;
 mod pinned_https_client;
 mod private_consensus_runtime;
@@ -186,6 +187,10 @@ mod shard_repair_worker;
 mod storage_scrub_worker;
 
 pub use maintenance_authority::MaintenanceMetadataAuthority;
+pub use periodic_scrub_scheduler::{
+    PeriodicScrubAdmissionPage, PeriodicScrubAuthority, PeriodicScrubScheduler,
+    PeriodicScrubSchedulingError,
+};
 pub use scrub_finding_scheduler::{
     AutomaticScrubFindingScheduler, RepairCandidateResolver, ScrubFindingSchedulingError,
     ScrubFindingSink,
