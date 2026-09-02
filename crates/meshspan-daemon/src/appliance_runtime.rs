@@ -124,6 +124,8 @@ const SMB_PACKET_BYTES: usize = meshspan_smb::DIRECT_TCP_MAX_PAYLOAD_LENGTH;
 const SMB_INACTIVITY_TIMEOUT: Duration = Duration::from_mins(5);
 const SCRUB_MAXIMUM_AGE_MICROS: u64 = 7 * 24 * 60 * 60 * 1_000_000;
 const SCRUB_ADMISSION_INTERVAL_MICROS: u64 = 60 * 1_000_000;
+const TARGET_HEALTH_PROBE_INTERVAL_MICROS: u64 = 30 * 1_000_000;
+const RETURN_SCAN_ADMISSIONS_PER_TICK: usize = 16;
 const SCRUB_PAGE_ITEMS: usize = 32;
 const SCRUB_PAGE_IN_FLIGHT_BYTES: u64 =
     SCRUB_PAGE_ITEMS as u64 * crate::native_filesystem_runtime::MAXIMUM_NATIVE_SHARD_BYTES as u64;
@@ -1958,6 +1960,8 @@ struct StorageTargetRuntime {
     native_filesystem: NativeFilesystemRuntime,
     configured_paths: Vec<PathBuf>,
     active: BTreeMap<PathBuf, NativeStorageTarget>,
+    pending_return_scans: BTreeMap<TargetId, (u64, UnixMicros)>,
+    next_target_health_probe_at: Option<UnixMicros>,
     scrub_admission_cursor: Option<meshspan_metadata::DueStorageScrubCursor>,
     next_scrub_admission_at: Option<UnixMicros>,
     rebalance_admission_cursor: Option<meshspan_metadata::VolumeInventoryCursor>,
@@ -2002,6 +2006,8 @@ impl StorageTargetRuntime {
             native_filesystem,
             configured_paths,
             active: BTreeMap::new(),
+            pending_return_scans: BTreeMap::new(),
+            next_target_health_probe_at: None,
             scrub_admission_cursor: None,
             next_scrub_admission_at: None,
             rebalance_admission_cursor: None,
@@ -2372,6 +2378,70 @@ impl StorageTargetRuntime {
             .ok_or(())
     }
 
+    fn probe_active_targets(&mut self, now: UnixMicros) -> Result<usize, ()> {
+        if self
+            .next_target_health_probe_at
+            .is_some_and(|eligible_at| eligible_at > now)
+        {
+            return Ok(0);
+        }
+        self.next_target_health_probe_at =
+            now.checked_add(DurationMicros::new(TARGET_HEALTH_PROBE_INTERVAL_MICROS));
+        let unavailable = self
+            .active
+            .iter()
+            .filter_map(|(canonical_path, target)| {
+                target
+                    .check_health()
+                    .is_err()
+                    .then_some(canonical_path.clone())
+            })
+            .collect::<Vec<_>>();
+        if unavailable.is_empty() {
+            return Ok(0);
+        }
+        for canonical_path in &unavailable {
+            if let Some(target) = self.active.remove(canonical_path) {
+                self.pending_return_scans
+                    .remove(&target.context().target_id);
+            }
+        }
+        self.native_filesystem
+            .invalidate_target_set()
+            .map_err(|_| ())?;
+        Ok(unavailable.len())
+    }
+
+    fn admit_return_scans(&mut self, now: UnixMicros) -> Result<(), ()> {
+        if self.pending_return_scans.is_empty() {
+            return Ok(());
+        }
+        let actor = self.maintenance_actor(now)?;
+        let pending = self
+            .pending_return_scans
+            .iter()
+            .take(RETURN_SCAN_ADMISSIONS_PER_TICK)
+            .map(|(target_id, (generation, returned_at))| (*target_id, *generation, *returned_at))
+            .collect::<Vec<_>>();
+        for (target_id, generation, returned_at) in pending {
+            PeriodicScrubScheduler::new(
+                &self.maintenance_authority,
+                &mut OperatingSystemRandom,
+                self.local_node_id,
+                actor,
+            )
+            .admit_returned_target(
+                target_id,
+                generation,
+                returned_at,
+                SCRUB_PAGE_IN_FLIGHT_BYTES,
+            )
+            .map_err(|_| ())?;
+            self.pending_return_scans.remove(&target_id);
+        }
+        Ok(())
+    }
+
     fn reconcile(&mut self, now: UnixMicros) {
         let mut failures = 0_usize;
         if self.restore_persisted_paths().is_err() {
@@ -2379,6 +2449,10 @@ impl StorageTargetRuntime {
         }
         if self.wrapping_registration.ensure(now).is_err() {
             failures = failures.saturating_add(1);
+        }
+        match self.probe_active_targets(now) {
+            Ok(unavailable) => failures = failures.saturating_add(unavailable),
+            Err(()) => failures = failures.saturating_add(1),
         }
         for configured_path in &self.configured_paths {
             let Ok(canonical_path) = std::fs::canonicalize(configured_path) else {
@@ -2393,6 +2467,8 @@ impl StorageTargetRuntime {
                     let context = target.context();
                     match self.opening.open(target, now) {
                         Ok(provider) => {
+                            self.pending_return_scans
+                                .insert(context.target_id, (context.generation, now));
                             self.active.insert(
                                 canonical_path,
                                 NativeStorageTarget::new(context, provider),
@@ -2403,6 +2479,9 @@ impl StorageTargetRuntime {
                 }
                 Err(_) => failures = failures.saturating_add(1),
             }
+        }
+        if self.admit_return_scans(now).is_err() {
+            failures = failures.saturating_add(1);
         }
         if !self.active.is_empty() {
             let targets = self.active.values().cloned().collect::<Vec<_>>();

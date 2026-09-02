@@ -140,6 +140,35 @@ where
         })
     }
 
+    /// Immediately admits one exact target generation after its focused return probes pass.
+    ///
+    /// The supplied return instant defines a distinct, restart-safe verification cycle. Replays
+    /// at that instant coalesce through the same semantic key; a later disappearance and return
+    /// produces a new cycle.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a zero generation or budget, unavailable consensus, entropy failure and
+    /// contradictory authority output.
+    pub fn admit_returned_target(
+        &mut self,
+        target_id: meshspan_domain::TargetId,
+        target_generation: u64,
+        returned_at: UnixMicros,
+        maximum_in_flight_bytes: u64,
+    ) -> Result<(), PeriodicScrubSchedulingError> {
+        self.admit_candidate(
+            DueStorageScrub {
+                target_id,
+                target_generation,
+                due_at: returned_at,
+                last_completed_at: None,
+            },
+            returned_at,
+            maximum_in_flight_bytes,
+        )
+    }
+
     fn admit_candidate(
         &mut self,
         candidate: DueStorageScrub,
@@ -285,6 +314,44 @@ mod tests {
         assert_eq!(first.subject, second.subject);
         assert_eq!(first.signals.due_at, Some(UnixMicros::new(50)));
         assert_eq!(first.demand.in_flight_bytes, 4_096);
+        Ok(())
+    }
+
+    #[test]
+    fn returned_target_is_admitted_immediately_with_exact_generation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let target_id = TargetId::from_bytes([7; 16])?;
+        let authority = RecordingAuthority {
+            due: DueStorageScrubPage {
+                targets: Vec::new(),
+                next: None,
+            },
+            commands: RefCell::new(Vec::new()),
+        };
+        let mut random = CounterRandom(80);
+        PeriodicScrubScheduler::new(
+            &authority,
+            &mut random,
+            NodeId::from_bytes([8; 16])?,
+            PrincipalId::from_bytes([9; 16])?,
+        )
+        .admit_returned_target(target_id, 4, UnixMicros::new(500), 8_192)?;
+
+        let commands = authority.commands.borrow();
+        let AuthoritativeCommand::QueueMaintenanceWork(work) = commands[0] else {
+            return Err("return admission was not scrub work".into());
+        };
+        assert_eq!(
+            work.subject,
+            WorkSubject::Scrub {
+                target_id,
+                target_generation: 4,
+            }
+        );
+        assert_eq!(work.signals.created_at, UnixMicros::new(500));
+        assert_eq!(work.signals.due_at, Some(UnixMicros::new(500)));
+        assert_eq!(work.next_attempt_at, UnixMicros::new(500));
+        assert_eq!(work.demand.in_flight_bytes, 8_192);
         Ok(())
     }
 

@@ -12,6 +12,8 @@ use meshspan_contracts::{
 };
 use meshspan_domain::UnixMicros;
 
+use crate::{FolderShardStore, FolderShardStoreError};
+
 /// One target-local provider shared by independently opened filesystem service connections.
 ///
 /// A registered target owns one journal and active pack writer, so its mutations must be ordered.
@@ -52,6 +54,21 @@ impl<P> Clone for SharedStorageProvider<P> {
             descriptor: self.descriptor,
             removal_fence: self.removal_fence,
         }
+    }
+}
+
+impl SharedStorageProvider<FolderShardStore> {
+    /// Revalidates the owned folder and both target-local databases under the target lock.
+    ///
+    /// # Errors
+    ///
+    /// Reports target-local capability, identity or integrity failure without poisoning sibling
+    /// providers.
+    pub fn check_health(&self) -> Result<(), FolderShardStoreError> {
+        self.inner
+            .lock()
+            .map_err(|_| FolderShardStoreError::Unavailable)?
+            .check_health()
     }
 }
 
@@ -235,6 +252,10 @@ mod tests {
 
         assert_eq!(shared.describe(), descriptor);
         assert_eq!(shared.removal_authority_fence(), fence);
+        assert!(matches!(
+            shared.check_health(),
+            Err(crate::FolderShardStoreError::Unavailable)
+        ));
         assert!(matches!(
             shared.inventory(None, 1),
             Err(meshspan_contracts::ContractError::Unavailable)
