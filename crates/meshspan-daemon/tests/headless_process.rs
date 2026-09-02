@@ -1712,6 +1712,7 @@ fn response_body(response: &str) -> Result<&str, Box<dyn Error>> {
 struct ProcessFixture {
     _temporary: TempDir,
     address: SocketAddr,
+    smb_address: SocketAddr,
     private_address: SocketAddr,
     claim_path: PathBuf,
     identity_path: PathBuf,
@@ -1734,6 +1735,7 @@ impl ProcessFixture {
         fs::write(storage_path.join("operator-file.txt"), b"untouched")?;
         Ok(Self {
             address: unused_address()?,
+            smb_address: unused_address()?,
             private_address: unused_udp_address()?,
             claim_path: state_path.join("first-boot.claim"),
             identity_path: state_path.join("secrets/node-identity.pk8"),
@@ -1768,6 +1770,8 @@ impl ProcessFixture {
             .arg(&self.storage_path)
             .arg("--https-listen")
             .arg(self.address.to_string())
+            .arg("--smb-listen")
+            .arg(self.smb_address.to_string())
             .arg("--private-listen")
             .arg(self.private_address.to_string())
             .arg("--private-endpoint")
