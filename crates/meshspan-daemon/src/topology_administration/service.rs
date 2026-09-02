@@ -5,8 +5,10 @@
 use axum::http::HeaderMap;
 use axum::http::header::{AUTHORIZATION, COOKIE};
 use meshspan_api_contract::{
-    CreateFaultGroupRequest, CreateFaultGroupResponse, ListFaultGroupMembershipsResponse,
-    ListFaultGroupsResponse, ListTopologyNodesResponse, ListTopologyQuery,
+    AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
+    CreateFaultGroupRequest, CreateFaultGroupResponse, CreateProtectionPolicyRequest,
+    CreateProtectionPolicyResponse, ListFaultGroupMembershipsResponse, ListFaultGroupsResponse,
+    ListProtectionPoliciesResponse, ListTopologyNodesResponse, ListTopologyQuery,
     ListTopologyTargetsResponse, SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse,
     validate_list_topology_query,
 };
@@ -14,9 +16,11 @@ use meshspan_domain::{AssuranceLevel, UnixMicros};
 use meshspan_metadata::{EntityKind, PageLimit};
 
 use super::model::{
-    command_context, create_command, decode_group_cursor, decode_membership_cursor,
-    decode_node_cursor, decode_target_cursor, group_response, group_summary, membership_command,
-    membership_response, node_response, target_response,
+    assignment_response, command_context, create_command, decode_group_cursor,
+    decode_membership_cursor, decode_node_cursor, decode_policy_cursor, decode_target_cursor,
+    group_response, group_summary, membership_command, membership_response, node_response,
+    policy_summary, protection_assignment_command, protection_policy_command,
+    protection_policy_response, target_response,
 };
 use super::{
     TopologyAdministrationAuthority, TopologyAdministrationAuthorityError,
@@ -149,6 +153,25 @@ where
         membership_response(&query, page)
     }
 
+    fn list_protection_policies(
+        &self,
+        _administrator: IdentityAdministrator,
+        query: ListTopologyQuery,
+    ) -> Result<ListProtectionPoliciesResponse, TopologyAdministrationError> {
+        validate_list_topology_query(&query)
+            .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+        let cursor = query
+            .cursor
+            .as_ref()
+            .map(decode_policy_cursor)
+            .transpose()?;
+        let page = self
+            .authority
+            .protection_policies(cursor.as_ref(), page_limit(&query)?)
+            .map_err(map_authority_error)?;
+        protection_policy_response(&query, page)
+    }
+
     fn create_fault_group(
         &mut self,
         administrator: IdentityAdministrator,
@@ -208,6 +231,66 @@ where
             present,
             revision: receipt.committed_revision.get(),
         })
+    }
+
+    fn create_protection_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        request: CreateProtectionPolicyRequest,
+    ) -> Result<CreateProtectionPolicyResponse, TopologyAdministrationError> {
+        let operation = request.operation_id.clone();
+        let (operation_id, policy_id, command) = protection_policy_command(&request)?;
+        let context = command_context(administrator, operation_id)?;
+        let expected_digest = command.request_digest(context);
+        let receipt = self
+            .authority
+            .commit_topology_operation(context, &command)
+            .map_err(map_authority_error)?;
+        if receipt.request_digest != expected_digest
+            || receipt.entity.kind != EntityKind::ProtectionPolicy
+            || receipt.entity.id != policy_id.as_bytes()
+        {
+            return Err(TopologyAdministrationError::Conflict);
+        }
+        let record = self
+            .authority
+            .protection_policy(policy_id)
+            .map_err(map_authority_error)?
+            .ok_or(TopologyAdministrationError::Failed)?;
+        Ok(CreateProtectionPolicyResponse {
+            operation_id: operation,
+            policy: policy_summary(record),
+        })
+    }
+
+    fn assign_volume_protection_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        volume_id: &str,
+        policy_id: &str,
+        request: AssignVolumeProtectionPolicyRequest,
+    ) -> Result<AssignVolumeProtectionPolicyResponse, TopologyAdministrationError> {
+        let operation = request.operation_id.clone();
+        let (operation_id, volume_id, policy_id, command) =
+            protection_assignment_command(volume_id, policy_id, &request)?;
+        let context = command_context(administrator, operation_id)?;
+        let expected_digest = command.request_digest(context);
+        let receipt = self
+            .authority
+            .commit_topology_operation(context, &command)
+            .map_err(map_authority_error)?;
+        if receipt.request_digest != expected_digest
+            || receipt.entity.kind != EntityKind::Volume
+            || receipt.entity.id != volume_id.as_bytes()
+        {
+            return Err(TopologyAdministrationError::Conflict);
+        }
+        Ok(assignment_response(
+            operation,
+            volume_id,
+            policy_id,
+            receipt.committed_revision.get(),
+        ))
     }
 }
 

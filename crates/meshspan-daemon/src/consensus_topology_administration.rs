@@ -3,12 +3,12 @@
 //! Consensus-owned adapter for mesh topology administration.
 
 use meshspan_cluster::MetadataAuthorityRequestError;
-use meshspan_domain::{FaultGroupId, OperationId};
+use meshspan_domain::{FaultGroupId, OperationId, ProtectionPolicyId};
 use meshspan_metadata::{
     AuthoritativeCommand, CommandContext, CommandReceipt, FaultGroupCursor,
     FaultGroupMembershipCursor, FaultGroupMembershipRecord, FaultGroupRecord, Page, PageLimit,
-    RepositoryError, TopologyNodeCursor, TopologyNodeRecord, TopologyTargetCursor,
-    TopologyTargetRecord,
+    ProtectionPolicyCursor, ProtectionPolicyRecord, RepositoryError, TopologyNodeCursor,
+    TopologyNodeRecord, TopologyTargetCursor, TopologyTargetRecord,
 };
 
 use crate::{
@@ -71,6 +71,28 @@ impl TopologyAdministrationAuthority for ConsensusAuthenticationAuthority {
     > {
         self.reader()
             .fault_group_memberships(after, limit)
+            .map_err(|error| map_repository_error(&error))
+    }
+
+    fn protection_policies(
+        &self,
+        after: Option<&ProtectionPolicyCursor>,
+        limit: PageLimit,
+    ) -> Result<
+        Page<ProtectionPolicyRecord, ProtectionPolicyCursor>,
+        TopologyAdministrationAuthorityError,
+    > {
+        self.reader()
+            .protection_policies(after, limit)
+            .map_err(|error| map_repository_error(&error))
+    }
+
+    fn protection_policy(
+        &self,
+        policy_id: ProtectionPolicyId,
+    ) -> Result<Option<ProtectionPolicyRecord>, TopologyAdministrationAuthorityError> {
+        self.reader()
+            .protection_policy(policy_id)
             .map_err(|error| map_repository_error(&error))
     }
 

@@ -7,33 +7,35 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     AbortUploadRequest, AbortUploadResponse, AddGroupMemberRequest, AddGroupMemberResponse,
-    ApiError, BeginUploadRequest, BeginUploadResponse, CommitUploadRequest, CommitUploadResponse,
+    ApiError, AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
+    BeginUploadRequest, BeginUploadResponse, CommitUploadRequest, CommitUploadResponse,
     ConfirmRecoveryBundleRequest, ConfirmRecoveryBundleResponse, CreateApiKeyRequest,
     CreateApiKeyResponse, CreateDirectoryRequest, CreateDirectoryResponse, CreateFaultGroupRequest,
     CreateFaultGroupResponse, CreateGroupRequest, CreateMeshSetupRequest, CreateMeshSetupResponse,
     CreateNodeJoinGrantRequest, CreateNodeJoinGrantResponse, CreatePasskeyChallengeRequest,
     CreatePasskeyChallengeResponse, CreatePasskeyRegistrationChallengeRequest,
     CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationRequest,
-    CreatePasskeyRegistrationResponse, CreatePrincipalResponse, CreateRecoveryCodesRequest,
-    CreateRecoveryCodesResponse, CreateSessionRequest, CreateSessionResponse,
-    CreateTotpRegistrationChallengeRequest, CreateTotpRegistrationChallengeResponse,
-    CreateTotpRegistrationRequest, CreateTotpRegistrationResponse, CreateUserRequest,
-    CreateVolumePermissionGrantRequest, CreateVolumePermissionGrantResponse, CreateVolumeRequest,
-    CreateVolumeResponse, CurrentSessionResponse, DeleteObjectRequest, DeleteObjectResponse,
-    EnrolNodeRequest, EnrolNodeResponse, GetObjectResponse, HealthResponse, JoinMeshSetupRequest,
+    CreatePasskeyRegistrationResponse, CreatePrincipalResponse, CreateProtectionPolicyRequest,
+    CreateProtectionPolicyResponse, CreateRecoveryCodesRequest, CreateRecoveryCodesResponse,
+    CreateSessionRequest, CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
+    CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
+    CreateTotpRegistrationResponse, CreateUserRequest, CreateVolumePermissionGrantRequest,
+    CreateVolumePermissionGrantResponse, CreateVolumeRequest, CreateVolumeResponse,
+    CurrentSessionResponse, DeleteObjectRequest, DeleteObjectResponse, EnrolNodeRequest,
+    EnrolNodeResponse, GetObjectResponse, HealthResponse, JoinMeshSetupRequest,
     JoinMeshSetupResponse, ListAuthenticationMethodsResponse, ListDirectoryResponse,
     ListFaultGroupMembershipsResponse, ListFaultGroupsResponse, ListGroupMembershipsResponse,
-    ListOperationsResponse, ListPrincipalsResponse, ListStorageFoldersResponse,
-    ListTopologyNodesResponse, ListTopologyTargetsResponse, ListUploadRangesResponse,
-    ListVolumePermissionGrantsResponse, ListVolumesResponse, OperationStatusResponse,
-    PublishSmbExportRequest, PublishSmbExportResponse, RegisterStorageFolderRequest,
-    RegisterStorageFolderResponse, RemoveGroupMemberRequest, RemoveGroupMemberResponse,
-    RenameObjectRequest, RenameObjectResponse, RevokeAuthenticationMethodRequest,
-    RevokeAuthenticationMethodResponse, RevokeCurrentSessionRequest, RevokeCurrentSessionResponse,
-    RevokePermissionGrantRequest, RevokePermissionGrantResponse, SetFaultGroupMembershipRequest,
-    SetFaultGroupMembershipResponse, SetupStatusResponse, StepUpCurrentSessionRequest,
-    UploadStatusResponse, WithdrawSmbExportRequest, WithdrawSmbExportResponse,
-    WriteUploadRangeResponse, schema,
+    ListOperationsResponse, ListPrincipalsResponse, ListProtectionPoliciesResponse,
+    ListStorageFoldersResponse, ListTopologyNodesResponse, ListTopologyTargetsResponse,
+    ListUploadRangesResponse, ListVolumePermissionGrantsResponse, ListVolumesResponse,
+    OperationStatusResponse, PublishSmbExportRequest, PublishSmbExportResponse,
+    RegisterStorageFolderRequest, RegisterStorageFolderResponse, RemoveGroupMemberRequest,
+    RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
+    RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
+    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, RevokePermissionGrantRequest,
+    RevokePermissionGrantResponse, SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse,
+    SetupStatusResponse, StepUpCurrentSessionRequest, UploadStatusResponse,
+    WithdrawSmbExportRequest, WithdrawSmbExportResponse, WriteUploadRangeResponse, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -107,6 +109,12 @@ fn components() -> Value {
             schema_response::<AbortUploadResponse>("AbortUploadResponse"),
             schema_request::<AddGroupMemberRequest>("AddGroupMemberRequest"),
             schema_response::<AddGroupMemberResponse>("AddGroupMemberResponse"),
+            schema_request::<AssignVolumeProtectionPolicyRequest>(
+                "AssignVolumeProtectionPolicyRequest",
+            ),
+            schema_response::<AssignVolumeProtectionPolicyResponse>(
+                "AssignVolumeProtectionPolicyResponse",
+            ),
             schema_request::<BeginUploadRequest>("BeginUploadRequest"),
             schema_response::<BeginUploadResponse>("BeginUploadResponse"),
             schema_request::<CommitUploadRequest>("CommitUploadRequest"),
@@ -137,6 +145,8 @@ fn components() -> Value {
                 "CreatePasskeyRegistrationResponse",
             ),
             schema_response::<CreatePrincipalResponse>("CreatePrincipalResponse"),
+            schema_request::<CreateProtectionPolicyRequest>("CreateProtectionPolicyRequest"),
+            schema_response::<CreateProtectionPolicyResponse>("CreateProtectionPolicyResponse"),
             schema_request::<CreateRecoveryCodesRequest>("CreateRecoveryCodesRequest"),
             schema_response::<CreateRecoveryCodesResponse>("CreateRecoveryCodesResponse"),
             schema_request::<CreateSessionRequest>("CreateSessionRequest"),
@@ -178,6 +188,7 @@ fn components() -> Value {
             schema_response::<ListGroupMembershipsResponse>("ListGroupMembershipsResponse"),
             schema_response::<ListOperationsResponse>("ListOperationsResponse"),
             schema_response::<ListPrincipalsResponse>("ListPrincipalsResponse"),
+            schema_response::<ListProtectionPoliciesResponse>("ListProtectionPoliciesResponse"),
             schema_response::<ListStorageFoldersResponse>("ListStorageFoldersResponse"),
             schema_response::<ListTopologyNodesResponse>("ListTopologyNodesResponse"),
             schema_response::<ListTopologyTargetsResponse>("ListTopologyTargetsResponse"),
@@ -419,7 +430,7 @@ fn list_volumes_path() -> Value {
     })
 }
 
-fn administration_paths() -> [(String, Value); 16] {
+fn administration_paths() -> [(String, Value); 18] {
     [
         (
             "/admin/users".to_owned(),
@@ -438,6 +449,14 @@ fn administration_paths() -> [(String, Value); 16] {
             group_membership_removal_path(),
         ),
         ("/admin/volumes".to_owned(), create_volume_path()),
+        (
+            "/admin/protection-policies".to_owned(),
+            protection_policy_administration_path(),
+        ),
+        (
+            "/admin/volumes/{volume_id}/protection-policies/{policy_id}".to_owned(),
+            volume_protection_policy_path(),
+        ),
         (
             "/admin/volumes/{volume_id}/smb-exports".to_owned(),
             publish_smb_export_path(),
@@ -492,6 +511,67 @@ fn administration_paths() -> [(String, Value); 16] {
             permission_grant_revocation_path(),
         ),
     ]
+}
+
+fn protection_policy_administration_path() -> Value {
+    let mut value = topology_inventory_path(
+        "listProtectionPolicies",
+        "List immutable data-survival policies",
+        "ListProtectionPoliciesResponse",
+    );
+    value["post"] = json!({
+        "operationId": "createProtectionPolicy",
+        "summary": "Create one immutable data-survival policy",
+        "x-meshspan-access": "system-manager-csrf",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+        "parameters": [optional_csrf_parameter()],
+        "requestBody": json_request(
+            "Combined failure scenarios",
+            "#/components/schemas/CreateProtectionPolicyRequest"
+        ),
+        "responses": {
+            "201": json_response("Survival policy committed", "#/components/schemas/CreateProtectionPolicyResponse"),
+            "400": json_response("Invalid policy request", "#/components/schemas/ApiError"),
+            "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+            "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+            "409": json_response("Name or operation conflict", "#/components/schemas/ApiError"),
+            "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+            "500": json_response("Outgoing contract or policy integrity failure", "#/components/schemas/ApiError"),
+            "503": json_response("Metadata authority temporarily unavailable", "#/components/schemas/ApiError")
+        }
+    });
+    value
+}
+
+fn volume_protection_policy_path() -> Value {
+    json!({
+        "put": {
+            "operationId": "assignVolumeProtectionPolicy",
+            "summary": "Select one immutable data-survival policy for a volume",
+            "x-meshspan-access": "system-manager-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "parameters": [
+                volume_parameter(),
+                principal_parameter("policy_id", "Immutable survival-policy identity"),
+                optional_csrf_parameter()
+            ],
+            "requestBody": json_request(
+                "Exact-retry assignment",
+                "#/components/schemas/AssignVolumeProtectionPolicyRequest"
+            ),
+            "responses": {
+                "200": json_response("Volume policy selection committed", "#/components/schemas/AssignVolumeProtectionPolicyResponse"),
+                "400": json_response("Invalid assignment request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "404": json_response("Volume or policy not found", "#/components/schemas/ApiError"),
+                "409": json_response("Operation conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or policy integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Metadata authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn publish_smb_export_path() -> Value {

@@ -2,11 +2,12 @@
 
 //! Replaceable replicated-authority boundary for topology administration.
 
-use meshspan_domain::{FaultGroupId, OperationId};
+use meshspan_domain::{FaultGroupId, OperationId, ProtectionPolicyId};
 use meshspan_metadata::{
     AuthoritativeCommand, CommandContext, CommandReceipt, FaultGroupCursor,
     FaultGroupMembershipCursor, FaultGroupMembershipRecord, FaultGroupRecord, Page, PageLimit,
-    TopologyNodeCursor, TopologyNodeRecord, TopologyTargetCursor, TopologyTargetRecord,
+    ProtectionPolicyCursor, ProtectionPolicyRecord, TopologyNodeCursor, TopologyNodeRecord,
+    TopologyTargetCursor, TopologyTargetRecord,
 };
 use thiserror::Error;
 
@@ -73,6 +74,30 @@ pub trait TopologyAdministrationAuthority: IdentityAdministrationAuthority {
         Page<FaultGroupMembershipRecord, FaultGroupMembershipCursor>,
         TopologyAdministrationAuthorityError,
     >;
+
+    /// Returns one bounded immutable survival-policy page.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authority error when committed policy state cannot be read safely.
+    fn protection_policies(
+        &self,
+        after: Option<&ProtectionPolicyCursor>,
+        limit: PageLimit,
+    ) -> Result<
+        Page<ProtectionPolicyRecord, ProtectionPolicyCursor>,
+        TopologyAdministrationAuthorityError,
+    >;
+
+    /// Returns one exact immutable survival policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authority error when committed policy state cannot be read safely.
+    fn protection_policy(
+        &self,
+        policy_id: ProtectionPolicyId,
+    ) -> Result<Option<ProtectionPolicyRecord>, TopologyAdministrationAuthorityError>;
 
     /// Resolves an already committed topology operation.
     ///

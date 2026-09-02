@@ -30,6 +30,8 @@ mod passkey_registration;
 mod passkey_validation;
 mod permission_administration;
 mod permission_administration_validation;
+mod protection_administration;
+mod protection_administration_validation;
 mod recovery_bundle_verification;
 mod recovery_bundle_verification_validation;
 mod recovery_code_management;
@@ -202,6 +204,18 @@ pub use permission_administration_validation::{
     decode_revoke_permission_grant_request, encode_create_volume_permission_grant_response,
     encode_list_volume_permission_grants_response, encode_revoke_permission_grant_response,
     validate_list_volume_permission_grants_query,
+};
+pub use protection_administration::{
+    AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
+    CreateProtectionPolicyRequest, CreateProtectionPolicyResponse, CreateProtectionScenario,
+    ListProtectionPoliciesQuery, ListProtectionPoliciesResponse, ProtectionFailureTerm,
+    ProtectionFailureTermSummary, ProtectionName, ProtectionPolicyCursor, ProtectionPolicySummary,
+    ProtectionScenarioSummary,
+};
+pub use protection_administration_validation::{
+    MAX_PROTECTION_POLICY_MUTATION_BYTES, decode_assign_volume_protection_policy_request,
+    decode_create_protection_policy_request, encode_assign_volume_protection_policy_response,
+    encode_create_protection_policy_response, encode_list_protection_policies_response,
 };
 pub use recovery_bundle_verification::{
     ConfirmRecoveryBundleRequest, ConfirmRecoveryBundleResponse,

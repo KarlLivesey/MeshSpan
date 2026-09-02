@@ -7,7 +7,9 @@ use meshspan_domain::{
     machine_fault_class_id, storage_device_fault_class_id,
 };
 
-use super::{ApplyDisposition, AuthoritativeRepository, EntityKind, LogPosition, RepositoryError};
+use super::{
+    ApplyDisposition, AuthoritativeRepository, EntityKind, LogPosition, PageLimit, RepositoryError,
+};
 use crate::{
     AssignVolumeProtectionPolicy, AuthoritativeCommand, BootstrapMesh, CommandContext,
     CreateProtectionPolicy, PartitionDatabase, ProtectionScenarioConfiguration, RecordName,
@@ -50,6 +52,20 @@ fn volume_policy_commits_complete_combined_failure_scenarios_and_replays()
     assert_eq!(selected.scenarios.len(), 2);
     assert_eq!(selected.scenarios[0].terms()[0].failure_count, 2);
     assert_eq!(selected.scenarios[1].terms()[0].failure_count, 3);
+
+    let page = repository.protection_policies(None, PageLimit::new(1)?)?;
+    assert_eq!(page.items.len(), 1);
+    assert!(page.next.is_none());
+    let stored = &page.items[0];
+    assert_eq!(stored.policy_id, policy_id);
+    assert_eq!(stored.display_name, "Two machines and three devices");
+    assert_eq!(stored.scenarios[0].display_name, "Any two machines");
+    assert_eq!(stored.scenarios[0].terms[0].class_display_name, "Machine");
+    assert_eq!(stored.scenarios[0].terms[0].failure_count, 2);
+    assert_eq!(
+        repository.protection_policy(policy_id)?,
+        Some(stored.clone())
+    );
     Ok(())
 }
 

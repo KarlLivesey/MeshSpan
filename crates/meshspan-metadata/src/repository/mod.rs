@@ -197,7 +197,10 @@ pub use passkey_registration::{
     AuthenticationMethodCreationReplay, AuthenticationRegistrationProfile,
     PasskeyRegistrationProfile, PasskeyRegistrationReplay,
 };
-pub use protection_policy::VolumeProtectionPolicy;
+pub use protection_policy::{
+    ProtectionPolicyCursor, ProtectionPolicyRecord, ProtectionScenarioRecord, ProtectionTermRecord,
+    VolumeProtectionPolicy,
+};
 pub use query::{
     GroupMemberCursor, GroupMembershipEventKind, GroupMembershipEventRecord, GroupMembershipRecord,
     NamespaceCursor, NamespaceRecord, Page, PageLimit, PrincipalCursor, PrincipalKind,
@@ -1337,6 +1340,31 @@ impl AuthoritativeRepository {
         volume_id: meshspan_domain::VolumeId,
     ) -> Result<Option<VolumeProtectionPolicy>, RepositoryError> {
         protection_policy::for_volume(&self.database, volume_id)
+    }
+
+    /// Returns one bounded stable page of immutable data-survival policies.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored names, identities, scenarios or revisions are malformed.
+    pub fn protection_policies(
+        &self,
+        after: Option<&ProtectionPolicyCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<ProtectionPolicyRecord, ProtectionPolicyCursor>, RepositoryError> {
+        protection_policy::policies(&self.database, after, limit)
+    }
+
+    /// Returns one exact immutable data-survival policy.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored names, identities, scenarios or revisions are malformed.
+    pub fn protection_policy(
+        &self,
+        policy_id: meshspan_domain::ProtectionPolicyId,
+    ) -> Result<Option<ProtectionPolicyRecord>, RepositoryError> {
+        protection_policy::policy(&self.database, policy_id)
     }
 
     /// Returns the current public secret-wrapping-key generation for one node.

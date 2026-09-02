@@ -6,10 +6,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode};
 use meshspan_api_contract::{
-    CreateFaultGroupRequest, CreateFaultGroupResponse, FaultGroupSummary,
-    ListFaultGroupMembershipsResponse, ListFaultGroupsResponse, ListTopologyNodesResponse,
-    ListTopologyQuery, ListTopologyTargetsResponse, SetFaultGroupMembershipRequest,
-    SetFaultGroupMembershipResponse,
+    AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
+    CreateFaultGroupRequest, CreateFaultGroupResponse, CreateProtectionPolicyRequest,
+    CreateProtectionPolicyResponse, CreateProtectionScenario, FaultGroupSummary,
+    ListFaultGroupMembershipsResponse, ListFaultGroupsResponse, ListProtectionPoliciesResponse,
+    ListTopologyNodesResponse, ListTopologyQuery, ListTopologyTargetsResponse,
+    ProtectionFailureTerm, ProtectionFailureTermSummary, ProtectionPolicySummary,
+    ProtectionScenarioSummary, SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse,
 };
 use meshspan_domain::{PrincipalId, UnixMicros};
 use tower::ServiceExt;
@@ -61,6 +64,7 @@ async fn authenticated_topology_routes_list_and_create_real_contract_shapes()
         group_name: serde_json::from_str("\"UPS A\"")?,
     })?;
     let created = router
+        .clone()
         .oneshot(
             Request::post("/api/latest/admin/topology/fault-groups")
                 .header("content-type", "application/json")
@@ -69,6 +73,27 @@ async fn authenticated_topology_routes_list_and_create_real_contract_shapes()
         )
         .await?;
     assert_eq!(created.status(), StatusCode::CREATED);
+
+    let policy_request = serde_json::to_vec(&CreateProtectionPolicyRequest {
+        operation_id: serde_json::from_str("\"223e4567-e89b-42d3-a456-426614174000\"")?,
+        name: serde_json::from_str("\"Two machines and three devices\"")?,
+        scenarios: vec![CreateProtectionScenario {
+            name: serde_json::from_str("\"Combined loss\"")?,
+            terms: vec![ProtectionFailureTerm {
+                class_id: "6d657368-7370-816e-ad6d-616368696e65".to_owned(),
+                failure_count: 2,
+            }],
+        }],
+    })?;
+    let protected = router
+        .oneshot(
+            Request::post("/api/latest/admin/protection-policies")
+                .header("content-type", "application/json")
+                .header("x-test-auth", "accepted")
+                .body(Body::from(policy_request))?,
+        )
+        .await?;
+    assert_eq!(protected.status(), StatusCode::CREATED);
     assert!(mutated.load(Ordering::SeqCst));
     Ok(())
 }
@@ -142,6 +167,17 @@ impl TopologyAdministrationController for FakeController {
         })
     }
 
+    fn list_protection_policies(
+        &self,
+        _administrator: IdentityAdministrator,
+        _query: ListTopologyQuery,
+    ) -> Result<ListProtectionPoliciesResponse, TopologyAdministrationError> {
+        Ok(ListProtectionPoliciesResponse {
+            policies: Vec::new(),
+            next_page_url: None,
+        })
+    }
+
     fn create_fault_group(
         &mut self,
         _administrator: IdentityAdministrator,
@@ -169,6 +205,33 @@ impl TopologyAdministrationController for FakeController {
             revision: 2,
         })
     }
+
+    fn create_protection_policy(
+        &mut self,
+        _administrator: IdentityAdministrator,
+        request: CreateProtectionPolicyRequest,
+    ) -> Result<CreateProtectionPolicyResponse, TopologyAdministrationError> {
+        self.mutated.store(true, Ordering::SeqCst);
+        Ok(CreateProtectionPolicyResponse {
+            operation_id: request.operation_id,
+            policy: policy(),
+        })
+    }
+
+    fn assign_volume_protection_policy(
+        &mut self,
+        _administrator: IdentityAdministrator,
+        volume_id: &str,
+        policy_id: &str,
+        request: AssignVolumeProtectionPolicyRequest,
+    ) -> Result<AssignVolumeProtectionPolicyResponse, TopologyAdministrationError> {
+        Ok(AssignVolumeProtectionPolicyResponse {
+            operation_id: request.operation_id,
+            volume_id: volume_id.to_owned(),
+            policy_id: policy_id.to_owned(),
+            revision: 3,
+        })
+    }
 }
 
 fn group() -> FaultGroupSummary {
@@ -178,5 +241,22 @@ fn group() -> FaultGroupSummary {
         group_id: "323e4567-e89b-42d3-a456-426614174000".to_owned(),
         group_name: "UPS A".to_owned(),
         revision: 2,
+    }
+}
+
+fn policy() -> ProtectionPolicySummary {
+    ProtectionPolicySummary {
+        policy_id: "423e4567-e89b-42d3-a456-426614174000".to_owned(),
+        name: "Two machines and three devices".to_owned(),
+        scenarios: vec![ProtectionScenarioSummary {
+            scenario_id: "523e4567-e89b-42d3-a456-426614174000".to_owned(),
+            name: "Combined loss".to_owned(),
+            terms: vec![ProtectionFailureTermSummary {
+                class_id: "6d657368-7370-816e-ad6d-616368696e65".to_owned(),
+                class_name: "Machine".to_owned(),
+                failure_count: 2,
+            }],
+        }],
+        revision: 3,
     }
 }

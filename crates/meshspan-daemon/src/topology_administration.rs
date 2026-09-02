@@ -9,8 +9,10 @@ mod service;
 
 use axum::http::HeaderMap;
 use meshspan_api_contract::{
-    CreateFaultGroupRequest, CreateFaultGroupResponse, ListFaultGroupMembershipsResponse,
-    ListFaultGroupsResponse, ListTopologyNodesResponse, ListTopologyQuery,
+    AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
+    CreateFaultGroupRequest, CreateFaultGroupResponse, CreateProtectionPolicyRequest,
+    CreateProtectionPolicyResponse, ListFaultGroupMembershipsResponse, ListFaultGroupsResponse,
+    ListProtectionPoliciesResponse, ListTopologyNodesResponse, ListTopologyQuery,
     ListTopologyTargetsResponse, SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse,
 };
 use meshspan_domain::UnixMicros;
@@ -80,6 +82,17 @@ pub trait TopologyAdministrationController: Send + 'static {
         query: ListTopologyQuery,
     ) -> Result<ListFaultGroupMembershipsResponse, TopologyAdministrationError>;
 
+    /// Returns one bounded immutable survival-policy page.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid input or unavailable/corrupt committed policy state.
+    fn list_protection_policies(
+        &self,
+        administrator: IdentityAdministrator,
+        query: ListTopologyQuery,
+    ) -> Result<ListProtectionPoliciesResponse, TopologyAdministrationError>;
+
     /// Creates or exactly resolves one named shared-failure group.
     ///
     /// # Errors
@@ -103,6 +116,30 @@ pub trait TopologyAdministrationController: Send + 'static {
         host_id: &str,
         request: SetFaultGroupMembershipRequest,
     ) -> Result<SetFaultGroupMembershipResponse, TopologyAdministrationError>;
+
+    /// Creates or exactly resolves one immutable data-survival policy.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, conflicting, unauthorised or uncommitted mutations.
+    fn create_protection_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        request: CreateProtectionPolicyRequest,
+    ) -> Result<CreateProtectionPolicyResponse, TopologyAdministrationError>;
+
+    /// Selects or exactly resolves one immutable policy for a volume.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, missing, conflicting, unauthorised or uncommitted mutations.
+    fn assign_volume_protection_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        volume_id: &str,
+        policy_id: &str,
+        request: AssignVolumeProtectionPolicyRequest,
+    ) -> Result<AssignVolumeProtectionPolicyResponse, TopologyAdministrationError>;
 }
 
 /// Closed non-secret topology-administration failure categories.

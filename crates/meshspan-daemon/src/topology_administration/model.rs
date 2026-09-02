@@ -5,18 +5,25 @@
 use std::fmt::Write;
 
 use meshspan_api_contract::{
-    CreateFaultGroupRequest, FaultGroupMembershipSummary, FaultGroupSummary,
-    ListFaultGroupMembershipsResponse, ListFaultGroupsResponse, ListTopologyNodesResponse,
-    ListTopologyQuery, ListTopologyTargetsResponse, OperationId as ApiOperationId,
-    SetFaultGroupMembershipRequest, StorageFolderUsageLimit, TopologyCursor, TopologyNodeRoles,
-    TopologyNodeState, TopologyNodeSummary, TopologyTargetState, TopologyTargetSummary,
+    AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
+    CreateFaultGroupRequest, CreateProtectionPolicyRequest, FaultGroupMembershipSummary,
+    FaultGroupSummary, ListFaultGroupMembershipsResponse, ListFaultGroupsResponse,
+    ListProtectionPoliciesResponse, ListTopologyNodesResponse, ListTopologyQuery,
+    ListTopologyTargetsResponse, OperationId as ApiOperationId, ProtectionFailureTermSummary,
+    ProtectionPolicySummary, ProtectionScenarioSummary, SetFaultGroupMembershipRequest,
+    StorageFolderUsageLimit, TopologyCursor, TopologyNodeRoles, TopologyNodeState,
+    TopologyNodeSummary, TopologyTargetState, TopologyTargetSummary,
 };
+use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    AuditEventId, FaultGroupClassId, FaultGroupId, HostId, OperationId, uuid_v8,
+    AuditEventId, FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId, HostId,
+    OperationId, ProtectionPolicyId, ProtectionScenarioId, VolumeId, uuid_v8,
 };
 use meshspan_metadata::{
-    AuthoritativeCommand, CommandContext, CreateFaultGroup, FaultGroupCursor,
-    FaultGroupMembershipCursor, FaultGroupMembershipRecord, FaultGroupRecord, Page, RecordName,
+    AssignVolumeProtectionPolicy, AuthoritativeCommand, CommandContext, CreateFaultGroup,
+    CreateProtectionPolicy, FaultGroupCursor, FaultGroupMembershipCursor,
+    FaultGroupMembershipRecord, FaultGroupRecord, Page, ProtectionPolicyCursor,
+    ProtectionPolicyRecord, ProtectionScenarioConfiguration, RecordName,
     SetHostFaultGroupMembership, StorageUsageLimit, TopologyNodeCursor, TopologyNodeRecord,
     TopologyTargetCursor, TopologyTargetRecord,
 };
@@ -28,6 +35,8 @@ use crate::create_mesh_setup::{format_uuid, parse_uuid};
 const CLASS_ID_DOMAIN: &[u8] = b"meshspan.topology.fault-class-id.v1\0";
 const GROUP_ID_DOMAIN: &[u8] = b"meshspan.topology.fault-group-id.v1\0";
 const AUDIT_ID_DOMAIN: &[u8] = b"meshspan.topology.audit-id.v1\0";
+const POLICY_ID_DOMAIN: &[u8] = b"meshspan.protection.policy-id.v1\0";
+const SCENARIO_ID_DOMAIN: &[u8] = b"meshspan.protection.scenario-id.v1\0";
 
 pub(super) fn create_command(
     request: &CreateFaultGroupRequest,
@@ -83,6 +92,98 @@ pub(super) fn membership_command(
             group_id,
             host_id,
             present: request.present,
+        }),
+    ))
+}
+
+pub(super) fn protection_policy_command(
+    request: &CreateProtectionPolicyRequest,
+) -> Result<(OperationId, ProtectionPolicyId, AuthoritativeCommand), TopologyAdministrationError> {
+    let operation_id = domain_operation(&request.operation_id)?;
+    let policy_id =
+        ProtectionPolicyId::from_bytes(derived_uuid(POLICY_ID_DOMAIN, &operation_id.as_bytes())?)
+            .map_err(|_| TopologyAdministrationError::Failed)?;
+    let name = RecordName::new(request.name.as_str())
+        .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+    let scenarios = request
+        .scenarios
+        .iter()
+        .enumerate()
+        .map(|(index, scenario)| {
+            let mut identity = operation_id.as_bytes().to_vec();
+            identity.extend_from_slice(
+                &u64::try_from(index)
+                    .map_err(|_| TopologyAdministrationError::InvalidInput)?
+                    .to_be_bytes(),
+            );
+            let scenario_id =
+                ProtectionScenarioId::from_bytes(derived_uuid(SCENARIO_ID_DOMAIN, &identity)?)
+                    .map_err(|_| TopologyAdministrationError::Failed)?;
+            let name = RecordName::new(scenario.name.as_str())
+                .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+            let terms = scenario
+                .terms
+                .iter()
+                .map(|term| {
+                    Ok(FailureTerm {
+                        class_id: FaultGroupClassId::from_bytes(
+                            parse_uuid(&term.class_id)
+                                .map_err(|_| TopologyAdministrationError::InvalidInput)?,
+                        )
+                        .map_err(|_| TopologyAdministrationError::InvalidInput)?,
+                        failure_count: term.failure_count,
+                    })
+                })
+                .collect::<Result<Vec<_>, TopologyAdministrationError>>()?;
+            Ok(ProtectionScenarioConfiguration {
+                scenario_id,
+                name,
+                scenario: FailureScenario::new(terms)
+                    .map_err(|_| TopologyAdministrationError::InvalidInput)?,
+            })
+        })
+        .collect::<Result<Vec<_>, TopologyAdministrationError>>()?;
+    Ok((
+        operation_id,
+        policy_id,
+        AuthoritativeCommand::CreateProtectionPolicy(CreateProtectionPolicy {
+            policy_id,
+            name,
+            scenarios: BoundedItems::new(scenarios, 16)
+                .map_err(|_| TopologyAdministrationError::InvalidInput)?,
+        }),
+    ))
+}
+
+pub(super) fn protection_assignment_command(
+    volume_id: &str,
+    policy_id: &str,
+    request: &AssignVolumeProtectionPolicyRequest,
+) -> Result<
+    (
+        OperationId,
+        VolumeId,
+        ProtectionPolicyId,
+        AuthoritativeCommand,
+    ),
+    TopologyAdministrationError,
+> {
+    let operation_id = domain_operation(&request.operation_id)?;
+    let volume_id = VolumeId::from_bytes(
+        parse_uuid(volume_id).map_err(|_| TopologyAdministrationError::InvalidInput)?,
+    )
+    .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+    let policy_id = ProtectionPolicyId::from_bytes(
+        parse_uuid(policy_id).map_err(|_| TopologyAdministrationError::InvalidInput)?,
+    )
+    .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+    Ok((
+        operation_id,
+        volume_id,
+        policy_id,
+        AuthoritativeCommand::AssignVolumeProtectionPolicy(AssignVolumeProtectionPolicy {
+            volume_id,
+            policy_id,
         }),
     ))
 }
@@ -175,6 +276,61 @@ pub(super) fn membership_response(
     })
 }
 
+pub(super) fn protection_policy_response(
+    query: &ListTopologyQuery,
+    page: Page<ProtectionPolicyRecord, ProtectionPolicyCursor>,
+) -> Result<ListProtectionPoliciesResponse, TopologyAdministrationError> {
+    Ok(ListProtectionPoliciesResponse {
+        policies: page.items.into_iter().map(policy_summary).collect(),
+        next_page_url: page
+            .next
+            .as_ref()
+            .map(encode_policy_cursor)
+            .transpose()?
+            .map(|cursor| protection_page_url(&cursor, query.limit))
+            .transpose()?,
+    })
+}
+
+pub(super) fn policy_summary(record: ProtectionPolicyRecord) -> ProtectionPolicySummary {
+    ProtectionPolicySummary {
+        policy_id: format_uuid(record.policy_id.as_bytes()),
+        name: record.display_name,
+        scenarios: record
+            .scenarios
+            .into_iter()
+            .map(|scenario| ProtectionScenarioSummary {
+                scenario_id: format_uuid(scenario.scenario_id.as_bytes()),
+                name: scenario.display_name,
+                terms: scenario
+                    .terms
+                    .into_iter()
+                    .map(|term| ProtectionFailureTermSummary {
+                        class_id: format_uuid(term.class_id.as_bytes()),
+                        class_name: term.class_display_name,
+                        failure_count: term.failure_count,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        revision: record.revision.get(),
+    }
+}
+
+pub(super) fn assignment_response(
+    operation_id: ApiOperationId,
+    volume_id: VolumeId,
+    policy_id: ProtectionPolicyId,
+    revision: u64,
+) -> AssignVolumeProtectionPolicyResponse {
+    AssignVolumeProtectionPolicyResponse {
+        operation_id,
+        volume_id: format_uuid(volume_id.as_bytes()),
+        policy_id: format_uuid(policy_id.as_bytes()),
+        revision,
+    }
+}
+
 pub(super) fn group_summary(record: FaultGroupRecord) -> FaultGroupSummary {
     FaultGroupSummary {
         class_id: format_uuid(record.class_id.as_bytes()),
@@ -228,6 +384,18 @@ pub(super) fn decode_membership_cursor(
     let group_id = FaultGroupId::from_bytes(parse_cursor_uuid(fields[1])?)
         .map_err(|_| TopologyAdministrationError::InvalidInput)?;
     Ok(FaultGroupMembershipCursor::new(host_id, group_id))
+}
+
+pub(super) fn decode_policy_cursor(
+    cursor: &TopologyCursor,
+) -> Result<ProtectionPolicyCursor, TopologyAdministrationError> {
+    let fields = cursor_fields(cursor, "p", 2)?;
+    let policy_id = ProtectionPolicyId::from_bytes(parse_cursor_uuid(fields[0])?)
+        .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+    Ok(ProtectionPolicyCursor::new(
+        decode_text(fields[1])?,
+        policy_id,
+    ))
 }
 
 fn node_summary(
@@ -344,6 +512,16 @@ fn encode_membership_cursor(
     TopologyCursor::from_encoded(encoded).ok_or(TopologyAdministrationError::Failed)
 }
 
+fn encode_policy_cursor(
+    cursor: &ProtectionPolicyCursor,
+) -> Result<TopologyCursor, TopologyAdministrationError> {
+    encoded_cursor(
+        "p",
+        cursor.policy_id().as_bytes(),
+        &[cursor.canonical_name()],
+    )
+}
+
 fn encoded_cursor(
     kind: &str,
     identifier: [u8; 16],
@@ -407,6 +585,20 @@ fn page_url(
 ) -> Result<String, TopologyAdministrationError> {
     let mut url = format!(
         "/api/latest/admin/topology/{resource}?cursor={}",
+        cursor.as_str()
+    );
+    if let Some(limit) = limit {
+        write!(url, "&limit={limit}").map_err(|_| TopologyAdministrationError::Failed)?;
+    }
+    Ok(url)
+}
+
+fn protection_page_url(
+    cursor: &TopologyCursor,
+    limit: Option<u16>,
+) -> Result<String, TopologyAdministrationError> {
+    let mut url = format!(
+        "/api/latest/admin/protection-policies?cursor={}",
         cursor.as_str()
     );
     if let Some(limit) = limit {
