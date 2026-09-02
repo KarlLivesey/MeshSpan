@@ -161,6 +161,7 @@ pub(super) fn maybe_plan_membership_transition(
         driver.member_incarnations(),
         membership.active_voters(),
         membership.admitted_learners(),
+        membership.retiring_members(),
         committed.as_ref(),
         |node| driver.peer_matched_index(node),
     )?;

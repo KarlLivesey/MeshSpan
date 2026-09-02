@@ -588,6 +588,7 @@ impl MetadataAuthorityRuntime {
             self.driver.member_incarnations(),
             membership.active_voters(),
             membership.admitted_learners(),
+            membership.retiring_members(),
             committed.as_ref(),
             |node| self.driver.peer_matched_index(node),
         )
@@ -625,6 +626,7 @@ impl MetadataAuthorityRuntime {
                 .log_entry(evidence.committed_position.index)
                 .cloned(),
             MembershipTransitionCommand::AdmitLearner { .. }
+            | MembershipTransitionCommand::RemoveMember { .. }
             | MembershipTransitionCommand::FinaliseStable { .. } => None,
         };
         let membership = self
@@ -637,6 +639,7 @@ impl MetadataAuthorityRuntime {
             self.driver.member_incarnations(),
             membership.active_voters(),
             membership.admitted_learners(),
+            membership.retiring_members(),
             &command,
             evidence_entry.as_ref(),
         )
@@ -649,7 +652,8 @@ impl MetadataAuthorityRuntime {
         }
         let activation = match command {
             MembershipTransitionCommand::AdmitLearner { joint_plan, .. }
-            | MembershipTransitionCommand::PromoteLearner { joint_plan, .. } => {
+            | MembershipTransitionCommand::PromoteLearner { joint_plan, .. }
+            | MembershipTransitionCommand::RemoveMember { joint_plan, .. } => {
                 CoreInput::ActivateJointPlan {
                     joint_plan,
                     member_incarnations: incarnations,

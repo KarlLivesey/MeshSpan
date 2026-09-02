@@ -146,6 +146,63 @@ pub struct PlannedLearnerAdmission {
     pub member_incarnations: MemberIncarnations,
 }
 
+/// One deterministic safe removal of an existing voter or learner through a joint phase.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlannedMemberRemoval {
+    /// Exact current member selected for removal.
+    pub removed_node_id: NodeId,
+    /// Verified old+new phase whose successor excludes that member.
+    pub joint_plan: JointQuorumPlan,
+}
+
+/// Removes one exact current member from a flat plan through a proved joint transition.
+///
+/// Voters are removed rather than silently demoted: a drained machine must not remain required as
+/// a learner. The final voter can never be removed because doing so would manufacture a writable
+/// consensus group with no authority.
+///
+/// # Errors
+///
+/// Rejects stale incarnation state, an absent target, removal of the final voter, an exhausted
+/// epoch or a transition that cannot be independently proved safe.
+pub fn plan_flat_member_removal(
+    old: &CompiledQuorumPlan,
+    accepted_incarnations: &MemberIncarnations,
+    node_id: NodeId,
+    incarnation: u64,
+    new_plan_id: QuorumPlanId,
+) -> Result<PlannedMemberRemoval, MembershipChangeError> {
+    if incarnation == 0
+        || !accepted_incarnations.matches_members(&old.members())
+        || accepted_incarnations.incarnation(node_id) != Some(incarnation)
+    {
+        return Err(MembershipChangeError::InvalidTarget);
+    }
+    let mut voters = old.spec().voters.clone();
+    let mut learners = old.spec().learners.clone();
+    let removed = voters.remove(&node_id) || learners.remove(&node_id);
+    if !removed || voters.is_empty() {
+        return Err(MembershipChangeError::InvalidTarget);
+    }
+    let new = compile_plan(
+        flat_plan(
+            new_plan_id,
+            old.spec()
+                .membership_epoch
+                .checked_add(1)
+                .ok_or(MembershipChangeError::InvalidTransition)?,
+            voters,
+            learners,
+        )
+        .map_err(|_| MembershipChangeError::InvalidTransition)?,
+    )
+    .map_err(|_| MembershipChangeError::InvalidTransition)?;
+    Ok(PlannedMemberRemoval {
+        removed_node_id: node_id,
+        joint_plan: JointQuorumPlan::new(old.clone(), new)?,
+    })
+}
+
 /// Adds at most one authoritative candidate to a flat plan as a non-voting learner.
 ///
 /// # Errors
@@ -424,6 +481,63 @@ mod tests {
                 QuorumPlanId::from_bytes([3; 16])?,
             ),
             Err(MembershipChangeError::NoCaughtUpLearner)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn member_removal_uses_joint_quorum_and_never_removes_final_voter()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let first = node(1)?;
+        let second = node(2)?;
+        let learner = node(3)?;
+        let old = compiled(
+            1,
+            BTreeSet::from([first, second]),
+            BTreeSet::from([learner]),
+        )?;
+        let incarnations = MemberIncarnations::new(
+            BTreeMap::from([(first, 1), (second, 2), (learner, 3)]),
+            &old,
+        )?;
+        let removal = plan_flat_member_removal(
+            &old,
+            &incarnations,
+            first,
+            1,
+            QuorumPlanId::from_bytes([9; 16])?,
+        )?;
+        assert_eq!(removal.removed_node_id, first);
+        assert_eq!(
+            removal.joint_plan.new_plan().spec().voters,
+            BTreeSet::from([second])
+        );
+        assert_eq!(
+            removal.joint_plan.new_plan().spec().learners,
+            BTreeSet::from([learner])
+        );
+        assert!(
+            !removal
+                .joint_plan
+                .satisfies(QuorumFamily::Commit, &BTreeSet::from([first]))
+        );
+        assert!(
+            removal
+                .joint_plan
+                .satisfies(QuorumFamily::Commit, &BTreeSet::from([second]))
+        );
+
+        let one = compiled(1, BTreeSet::from([first]), BTreeSet::new())?;
+        let one_incarnation = MemberIncarnations::new(BTreeMap::from([(first, 1)]), &one)?;
+        assert!(matches!(
+            plan_flat_member_removal(
+                &one,
+                &one_incarnation,
+                first,
+                1,
+                QuorumPlanId::from_bytes([10; 16])?,
+            ),
+            Err(MembershipChangeError::InvalidTarget)
         ));
         Ok(())
     }
