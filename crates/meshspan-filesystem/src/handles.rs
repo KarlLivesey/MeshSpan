@@ -271,6 +271,8 @@ pub struct OpenHandleReceipt {
     pub object_revision_id: ObjectRevisionId,
     /// Exact immutable file version pinned at open.
     pub opened_version_id: FileVersionId,
+    /// Exact logical length of the pinned version before private writes.
+    pub opened_logical_length: u64,
     /// First fencing generation issued for the handle.
     pub handle_fence: u64,
     /// Whether the adapter must initialise an empty private write stage.
@@ -357,6 +359,7 @@ pub(crate) struct ResolvedFile {
     object: ObjectId,
     object_revision: ObjectRevisionId,
     version: FileVersionId,
+    logical_length: u64,
 }
 
 impl ResolvedFile {
@@ -365,12 +368,14 @@ impl ResolvedFile {
         object: ObjectId,
         object_revision: ObjectRevisionId,
         version: FileVersionId,
+        logical_length: u64,
     ) -> Self {
         Self {
             namespace_commit,
             object,
             object_revision,
             version,
+            logical_length,
         }
     }
 }
@@ -644,6 +649,8 @@ fn resolve_leaf(
     namespace_commit_id: NamespaceCommitId,
     entry: &DirectoryEntry,
 ) -> Result<Option<ResolvedFile>, HandleError> {
+    type StoredHead = (Vec<u8>, Option<Vec<u8>>, Option<i64>);
+
     if entry.kind() != DirectoryEntryKind::File {
         return Ok(None);
     }
@@ -655,18 +662,20 @@ fn resolve_leaf(
     {
         return Err(HandleError::Corrupt);
     }
-    let stored_head: Option<(Vec<u8>, Option<Vec<u8>>)> = connection
+    let stored_head: Option<StoredHead> = connection
         .query_row(
-            "SELECT volume_id, current_version_id FROM branch_files
-             WHERE branch_id = ?1 AND object_id = ?2",
+            "SELECT files.volume_id, files.current_version_id, versions.logical_length
+             FROM branch_files files
+             LEFT JOIN file_versions versions ON versions.version_id = files.current_version_id
+             WHERE files.branch_id = ?1 AND files.object_id = ?2",
             params![
                 branch_id.as_bytes().as_slice(),
                 entry.object_id().as_bytes().as_slice()
             ],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()?;
-    let Some((volume, current)) = stored_head else {
+    let Some((volume, current, logical_length)) = stored_head else {
         return Err(HandleError::Corrupt);
     };
     if volume.as_slice() != volume_id.as_bytes()
@@ -679,6 +688,8 @@ fn resolve_leaf(
         object: entry.object_id(),
         object_revision: entry.object_revision_id(),
         version: version_id,
+        logical_length: u64::try_from(logical_length.ok_or(HandleError::Corrupt)?)
+            .map_err(|_| HandleError::Corrupt)?,
     }))
 }
 
@@ -843,6 +854,7 @@ fn persist_open(
         object_id: resolved.object,
         object_revision_id: resolved.object_revision,
         opened_version_id: resolved.version,
+        opened_logical_length: resolved.logical_length,
         handle_fence: 1,
         truncate_on_first_write: request.create_disposition.truncates_existing(),
         result_digest,
@@ -950,6 +962,7 @@ fn decode_open_receipt(
     let object_id = identifier(&stored.object, ObjectId::from_bytes)?;
     let object_revision_id = identifier(&stored.object_revision, ObjectRevisionId::from_bytes)?;
     let opened_version_id = identifier(&stored.opened_version, FileVersionId::from_bytes)?;
+    let opened_logical_length = load_version_length(connection, opened_version_id)?;
     let fence = u64::try_from(stored.opened_fence).map_err(|_| HandleError::Corrupt)?;
     let desired = u8::try_from(stored.desired_access).map_err(|_| HandleError::Corrupt)?;
     let shared = u8::try_from(stored.share_access).map_err(|_| HandleError::Corrupt)?;
@@ -973,6 +986,7 @@ fn decode_open_receipt(
         object: object_id,
         object_revision: object_revision_id,
         version: opened_version_id,
+        logical_length: opened_logical_length,
     };
     let expected = open_result_digest_fields(
         operation_id,
@@ -994,6 +1008,7 @@ fn decode_open_receipt(
         object_id,
         object_revision_id,
         opened_version_id,
+        opened_logical_length,
         handle_fence: fence,
         truncate_on_first_write: create_disposition.truncates_existing(),
         result_digest,
@@ -1041,6 +1056,21 @@ fn validate_open_lineage(
     } else {
         Err(HandleError::Corrupt)
     }
+}
+
+fn load_version_length(
+    connection: &Connection,
+    version_id: FileVersionId,
+) -> Result<u64, HandleError> {
+    let length = connection
+        .query_row(
+            "SELECT logical_length FROM file_versions WHERE version_id = ?1",
+            [version_id.as_bytes().as_slice()],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .ok_or(HandleError::Corrupt)?;
+    u64::try_from(length).map_err(|_| HandleError::Corrupt)
 }
 
 fn expire_stale_handles(transaction: &Transaction<'_>, now: UnixMicros) -> Result<(), HandleError> {
@@ -1201,7 +1231,7 @@ fn open_result_digest_fields(
     truncate: bool,
 ) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.open-handle-result.v1\0");
+    digest.update(b"meshspan.filesystem.open-handle-result.v2\0");
     digest.update(&operation_id.as_bytes());
     digest.update(&handle_id.as_bytes());
     digest.update(&request_digest);
@@ -1209,6 +1239,7 @@ fn open_result_digest_fields(
     digest.update(&resolved.object.as_bytes());
     digest.update(&resolved.object_revision.as_bytes());
     digest.update(&resolved.version.as_bytes());
+    digest.update(&resolved.logical_length.to_be_bytes());
     digest.update(&fence.to_be_bytes());
     digest.update(&[u8::from(truncate)]);
     digest.finalize().into()

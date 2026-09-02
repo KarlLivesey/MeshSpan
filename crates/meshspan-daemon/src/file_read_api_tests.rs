@@ -210,6 +210,7 @@ impl FileRangeReader for TestReader {
             object_revision_id: ObjectRevisionId::from_bytes(versioned(4))
                 .map_err(|_| TestError)?,
             opened_version_id: file_version()?,
+            opened_logical_length: 0,
             handle_fence: 1,
             truncate_on_first_write: false,
             result_digest: [2; 32],

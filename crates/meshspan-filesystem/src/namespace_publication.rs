@@ -480,6 +480,7 @@ fn publish_inner(
                     publication.file.object_id,
                     publication.file_object_revision_id,
                     publication.file.version_id,
+                    publication.file.manifest.logical_length,
                 ),
             )
         })
