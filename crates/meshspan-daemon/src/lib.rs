@@ -186,6 +186,7 @@ mod setup_api;
 mod setup_api_tests;
 mod shard_repair_worker;
 mod storage_scrub_worker;
+mod target_drain_worker;
 
 pub use maintenance_authority::MaintenanceMetadataAuthority;
 pub use maintenance_dispatcher::{
@@ -209,6 +210,10 @@ pub use storage_scrub_worker::{
     ResumableStorageScrubReceipt, ScrubProgressStore, StorageScrubExecution,
     StorageScrubExecutionError, StorageScrubExecutionReceipt, StorageScrubSummary,
     execute_resumable_storage_scrub, execute_storage_scrub,
+};
+pub use target_drain_worker::{
+    TargetDrainError, TargetDrainExecution, TargetDrainStepReceipt, TargetShardInventorySource,
+    execute_target_drain_step,
 };
 mod smb_authentication;
 mod smb_connection;
