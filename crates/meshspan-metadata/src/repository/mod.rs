@@ -1449,6 +1449,18 @@ impl AuthoritativeRepository {
         locality_policy::policies(&self.database, after, limit)
     }
 
+    /// Returns one exact immutable desired-locality policy.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored names, identities, requirements or revisions are malformed.
+    pub fn locality_policy(
+        &self,
+        policy_id: meshspan_domain::LocalityPolicyId,
+    ) -> Result<Option<LocalityPolicyRecord>, RepositoryError> {
+        locality_policy::policy(&self.database, policy_id)
+    }
+
     /// Returns the immutable write-acknowledgement policy selected by one volume.
     ///
     /// `None` means the volume uses the built-in availability-first eventual default.
@@ -1475,6 +1487,18 @@ impl AuthoritativeRepository {
     ) -> Result<Page<AcknowledgementPolicyRecord, AcknowledgementPolicyCursor>, RepositoryError>
     {
         acknowledgement_policy::policies(&self.database, after, limit)
+    }
+
+    /// Returns one exact immutable write-acknowledgement policy.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored policy predicates or revisions are malformed.
+    pub fn acknowledgement_policy(
+        &self,
+        policy_id: meshspan_domain::AcknowledgementPolicyId,
+    ) -> Result<Option<AcknowledgementPolicyRecord>, RepositoryError> {
+        acknowledgement_policy::policy(&self.database, policy_id)
     }
 
     /// Returns the current public secret-wrapping-key generation for one node.

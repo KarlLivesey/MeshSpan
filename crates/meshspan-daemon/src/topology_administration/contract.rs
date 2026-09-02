@@ -2,12 +2,17 @@
 
 //! Replaceable replicated-authority boundary for topology administration.
 
-use meshspan_domain::{AvailabilityCellId, FaultGroupId, OperationId, ProtectionPolicyId};
+use meshspan_domain::{
+    AcknowledgementPolicyId, AvailabilityCellId, FaultGroupId, LocalityPolicyId, OperationId,
+    ProtectionPolicyId,
+};
 use meshspan_metadata::{
-    AuthoritativeCommand, AvailabilityCellCursor, AvailabilityCellRecord, CommandContext,
-    CommandReceipt, FaultGroupCursor, FaultGroupMembershipCursor, FaultGroupMembershipRecord,
-    FaultGroupRecord, Page, PageLimit, ProtectionPolicyCursor, ProtectionPolicyRecord,
-    TopologyNodeCursor, TopologyNodeRecord, TopologyTargetCursor, TopologyTargetRecord,
+    AcknowledgementPolicyCursor, AcknowledgementPolicyRecord, AuthoritativeCommand,
+    AvailabilityCellCursor, AvailabilityCellRecord, CommandContext, CommandReceipt,
+    FaultGroupCursor, FaultGroupMembershipCursor, FaultGroupMembershipRecord, FaultGroupRecord,
+    LocalityPolicyCursor, LocalityPolicyRecord, Page, PageLimit, ProtectionPolicyCursor,
+    ProtectionPolicyRecord, TopologyNodeCursor, TopologyNodeRecord, TopologyTargetCursor,
+    TopologyTargetRecord,
 };
 use thiserror::Error;
 
@@ -122,6 +127,54 @@ pub trait TopologyAdministrationAuthority: IdentityAdministrationAuthority {
         &self,
         cell_id: AvailabilityCellId,
     ) -> Result<Option<AvailabilityCellRecord>, TopologyAdministrationAuthorityError>;
+
+    /// Returns one bounded immutable desired-locality policy page.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authority error when committed policy state cannot be read safely.
+    fn locality_policies(
+        &self,
+        after: Option<&LocalityPolicyCursor>,
+        limit: PageLimit,
+    ) -> Result<
+        Page<LocalityPolicyRecord, LocalityPolicyCursor>,
+        TopologyAdministrationAuthorityError,
+    >;
+
+    /// Returns one exact immutable desired-locality policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authority error when committed policy state cannot be read safely.
+    fn locality_policy(
+        &self,
+        policy_id: LocalityPolicyId,
+    ) -> Result<Option<LocalityPolicyRecord>, TopologyAdministrationAuthorityError>;
+
+    /// Returns one bounded immutable write-acknowledgement policy page.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authority error when committed policy state cannot be read safely.
+    fn acknowledgement_policies(
+        &self,
+        after: Option<&AcknowledgementPolicyCursor>,
+        limit: PageLimit,
+    ) -> Result<
+        Page<AcknowledgementPolicyRecord, AcknowledgementPolicyCursor>,
+        TopologyAdministrationAuthorityError,
+    >;
+
+    /// Returns one exact immutable write-acknowledgement policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authority error when committed policy state cannot be read safely.
+    fn acknowledgement_policy(
+        &self,
+        policy_id: AcknowledgementPolicyId,
+    ) -> Result<Option<AcknowledgementPolicyRecord>, TopologyAdministrationAuthorityError>;
 
     /// Resolves an already committed topology operation.
     ///

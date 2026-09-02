@@ -30,6 +30,8 @@ mod passkey_registration;
 mod passkey_validation;
 mod permission_administration;
 mod permission_administration_validation;
+mod placement_policy_administration;
+mod placement_policy_administration_validation;
 mod protection_administration;
 mod protection_administration_validation;
 mod recovery_bundle_verification;
@@ -59,6 +61,8 @@ mod group_membership_administration_tests;
 mod identity_administration_tests;
 #[cfg(test)]
 mod namespace_mutation_tests;
+#[cfg(test)]
+mod placement_policy_administration_tests;
 #[cfg(test)]
 mod recovery_bundle_verification_tests;
 #[cfg(test)]
@@ -204,6 +208,22 @@ pub use permission_administration_validation::{
     decode_revoke_permission_grant_request, encode_create_volume_permission_grant_response,
     encode_list_volume_permission_grants_response, encode_revoke_permission_grant_response,
     validate_list_volume_permission_grants_query,
+};
+pub use placement_policy_administration::{
+    AcknowledgementCellMode, AcknowledgementConsistency, AcknowledgementPolicySummary,
+    AssignVolumePlacementPolicyRequest, AssignVolumePlacementPolicyResponse,
+    CreateAcknowledgementCellRequirement, CreateAcknowledgementPolicyRequest,
+    CreateAcknowledgementPolicyResponse, CreateLocalityPolicyRequest, CreateLocalityPolicyResponse,
+    CreateLocalityRequirement, ListAcknowledgementPoliciesResponse, ListLocalityPoliciesResponse,
+    ListPlacementPoliciesQuery, LocalityPolicySummary, LocalityRequirementSummary,
+    PlacementPolicyCursor, ProtectionScenarioReferenceId, StrongFallback,
+};
+pub use placement_policy_administration_validation::{
+    MAX_PLACEMENT_POLICY_MUTATION_BYTES, decode_assign_volume_placement_policy_request,
+    decode_create_acknowledgement_policy_request, decode_create_locality_policy_request,
+    encode_assign_volume_placement_policy_response, encode_create_acknowledgement_policy_response,
+    encode_create_locality_policy_response, encode_list_acknowledgement_policies_response,
+    encode_list_locality_policies_response,
 };
 pub use protection_administration::{
     AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,

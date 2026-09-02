@@ -9,10 +9,14 @@ mod service;
 
 use axum::http::HeaderMap;
 use meshspan_api_contract::{
+    AssignVolumePlacementPolicyRequest, AssignVolumePlacementPolicyResponse,
     AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
+    CreateAcknowledgementPolicyRequest, CreateAcknowledgementPolicyResponse,
     CreateAvailabilityCellRequest, CreateAvailabilityCellResponse, CreateFaultGroupRequest,
-    CreateFaultGroupResponse, CreateProtectionPolicyRequest, CreateProtectionPolicyResponse,
-    ListAvailabilityCellsResponse, ListFaultGroupMembershipsResponse, ListFaultGroupsResponse,
+    CreateFaultGroupResponse, CreateLocalityPolicyRequest, CreateLocalityPolicyResponse,
+    CreateProtectionPolicyRequest, CreateProtectionPolicyResponse,
+    ListAcknowledgementPoliciesResponse, ListAvailabilityCellsResponse,
+    ListFaultGroupMembershipsResponse, ListFaultGroupsResponse, ListLocalityPoliciesResponse,
     ListProtectionPoliciesResponse, ListTopologyNodesResponse, ListTopologyQuery,
     ListTopologyTargetsResponse, SetAvailabilityCellMembershipResponse,
     SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse,
@@ -106,6 +110,28 @@ pub trait TopologyAdministrationController: Send + 'static {
         query: ListTopologyQuery,
     ) -> Result<ListAvailabilityCellsResponse, TopologyAdministrationError>;
 
+    /// Returns one bounded immutable desired-locality policy page.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid input or unavailable/corrupt committed policy state.
+    fn list_locality_policies(
+        &self,
+        administrator: IdentityAdministrator,
+        query: ListTopologyQuery,
+    ) -> Result<ListLocalityPoliciesResponse, TopologyAdministrationError>;
+
+    /// Returns one bounded immutable write-acknowledgement policy page.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid input or unavailable/corrupt committed policy state.
+    fn list_acknowledgement_policies(
+        &self,
+        administrator: IdentityAdministrator,
+        query: ListTopologyQuery,
+    ) -> Result<ListAcknowledgementPoliciesResponse, TopologyAdministrationError>;
+
     /// Creates or exactly resolves one named shared-failure group.
     ///
     /// # Errors
@@ -153,6 +179,54 @@ pub trait TopologyAdministrationController: Send + 'static {
         policy_id: &str,
         request: AssignVolumeProtectionPolicyRequest,
     ) -> Result<AssignVolumeProtectionPolicyResponse, TopologyAdministrationError>;
+
+    /// Creates or exactly resolves one immutable desired-locality policy.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, conflicting, unauthorised or uncommitted mutations.
+    fn create_locality_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        request: CreateLocalityPolicyRequest,
+    ) -> Result<CreateLocalityPolicyResponse, TopologyAdministrationError>;
+
+    /// Selects one immutable desired-locality policy for a volume.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, missing, conflicting, unauthorised or uncommitted mutations.
+    fn assign_volume_locality_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        volume_id: &str,
+        policy_id: &str,
+        request: AssignVolumePlacementPolicyRequest,
+    ) -> Result<AssignVolumePlacementPolicyResponse, TopologyAdministrationError>;
+
+    /// Creates or exactly resolves one immutable write-acknowledgement policy.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, conflicting, unauthorised or uncommitted mutations.
+    fn create_acknowledgement_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        request: CreateAcknowledgementPolicyRequest,
+    ) -> Result<CreateAcknowledgementPolicyResponse, TopologyAdministrationError>;
+
+    /// Selects one immutable write-acknowledgement policy for a volume.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, missing, conflicting, unauthorised or uncommitted mutations.
+    fn assign_volume_acknowledgement_policy(
+        &mut self,
+        administrator: IdentityAdministrator,
+        volume_id: &str,
+        policy_id: &str,
+        request: AssignVolumePlacementPolicyRequest,
+    ) -> Result<AssignVolumePlacementPolicyResponse, TopologyAdministrationError>;
 
     /// Creates or exactly resolves one named availability locality.
     ///

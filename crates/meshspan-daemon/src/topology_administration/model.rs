@@ -5,31 +5,40 @@
 use std::fmt::Write;
 
 use meshspan_api_contract::{
+    AcknowledgementCellMode, AcknowledgementConsistency, AcknowledgementPolicySummary,
+    AssignVolumePlacementPolicyRequest, AssignVolumePlacementPolicyResponse,
     AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
-    AvailabilityCellSummary, CreateAvailabilityCellRequest, CreateFaultGroupRequest,
-    CreateProtectionPolicyRequest, FaultGroupMembershipSummary, FaultGroupSummary,
-    ListAvailabilityCellsResponse, ListFaultGroupMembershipsResponse, ListFaultGroupsResponse,
+    AvailabilityCellSummary, CreateAcknowledgementCellRequirement,
+    CreateAcknowledgementPolicyRequest, CreateAvailabilityCellRequest, CreateFaultGroupRequest,
+    CreateLocalityPolicyRequest, CreateProtectionPolicyRequest, FaultGroupMembershipSummary,
+    FaultGroupSummary, ListAcknowledgementPoliciesResponse, ListAvailabilityCellsResponse,
+    ListFaultGroupMembershipsResponse, ListFaultGroupsResponse, ListLocalityPoliciesResponse,
     ListProtectionPoliciesResponse, ListTopologyNodesResponse, ListTopologyQuery,
-    ListTopologyTargetsResponse, OperationId as ApiOperationId, ProtectionFailureTermSummary,
-    ProtectionPolicySummary, ProtectionScenarioSummary, SetAvailabilityCellMembershipResponse,
-    SetFaultGroupMembershipRequest, StorageFolderUsageLimit, TopologyCursor, TopologyNodeRoles,
-    TopologyNodeState, TopologyNodeSummary, TopologyTargetState, TopologyTargetSummary,
+    ListTopologyTargetsResponse, LocalityPolicySummary, LocalityRequirementSummary,
+    OperationId as ApiOperationId, ProtectionFailureTermSummary, ProtectionPolicySummary,
+    ProtectionScenarioSummary, SetAvailabilityCellMembershipResponse,
+    SetFaultGroupMembershipRequest, StorageFolderUsageLimit, StrongFallback, TopologyCursor,
+    TopologyNodeRoles, TopologyNodeState, TopologyNodeSummary, TopologyTargetState,
+    TopologyTargetSummary,
 };
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    AuditEventId, AvailabilityCellId, FailureScenario, FailureTerm, FaultGroupClassId,
-    FaultGroupId, HostId, OperationId, ProtectionPolicyId, ProtectionScenarioId, TargetId,
-    VolumeId, uuid_v8,
+    AcknowledgementPolicyId, AuditEventId, AvailabilityCellId, DurationMicros, FailureScenario,
+    FailureTerm, FaultGroupClassId, FaultGroupId, HostId, LocalityPolicyId, LocalityRequirementId,
+    OperationId, ProtectionPolicyId, ProtectionScenarioId, TargetId, VolumeId, uuid_v8,
 };
 use meshspan_metadata::{
-    AssignVolumeProtectionPolicy, AuthoritativeCommand, AvailabilityCellCursor,
-    AvailabilityCellRecord, CommandContext, CreateAvailabilityCell, CreateFaultGroup,
-    CreateProtectionPolicy, FaultGroupCursor, FaultGroupMembershipCursor,
-    FaultGroupMembershipRecord, FaultGroupRecord, Page, ProtectionPolicyCursor,
-    ProtectionPolicyRecord, ProtectionScenarioConfiguration, RecordName,
+    AcknowledgementCellRequirement, AcknowledgementCellRole, AcknowledgementConsistencyClass,
+    AcknowledgementPolicyCursor, AcknowledgementPolicyRecord, AssignVolumeAcknowledgementPolicy,
+    AssignVolumeLocalityPolicy, AssignVolumeProtectionPolicy, AuthoritativeCommand,
+    AvailabilityCellCursor, AvailabilityCellRecord, CommandContext, CreateAcknowledgementPolicy,
+    CreateAvailabilityCell, CreateFaultGroup, CreateLocalityPolicy, CreateProtectionPolicy,
+    FaultGroupCursor, FaultGroupMembershipCursor, FaultGroupMembershipRecord, FaultGroupRecord,
+    LocalityPolicyCursor, LocalityPolicyRecord, LocalityRequirementConfiguration, Page,
+    ProtectionPolicyCursor, ProtectionPolicyRecord, ProtectionScenarioConfiguration, RecordName,
     SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
-    SetTargetAvailabilityCellMembership, StorageUsageLimit, TopologyNodeCursor, TopologyNodeRecord,
-    TopologyTargetCursor, TopologyTargetRecord,
+    SetTargetAvailabilityCellMembership, StorageUsageLimit, StrongFallbackMode, TopologyNodeCursor,
+    TopologyNodeRecord, TopologyTargetCursor, TopologyTargetRecord,
 };
 use sha2::{Digest, Sha256};
 
@@ -42,6 +51,9 @@ const AUDIT_ID_DOMAIN: &[u8] = b"meshspan.topology.audit-id.v1\0";
 const POLICY_ID_DOMAIN: &[u8] = b"meshspan.protection.policy-id.v1\0";
 const SCENARIO_ID_DOMAIN: &[u8] = b"meshspan.protection.scenario-id.v1\0";
 const CELL_ID_DOMAIN: &[u8] = b"meshspan.topology.availability-cell-id.v1\0";
+const LOCALITY_POLICY_ID_DOMAIN: &[u8] = b"meshspan.locality.policy-id.v1\0";
+const LOCALITY_REQUIREMENT_ID_DOMAIN: &[u8] = b"meshspan.locality.requirement-id.v1\0";
+const ACKNOWLEDGEMENT_POLICY_ID_DOMAIN: &[u8] = b"meshspan.acknowledgement.policy-id.v1\0";
 
 pub(super) fn create_command(
     request: &CreateFaultGroupRequest,
@@ -288,6 +300,192 @@ pub(super) fn protection_assignment_command(
     ))
 }
 
+pub(super) fn locality_policy_command(
+    request: &CreateLocalityPolicyRequest,
+) -> Result<(OperationId, LocalityPolicyId, AuthoritativeCommand), TopologyAdministrationError> {
+    let operation_id = domain_operation(&request.operation_id)?;
+    let policy_id = LocalityPolicyId::from_bytes(derived_uuid(
+        LOCALITY_POLICY_ID_DOMAIN,
+        &operation_id.as_bytes(),
+    )?)
+    .map_err(|_| TopologyAdministrationError::Failed)?;
+    let requirements = request
+        .requirements
+        .iter()
+        .enumerate()
+        .map(|(index, requirement)| {
+            let mut identity = operation_id.as_bytes().to_vec();
+            identity.extend_from_slice(
+                &u64::try_from(index)
+                    .map_err(|_| TopologyAdministrationError::InvalidInput)?
+                    .to_be_bytes(),
+            );
+            Ok(LocalityRequirementConfiguration {
+                requirement_id: LocalityRequirementId::from_bytes(derived_uuid(
+                    LOCALITY_REQUIREMENT_ID_DOMAIN,
+                    &identity,
+                )?)
+                .map_err(|_| TopologyAdministrationError::Failed)?,
+                cell_id: domain_cell(&requirement.cell_id)?,
+                local_protection_policy_id: requirement
+                    .local_protection_policy_id
+                    .as_deref()
+                    .map(domain_protection_policy)
+                    .transpose()?,
+            })
+        })
+        .collect::<Result<Vec<_>, TopologyAdministrationError>>()?;
+    Ok((
+        operation_id,
+        policy_id,
+        AuthoritativeCommand::CreateLocalityPolicy(CreateLocalityPolicy {
+            policy_id,
+            name: RecordName::new(request.name.as_str())
+                .map_err(|_| TopologyAdministrationError::InvalidInput)?,
+            maximum_lag: request.maximum_lag_micros.map(DurationMicros::new),
+            requirements: BoundedItems::new(requirements, 64)
+                .map_err(|_| TopologyAdministrationError::InvalidInput)?,
+        }),
+    ))
+}
+
+pub(super) fn acknowledgement_policy_command(
+    request: &CreateAcknowledgementPolicyRequest,
+) -> Result<(OperationId, AcknowledgementPolicyId, AuthoritativeCommand), TopologyAdministrationError>
+{
+    let operation_id = domain_operation(&request.operation_id)?;
+    let policy_id = AcknowledgementPolicyId::from_bytes(derived_uuid(
+        ACKNOWLEDGEMENT_POLICY_ID_DOMAIN,
+        &operation_id.as_bytes(),
+    )?)
+    .map_err(|_| TopologyAdministrationError::Failed)?;
+    let scenarios = request
+        .required_scenario_ids
+        .iter()
+        .map(|value| {
+            ProtectionScenarioId::from_bytes(
+                parse_uuid(value.as_str())
+                    .map_err(|_| TopologyAdministrationError::InvalidInput)?,
+            )
+            .map_err(|_| TopologyAdministrationError::InvalidInput)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let cells = request
+        .cells
+        .iter()
+        .map(acknowledgement_cell)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((
+        operation_id,
+        policy_id,
+        AuthoritativeCommand::CreateAcknowledgementPolicy(CreateAcknowledgementPolicy {
+            policy_id,
+            name: RecordName::new(request.name.as_str())
+                .map_err(|_| TopologyAdministrationError::InvalidInput)?,
+            consistency: match request.consistency {
+                AcknowledgementConsistency::Eventual => AcknowledgementConsistencyClass::Eventual,
+                AcknowledgementConsistency::Strong => AcknowledgementConsistencyClass::Strong,
+            },
+            minimum_durable_targets: request.minimum_durable_targets,
+            minimum_distinct_nodes: request.minimum_distinct_nodes,
+            strong_wait: request.strong_wait_micros.map(DurationMicros::new),
+            fallback: match request.fallback {
+                StrongFallback::RemainPending => StrongFallbackMode::RemainPending,
+                StrongFallback::FailAtDeadline => StrongFallbackMode::FailAtDeadline,
+                StrongFallback::Eventual => StrongFallbackMode::Eventual,
+            },
+            required_scenarios: BoundedItems::new(scenarios, 64)
+                .map_err(|_| TopologyAdministrationError::InvalidInput)?,
+            cells: BoundedItems::new(cells, 256)
+                .map_err(|_| TopologyAdministrationError::InvalidInput)?,
+        }),
+    ))
+}
+
+fn acknowledgement_cell(
+    cell: &CreateAcknowledgementCellRequirement,
+) -> Result<AcknowledgementCellRequirement, TopologyAdministrationError> {
+    Ok(AcknowledgementCellRequirement {
+        cell_id: domain_cell(&cell.cell_id)?,
+        role: match cell.mode {
+            AcknowledgementCellMode::RequiredBeforeCommit => {
+                AcknowledgementCellRole::RequiredBeforeCommit
+            }
+            AcknowledgementCellMode::Eventual => AcknowledgementCellRole::Eventual,
+            AcknowledgementCellMode::Excluded => AcknowledgementCellRole::Excluded,
+        },
+        minimum_durable_targets: cell.minimum_durable_targets,
+        minimum_distinct_nodes: cell.minimum_distinct_nodes,
+        local_protection_policy_id: cell
+            .local_protection_policy_id
+            .as_deref()
+            .map(domain_protection_policy)
+            .transpose()?,
+    })
+}
+
+pub(super) fn locality_assignment_command(
+    volume_id: &str,
+    policy_id: &str,
+    request: &AssignVolumePlacementPolicyRequest,
+) -> Result<
+    (
+        OperationId,
+        VolumeId,
+        LocalityPolicyId,
+        AuthoritativeCommand,
+    ),
+    TopologyAdministrationError,
+> {
+    let operation_id = domain_operation(&request.operation_id)?;
+    let volume_id = domain_volume(volume_id)?;
+    let policy_id = LocalityPolicyId::from_bytes(
+        parse_uuid(policy_id).map_err(|_| TopologyAdministrationError::InvalidInput)?,
+    )
+    .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+    Ok((
+        operation_id,
+        volume_id,
+        policy_id,
+        AuthoritativeCommand::AssignVolumeLocalityPolicy(AssignVolumeLocalityPolicy {
+            volume_id,
+            policy_id,
+        }),
+    ))
+}
+
+pub(super) fn acknowledgement_assignment_command(
+    volume_id: &str,
+    policy_id: &str,
+    request: &AssignVolumePlacementPolicyRequest,
+) -> Result<
+    (
+        OperationId,
+        VolumeId,
+        AcknowledgementPolicyId,
+        AuthoritativeCommand,
+    ),
+    TopologyAdministrationError,
+> {
+    let operation_id = domain_operation(&request.operation_id)?;
+    let volume_id = domain_volume(volume_id)?;
+    let policy_id = AcknowledgementPolicyId::from_bytes(
+        parse_uuid(policy_id).map_err(|_| TopologyAdministrationError::InvalidInput)?,
+    )
+    .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+    Ok((
+        operation_id,
+        volume_id,
+        policy_id,
+        AuthoritativeCommand::AssignVolumeAcknowledgementPolicy(
+            AssignVolumeAcknowledgementPolicy {
+                volume_id,
+                policy_id,
+            },
+        ),
+    ))
+}
+
 pub(super) fn command_context(
     administrator: IdentityAdministrator,
     operation_id: OperationId,
@@ -475,6 +673,130 @@ pub(super) fn assignment_response(
     }
 }
 
+pub(super) fn placement_assignment_response(
+    operation_id: ApiOperationId,
+    volume_id: VolumeId,
+    policy_id: [u8; 16],
+    revision: u64,
+) -> AssignVolumePlacementPolicyResponse {
+    AssignVolumePlacementPolicyResponse {
+        operation_id,
+        volume_id: format_uuid(volume_id.as_bytes()),
+        policy_id: format_uuid(policy_id),
+        revision,
+    }
+}
+
+pub(super) fn locality_policy_response(
+    query: &ListTopologyQuery,
+    page: Page<LocalityPolicyRecord, LocalityPolicyCursor>,
+) -> Result<ListLocalityPoliciesResponse, TopologyAdministrationError> {
+    Ok(ListLocalityPoliciesResponse {
+        policies: page
+            .items
+            .into_iter()
+            .map(locality_policy_summary)
+            .collect(),
+        next_page_url: page
+            .next
+            .as_ref()
+            .map(encode_locality_cursor)
+            .transpose()?
+            .map(|cursor| placement_page_url("locality-policies", &cursor, query.limit))
+            .transpose()?,
+    })
+}
+
+pub(super) fn locality_policy_summary(record: LocalityPolicyRecord) -> LocalityPolicySummary {
+    LocalityPolicySummary {
+        policy_id: format_uuid(record.policy_id.as_bytes()),
+        name: record.display_name,
+        maximum_lag_micros: record.maximum_lag.map(DurationMicros::get),
+        requirements: record
+            .requirements
+            .into_iter()
+            .map(|requirement| LocalityRequirementSummary {
+                requirement_id: format_uuid(requirement.requirement_id.as_bytes()),
+                cell_id: format_uuid(requirement.cell_id.as_bytes()),
+                local_protection_policy_id: requirement
+                    .local_protection_policy_id
+                    .map(ProtectionPolicyId::as_bytes)
+                    .map(format_uuid),
+            })
+            .collect(),
+        revision: record.revision.get(),
+    }
+}
+
+pub(super) fn acknowledgement_policy_response(
+    query: &ListTopologyQuery,
+    page: Page<AcknowledgementPolicyRecord, AcknowledgementPolicyCursor>,
+) -> Result<ListAcknowledgementPoliciesResponse, TopologyAdministrationError> {
+    Ok(ListAcknowledgementPoliciesResponse {
+        policies: page
+            .items
+            .into_iter()
+            .map(acknowledgement_policy_summary)
+            .collect::<Result<_, _>>()?,
+        next_page_url: page
+            .next
+            .as_ref()
+            .map(encode_acknowledgement_cursor)
+            .transpose()?
+            .map(|cursor| placement_page_url("acknowledgement-policies", &cursor, query.limit))
+            .transpose()?,
+    })
+}
+
+pub(super) fn acknowledgement_policy_summary(
+    record: AcknowledgementPolicyRecord,
+) -> Result<AcknowledgementPolicySummary, TopologyAdministrationError> {
+    Ok(AcknowledgementPolicySummary {
+        policy_id: format_uuid(record.policy_id.as_bytes()),
+        name: record.display_name,
+        consistency: match record.consistency {
+            AcknowledgementConsistencyClass::Eventual => AcknowledgementConsistency::Eventual,
+            AcknowledgementConsistencyClass::Strong => AcknowledgementConsistency::Strong,
+        },
+        minimum_durable_targets: record.minimum_durable_targets,
+        minimum_distinct_nodes: record.minimum_distinct_nodes,
+        strong_wait_micros: record.strong_wait.map(DurationMicros::get),
+        fallback: match record.fallback {
+            StrongFallbackMode::RemainPending => StrongFallback::RemainPending,
+            StrongFallbackMode::FailAtDeadline => StrongFallback::FailAtDeadline,
+            StrongFallbackMode::Eventual => StrongFallback::Eventual,
+        },
+        required_scenario_ids: record
+            .required_scenarios
+            .into_iter()
+            .map(ProtectionScenarioId::as_bytes)
+            .map(meshspan_api_contract::ProtectionScenarioReferenceId::from_uuid_bytes)
+            .collect::<Option<Vec<_>>>()
+            .ok_or(TopologyAdministrationError::Failed)?,
+        cells: record
+            .cells
+            .into_iter()
+            .map(|cell| CreateAcknowledgementCellRequirement {
+                cell_id: format_uuid(cell.cell_id.as_bytes()),
+                mode: match cell.role {
+                    AcknowledgementCellRole::RequiredBeforeCommit => {
+                        AcknowledgementCellMode::RequiredBeforeCommit
+                    }
+                    AcknowledgementCellRole::Eventual => AcknowledgementCellMode::Eventual,
+                    AcknowledgementCellRole::Excluded => AcknowledgementCellMode::Excluded,
+                },
+                minimum_durable_targets: cell.minimum_durable_targets,
+                minimum_distinct_nodes: cell.minimum_distinct_nodes,
+                local_protection_policy_id: cell
+                    .local_protection_policy_id
+                    .map(ProtectionPolicyId::as_bytes)
+                    .map(format_uuid),
+            })
+            .collect(),
+        revision: record.revision.get(),
+    })
+}
+
 pub(super) fn group_summary(record: FaultGroupRecord) -> FaultGroupSummary {
     FaultGroupSummary {
         class_id: format_uuid(record.class_id.as_bytes()),
@@ -554,6 +876,30 @@ pub(super) fn decode_cell_cursor(
     ))
 }
 
+pub(super) fn decode_locality_cursor(
+    cursor: &TopologyCursor,
+) -> Result<LocalityPolicyCursor, TopologyAdministrationError> {
+    let fields = cursor_fields(cursor, "l", 2)?;
+    let policy_id = LocalityPolicyId::from_bytes(parse_cursor_uuid(fields[0])?)
+        .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+    Ok(LocalityPolicyCursor::new(
+        decode_text(fields[1])?,
+        policy_id,
+    ))
+}
+
+pub(super) fn decode_acknowledgement_cursor(
+    cursor: &TopologyCursor,
+) -> Result<AcknowledgementPolicyCursor, TopologyAdministrationError> {
+    let fields = cursor_fields(cursor, "a", 2)?;
+    let policy_id = AcknowledgementPolicyId::from_bytes(parse_cursor_uuid(fields[0])?)
+        .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+    Ok(AcknowledgementPolicyCursor::new(
+        decode_text(fields[1])?,
+        policy_id,
+    ))
+}
+
 fn node_summary(
     record: TopologyNodeRecord,
 ) -> Result<TopologyNodeSummary, TopologyAdministrationError> {
@@ -628,6 +974,20 @@ fn domain_cell(value: &str) -> Result<AvailabilityCellId, TopologyAdministration
     .map_err(|_| TopologyAdministrationError::InvalidInput)
 }
 
+fn domain_volume(value: &str) -> Result<VolumeId, TopologyAdministrationError> {
+    VolumeId::from_bytes(parse_uuid(value).map_err(|_| TopologyAdministrationError::InvalidInput)?)
+        .map_err(|_| TopologyAdministrationError::InvalidInput)
+}
+
+fn domain_protection_policy(
+    value: &str,
+) -> Result<ProtectionPolicyId, TopologyAdministrationError> {
+    ProtectionPolicyId::from_bytes(
+        parse_uuid(value).map_err(|_| TopologyAdministrationError::InvalidInput)?,
+    )
+    .map_err(|_| TopologyAdministrationError::InvalidInput)
+}
+
 fn derived_uuid(domain: &[u8], value: &[u8]) -> Result<[u8; 16], TopologyAdministrationError> {
     let mut digest = Sha256::new();
     digest.update(domain);
@@ -689,6 +1049,26 @@ fn encode_cell_cursor(
     cursor: &AvailabilityCellCursor,
 ) -> Result<TopologyCursor, TopologyAdministrationError> {
     encoded_cursor("c", cursor.cell_id().as_bytes(), &[cursor.canonical_name()])
+}
+
+fn encode_locality_cursor(
+    cursor: &LocalityPolicyCursor,
+) -> Result<TopologyCursor, TopologyAdministrationError> {
+    encoded_cursor(
+        "l",
+        cursor.policy_id().as_bytes(),
+        &[cursor.canonical_name()],
+    )
+}
+
+fn encode_acknowledgement_cursor(
+    cursor: &AcknowledgementPolicyCursor,
+) -> Result<TopologyCursor, TopologyAdministrationError> {
+    encoded_cursor(
+        "a",
+        cursor.policy_id().as_bytes(),
+        &[cursor.canonical_name()],
+    )
 }
 
 fn encoded_cursor(
@@ -770,6 +1150,18 @@ fn protection_page_url(
         "/api/latest/admin/protection-policies?cursor={}",
         cursor.as_str()
     );
+    if let Some(limit) = limit {
+        write!(url, "&limit={limit}").map_err(|_| TopologyAdministrationError::Failed)?;
+    }
+    Ok(url)
+}
+
+fn placement_page_url(
+    resource: &str,
+    cursor: &TopologyCursor,
+    limit: Option<u16>,
+) -> Result<String, TopologyAdministrationError> {
+    let mut url = format!("/api/latest/admin/{resource}?cursor={}", cursor.as_str());
     if let Some(limit) = limit {
         write!(url, "&limit={limit}").map_err(|_| TopologyAdministrationError::Failed)?;
     }

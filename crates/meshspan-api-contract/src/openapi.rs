@@ -7,31 +7,34 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     AbortUploadRequest, AbortUploadResponse, AddGroupMemberRequest, AddGroupMemberResponse,
-    ApiError, AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
-    BeginUploadRequest, BeginUploadResponse, CommitUploadRequest, CommitUploadResponse,
-    ConfirmRecoveryBundleRequest, ConfirmRecoveryBundleResponse, CreateApiKeyRequest,
-    CreateApiKeyResponse, CreateAvailabilityCellRequest, CreateAvailabilityCellResponse,
-    CreateDirectoryRequest, CreateDirectoryResponse, CreateFaultGroupRequest,
-    CreateFaultGroupResponse, CreateGroupRequest, CreateMeshSetupRequest, CreateMeshSetupResponse,
-    CreateNodeJoinGrantRequest, CreateNodeJoinGrantResponse, CreatePasskeyChallengeRequest,
-    CreatePasskeyChallengeResponse, CreatePasskeyRegistrationChallengeRequest,
-    CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationRequest,
-    CreatePasskeyRegistrationResponse, CreatePrincipalResponse, CreateProtectionPolicyRequest,
-    CreateProtectionPolicyResponse, CreateRecoveryCodesRequest, CreateRecoveryCodesResponse,
-    CreateSessionRequest, CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
-    CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
-    CreateTotpRegistrationResponse, CreateUserRequest, CreateVolumePermissionGrantRequest,
-    CreateVolumePermissionGrantResponse, CreateVolumeRequest, CreateVolumeResponse,
-    CurrentSessionResponse, DeleteObjectRequest, DeleteObjectResponse, EnrolNodeRequest,
-    EnrolNodeResponse, GetObjectResponse, HealthResponse, JoinMeshSetupRequest,
-    JoinMeshSetupResponse, ListAuthenticationMethodsResponse, ListAvailabilityCellsResponse,
-    ListDirectoryResponse, ListFaultGroupMembershipsResponse, ListFaultGroupsResponse,
-    ListGroupMembershipsResponse, ListOperationsResponse, ListPrincipalsResponse,
-    ListProtectionPoliciesResponse, ListStorageFoldersResponse, ListTopologyNodesResponse,
-    ListTopologyTargetsResponse, ListUploadRangesResponse, ListVolumePermissionGrantsResponse,
-    ListVolumesResponse, OperationStatusResponse, PublishSmbExportRequest,
-    PublishSmbExportResponse, RegisterStorageFolderRequest, RegisterStorageFolderResponse,
-    RemoveGroupMemberRequest, RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
+    ApiError, AssignVolumePlacementPolicyRequest, AssignVolumePlacementPolicyResponse,
+    AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse, BeginUploadRequest,
+    BeginUploadResponse, CommitUploadRequest, CommitUploadResponse, ConfirmRecoveryBundleRequest,
+    ConfirmRecoveryBundleResponse, CreateAcknowledgementPolicyRequest,
+    CreateAcknowledgementPolicyResponse, CreateApiKeyRequest, CreateApiKeyResponse,
+    CreateAvailabilityCellRequest, CreateAvailabilityCellResponse, CreateDirectoryRequest,
+    CreateDirectoryResponse, CreateFaultGroupRequest, CreateFaultGroupResponse, CreateGroupRequest,
+    CreateLocalityPolicyRequest, CreateLocalityPolicyResponse, CreateMeshSetupRequest,
+    CreateMeshSetupResponse, CreateNodeJoinGrantRequest, CreateNodeJoinGrantResponse,
+    CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,
+    CreatePasskeyRegistrationChallengeRequest, CreatePasskeyRegistrationChallengeResponse,
+    CreatePasskeyRegistrationRequest, CreatePasskeyRegistrationResponse, CreatePrincipalResponse,
+    CreateProtectionPolicyRequest, CreateProtectionPolicyResponse, CreateRecoveryCodesRequest,
+    CreateRecoveryCodesResponse, CreateSessionRequest, CreateSessionResponse,
+    CreateTotpRegistrationChallengeRequest, CreateTotpRegistrationChallengeResponse,
+    CreateTotpRegistrationRequest, CreateTotpRegistrationResponse, CreateUserRequest,
+    CreateVolumePermissionGrantRequest, CreateVolumePermissionGrantResponse, CreateVolumeRequest,
+    CreateVolumeResponse, CurrentSessionResponse, DeleteObjectRequest, DeleteObjectResponse,
+    EnrolNodeRequest, EnrolNodeResponse, GetObjectResponse, HealthResponse, JoinMeshSetupRequest,
+    JoinMeshSetupResponse, ListAcknowledgementPoliciesResponse, ListAuthenticationMethodsResponse,
+    ListAvailabilityCellsResponse, ListDirectoryResponse, ListFaultGroupMembershipsResponse,
+    ListFaultGroupsResponse, ListGroupMembershipsResponse, ListLocalityPoliciesResponse,
+    ListOperationsResponse, ListPrincipalsResponse, ListProtectionPoliciesResponse,
+    ListStorageFoldersResponse, ListTopologyNodesResponse, ListTopologyTargetsResponse,
+    ListUploadRangesResponse, ListVolumePermissionGrantsResponse, ListVolumesResponse,
+    OperationStatusResponse, PublishSmbExportRequest, PublishSmbExportResponse,
+    RegisterStorageFolderRequest, RegisterStorageFolderResponse, RemoveGroupMemberRequest,
+    RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
     RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
     RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, RevokePermissionGrantRequest,
     RevokePermissionGrantResponse, SetAvailabilityCellMembershipResponse,
@@ -117,6 +120,12 @@ fn components() -> Value {
             schema_response::<AssignVolumeProtectionPolicyResponse>(
                 "AssignVolumeProtectionPolicyResponse",
             ),
+            schema_request::<AssignVolumePlacementPolicyRequest>(
+                "AssignVolumePlacementPolicyRequest",
+            ),
+            schema_response::<AssignVolumePlacementPolicyResponse>(
+                "AssignVolumePlacementPolicyResponse",
+            ),
             schema_request::<BeginUploadRequest>("BeginUploadRequest"),
             schema_response::<BeginUploadResponse>("BeginUploadResponse"),
             schema_request::<CommitUploadRequest>("CommitUploadRequest"),
@@ -125,6 +134,12 @@ fn components() -> Value {
             schema_response::<ConfirmRecoveryBundleResponse>("ConfirmRecoveryBundleResponse"),
             schema_request::<CreateAvailabilityCellRequest>("CreateAvailabilityCellRequest"),
             schema_response::<CreateAvailabilityCellResponse>("CreateAvailabilityCellResponse"),
+            schema_request::<CreateAcknowledgementPolicyRequest>(
+                "CreateAcknowledgementPolicyRequest",
+            ),
+            schema_response::<CreateAcknowledgementPolicyResponse>(
+                "CreateAcknowledgementPolicyResponse",
+            ),
             schema_request::<CreateApiKeyRequest>("CreateApiKeyRequest"),
             schema_response::<CreateApiKeyResponse>("CreateApiKeyResponse"),
             schema_request::<CreateDirectoryRequest>("CreateDirectoryRequest"),
@@ -149,6 +164,8 @@ fn components() -> Value {
                 "CreatePasskeyRegistrationResponse",
             ),
             schema_response::<CreatePrincipalResponse>("CreatePrincipalResponse"),
+            schema_request::<CreateLocalityPolicyRequest>("CreateLocalityPolicyRequest"),
+            schema_response::<CreateLocalityPolicyResponse>("CreateLocalityPolicyResponse"),
             schema_request::<CreateProtectionPolicyRequest>("CreateProtectionPolicyRequest"),
             schema_response::<CreateProtectionPolicyResponse>("CreateProtectionPolicyResponse"),
             schema_request::<CreateRecoveryCodesRequest>("CreateRecoveryCodesRequest"),
@@ -184,6 +201,9 @@ fn components() -> Value {
             schema_response::<ListAuthenticationMethodsResponse>(
                 "ListAuthenticationMethodsResponse",
             ),
+            schema_response::<ListAcknowledgementPoliciesResponse>(
+                "ListAcknowledgementPoliciesResponse",
+            ),
             schema_response::<ListAvailabilityCellsResponse>("ListAvailabilityCellsResponse"),
             schema_response::<ListDirectoryResponse>("ListDirectoryResponse"),
             schema_response::<ListFaultGroupMembershipsResponse>(
@@ -191,6 +211,7 @@ fn components() -> Value {
             ),
             schema_response::<ListFaultGroupsResponse>("ListFaultGroupsResponse"),
             schema_response::<ListGroupMembershipsResponse>("ListGroupMembershipsResponse"),
+            schema_response::<ListLocalityPoliciesResponse>("ListLocalityPoliciesResponse"),
             schema_response::<ListOperationsResponse>("ListOperationsResponse"),
             schema_response::<ListPrincipalsResponse>("ListPrincipalsResponse"),
             schema_response::<ListProtectionPoliciesResponse>("ListProtectionPoliciesResponse"),
@@ -438,7 +459,15 @@ fn list_volumes_path() -> Value {
     })
 }
 
-fn administration_paths() -> [(String, Value); 21] {
+fn administration_paths() -> Vec<(String, Value)> {
+    administration_identity_paths()
+        .into_iter()
+        .chain(administration_placement_paths())
+        .chain(administration_topology_paths())
+        .collect()
+}
+
+fn administration_identity_paths() -> [(String, Value); 6] {
     [
         (
             "/admin/users".to_owned(),
@@ -458,12 +487,56 @@ fn administration_paths() -> [(String, Value); 21] {
         ),
         ("/admin/volumes".to_owned(), create_volume_path()),
         (
+            "/admin/volumes/{volume_id}/permission-grants".to_owned(),
+            volume_permission_grants_path(),
+        ),
+    ]
+}
+
+fn administration_placement_paths() -> [(String, Value); 9] {
+    [
+        (
             "/admin/protection-policies".to_owned(),
             protection_policy_administration_path(),
         ),
         (
             "/admin/volumes/{volume_id}/protection-policies/{policy_id}".to_owned(),
             volume_protection_policy_path(),
+        ),
+        (
+            "/admin/locality-policies".to_owned(),
+            placement_policy_administration_path(
+                "listLocalityPolicies",
+                "List immutable desired-locality policies",
+                "ListLocalityPoliciesResponse",
+                "createLocalityPolicy",
+                "Create one immutable desired-locality policy",
+                "CreateLocalityPolicyRequest",
+                "CreateLocalityPolicyResponse",
+            ),
+        ),
+        (
+            "/admin/volumes/{volume_id}/locality-policies/{policy_id}".to_owned(),
+            volume_placement_policy_path("assignVolumeLocalityPolicy", "desired-locality"),
+        ),
+        (
+            "/admin/acknowledgement-policies".to_owned(),
+            placement_policy_administration_path(
+                "listAcknowledgementPolicies",
+                "List immutable write-acknowledgement policies",
+                "ListAcknowledgementPoliciesResponse",
+                "createAcknowledgementPolicy",
+                "Create one immutable write-acknowledgement policy",
+                "CreateAcknowledgementPolicyRequest",
+                "CreateAcknowledgementPolicyResponse",
+            ),
+        ),
+        (
+            "/admin/volumes/{volume_id}/acknowledgement-policies/{policy_id}".to_owned(),
+            volume_placement_policy_path(
+                "assignVolumeAcknowledgementPolicy",
+                "write-acknowledgement",
+            ),
         ),
         (
             "/admin/volumes/{volume_id}/smb-exports".to_owned(),
@@ -473,6 +546,15 @@ fn administration_paths() -> [(String, Value); 21] {
             "/admin/smb-exports/{export_id}/withdrawals".to_owned(),
             withdraw_smb_export_path(),
         ),
+        (
+            "/admin/volumes/{volume_id}/permission-grants/{grant_id}/revocations".to_owned(),
+            permission_grant_revocation_path(),
+        ),
+    ]
+}
+
+fn administration_topology_paths() -> [(String, Value); 10] {
+    [
         ("/admin/operations".to_owned(), list_operations_path()),
         (
             "/admin/storage-folders".to_owned(),
@@ -521,14 +603,6 @@ fn administration_paths() -> [(String, Value); 21] {
         (
             "/admin/topology/availability-cells/{cell_id}/targets/{target_id}".to_owned(),
             availability_cell_membership_path("target_id", "Storage-target identity"),
-        ),
-        (
-            "/admin/volumes/{volume_id}/permission-grants".to_owned(),
-            volume_permission_grants_path(),
-        ),
-        (
-            "/admin/volumes/{volume_id}/permission-grants/{grant_id}/revocations".to_owned(),
-            permission_grant_revocation_path(),
         ),
     ]
 }
@@ -642,6 +716,79 @@ fn volume_protection_policy_path() -> Value {
             ),
             "responses": {
                 "200": json_response("Volume policy selection committed", "#/components/schemas/AssignVolumeProtectionPolicyResponse"),
+                "400": json_response("Invalid assignment request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "404": json_response("Volume or policy not found", "#/components/schemas/ApiError"),
+                "409": json_response("Operation conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or policy integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Metadata authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the arguments are the complete declarative OpenAPI names for one policy family"
+)]
+fn placement_policy_administration_path(
+    list_operation: &str,
+    list_summary: &str,
+    list_response: &str,
+    create_operation: &str,
+    create_summary: &str,
+    create_request: &str,
+    create_response: &str,
+) -> Value {
+    let mut value = topology_inventory_path(list_operation, list_summary, list_response);
+    value["post"] = json!({
+        "operationId": create_operation,
+        "summary": create_summary,
+        "x-meshspan-access": "system-manager-csrf",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+        "parameters": [optional_csrf_parameter()],
+        "requestBody": json_request(
+            "Immutable placement policy",
+            &format!("#/components/schemas/{create_request}")
+        ),
+        "responses": {
+            "201": json_response(
+                "Placement policy committed",
+                &format!("#/components/schemas/{create_response}")
+            ),
+            "400": json_response("Invalid policy request", "#/components/schemas/ApiError"),
+            "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+            "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+            "404": json_response("Referenced policy or cell not found", "#/components/schemas/ApiError"),
+            "409": json_response("Name or operation conflict", "#/components/schemas/ApiError"),
+            "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+            "500": json_response("Outgoing contract or policy integrity failure", "#/components/schemas/ApiError"),
+            "503": json_response("Metadata authority temporarily unavailable", "#/components/schemas/ApiError")
+        }
+    });
+    value
+}
+
+fn volume_placement_policy_path(operation_id: &str, policy_kind: &str) -> Value {
+    json!({
+        "put": {
+            "operationId": operation_id,
+            "summary": format!("Select one immutable {policy_kind} policy for a volume"),
+            "x-meshspan-access": "system-manager-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "parameters": [
+                volume_parameter(),
+                principal_parameter("policy_id", "Immutable policy identity"),
+                optional_csrf_parameter()
+            ],
+            "requestBody": json_request(
+                "Exact-retry assignment",
+                "#/components/schemas/AssignVolumePlacementPolicyRequest"
+            ),
+            "responses": {
+                "200": json_response("Volume policy selection committed", "#/components/schemas/AssignVolumePlacementPolicyResponse"),
                 "400": json_response("Invalid assignment request", "#/components/schemas/ApiError"),
                 "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
                 "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),

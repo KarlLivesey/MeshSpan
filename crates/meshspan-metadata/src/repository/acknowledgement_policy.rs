@@ -328,7 +328,7 @@ pub(super) fn policies(
     })
 }
 
-fn policy(
+pub(super) fn policy(
     database: &PartitionDatabase,
     policy_id: AcknowledgementPolicyId,
 ) -> Result<Option<AcknowledgementPolicyRecord>, RepositoryError> {

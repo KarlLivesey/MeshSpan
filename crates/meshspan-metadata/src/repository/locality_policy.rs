@@ -332,6 +332,41 @@ pub(super) fn policies(
     })
 }
 
+pub(super) fn policy(
+    database: &PartitionDatabase,
+    policy_id: LocalityPolicyId,
+) -> Result<Option<LocalityPolicyRecord>, RepositoryError> {
+    let stored = database
+        .connection()
+        .query_row(
+            "SELECT display_name, canonical_name, maximum_lag_micros, revision
+             FROM locality_policies WHERE locality_policy_id = ?1 AND state = ?2",
+            params![policy_id.as_bytes().as_slice(), ACTIVE_STATE],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .optional()?;
+    stored
+        .map(|(display_name, canonical_name, maximum_lag, revision)| {
+            let revision = positive_revision(revision)?;
+            Ok(LocalityPolicyRecord {
+                policy_id,
+                display_name,
+                canonical_name,
+                maximum_lag: optional_duration(maximum_lag)?,
+                requirements: load_requirements(database, policy_id, revision)?,
+                revision,
+            })
+        })
+        .transpose()
+}
+
 fn load_requirements(
     database: &PartitionDatabase,
     policy_id: LocalityPolicyId,
