@@ -6,14 +6,18 @@ use meshspan_cluster::MetadataAuthorityRequestError;
 use meshspan_contracts::{
     BoundedBytes, ContractError, ScrubObservation, ScrubOutcome, ScrubPage, StorageProvider,
 };
-use meshspan_domain::{TargetId, UnixMicros};
+use meshspan_domain::{TargetId, UnixMicros, WorkId};
 use meshspan_metadata::{
     AuthoritativeCommand, ClaimMaintenanceWork, CommandContext, CommandReceipt, CommitScrubPass,
-    CompleteMaintenanceWork, MaintenanceWorkCompletion,
+    CompleteMaintenanceWork, LocalDatabase, LocalScrubProgress, LocalScrubProgressError,
+    LocalScrubProgressUpdate, MaintenanceEffectReference, MaintenanceWorkCompletion,
 };
 use thiserror::Error;
 
-use crate::{MaintenanceMetadataAuthority, ScrubFindingSchedulingError, ScrubFindingSink};
+use crate::{
+    ConsensusAuthenticationAuthority, MaintenanceMetadataAuthority, ScrubFindingSchedulingError,
+    ScrubFindingSink,
+};
 
 /// Exact identities and execution bounds for one already-selected scrub job.
 pub struct StorageScrubExecution {
@@ -61,6 +65,49 @@ pub struct StorageScrubExecutionReceipt {
     pub completion: CommandReceipt,
 }
 
+/// Exact bounded attempt for a restart-safe paged target scrub.
+pub struct ResumableStorageScrubExecution {
+    /// Idempotency, actor, audit and time context for the claim command.
+    pub claim_context: CommandContext,
+    /// Independent context for the complete-pass effect, used only at end-of-cycle.
+    pub effect_context: CommandContext,
+    /// Independent context releasing this claim as continued or terminal.
+    pub completion_context: CommandContext,
+    /// Next fenced claim generation selected from authoritative job state.
+    pub claim: ClaimMaintenanceWork,
+    /// Storage target bound into the scrub work subject.
+    pub target_id: TargetId,
+    /// Exact target generation inspected by the provider.
+    pub target_generation: u64,
+    /// Maximum observations read and retained by this attempt.
+    pub page_items: usize,
+    /// Authority-agreed instant attached to physical observations.
+    pub observed_at: UnixMicros,
+    /// Earliest authority-agreed instant for the next page claim.
+    pub continuation_at: UnixMicros,
+}
+
+/// Durable outcome of one resumable scrub attempt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ResumableStorageScrubReceipt {
+    /// One non-terminal page was durably checkpointed and the claim was released.
+    Continued {
+        /// Exact local progress after the accepted page.
+        progress: LocalScrubProgress,
+        /// Authoritative continuation receipt.
+        completion: CommandReceipt,
+    },
+    /// This attempt completed the provider cycle and terminal work effect.
+    Completed(StorageScrubExecutionReceipt),
+    /// A prior attempt committed the effect; this claim linked it terminally without more IO.
+    Recovered {
+        /// Previously committed immutable effect.
+        effect: MaintenanceEffectReference,
+        /// Terminal work-completion receipt from this claim.
+        completion: CommandReceipt,
+    },
+}
+
 /// Closed failure phases; none claims success without an exact committed effect.
 #[derive(Debug, Error)]
 pub enum StorageScrubExecutionError {
@@ -82,6 +129,83 @@ pub enum StorageScrubExecutionError {
     /// A validated non-healthy observation could not be safely admitted for follow-up.
     #[error("storage scrub finding could not be scheduled")]
     Finding(#[from] ScrubFindingSchedulingError),
+    /// Restart-safe local page progress could not be loaded or advanced.
+    #[error("storage scrub progress could not be persisted")]
+    Progress(#[from] LocalScrubProgressError),
+    /// An already committed authoritative effect could not be queried safely.
+    #[error("storage scrub committed-effect recovery failed")]
+    Recovery(#[from] meshspan_metadata::RepositoryError),
+}
+
+/// Read extension used to close the effect-committed/completion-lost crash window.
+pub trait RecoverableMaintenanceAuthority: MaintenanceMetadataAuthority {
+    /// Returns the immutable effect already committed for one work item, if any.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed authoritative state or database failure.
+    fn effect_reference(
+        &self,
+        work_id: WorkId,
+    ) -> Result<Option<MaintenanceEffectReference>, meshspan_metadata::RepositoryError>;
+}
+
+impl RecoverableMaintenanceAuthority for ConsensusAuthenticationAuthority {
+    fn effect_reference(
+        &self,
+        work_id: WorkId,
+    ) -> Result<Option<MaintenanceEffectReference>, meshspan_metadata::RepositoryError> {
+        self.reader().maintenance_effect_reference(work_id)
+    }
+}
+
+/// Replaceable restart journal boundary for bounded scrub pages.
+pub trait ScrubProgressStore {
+    /// Loads or creates one identity-bound initial checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Rejects identity reuse, corruption and durable IO failure.
+    fn load_or_create(
+        &mut self,
+        work_id: WorkId,
+        target_id: TargetId,
+        target_generation: u64,
+        now: UnixMicros,
+    ) -> Result<LocalScrubProgress, LocalScrubProgressError>;
+
+    /// Advances one validated page through exact compare-and-set.
+    ///
+    /// # Errors
+    ///
+    /// Rejects stale writers, invalid progress and durable IO failure.
+    fn advance(
+        &mut self,
+        expected: &LocalScrubProgress,
+        update: &LocalScrubProgressUpdate,
+        now: UnixMicros,
+    ) -> Result<LocalScrubProgress, LocalScrubProgressError>;
+}
+
+impl ScrubProgressStore for LocalDatabase {
+    fn load_or_create(
+        &mut self,
+        work_id: WorkId,
+        target_id: TargetId,
+        target_generation: u64,
+        now: UnixMicros,
+    ) -> Result<LocalScrubProgress, LocalScrubProgressError> {
+        self.load_or_create_scrub_progress(work_id, target_id, target_generation, now)
+    }
+
+    fn advance(
+        &mut self,
+        expected: &LocalScrubProgress,
+        update: &LocalScrubProgressUpdate,
+        now: UnixMicros,
+    ) -> Result<LocalScrubProgress, LocalScrubProgressError> {
+        self.advance_scrub_progress(expected, update, now)
+    }
 }
 
 /// Replaceable physical page boundary used by scrub orchestration.
@@ -179,6 +303,304 @@ where
         effect,
         completion,
     })
+}
+
+/// Claims and executes at most one restart-safe provider page.
+///
+/// Non-terminal pages are accumulated in the local compare-and-set journal before the claim is
+/// released with an explicit continuation outcome. A crash before that local commit repeats the
+/// page and deduplicated findings; a crash after the final authoritative effect is recovered by
+/// linking the existing effect from a later claim without repeating provider IO.
+///
+/// # Errors
+///
+/// Rejects contradictory execution input, malformed provider evidence, unsafe local progress,
+/// finding admission failure and unavailable metadata authority.
+pub fn execute_resumable_storage_scrub<Authority, Provider, Findings, Progress>(
+    authority: &Authority,
+    provider: &mut Provider,
+    findings: &mut Findings,
+    progress_store: &mut Progress,
+    execution: &ResumableStorageScrubExecution,
+) -> Result<ResumableStorageScrubReceipt, StorageScrubExecutionError>
+where
+    Authority: RecoverableMaintenanceAuthority,
+    Provider: PhysicalStorageScrub,
+    Findings: ScrubFindingSink,
+    Progress: ScrubProgressStore,
+{
+    validate_resumable_execution(execution)?;
+    authority.commit(
+        execution.claim_context,
+        &AuthoritativeCommand::ClaimMaintenanceWork(execution.claim),
+    )?;
+    if let Some(effect) = authority.effect_reference(execution.claim.work_id)? {
+        let completion = complete_existing_effect(authority, execution, effect)?;
+        return Ok(ResumableStorageScrubReceipt::Recovered { effect, completion });
+    }
+    let progress = progress_store.load_or_create(
+        execution.claim.work_id,
+        execution.target_id,
+        execution.target_generation,
+        execution.observed_at,
+    )?;
+    if progress.complete {
+        return commit_completed_progress(authority, execution, &progress)
+            .map(ResumableStorageScrubReceipt::Completed);
+    }
+    let cursor = progress
+        .next_cursor
+        .as_deref()
+        .map(|bytes| BoundedBytes::copy_from(bytes, 512))
+        .transpose()
+        .map_err(|_| StorageScrubExecutionError::InvalidEvidence)?;
+    let page = provider.scrub_page(cursor.as_ref(), execution.page_items, execution.observed_at)?;
+    validate_page(&page, cursor.as_ref(), execution.page_items)?;
+    for observation in page.observations.as_slice() {
+        if observation.outcome != ScrubOutcome::Healthy {
+            findings.record(
+                execution.target_id,
+                execution.target_generation,
+                *observation,
+                execution.observed_at,
+            )?;
+        }
+    }
+    let update = accumulate_progress(&progress, &page)?;
+    let progress = progress_store.advance(&progress, &update, execution.observed_at)?;
+    if progress.complete {
+        commit_completed_progress(authority, execution, &progress)
+            .map(ResumableStorageScrubReceipt::Completed)
+    } else {
+        let completion = authority.commit(
+            execution.completion_context,
+            &AuthoritativeCommand::CompleteMaintenanceWork(CompleteMaintenanceWork {
+                work_id: execution.claim.work_id,
+                claim_generation: execution.claim.claim_generation,
+                worker_node_id: execution.claim.worker_node_id,
+                worker_incarnation: execution.claim.worker_incarnation,
+                fence: execution.claim.fence,
+                outcome: MaintenanceWorkCompletion::Continue {
+                    progress_digest: progress_digest(&progress),
+                    retry_at: execution.continuation_at,
+                },
+            }),
+        )?;
+        Ok(ResumableStorageScrubReceipt::Continued {
+            progress,
+            completion,
+        })
+    }
+}
+
+fn complete_existing_effect<Authority: MaintenanceMetadataAuthority>(
+    authority: &Authority,
+    execution: &ResumableStorageScrubExecution,
+    effect: MaintenanceEffectReference,
+) -> Result<CommandReceipt, StorageScrubExecutionError> {
+    authority
+        .commit(
+            execution.completion_context,
+            &AuthoritativeCommand::CompleteMaintenanceWork(CompleteMaintenanceWork {
+                work_id: execution.claim.work_id,
+                claim_generation: execution.claim.claim_generation,
+                worker_node_id: execution.claim.worker_node_id,
+                worker_incarnation: execution.claim.worker_incarnation,
+                fence: execution.claim.fence,
+                outcome: MaintenanceWorkCompletion::Succeeded {
+                    effect_operation_id: effect.operation_id,
+                    effect_revision: effect.revision,
+                    effect_result_digest: effect.result_digest,
+                },
+            }),
+        )
+        .map_err(Into::into)
+}
+
+fn commit_completed_progress<Authority: MaintenanceMetadataAuthority>(
+    authority: &Authority,
+    execution: &ResumableStorageScrubExecution,
+    progress: &LocalScrubProgress,
+) -> Result<StorageScrubExecutionReceipt, StorageScrubExecutionError> {
+    let summary = summary_from_progress(progress)?;
+    let counts = summary.outcome_counts;
+    let effect = authority.commit(
+        execution.effect_context,
+        &AuthoritativeCommand::CommitScrubPass(CommitScrubPass {
+            work_id: execution.claim.work_id,
+            claim_generation: execution.claim.claim_generation,
+            worker_node_id: execution.claim.worker_node_id,
+            worker_incarnation: execution.claim.worker_incarnation,
+            fence: execution.claim.fence,
+            target_id: execution.target_id,
+            target_generation: execution.target_generation,
+            observation_count: summary.observation_count,
+            verified_bytes: summary.verified_bytes,
+            healthy_count: counts[0],
+            missing_count: counts[1],
+            corrupt_count: counts[2],
+            unreadable_count: counts[3],
+            unexpected_count: counts[4],
+            deferred_count: counts[5],
+            evidence_digest: summary.evidence_digest,
+        }),
+    )?;
+    let completion = complete_existing_effect(
+        authority,
+        execution,
+        MaintenanceEffectReference {
+            operation_id: effect.operation_id,
+            revision: effect.committed_revision,
+            result_digest: effect.result_digest,
+        },
+    )?;
+    Ok(StorageScrubExecutionReceipt {
+        summary,
+        effect,
+        completion,
+    })
+}
+
+fn validate_page(
+    page: &ScrubPage,
+    current_cursor: Option<&BoundedBytes>,
+    page_items: usize,
+) -> Result<(), StorageScrubExecutionError> {
+    if page.observations.len() > page_items
+        || page.next_cursor.as_ref().is_some_and(|next| {
+            next.is_empty()
+                || current_cursor.is_some_and(|current| current == next)
+                || page.observations.is_empty()
+        })
+    {
+        return Err(StorageScrubExecutionError::InvalidEvidence);
+    }
+    for observation in page.observations.as_slice() {
+        validate_observation(*observation)?;
+    }
+    Ok(())
+}
+
+fn accumulate_progress(
+    progress: &LocalScrubProgress,
+    page: &ScrubPage,
+) -> Result<LocalScrubProgressUpdate, StorageScrubExecutionError> {
+    let mut observation_count = progress.observation_count;
+    let mut verified_bytes = progress.verified_bytes;
+    let mut outcome_counts = progress.outcome_counts;
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.storage.scrub-progress-page.v1\0");
+    digest.update(&progress.target_id.as_bytes());
+    digest.update(&progress.target_generation.to_be_bytes());
+    digest.update(&progress.page_index.to_be_bytes());
+    digest.update(&progress.rolling_evidence_digest);
+    digest.update(
+        &u64::try_from(page.observations.len())
+            .map_err(|_| StorageScrubExecutionError::InvalidEvidence)?
+            .to_be_bytes(),
+    );
+    for observation in page.observations.as_slice() {
+        observation_count = observation_count
+            .checked_add(1)
+            .ok_or(StorageScrubExecutionError::InvalidEvidence)?;
+        let outcome_index = usize::from(outcome_code(observation.outcome) - 1);
+        outcome_counts[outcome_index] = outcome_counts[outcome_index]
+            .checked_add(1)
+            .ok_or(StorageScrubExecutionError::InvalidEvidence)?;
+        if matches!(
+            observation.outcome,
+            ScrubOutcome::Healthy | ScrubOutcome::Corrupt
+        ) {
+            verified_bytes = verified_bytes
+                .checked_add(
+                    observation
+                        .observed_length
+                        .ok_or(StorageScrubExecutionError::InvalidEvidence)?,
+                )
+                .ok_or(StorageScrubExecutionError::InvalidEvidence)?;
+        }
+        digest_observation(&mut digest, *observation);
+    }
+    Ok(LocalScrubProgressUpdate {
+        next_cursor: page
+            .next_cursor
+            .as_ref()
+            .map(|cursor| cursor.as_slice().to_vec()),
+        observation_count,
+        verified_bytes,
+        outcome_counts,
+        rolling_evidence_digest: digest.finalize().into(),
+    })
+}
+
+fn summary_from_progress(
+    progress: &LocalScrubProgress,
+) -> Result<StorageScrubSummary, StorageScrubExecutionError> {
+    if !progress.complete || progress.rolling_evidence_digest == [0; 32] {
+        return Err(StorageScrubExecutionError::InvalidEvidence);
+    }
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.storage.scrub-progress-complete.v1\0");
+    digest.update(&progress.target_id.as_bytes());
+    digest.update(&progress.target_generation.to_be_bytes());
+    digest.update(&progress.page_index.to_be_bytes());
+    digest.update(&progress.observation_count.to_be_bytes());
+    digest.update(&progress.verified_bytes.to_be_bytes());
+    for count in progress.outcome_counts {
+        digest.update(&count.to_be_bytes());
+    }
+    digest.update(&progress.rolling_evidence_digest);
+    Ok(StorageScrubSummary {
+        observation_count: progress.observation_count,
+        verified_bytes: progress.verified_bytes,
+        outcome_counts: progress.outcome_counts,
+        evidence_digest: digest.finalize().into(),
+    })
+}
+
+fn progress_digest(progress: &LocalScrubProgress) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"meshspan.storage.scrub-progress-checkpoint.v1\0");
+    digest.update(&progress.work_id.as_bytes());
+    digest.update(&progress.target_id.as_bytes());
+    digest.update(&progress.target_generation.to_be_bytes());
+    digest.update(&progress.page_index.to_be_bytes());
+    digest.update(&progress.revision.to_be_bytes());
+    digest.update(&progress.rolling_evidence_digest);
+    if let Some(cursor) = &progress.next_cursor {
+        digest.update(cursor);
+    }
+    digest.finalize().into()
+}
+
+fn validate_resumable_execution(
+    execution: &ResumableStorageScrubExecution,
+) -> Result<(), StorageScrubExecutionError> {
+    let claim = execution.claim;
+    if execution.target_generation == 0
+        || execution.page_items == 0
+        || execution.page_items > 1_000
+        || execution.claim_context.actor_principal_id != execution.effect_context.actor_principal_id
+        || execution.claim_context.actor_principal_id
+            != execution.completion_context.actor_principal_id
+        || execution.claim_context.operation_id == execution.effect_context.operation_id
+        || execution.claim_context.operation_id == execution.completion_context.operation_id
+        || execution.effect_context.operation_id == execution.completion_context.operation_id
+        || execution.claim_context.audit_event_id == execution.effect_context.audit_event_id
+        || execution.claim_context.audit_event_id == execution.completion_context.audit_event_id
+        || execution.effect_context.audit_event_id == execution.completion_context.audit_event_id
+        || execution.claim_context.occurred_at > execution.observed_at
+        || execution.observed_at > execution.effect_context.occurred_at
+        || execution.effect_context.occurred_at > execution.completion_context.occurred_at
+        || execution.continuation_at <= execution.completion_context.occurred_at
+        || execution.claim_context.occurred_at >= claim.lease_expires_at
+        || execution.effect_context.occurred_at >= claim.lease_expires_at
+        || execution.completion_context.occurred_at >= claim.lease_expires_at
+    {
+        Err(StorageScrubExecutionError::InvalidInput)
+    } else {
+        Ok(())
+    }
 }
 
 fn scrub_all_pages<Provider, Findings>(
@@ -418,6 +840,7 @@ mod tests {
     use meshspan_contracts::{BoundedItems, ShardIdentity};
     use meshspan_domain::{AuditEventId, NodeId, OperationId, PrincipalId, Revision, WorkId};
     use meshspan_metadata::{ApplyDisposition, EntityKind, EntityReference, LogPosition};
+    use tempfile::tempdir;
 
     use super::*;
 
@@ -483,6 +906,76 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn resumable_attempts_checkpoint_then_complete_without_replaying_pages()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let mut progress = LocalDatabase::open(
+            &directory.path().join("local.sqlite3"),
+            NodeId::from_bytes([30; 16])?,
+            UnixMicros::new(1),
+        )?;
+        let authority = RecordingAuthority::default();
+        let mut provider = PageProvider::new([
+            Ok(page(
+                vec![healthy(1), corrupt(2)],
+                Some(BoundedBytes::copy_from(&[1], 8)?),
+            )?),
+            Ok(page(vec![missing(3)], None)?),
+        ]);
+        let mut findings = RecordingFindings::default();
+        let first = execute_resumable_storage_scrub(
+            &authority,
+            &mut provider,
+            &mut findings,
+            &mut progress,
+            &resumable_execution(1, 40, 10)?,
+        )?;
+        let ResumableStorageScrubReceipt::Continued {
+            progress: checkpoint,
+            ..
+        } = first
+        else {
+            return Err("first page did not yield a continuation".into());
+        };
+        assert_eq!(checkpoint.page_index, 1);
+        assert_eq!(checkpoint.next_cursor, Some(vec![1]));
+        assert_eq!(checkpoint.observation_count, 2);
+
+        let second = execute_resumable_storage_scrub(
+            &authority,
+            &mut provider,
+            &mut findings,
+            &mut progress,
+            &resumable_execution(2, 50, 20)?,
+        )?;
+        let ResumableStorageScrubReceipt::Completed(receipt) = second else {
+            return Err("final page did not complete the scrub".into());
+        };
+        assert_eq!(receipt.summary.observation_count, 3);
+        assert_eq!(receipt.summary.verified_bytes, 8_193);
+        assert_eq!(receipt.summary.outcome_counts, [1, 1, 1, 0, 0, 0]);
+        assert_eq!(provider.requested_cursors, vec![None, Some(vec![1])]);
+        assert_eq!(findings.observations.len(), 2);
+        let commands = authority.commands.borrow();
+        let AuthoritativeCommand::CompleteMaintenanceWork(first_completion) = commands[1] else {
+            return Err("first attempt did not release its claim".into());
+        };
+        assert!(matches!(
+            first_completion.outcome,
+            MaintenanceWorkCompletion::Continue { .. }
+        ));
+        assert!(matches!(
+            commands[3],
+            AuthoritativeCommand::CommitScrubPass(_)
+        ));
+        assert!(matches!(
+            commands[4],
+            AuthoritativeCommand::CompleteMaintenanceWork(_)
+        ));
+        Ok(())
+    }
+
     #[derive(Default)]
     struct RecordingFindings {
         observations: Vec<ScrubObservation>,
@@ -537,6 +1030,16 @@ mod tests {
         }
     }
 
+    impl RecoverableMaintenanceAuthority for RecordingAuthority {
+        fn effect_reference(
+            &self,
+            _work_id: WorkId,
+        ) -> Result<Option<MaintenanceEffectReference>, meshspan_metadata::RepositoryError>
+        {
+            Ok(None)
+        }
+    }
+
     struct PageProvider {
         pages: VecDeque<Result<ScrubPage, ContractError>>,
         requested_cursors: Vec<Option<Vec<u8>>>,
@@ -586,6 +1089,31 @@ mod tests {
             page_items: 2,
             maximum_pages,
             observed_at: UnixMicros::new(20),
+        })
+    }
+
+    fn resumable_execution(
+        claim_generation: u64,
+        seed: u8,
+        occurred_at: i64,
+    ) -> Result<ResumableStorageScrubExecution, meshspan_domain::IdentifierError> {
+        Ok(ResumableStorageScrubExecution {
+            claim_context: context(seed, occurred_at)?,
+            effect_context: context(seed + 1, occurred_at + 2)?,
+            completion_context: context(seed + 2, occurred_at + 3)?,
+            claim: ClaimMaintenanceWork {
+                work_id: WorkId::from_bytes([4; 16])?,
+                worker_node_id: NodeId::from_bytes([5; 16])?,
+                worker_incarnation: 1,
+                claim_generation,
+                fence: 6 + claim_generation,
+                lease_expires_at: UnixMicros::new(occurred_at + 100),
+            },
+            target_id: TargetId::from_bytes([7; 16])?,
+            target_generation: 1,
+            page_items: 2,
+            observed_at: UnixMicros::new(occurred_at + 1),
+            continuation_at: UnixMicros::new(occurred_at + 4),
         })
     }
 

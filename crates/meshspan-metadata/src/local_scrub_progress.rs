@@ -203,7 +203,8 @@ fn validate_update(
                 || cursor.len() > MAXIMUM_CURSOR_BYTES
                 || expected.next_cursor.as_ref() == Some(cursor)
         })
-        || update.observation_count <= expected.observation_count
+        || update.observation_count < expected.observation_count
+        || (update.observation_count == expected.observation_count && update.next_cursor.is_some())
         || update.verified_bytes < expected.verified_bytes
         || update
             .outcome_counts
@@ -309,8 +310,8 @@ fn validate_stored(progress: &LocalScrubProgress) -> Result<(), LocalScrubProgre
         && progress.next_cursor.is_none()
         && !progress.complete;
     let advanced = progress.page_index > 0
-        && progress.observation_count > 0
-        && progress.rolling_evidence_digest != [0; 32];
+        && progress.rolling_evidence_digest != [0; 32]
+        && (progress.observation_count > 0 || progress.complete);
     if classified != Some(progress.observation_count)
         || progress
             .next_cursor

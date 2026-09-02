@@ -205,8 +205,10 @@ pub use shard_repair_worker::{
     ShardRepairExecutionReceipt, execute_shard_repair,
 };
 pub use storage_scrub_worker::{
-    PhysicalStorageScrub, StorageScrubExecution, StorageScrubExecutionError,
-    StorageScrubExecutionReceipt, StorageScrubSummary, execute_storage_scrub,
+    PhysicalStorageScrub, RecoverableMaintenanceAuthority, ResumableStorageScrubExecution,
+    ResumableStorageScrubReceipt, ScrubProgressStore, StorageScrubExecution,
+    StorageScrubExecutionError, StorageScrubExecutionReceipt, StorageScrubSummary,
+    execute_resumable_storage_scrub, execute_storage_scrub,
 };
 mod smb_authentication;
 mod smb_connection;
