@@ -18,6 +18,7 @@ mod signing;
 mod spnego;
 mod status;
 mod transform;
+mod tree_connect;
 
 pub use direct_tcp::{
     DirectTcpFrame, DirectTcpFrameError, DirectTcpFrameHeader, encode_direct_tcp_header,
@@ -45,3 +46,7 @@ pub use spnego::{
 };
 pub use status::{ConnectorFailure, NtStatus};
 pub use transform::{Smb311Transform, SmbTransformError};
+pub use tree_connect::{
+    SmbTreeConnectError, TreeConnectRequest, TreeConnectResponse, TreeConnectResponseConfig,
+    TreeDisconnectRequest,
+};
