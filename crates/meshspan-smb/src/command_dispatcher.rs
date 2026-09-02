@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use meshspan_domain::VolumeId;
+use meshspan_domain::{UnixMicros, VolumeId};
 use meshspan_filesystem::{FilesystemAccessContext, FilesystemFileAdapter, NamespaceLimits};
 
 use crate::{
@@ -102,7 +102,7 @@ struct ConnectedTree<F> {
 impl<I, F, C, M> SmbCommandDispatcher<I, F, C, M>
 where
     F: FilesystemFileAdapter + Clone,
-    C: FnMut(&I) -> Result<FilesystemAccessContext, ConnectorFailure>,
+    C: FnMut(&I, UnixMicros) -> Result<FilesystemAccessContext, ConnectorFailure>,
     M: Fn(&F::Error) -> ConnectorFailure,
 {
     /// Composes one authenticated channel with published share and filesystem policy.
@@ -147,7 +147,11 @@ where
     ///
     /// Returns only channel-integrity or response-construction failures. Hostile but authentic
     /// command input receives a bounded protocol error response instead.
-    pub fn dispatch(&mut self, protected: &[u8]) -> Result<Vec<u8>, SmbCommandDispatchError> {
+    pub fn dispatch(
+        &mut self,
+        protected: &[u8],
+        observed_at: UnixMicros,
+    ) -> Result<Vec<u8>, SmbCommandDispatchError> {
         let encrypted = protected.starts_with(&TRANSFORM_PROTOCOL);
         let packet = self.channel.decode_request(protected)?;
         let header = Smb2Header::parse_request(&packet)
@@ -168,7 +172,9 @@ where
             | Smb2Command::Lock
             | Smb2Command::QueryDirectory
             | Smb2Command::QueryInfo
-            | Smb2Command::SetInfo => self.filesystem_command(&packet, header, encrypted),
+            | Smb2Command::SetInfo => {
+                self.filesystem_command(&packet, header, encrypted, observed_at)
+            }
             Smb2Command::Negotiate | Smb2Command::SessionSetup => {
                 Err(ConnectorFailure::InvalidInput)
             }
@@ -264,8 +270,9 @@ where
         packet: &[u8],
         header: Smb2Header,
         encrypted: bool,
+        observed_at: UnixMicros,
     ) -> Result<Vec<u8>, ConnectorFailure> {
-        let context = (self.make_context)(self.channel.identity())?;
+        let context = (self.make_context)(self.channel.identity(), observed_at)?;
         let tree = self
             .trees
             .get_mut(&header.tree_id)

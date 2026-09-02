@@ -21,6 +21,7 @@ mod negotiate;
 mod negotiate_response;
 mod ntlm_v2;
 mod ntlm_wire;
+mod protocol_connection;
 mod query_directory;
 mod secure_channel;
 mod session_handshake;
@@ -71,6 +72,10 @@ pub use negotiate_response::{
 pub use ntlm_v2::{NtlmPasswordVerifier, NtlmSessionBaseKey, NtlmVerificationError};
 pub use ntlm_wire::{
     NtlmAuthenticate, NtlmChallenge, NtlmChallengeConfig, NtlmNegotiate, NtlmWireError,
+};
+pub use protocol_connection::{
+    SmbConnectionHandshakeConfig, SmbEstablishedSessionServices, SmbProtocolConnection,
+    SmbProtocolConnectionError,
 };
 pub use query_directory::{
     DirectoryInformationClass, DirectoryResponseEntry, QueryDirectoryRequest,
