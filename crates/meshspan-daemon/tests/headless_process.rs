@@ -252,8 +252,7 @@ async fn wait_for_user_creation(
         };
         if Instant::now() >= deadline {
             return Err(format!(
-                "surviving daemon never accepted a committed metadata write: {}",
-                error
+                "surviving daemon never accepted a committed metadata write: {error}"
             )
             .into());
         }
@@ -374,8 +373,7 @@ async fn wait_for_file_surfaces(
         };
         if Instant::now() >= deadline {
             return Err(format!(
-                "native survivor bytes never became readable through the peer gateway: {}",
-                error
+                "native survivor bytes never became readable through the peer gateway: {error}"
             )
             .into());
         }

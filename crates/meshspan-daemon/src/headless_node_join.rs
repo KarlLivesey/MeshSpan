@@ -197,11 +197,53 @@ pub(crate) async fn activate_and_install_node(
     data_streams: tokio::sync::mpsc::Sender<PeerDataStream>,
     now: UnixMicros,
 ) -> Result<HeadlessJoinNetwork, HeadlessNodeJoinError> {
+    let local_node_id = local_state.node_id();
+    let prepared = prepare_join_network(local_state, private_listen, admission).await?;
+    let partition_id = prepared.partition_id;
+    let (peer_messages, received_peer_messages) = tokio::sync::mpsc::channel(256);
+    let (control_requests, received_control_requests) = tokio::sync::mpsc::channel(64);
+    let (snapshots, mut received_snapshots) = tokio::sync::mpsc::channel(1);
+    let network = ConsensusNetwork::start_with_control_snapshots_and_data(
+        prepared.config,
+        peer_messages,
+        control_requests,
+        snapshots,
+        data_streams,
+    )?;
+    activate_joined_node(&network, admission, local_node_id, now).await?;
+    let received = tokio::time::timeout(
+        std::time::Duration::from_micros(
+            u64::try_from(PRIVATE_OPERATION_TIMEOUT_MICROS)
+                .map_err(|_| HeadlessNodeJoinError::PrivateNetwork)?,
+        ),
+        received_snapshots.recv(),
+    )
+    .await
+    .map_err(|_| HeadlessNodeJoinError::PrivateNetwork)?
+    .ok_or(HeadlessNodeJoinError::PrivateNetwork)?;
+    install_join_snapshot(local_state, partition_id, received, now)?;
+    complete_join_setup(local_state, now)?;
+    Ok(HeadlessJoinNetwork {
+        network,
+        peer_messages: received_peer_messages,
+        control_requests: received_control_requests,
+    })
+}
+
+struct PreparedJoinNetwork {
+    config: ConsensusNetworkConfig,
+    partition_id: PartitionId,
+}
+
+async fn prepare_join_network(
+    local_state: &DaemonLocalState,
+    private_listen: SocketAddr,
+    admission: &EnrolNodeResponse,
+) -> Result<PreparedJoinNetwork, HeadlessNodeJoinError> {
     let mesh_id = meshspan_domain::MeshId::from_bytes(parse_uuid(&admission.mesh_id)?)
         .map_err(|_| HeadlessNodeJoinError::InvalidAdmissionResponse)?;
     let partition_id = PartitionId::from_bytes(parse_uuid(&admission.root_partition_id)?)
         .map_err(|_| HeadlessNodeJoinError::InvalidAdmissionResponse)?;
-    let local_node_id = local_state.node_id();
     let mut peers = Vec::with_capacity(admission.bootstrap_peers.len());
     for peer in &admission.bootstrap_peers {
         let node_id = meshspan_domain::NodeId::from_bytes(parse_uuid(&peer.node_id)?)
@@ -224,12 +266,9 @@ pub(crate) async fn activate_and_install_node(
     } else {
         std::net::SocketAddr::from(([0_u16; 8], 0))
     };
-    let (peer_messages, received_peer_messages) = tokio::sync::mpsc::channel(256);
-    let (control_requests, received_control_requests) = tokio::sync::mpsc::channel(64);
-    let (snapshots, mut received_snapshots) = tokio::sync::mpsc::channel(1);
-    let network = ConsensusNetwork::start_with_control_snapshots_and_data(
-        ConsensusNetworkConfig {
-            local_node_id,
+    Ok(PreparedJoinNetwork {
+        config: ConsensusNetworkConfig {
+            local_node_id: local_state.node_id(),
             local_incarnation: 1,
             mesh_id,
             partition_id,
@@ -254,11 +293,16 @@ pub(crate) async fn activate_and_install_node(
                 local_state.state_directory().join(ROOT_AUTHORITY_DATABASE),
             ),
         },
-        peer_messages,
-        control_requests,
-        snapshots,
-        data_streams,
-    )?;
+        partition_id,
+    })
+}
+
+async fn activate_joined_node(
+    network: &ConsensusNetwork,
+    admission: &EnrolNodeResponse,
+    local_node_id: meshspan_domain::NodeId,
+    now: UnixMicros,
+) -> Result<(), HeadlessNodeJoinError> {
     let activation_operation = activation_operation_id(local_node_id)?;
     let deadline = now
         .get()
@@ -282,24 +326,7 @@ pub(crate) async fn activate_and_install_node(
     let target_id = meshspan_domain::NodeId::from_bytes(parse_uuid(&target.node_id)?)
         .map_err(|_| HeadlessNodeJoinError::InvalidAdmissionResponse)?;
     let response = network.request_control(target_id, &request).await?;
-    validate_activation_result(&response)?;
-    let received = tokio::time::timeout(
-        std::time::Duration::from_micros(
-            u64::try_from(PRIVATE_OPERATION_TIMEOUT_MICROS)
-                .map_err(|_| HeadlessNodeJoinError::PrivateNetwork)?,
-        ),
-        received_snapshots.recv(),
-    )
-    .await
-    .map_err(|_| HeadlessNodeJoinError::PrivateNetwork)?
-    .ok_or(HeadlessNodeJoinError::PrivateNetwork)?;
-    install_join_snapshot(local_state, partition_id, received, now)?;
-    complete_join_setup(local_state, now)?;
-    Ok(HeadlessJoinNetwork {
-        network,
-        peer_messages: received_peer_messages,
-        control_requests: received_control_requests,
-    })
+    validate_activation_result(&response)
 }
 
 fn validate_activation_result(

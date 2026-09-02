@@ -394,12 +394,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn terminal_metadata_status_is_canonical_and_validated() {
+    fn terminal_metadata_status_is_canonical_and_validated()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut operation_bytes = [23; 16];
         operation_bytes[6] = 0x80;
         operation_bytes[8] = 0x80;
         let record = AuthoritativeOperationStatus {
-            operation_id: OperationId::from_bytes(operation_bytes).expect("valid operation id"),
+            operation_id: OperationId::from_bytes(operation_bytes)?,
             actor_principal_id: None,
             operation_kind: 1,
             state: AuthoritativeOperationState::Succeeded,
@@ -410,13 +411,13 @@ mod tests {
             revision: Revision::new(4),
         };
 
-        let response = public_status(record).expect("valid public status");
+        let response = public_status(record)?;
 
         assert_eq!(response.state, OperationState::Succeeded);
         assert_eq!(response.updated_at_epoch_micros, 120);
         assert_eq!(response.completed_at_epoch_micros, Some(120));
         assert_eq!(response.revision, 4);
-        meshspan_api_contract::encode_operation_status_response(&response)
-            .expect("outgoing status satisfies the generated contract");
+        meshspan_api_contract::encode_operation_status_response(&response)?;
+        Ok(())
     }
 }

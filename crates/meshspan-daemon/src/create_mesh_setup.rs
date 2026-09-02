@@ -83,6 +83,32 @@ pub struct CreateMeshSetupService<A, R> {
     random: R,
 }
 
+/// Immutable local paths and node identity required by first-mesh creation.
+pub struct CreateMeshSetupConfiguration {
+    claim_output_path: PathBuf,
+    recovery_bundle_path: PathBuf,
+    wrapping_public_key: WrappingPublicKey,
+    node_identity_public_key: Vec<u8>,
+}
+
+impl CreateMeshSetupConfiguration {
+    /// Binds mesh creation to the current node's protected paths and public identity.
+    #[must_use]
+    pub fn new(
+        claim_output_path: PathBuf,
+        recovery_bundle_path: PathBuf,
+        wrapping_public_key: WrappingPublicKey,
+        node_identity_public_key: Vec<u8>,
+    ) -> Self {
+        Self {
+            claim_output_path,
+            recovery_bundle_path,
+            wrapping_public_key,
+            node_identity_public_key,
+        }
+    }
+}
+
 impl<A, R> CreateMeshSetupService<A, R>
 where
     A: BootstrapAuthority,
@@ -93,21 +119,18 @@ where
     pub fn new(
         local_database: LocalDatabase,
         authority: A,
-        claim_output_path: PathBuf,
-        recovery_bundle_path: PathBuf,
         setup_state: Arc<SetupStateSnapshot>,
-        wrapping_public_key: WrappingPublicKey,
-        node_identity_public_key: Vec<u8>,
+        configuration: CreateMeshSetupConfiguration,
         random: R,
     ) -> Self {
         Self {
             local_database,
             authority,
-            claim_output_path,
-            recovery_bundle_path,
+            claim_output_path: configuration.claim_output_path,
+            recovery_bundle_path: configuration.recovery_bundle_path,
             setup_state,
-            wrapping_public_key,
-            node_identity_public_key,
+            wrapping_public_key: configuration.wrapping_public_key,
+            node_identity_public_key: configuration.node_identity_public_key,
             random,
         }
     }
@@ -167,12 +190,16 @@ where
             };
             let command = input.command(
                 &material,
-                &recovery_identity,
-                recovery_bundle.challenge(&recovery_code).commitment(),
-                setup.created_at,
-                self.wrapping_public_key,
-                &self.node_identity_public_key,
-                &online_authority,
+                &BootstrapCommandInputs {
+                    recovery: &recovery_identity,
+                    save_challenge_commitment: recovery_bundle
+                        .challenge(&recovery_code)
+                        .commitment(),
+                    occurred_at: setup.created_at,
+                    wrapping_public_key: self.wrapping_public_key,
+                    node_identity_public_key: &self.node_identity_public_key,
+                    online_authority: &online_authority,
+                },
             )?;
             let committed = self.authority.commit_or_resolve(context, &command)?;
             self.local_database.record_local_setup_authority_commit(
@@ -220,6 +247,15 @@ struct ValidatedSetupInput {
     partition_name: RecordName,
 }
 
+struct BootstrapCommandInputs<'a> {
+    recovery: &'a OfflineRecoveryIdentity,
+    save_challenge_commitment: [u8; 32],
+    occurred_at: UnixMicros,
+    wrapping_public_key: WrappingPublicKey,
+    node_identity_public_key: &'a [u8],
+    online_authority: &'a OnlineCertificateAuthority,
+}
+
 impl ValidatedSetupInput {
     fn new(request: &CreateMeshSetupRequest) -> Result<Self, CreateMeshSetupError> {
         Ok(Self {
@@ -236,34 +272,31 @@ impl ValidatedSetupInput {
     fn command(
         &self,
         material: &InitialBootstrapMaterial,
-        recovery: &OfflineRecoveryIdentity,
-        save_challenge_commitment: [u8; 32],
-        occurred_at: UnixMicros,
-        wrapping_public_key: WrappingPublicKey,
-        node_identity_public_key: &[u8],
-        online_authority: &OnlineCertificateAuthority,
+        inputs: &BootstrapCommandInputs<'_>,
     ) -> Result<AuthoritativeCommand, CreateMeshSetupError> {
-        let recovery_public_key = recovery.public_wrapping_key();
+        let recovery_public_key = inputs.recovery.public_wrapping_key();
         let generations = initial_authority_generations(
             material,
-            wrapping_public_key,
+            inputs.wrapping_public_key,
             recovery_public_key,
-            online_authority,
+            inputs.online_authority,
         )?;
-        let node_public_identity = NodePublicIdentity::from_sec1(node_identity_public_key)
+        let node_public_identity = NodePublicIdentity::from_sec1(inputs.node_identity_public_key)
             .map_err(|_| CreateMeshSetupError::Certificate)?;
         if InitialBootstrapMaterial::node_id(node_public_identity.public_key_fingerprint())?
             != material.node_id
         {
             return Err(CreateMeshSetupError::Certificate);
         }
-        let node_certificate_der = online_authority
+        let node_certificate_der = inputs
+            .online_authority
             .sign_node_public_identity(
                 &node_public_identity,
                 &private_node_certificate_name(material.node_id),
             )
             .map_err(|_| CreateMeshSetupError::Certificate)?;
-        let certificate_valid_until = occurred_at
+        let certificate_valid_until = inputs
+            .occurred_at
             .checked_add(meshspan_domain::DurationMicros::new(
                 NODE_CERTIFICATE_LIFETIME_MICROS,
             ))
@@ -292,27 +325,31 @@ impl ValidatedSetupInput {
                         key_id: material.api_key.key_id(),
                         key_digest: material.api_key.secret_digest(),
                         scopes: ALL_INITIAL_LOGIN_SCOPES,
-                        valid_from: occurred_at,
+                        valid_from: inputs.occurred_at,
                     },
                 },
                 recovery: Box::new(BootstrapRecoveryIdentity {
                     public_wrapping_key: recovery_public_key.as_bytes(),
                     key_fingerprint: recovery_public_key.fingerprint(),
-                    root_certificate_digest: Sha256::digest(recovery.root_certificate_der()).into(),
-                    root_certificate_der: recovery.root_certificate_der().to_vec(),
-                    online_authority_certificate_der: online_authority.certificate_der().to_vec(),
+                    root_certificate_digest: Sha256::digest(inputs.recovery.root_certificate_der())
+                        .into(),
+                    root_certificate_der: inputs.recovery.root_certificate_der().to_vec(),
+                    online_authority_certificate_der: inputs
+                        .online_authority
+                        .certificate_der()
+                        .to_vec(),
                     online_authority_certificate_digest: Sha256::digest(
-                        online_authority.certificate_der(),
+                        inputs.online_authority.certificate_der(),
                     )
                     .into(),
-                    bundle_digest: recovery.bundle_digest(),
-                    save_challenge_commitment,
+                    bundle_digest: inputs.recovery.bundle_digest(),
+                    save_challenge_commitment: inputs.save_challenge_commitment,
                 }),
                 node_wrapping_key: RegisterNodeWrappingKey {
                     node_id: material.node_id,
                     generation: 1,
-                    public_key: wrapping_public_key.as_bytes(),
-                    key_fingerprint: wrapping_public_key.fingerprint(),
+                    public_key: inputs.wrapping_public_key.as_bytes(),
+                    key_fingerprint: inputs.wrapping_public_key.fingerprint(),
                 },
                 node_certificate: BootstrapNodeCertificate {
                     certificate_fingerprint: Sha256::digest(&node_certificate_der).into(),
