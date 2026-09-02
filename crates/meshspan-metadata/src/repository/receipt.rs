@@ -120,6 +120,10 @@ pub enum EntityKind {
     SmbExport = 42,
     /// Immutable data-survival policy revision.
     ProtectionPolicy = 43,
+    /// Named availability locality.
+    AvailabilityCell = 44,
+    /// Desired machine or target membership in one availability cell.
+    AvailabilityCellMembership = 45,
 }
 
 impl EntityKind {
@@ -168,6 +172,8 @@ impl EntityKind {
             41 => Ok(Self::FaultGroupMembership),
             42 => Ok(Self::SmbExport),
             43 => Ok(Self::ProtectionPolicy),
+            44 => Ok(Self::AvailabilityCell),
+            45 => Ok(Self::AvailabilityCellMembership),
             _ => Err(RepositoryError::CorruptState),
         }
     }

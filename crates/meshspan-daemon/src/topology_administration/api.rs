@@ -10,16 +10,19 @@ use axum::extract::{Path, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Response, StatusCode};
 use axum::routing::{get, put};
 use meshspan_api_contract::{
-    ApiErrorCode, BoundaryError, ListFaultGroupMembershipsResponse, ListFaultGroupsResponse,
-    ListProtectionPoliciesResponse, ListTopologyNodesResponse, ListTopologyQuery,
-    ListTopologyTargetsResponse, MAX_PROTECTION_POLICY_MUTATION_BYTES, TopologyCursor,
-    decode_assign_volume_protection_policy_request, decode_create_fault_group_request,
+    ApiErrorCode, BoundaryError, ListAvailabilityCellsResponse, ListFaultGroupMembershipsResponse,
+    ListFaultGroupsResponse, ListProtectionPoliciesResponse, ListTopologyNodesResponse,
+    ListTopologyQuery, ListTopologyTargetsResponse, MAX_PROTECTION_POLICY_MUTATION_BYTES,
+    TopologyCursor, decode_assign_volume_protection_policy_request,
+    decode_create_availability_cell_request, decode_create_fault_group_request,
     decode_create_protection_policy_request, decode_set_fault_group_membership_request,
-    encode_assign_volume_protection_policy_response, encode_create_fault_group_response,
-    encode_create_protection_policy_response, encode_list_fault_group_memberships_response,
+    encode_assign_volume_protection_policy_response, encode_create_availability_cell_response,
+    encode_create_fault_group_response, encode_create_protection_policy_response,
+    encode_list_availability_cells_response, encode_list_fault_group_memberships_response,
     encode_list_fault_groups_response, encode_list_protection_policies_response,
     encode_list_topology_nodes_response, encode_list_topology_targets_response,
-    encode_set_fault_group_membership_response, generate_openapi,
+    encode_set_availability_cell_membership_response, encode_set_fault_group_membership_response,
+    generate_openapi,
 };
 use thiserror::Error;
 
@@ -52,6 +55,7 @@ enum InventoryKind {
     FaultGroups,
     Memberships,
     ProtectionPolicies,
+    AvailabilityCells,
 }
 
 enum InventoryPage {
@@ -60,6 +64,7 @@ enum InventoryPage {
     FaultGroups(ListFaultGroupsResponse),
     Memberships(ListFaultGroupMembershipsResponse),
     ProtectionPolicies(ListProtectionPoliciesResponse),
+    AvailabilityCells(ListAvailabilityCellsResponse),
 }
 
 /// Builds rolling manager-only mesh topology administration routes.
@@ -96,6 +101,18 @@ where
         .route(
             "/api/latest/admin/volumes/{volume_id}/protection-policies/{policy_id}",
             put(assign_volume_protection_policy::<C>),
+        )
+        .route(
+            "/api/latest/admin/topology/availability-cells",
+            get(list_availability_cells::<C>).post(create_availability_cell::<C>),
+        )
+        .route(
+            "/api/latest/admin/topology/availability-cells/{cell_id}/hosts/{host_id}",
+            put(set_host_cell_membership::<C>),
+        )
+        .route(
+            "/api/latest/admin/topology/availability-cells/{cell_id}/targets/{target_id}",
+            put(set_target_cell_membership::<C>),
         )
         .with_state(ApiState {
             controller: Arc::new(Mutex::new(controller)),
@@ -139,6 +156,16 @@ where
     C: TopologyAdministrationController,
 {
     list(state, request, InventoryKind::ProtectionPolicies).await
+}
+
+async fn list_availability_cells<C>(
+    State(state): State<ApiState<C>>,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    list(state, request, InventoryKind::AvailabilityCells).await
 }
 
 async fn list<C>(state: ApiState<C>, request: Request, kind: InventoryKind) -> Response<Body>
@@ -188,6 +215,9 @@ where
             InventoryKind::ProtectionPolicies => controller
                 .list_protection_policies(administrator, query)
                 .map(InventoryPage::ProtectionPolicies),
+            InventoryKind::AvailabilityCells => controller
+                .list_availability_cells(administrator, query)
+                .map(InventoryPage::AvailabilityCells),
         }
     })
     .await;
@@ -233,6 +263,41 @@ where
     }
 }
 
+async fn create_availability_cell<C>(
+    State(state): State<ApiState<C>>,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    let request_id = request_identifier();
+    let (administrator, body) = match authenticated_body(&state, request, request_id.clone()).await
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let decoded = match decode_create_availability_cell_request(&body) {
+        Ok(value) => value,
+        Err(error) => return boundary_error(&state, error, request_id),
+    };
+    let controller = Arc::clone(&state.controller);
+    let execution = tokio::task::spawn_blocking(move || {
+        controller
+            .lock()
+            .map_err(|_| TopologyAdministrationError::Unavailable)?
+            .create_availability_cell(administrator, decoded)
+    })
+    .await;
+    match execution {
+        Ok(Ok(response)) => match encode_create_availability_cell_response(&response) {
+            Ok(body) => json_response(StatusCode::CREATED, body, state.schema_digest),
+            Err(_) => failed(&state, request_id),
+        },
+        Ok(Err(error)) => service_error(&state, error, request_id),
+        Err(_) => service_error(&state, TopologyAdministrationError::Unavailable, request_id),
+    }
+}
+
 async fn assign_volume_protection_policy<C>(
     State(state): State<ApiState<C>>,
     Path((volume_id, policy_id)): Path<(String, String)>,
@@ -261,6 +326,85 @@ where
     .await;
     match execution {
         Ok(Ok(response)) => match encode_assign_volume_protection_policy_response(&response) {
+            Ok(body) => json_response(StatusCode::OK, body, state.schema_digest),
+            Err(_) => failed(&state, request_id),
+        },
+        Ok(Err(error)) => service_error(&state, error, request_id),
+        Err(_) => service_error(&state, TopologyAdministrationError::Unavailable, request_id),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CellMemberKind {
+    Host,
+    Target,
+}
+
+async fn set_host_cell_membership<C>(
+    State(state): State<ApiState<C>>,
+    Path((cell_id, host_id)): Path<(String, String)>,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    set_cell_membership(state, cell_id, host_id, CellMemberKind::Host, request).await
+}
+
+async fn set_target_cell_membership<C>(
+    State(state): State<ApiState<C>>,
+    Path((cell_id, target_id)): Path<(String, String)>,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    set_cell_membership(state, cell_id, target_id, CellMemberKind::Target, request).await
+}
+
+async fn set_cell_membership<C>(
+    state: ApiState<C>,
+    cell_id: String,
+    member_id: String,
+    kind: CellMemberKind,
+    request: Request,
+) -> Response<Body>
+where
+    C: TopologyAdministrationController,
+{
+    let request_id = request_identifier();
+    let (administrator, body) = match authenticated_body(&state, request, request_id.clone()).await
+    {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let decoded = match decode_set_fault_group_membership_request(&body) {
+        Ok(value) => value,
+        Err(error) => return boundary_error(&state, error, request_id),
+    };
+    let controller = Arc::clone(&state.controller);
+    let execution = tokio::task::spawn_blocking(move || {
+        let mut controller = controller
+            .lock()
+            .map_err(|_| TopologyAdministrationError::Unavailable)?;
+        match kind {
+            CellMemberKind::Host => controller.set_host_availability_cell_membership(
+                administrator,
+                &cell_id,
+                &member_id,
+                decoded,
+            ),
+            CellMemberKind::Target => controller.set_target_availability_cell_membership(
+                administrator,
+                &cell_id,
+                &member_id,
+                decoded,
+            ),
+        }
+    })
+    .await;
+    match execution {
+        Ok(Ok(response)) => match encode_set_availability_cell_membership_response(&response) {
             Ok(body) => json_response(StatusCode::OK, body, state.schema_digest),
             Err(_) => failed(&state, request_id),
         },
@@ -440,6 +584,7 @@ fn encode_page<C>(state: &ApiState<C>, page: InventoryPage, request_id: String) 
         InventoryPage::ProtectionPolicies(value) => {
             encode_list_protection_policies_response(&value)
         }
+        InventoryPage::AvailabilityCells(value) => encode_list_availability_cells_response(&value),
     };
     match encoded {
         Ok(body) => json_response(StatusCode::OK, body, state.schema_digest.clone()),

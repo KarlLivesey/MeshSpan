@@ -6,10 +6,11 @@ use std::sync::OnceLock;
 
 use crate::validation::{CompiledValidator, compile, validate, validator_from};
 use crate::{
-    BoundaryError, CreateFaultGroupRequest, CreateFaultGroupResponse,
+    BoundaryError, CreateAvailabilityCellRequest, CreateAvailabilityCellResponse,
+    CreateFaultGroupRequest, CreateFaultGroupResponse, ListAvailabilityCellsResponse,
     ListFaultGroupMembershipsResponse, ListFaultGroupsResponse, ListTopologyNodesResponse,
-    ListTopologyQuery, ListTopologyTargetsResponse, SetFaultGroupMembershipRequest,
-    SetFaultGroupMembershipResponse, schema,
+    ListTopologyQuery, ListTopologyTargetsResponse, SetAvailabilityCellMembershipResponse,
+    SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse, schema,
 };
 
 /// Maximum accepted bytes for one topology mutation.
@@ -18,6 +19,7 @@ pub const MAX_TOPOLOGY_MUTATION_BYTES: usize = 16 * 1_024;
 static LIST_QUERY: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
 static CREATE_REQUEST: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
 static MEMBERSHIP_REQUEST: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
+static CREATE_CELL_REQUEST: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
 
 /// Validates one decoded topology-list query.
 ///
@@ -48,6 +50,17 @@ pub fn decode_set_fault_group_membership_request(
     bytes: &[u8],
 ) -> Result<SetFaultGroupMembershipRequest, BoundaryError> {
     decode_request(bytes, membership_request_validator()?)
+}
+
+/// Decodes one bounded availability-cell creation request without coercion.
+///
+/// # Errors
+///
+/// Returns a boundary error for empty, oversized, malformed or invalid input.
+pub fn decode_create_availability_cell_request(
+    bytes: &[u8],
+) -> Result<CreateAvailabilityCellRequest, BoundaryError> {
+    decode_request(bytes, create_cell_request_validator()?)
 }
 
 /// Validates and encodes one node page.
@@ -116,6 +129,39 @@ pub fn encode_set_fault_group_membership_response(
     encode_response(response)
 }
 
+/// Validates and encodes one availability-cell page.
+///
+/// # Errors
+///
+/// Returns a boundary error rather than emitting an invalid response.
+pub fn encode_list_availability_cells_response(
+    response: &ListAvailabilityCellsResponse,
+) -> Result<Vec<u8>, BoundaryError> {
+    encode_response(response)
+}
+
+/// Validates and encodes one created availability cell.
+///
+/// # Errors
+///
+/// Returns a boundary error rather than emitting an invalid response.
+pub fn encode_create_availability_cell_response(
+    response: &CreateAvailabilityCellResponse,
+) -> Result<Vec<u8>, BoundaryError> {
+    encode_response(response)
+}
+
+/// Validates and encodes one desired availability-cell membership.
+///
+/// # Errors
+///
+/// Returns a boundary error rather than emitting an invalid response.
+pub fn encode_set_availability_cell_membership_response(
+    response: &SetAvailabilityCellMembershipResponse,
+) -> Result<Vec<u8>, BoundaryError> {
+    encode_response(response)
+}
+
 fn decode_request<T: serde::de::DeserializeOwned>(
     bytes: &[u8],
     validator: &CompiledValidator,
@@ -165,5 +211,12 @@ fn membership_request_validator() -> Result<&'static CompiledValidator, Boundary
     validator_from(
         MEMBERSHIP_REQUEST
             .get_or_init(|| compile(&schema::request_schema::<SetFaultGroupMembershipRequest>())),
+    )
+}
+
+fn create_cell_request_validator() -> Result<&'static CompiledValidator, BoundaryError> {
+    validator_from(
+        CREATE_CELL_REQUEST
+            .get_or_init(|| compile(&schema::request_schema::<CreateAvailabilityCellRequest>())),
     )
 }

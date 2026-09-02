@@ -6,25 +6,29 @@ use std::fmt::Write;
 
 use meshspan_api_contract::{
     AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
-    CreateFaultGroupRequest, CreateProtectionPolicyRequest, FaultGroupMembershipSummary,
-    FaultGroupSummary, ListFaultGroupMembershipsResponse, ListFaultGroupsResponse,
+    AvailabilityCellSummary, CreateAvailabilityCellRequest, CreateFaultGroupRequest,
+    CreateProtectionPolicyRequest, FaultGroupMembershipSummary, FaultGroupSummary,
+    ListAvailabilityCellsResponse, ListFaultGroupMembershipsResponse, ListFaultGroupsResponse,
     ListProtectionPoliciesResponse, ListTopologyNodesResponse, ListTopologyQuery,
     ListTopologyTargetsResponse, OperationId as ApiOperationId, ProtectionFailureTermSummary,
-    ProtectionPolicySummary, ProtectionScenarioSummary, SetFaultGroupMembershipRequest,
-    StorageFolderUsageLimit, TopologyCursor, TopologyNodeRoles, TopologyNodeState,
-    TopologyNodeSummary, TopologyTargetState, TopologyTargetSummary,
+    ProtectionPolicySummary, ProtectionScenarioSummary, SetAvailabilityCellMembershipResponse,
+    SetFaultGroupMembershipRequest, StorageFolderUsageLimit, TopologyCursor, TopologyNodeRoles,
+    TopologyNodeState, TopologyNodeSummary, TopologyTargetState, TopologyTargetSummary,
 };
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    AuditEventId, FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId, HostId,
-    OperationId, ProtectionPolicyId, ProtectionScenarioId, VolumeId, uuid_v8,
+    AuditEventId, AvailabilityCellId, FailureScenario, FailureTerm, FaultGroupClassId,
+    FaultGroupId, HostId, OperationId, ProtectionPolicyId, ProtectionScenarioId, TargetId,
+    VolumeId, uuid_v8,
 };
 use meshspan_metadata::{
-    AssignVolumeProtectionPolicy, AuthoritativeCommand, CommandContext, CreateFaultGroup,
+    AssignVolumeProtectionPolicy, AuthoritativeCommand, AvailabilityCellCursor,
+    AvailabilityCellRecord, CommandContext, CreateAvailabilityCell, CreateFaultGroup,
     CreateProtectionPolicy, FaultGroupCursor, FaultGroupMembershipCursor,
     FaultGroupMembershipRecord, FaultGroupRecord, Page, ProtectionPolicyCursor,
     ProtectionPolicyRecord, ProtectionScenarioConfiguration, RecordName,
-    SetHostFaultGroupMembership, StorageUsageLimit, TopologyNodeCursor, TopologyNodeRecord,
+    SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
+    SetTargetAvailabilityCellMembership, StorageUsageLimit, TopologyNodeCursor, TopologyNodeRecord,
     TopologyTargetCursor, TopologyTargetRecord,
 };
 use sha2::{Digest, Sha256};
@@ -37,6 +41,7 @@ const GROUP_ID_DOMAIN: &[u8] = b"meshspan.topology.fault-group-id.v1\0";
 const AUDIT_ID_DOMAIN: &[u8] = b"meshspan.topology.audit-id.v1\0";
 const POLICY_ID_DOMAIN: &[u8] = b"meshspan.protection.policy-id.v1\0";
 const SCENARIO_ID_DOMAIN: &[u8] = b"meshspan.protection.scenario-id.v1\0";
+const CELL_ID_DOMAIN: &[u8] = b"meshspan.topology.availability-cell-id.v1\0";
 
 pub(super) fn create_command(
     request: &CreateFaultGroupRequest,
@@ -93,6 +98,101 @@ pub(super) fn membership_command(
             host_id,
             present: request.present,
         }),
+    ))
+}
+
+pub(super) fn availability_cell_command(
+    request: &CreateAvailabilityCellRequest,
+) -> Result<(OperationId, AvailabilityCellId, AuthoritativeCommand), TopologyAdministrationError> {
+    let operation_id = domain_operation(&request.operation_id)?;
+    let cell_id =
+        AvailabilityCellId::from_bytes(derived_uuid(CELL_ID_DOMAIN, &operation_id.as_bytes())?)
+            .map_err(|_| TopologyAdministrationError::Failed)?;
+    let name = RecordName::new(request.name.as_str())
+        .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+    let parent_cell_id = request
+        .parent_cell_id
+        .as_deref()
+        .map(parse_uuid)
+        .transpose()
+        .map_err(|_| TopologyAdministrationError::InvalidInput)?
+        .map(AvailabilityCellId::from_bytes)
+        .transpose()
+        .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+    Ok((
+        operation_id,
+        cell_id,
+        AuthoritativeCommand::CreateAvailabilityCell(CreateAvailabilityCell {
+            cell_id,
+            name,
+            parent_cell_id,
+        }),
+    ))
+}
+
+pub(super) fn host_cell_membership_command(
+    cell_id: &str,
+    host_id: &str,
+    request: &SetFaultGroupMembershipRequest,
+) -> Result<
+    (
+        OperationId,
+        AvailabilityCellId,
+        HostId,
+        AuthoritativeCommand,
+    ),
+    TopologyAdministrationError,
+> {
+    let operation_id = domain_operation(&request.operation_id)?;
+    let cell_id = domain_cell(cell_id)?;
+    let host_id = HostId::from_bytes(
+        parse_uuid(host_id).map_err(|_| TopologyAdministrationError::InvalidInput)?,
+    )
+    .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+    Ok((
+        operation_id,
+        cell_id,
+        host_id,
+        AuthoritativeCommand::SetHostAvailabilityCellMembership(
+            SetHostAvailabilityCellMembership {
+                cell_id,
+                host_id,
+                present: request.present,
+            },
+        ),
+    ))
+}
+
+pub(super) fn target_cell_membership_command(
+    cell_id: &str,
+    target_id: &str,
+    request: &SetFaultGroupMembershipRequest,
+) -> Result<
+    (
+        OperationId,
+        AvailabilityCellId,
+        TargetId,
+        AuthoritativeCommand,
+    ),
+    TopologyAdministrationError,
+> {
+    let operation_id = domain_operation(&request.operation_id)?;
+    let cell_id = domain_cell(cell_id)?;
+    let target_id = TargetId::from_bytes(
+        parse_uuid(target_id).map_err(|_| TopologyAdministrationError::InvalidInput)?,
+    )
+    .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+    Ok((
+        operation_id,
+        cell_id,
+        target_id,
+        AuthoritativeCommand::SetTargetAvailabilityCellMembership(
+            SetTargetAvailabilityCellMembership {
+                cell_id,
+                target_id,
+                present: request.present,
+            },
+        ),
     ))
 }
 
@@ -276,6 +376,50 @@ pub(super) fn membership_response(
     })
 }
 
+pub(super) fn availability_cell_response(
+    query: &ListTopologyQuery,
+    page: Page<AvailabilityCellRecord, AvailabilityCellCursor>,
+) -> Result<ListAvailabilityCellsResponse, TopologyAdministrationError> {
+    Ok(ListAvailabilityCellsResponse {
+        cells: page.items.into_iter().map(cell_summary).collect(),
+        next_page_url: page
+            .next
+            .as_ref()
+            .map(encode_cell_cursor)
+            .transpose()?
+            .map(|cursor| page_url("availability-cells", &cursor, query.limit))
+            .transpose()?,
+    })
+}
+
+pub(super) fn cell_summary(record: AvailabilityCellRecord) -> AvailabilityCellSummary {
+    AvailabilityCellSummary {
+        cell_id: format_uuid(record.cell_id.as_bytes()),
+        name: record.display_name,
+        parent_cell_id: record
+            .parent_cell_id
+            .map(AvailabilityCellId::as_bytes)
+            .map(format_uuid),
+        revision: record.revision.get(),
+    }
+}
+
+pub(super) fn cell_membership_response(
+    operation_id: ApiOperationId,
+    cell_id: AvailabilityCellId,
+    member_id: [u8; 16],
+    present: bool,
+    revision: u64,
+) -> SetAvailabilityCellMembershipResponse {
+    SetAvailabilityCellMembershipResponse {
+        operation_id,
+        cell_id: format_uuid(cell_id.as_bytes()),
+        member_id: format_uuid(member_id),
+        present,
+        revision,
+    }
+}
+
 pub(super) fn protection_policy_response(
     query: &ListTopologyQuery,
     page: Page<ProtectionPolicyRecord, ProtectionPolicyCursor>,
@@ -398,6 +542,18 @@ pub(super) fn decode_policy_cursor(
     ))
 }
 
+pub(super) fn decode_cell_cursor(
+    cursor: &TopologyCursor,
+) -> Result<AvailabilityCellCursor, TopologyAdministrationError> {
+    let fields = cursor_fields(cursor, "c", 2)?;
+    let cell_id = AvailabilityCellId::from_bytes(parse_cursor_uuid(fields[0])?)
+        .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+    Ok(AvailabilityCellCursor::new(
+        decode_text(fields[1])?,
+        cell_id,
+    ))
+}
+
 fn node_summary(
     record: TopologyNodeRecord,
 ) -> Result<TopologyNodeSummary, TopologyAdministrationError> {
@@ -465,6 +621,13 @@ fn domain_operation(value: &ApiOperationId) -> Result<OperationId, TopologyAdmin
     .map_err(|_| TopologyAdministrationError::InvalidInput)
 }
 
+fn domain_cell(value: &str) -> Result<AvailabilityCellId, TopologyAdministrationError> {
+    AvailabilityCellId::from_bytes(
+        parse_uuid(value).map_err(|_| TopologyAdministrationError::InvalidInput)?,
+    )
+    .map_err(|_| TopologyAdministrationError::InvalidInput)
+}
+
 fn derived_uuid(domain: &[u8], value: &[u8]) -> Result<[u8; 16], TopologyAdministrationError> {
     let mut digest = Sha256::new();
     digest.update(domain);
@@ -520,6 +683,12 @@ fn encode_policy_cursor(
         cursor.policy_id().as_bytes(),
         &[cursor.canonical_name()],
     )
+}
+
+fn encode_cell_cursor(
+    cursor: &AvailabilityCellCursor,
+) -> Result<TopologyCursor, TopologyAdministrationError> {
+    encoded_cursor("c", cursor.cell_id().as_bytes(), &[cursor.canonical_name()])
 }
 
 fn encoded_cursor(

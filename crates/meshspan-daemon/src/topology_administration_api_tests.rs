@@ -7,12 +7,14 @@ use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode};
 use meshspan_api_contract::{
     AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
+    AvailabilityCellSummary, CreateAvailabilityCellRequest, CreateAvailabilityCellResponse,
     CreateFaultGroupRequest, CreateFaultGroupResponse, CreateProtectionPolicyRequest,
     CreateProtectionPolicyResponse, CreateProtectionScenario, FaultGroupSummary,
-    ListFaultGroupMembershipsResponse, ListFaultGroupsResponse, ListProtectionPoliciesResponse,
-    ListTopologyNodesResponse, ListTopologyQuery, ListTopologyTargetsResponse,
-    ProtectionFailureTerm, ProtectionFailureTermSummary, ProtectionPolicySummary,
-    ProtectionScenarioSummary, SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse,
+    ListAvailabilityCellsResponse, ListFaultGroupMembershipsResponse, ListFaultGroupsResponse,
+    ListProtectionPoliciesResponse, ListTopologyNodesResponse, ListTopologyQuery,
+    ListTopologyTargetsResponse, ProtectionFailureTerm, ProtectionFailureTermSummary,
+    ProtectionPolicySummary, ProtectionScenarioSummary, SetAvailabilityCellMembershipResponse,
+    SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse,
 };
 use meshspan_domain::{PrincipalId, UnixMicros};
 use tower::ServiceExt;
@@ -86,6 +88,7 @@ async fn authenticated_topology_routes_list_and_create_real_contract_shapes()
         }],
     })?;
     let protected = router
+        .clone()
         .oneshot(
             Request::post("/api/latest/admin/protection-policies")
                 .header("content-type", "application/json")
@@ -94,6 +97,21 @@ async fn authenticated_topology_routes_list_and_create_real_contract_shapes()
         )
         .await?;
     assert_eq!(protected.status(), StatusCode::CREATED);
+
+    let cell_request = serde_json::to_vec(&CreateAvailabilityCellRequest {
+        operation_id: serde_json::from_str("\"323e4567-e89b-42d3-a456-426614174000\"")?,
+        name: serde_json::from_str("\"Building A\"")?,
+        parent_cell_id: None,
+    })?;
+    let cell = router
+        .oneshot(
+            Request::post("/api/latest/admin/topology/availability-cells")
+                .header("content-type", "application/json")
+                .header("x-test-auth", "accepted")
+                .body(Body::from(cell_request))?,
+        )
+        .await?;
+    assert_eq!(cell.status(), StatusCode::CREATED);
     assert!(mutated.load(Ordering::SeqCst));
     Ok(())
 }
@@ -178,6 +196,17 @@ impl TopologyAdministrationController for FakeController {
         })
     }
 
+    fn list_availability_cells(
+        &self,
+        _administrator: IdentityAdministrator,
+        _query: ListTopologyQuery,
+    ) -> Result<ListAvailabilityCellsResponse, TopologyAdministrationError> {
+        Ok(ListAvailabilityCellsResponse {
+            cells: Vec::new(),
+            next_page_url: None,
+        })
+    }
+
     fn create_fault_group(
         &mut self,
         _administrator: IdentityAdministrator,
@@ -232,6 +261,42 @@ impl TopologyAdministrationController for FakeController {
             revision: 3,
         })
     }
+
+    fn create_availability_cell(
+        &mut self,
+        _administrator: IdentityAdministrator,
+        request: CreateAvailabilityCellRequest,
+    ) -> Result<CreateAvailabilityCellResponse, TopologyAdministrationError> {
+        Ok(CreateAvailabilityCellResponse {
+            operation_id: request.operation_id,
+            cell: AvailabilityCellSummary {
+                cell_id: "623e4567-e89b-42d3-a456-426614174000".to_owned(),
+                name: request.name.as_str().to_owned(),
+                parent_cell_id: request.parent_cell_id,
+                revision: 4,
+            },
+        })
+    }
+
+    fn set_host_availability_cell_membership(
+        &mut self,
+        _administrator: IdentityAdministrator,
+        cell_id: &str,
+        host_id: &str,
+        request: SetFaultGroupMembershipRequest,
+    ) -> Result<SetAvailabilityCellMembershipResponse, TopologyAdministrationError> {
+        Ok(cell_membership(cell_id, host_id, request))
+    }
+
+    fn set_target_availability_cell_membership(
+        &mut self,
+        _administrator: IdentityAdministrator,
+        cell_id: &str,
+        target_id: &str,
+        request: SetFaultGroupMembershipRequest,
+    ) -> Result<SetAvailabilityCellMembershipResponse, TopologyAdministrationError> {
+        Ok(cell_membership(cell_id, target_id, request))
+    }
 }
 
 fn group() -> FaultGroupSummary {
@@ -258,5 +323,19 @@ fn policy() -> ProtectionPolicySummary {
             }],
         }],
         revision: 3,
+    }
+}
+
+fn cell_membership(
+    cell_id: &str,
+    member_id: &str,
+    request: SetFaultGroupMembershipRequest,
+) -> SetAvailabilityCellMembershipResponse {
+    SetAvailabilityCellMembershipResponse {
+        operation_id: request.operation_id,
+        cell_id: cell_id.to_owned(),
+        member_id: member_id.to_owned(),
+        present: request.present,
+        revision: 5,
     }
 }

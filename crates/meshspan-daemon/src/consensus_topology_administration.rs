@@ -3,12 +3,13 @@
 //! Consensus-owned adapter for mesh topology administration.
 
 use meshspan_cluster::MetadataAuthorityRequestError;
-use meshspan_domain::{FaultGroupId, OperationId, ProtectionPolicyId};
+use meshspan_domain::{AvailabilityCellId, FaultGroupId, OperationId, ProtectionPolicyId};
 use meshspan_metadata::{
-    AuthoritativeCommand, CommandContext, CommandReceipt, FaultGroupCursor,
-    FaultGroupMembershipCursor, FaultGroupMembershipRecord, FaultGroupRecord, Page, PageLimit,
-    ProtectionPolicyCursor, ProtectionPolicyRecord, RepositoryError, TopologyNodeCursor,
-    TopologyNodeRecord, TopologyTargetCursor, TopologyTargetRecord,
+    AuthoritativeCommand, AvailabilityCellCursor, AvailabilityCellRecord, CommandContext,
+    CommandReceipt, FaultGroupCursor, FaultGroupMembershipCursor, FaultGroupMembershipRecord,
+    FaultGroupRecord, Page, PageLimit, ProtectionPolicyCursor, ProtectionPolicyRecord,
+    RepositoryError, TopologyNodeCursor, TopologyNodeRecord, TopologyTargetCursor,
+    TopologyTargetRecord,
 };
 
 use crate::{
@@ -93,6 +94,28 @@ impl TopologyAdministrationAuthority for ConsensusAuthenticationAuthority {
     ) -> Result<Option<ProtectionPolicyRecord>, TopologyAdministrationAuthorityError> {
         self.reader()
             .protection_policy(policy_id)
+            .map_err(|error| map_repository_error(&error))
+    }
+
+    fn availability_cells(
+        &self,
+        after: Option<&AvailabilityCellCursor>,
+        limit: PageLimit,
+    ) -> Result<
+        Page<AvailabilityCellRecord, AvailabilityCellCursor>,
+        TopologyAdministrationAuthorityError,
+    > {
+        self.reader()
+            .availability_cells(after, limit)
+            .map_err(|error| map_repository_error(&error))
+    }
+
+    fn availability_cell(
+        &self,
+        cell_id: AvailabilityCellId,
+    ) -> Result<Option<AvailabilityCellRecord>, TopologyAdministrationAuthorityError> {
+        self.reader()
+            .availability_cell(cell_id)
             .map_err(|error| map_repository_error(&error))
     }
 

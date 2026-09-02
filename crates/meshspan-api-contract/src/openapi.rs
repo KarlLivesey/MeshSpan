@@ -10,7 +10,8 @@ use crate::{
     ApiError, AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
     BeginUploadRequest, BeginUploadResponse, CommitUploadRequest, CommitUploadResponse,
     ConfirmRecoveryBundleRequest, ConfirmRecoveryBundleResponse, CreateApiKeyRequest,
-    CreateApiKeyResponse, CreateDirectoryRequest, CreateDirectoryResponse, CreateFaultGroupRequest,
+    CreateApiKeyResponse, CreateAvailabilityCellRequest, CreateAvailabilityCellResponse,
+    CreateDirectoryRequest, CreateDirectoryResponse, CreateFaultGroupRequest,
     CreateFaultGroupResponse, CreateGroupRequest, CreateMeshSetupRequest, CreateMeshSetupResponse,
     CreateNodeJoinGrantRequest, CreateNodeJoinGrantResponse, CreatePasskeyChallengeRequest,
     CreatePasskeyChallengeResponse, CreatePasskeyRegistrationChallengeRequest,
@@ -23,19 +24,20 @@ use crate::{
     CreateVolumePermissionGrantResponse, CreateVolumeRequest, CreateVolumeResponse,
     CurrentSessionResponse, DeleteObjectRequest, DeleteObjectResponse, EnrolNodeRequest,
     EnrolNodeResponse, GetObjectResponse, HealthResponse, JoinMeshSetupRequest,
-    JoinMeshSetupResponse, ListAuthenticationMethodsResponse, ListDirectoryResponse,
-    ListFaultGroupMembershipsResponse, ListFaultGroupsResponse, ListGroupMembershipsResponse,
-    ListOperationsResponse, ListPrincipalsResponse, ListProtectionPoliciesResponse,
-    ListStorageFoldersResponse, ListTopologyNodesResponse, ListTopologyTargetsResponse,
-    ListUploadRangesResponse, ListVolumePermissionGrantsResponse, ListVolumesResponse,
-    OperationStatusResponse, PublishSmbExportRequest, PublishSmbExportResponse,
-    RegisterStorageFolderRequest, RegisterStorageFolderResponse, RemoveGroupMemberRequest,
-    RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
+    JoinMeshSetupResponse, ListAuthenticationMethodsResponse, ListAvailabilityCellsResponse,
+    ListDirectoryResponse, ListFaultGroupMembershipsResponse, ListFaultGroupsResponse,
+    ListGroupMembershipsResponse, ListOperationsResponse, ListPrincipalsResponse,
+    ListProtectionPoliciesResponse, ListStorageFoldersResponse, ListTopologyNodesResponse,
+    ListTopologyTargetsResponse, ListUploadRangesResponse, ListVolumePermissionGrantsResponse,
+    ListVolumesResponse, OperationStatusResponse, PublishSmbExportRequest,
+    PublishSmbExportResponse, RegisterStorageFolderRequest, RegisterStorageFolderResponse,
+    RemoveGroupMemberRequest, RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
     RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
     RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, RevokePermissionGrantRequest,
-    RevokePermissionGrantResponse, SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse,
-    SetupStatusResponse, StepUpCurrentSessionRequest, UploadStatusResponse,
-    WithdrawSmbExportRequest, WithdrawSmbExportResponse, WriteUploadRangeResponse, schema,
+    RevokePermissionGrantResponse, SetAvailabilityCellMembershipResponse,
+    SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse, SetupStatusResponse,
+    StepUpCurrentSessionRequest, UploadStatusResponse, WithdrawSmbExportRequest,
+    WithdrawSmbExportResponse, WriteUploadRangeResponse, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -121,6 +123,8 @@ fn components() -> Value {
             schema_response::<CommitUploadResponse>("CommitUploadResponse"),
             schema_request::<ConfirmRecoveryBundleRequest>("ConfirmRecoveryBundleRequest"),
             schema_response::<ConfirmRecoveryBundleResponse>("ConfirmRecoveryBundleResponse"),
+            schema_request::<CreateAvailabilityCellRequest>("CreateAvailabilityCellRequest"),
+            schema_response::<CreateAvailabilityCellResponse>("CreateAvailabilityCellResponse"),
             schema_request::<CreateApiKeyRequest>("CreateApiKeyRequest"),
             schema_response::<CreateApiKeyResponse>("CreateApiKeyResponse"),
             schema_request::<CreateDirectoryRequest>("CreateDirectoryRequest"),
@@ -180,6 +184,7 @@ fn components() -> Value {
             schema_response::<ListAuthenticationMethodsResponse>(
                 "ListAuthenticationMethodsResponse",
             ),
+            schema_response::<ListAvailabilityCellsResponse>("ListAvailabilityCellsResponse"),
             schema_response::<ListDirectoryResponse>("ListDirectoryResponse"),
             schema_response::<ListFaultGroupMembershipsResponse>(
                 "ListFaultGroupMembershipsResponse",
@@ -217,6 +222,9 @@ fn components() -> Value {
             schema_response::<SetupStatusResponse>("SetupStatusResponse"),
             schema_request::<SetFaultGroupMembershipRequest>("SetFaultGroupMembershipRequest"),
             schema_response::<SetFaultGroupMembershipResponse>("SetFaultGroupMembershipResponse"),
+            schema_response::<SetAvailabilityCellMembershipResponse>(
+                "SetAvailabilityCellMembershipResponse",
+            ),
             schema_request::<StepUpCurrentSessionRequest>("StepUpCurrentSessionRequest"),
             schema_response::<UploadStatusResponse>("UploadStatusResponse"),
             schema_response::<WriteUploadRangeResponse>("WriteUploadRangeResponse"),
@@ -430,7 +438,7 @@ fn list_volumes_path() -> Value {
     })
 }
 
-fn administration_paths() -> [(String, Value); 18] {
+fn administration_paths() -> [(String, Value); 21] {
     [
         (
             "/admin/users".to_owned(),
@@ -503,6 +511,18 @@ fn administration_paths() -> [(String, Value); 18] {
             fault_group_membership_path(),
         ),
         (
+            "/admin/topology/availability-cells".to_owned(),
+            availability_cell_administration_path(),
+        ),
+        (
+            "/admin/topology/availability-cells/{cell_id}/hosts/{host_id}".to_owned(),
+            availability_cell_membership_path("host_id", "Machine identity"),
+        ),
+        (
+            "/admin/topology/availability-cells/{cell_id}/targets/{target_id}".to_owned(),
+            availability_cell_membership_path("target_id", "Storage-target identity"),
+        ),
+        (
             "/admin/volumes/{volume_id}/permission-grants".to_owned(),
             volume_permission_grants_path(),
         ),
@@ -511,6 +531,67 @@ fn administration_paths() -> [(String, Value); 18] {
             permission_grant_revocation_path(),
         ),
     ]
+}
+
+fn availability_cell_administration_path() -> Value {
+    let mut value = topology_inventory_path(
+        "listAvailabilityCells",
+        "List availability localities",
+        "ListAvailabilityCellsResponse",
+    );
+    value["post"] = json!({
+        "operationId": "createAvailabilityCell",
+        "summary": "Create one named availability locality",
+        "x-meshspan-access": "system-manager-csrf",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+        "parameters": [optional_csrf_parameter()],
+        "requestBody": json_request("Availability locality", "#/components/schemas/CreateAvailabilityCellRequest"),
+        "responses": {
+            "201": json_response("Availability cell committed", "#/components/schemas/CreateAvailabilityCellResponse"),
+            "400": json_response("Invalid cell request", "#/components/schemas/ApiError"),
+            "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+            "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+            "404": json_response("Parent cell not found", "#/components/schemas/ApiError"),
+            "409": json_response("Name or operation conflict", "#/components/schemas/ApiError"),
+            "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+            "500": json_response("Outgoing contract or topology integrity failure", "#/components/schemas/ApiError"),
+            "503": json_response("Metadata authority temporarily unavailable", "#/components/schemas/ApiError")
+        }
+    });
+    value
+}
+
+fn availability_cell_membership_path(member_name: &str, description: &str) -> Value {
+    let operation_id = if member_name == "host_id" {
+        "setAvailabilityCellHostMembership"
+    } else {
+        "setAvailabilityCellTargetMembership"
+    };
+    json!({
+        "put": {
+            "operationId": operation_id,
+            "summary": "Set one machine or target membership in an availability locality",
+            "x-meshspan-access": "system-manager-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "parameters": [
+                principal_parameter("cell_id", "Availability-cell identity"),
+                principal_parameter(member_name, description),
+                optional_csrf_parameter()
+            ],
+            "requestBody": json_request("Desired membership", "#/components/schemas/SetFaultGroupMembershipRequest"),
+            "responses": {
+                "200": json_response("Desired membership committed", "#/components/schemas/SetAvailabilityCellMembershipResponse"),
+                "400": json_response("Invalid membership request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "404": json_response("Cell or member not found", "#/components/schemas/ApiError"),
+                "409": json_response("Operation conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or topology integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Metadata authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn protection_policy_administration_path() -> Value {

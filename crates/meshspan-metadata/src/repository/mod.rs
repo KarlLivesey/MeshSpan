@@ -17,6 +17,9 @@ mod authentication_method_tests;
 mod authentication_policy;
 #[cfg(test)]
 mod authentication_policy_tests;
+mod availability_cell;
+#[cfg(test)]
+mod availability_cell_tests;
 mod backup;
 mod bootstrap;
 #[cfg(test)]
@@ -146,6 +149,7 @@ pub use authentication_method_query::{
     AuthenticationMethodCursor, AuthenticationMethodRecord, AuthenticationMethodRecordDetails,
 };
 pub use authentication_policy::AuthenticationPolicy;
+pub use availability_cell::{AvailabilityCellCursor, AvailabilityCellRecord};
 pub use backup::{PartitionBackupManifest, restore_partition_backup};
 pub use cleanup_attestation::{VersionCleanupAttestationProgress, VersionCleanupParticipant};
 pub use cleanup_completion::{VersionCleanupCompletion, VersionCleanupItemCompletion};
@@ -1365,6 +1369,44 @@ impl AuthoritativeRepository {
         policy_id: meshspan_domain::ProtectionPolicyId,
     ) -> Result<Option<ProtectionPolicyRecord>, RepositoryError> {
         protection_policy::policy(&self.database, policy_id)
+    }
+
+    /// Returns one bounded stable page of named availability cells.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored names, identities, hierarchy or revisions are malformed.
+    pub fn availability_cells(
+        &self,
+        after: Option<&AvailabilityCellCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<AvailabilityCellRecord, AvailabilityCellCursor>, RepositoryError> {
+        availability_cell::cells(&self.database, after, limit)
+    }
+
+    /// Returns one exact active availability cell.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored names, identities, hierarchy or revisions are malformed.
+    pub fn availability_cell(
+        &self,
+        cell_id: meshspan_domain::AvailabilityCellId,
+    ) -> Result<Option<AvailabilityCellRecord>, RepositoryError> {
+        availability_cell::cell(&self.database, cell_id)
+    }
+
+    /// Resolves direct and inherited availability cells for one target and machine.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when membership or cell hierarchy state is malformed.
+    pub fn target_availability_cells(
+        &self,
+        target_id: meshspan_domain::TargetId,
+        host_id: meshspan_domain::HostId,
+    ) -> Result<Vec<meshspan_domain::AvailabilityCellId>, RepositoryError> {
+        availability_cell::target_cells(&self.database, target_id, host_id)
     }
 
     /// Returns the current public secret-wrapping-key generation for one node.

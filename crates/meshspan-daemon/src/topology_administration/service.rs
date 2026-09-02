@@ -6,21 +6,24 @@ use axum::http::HeaderMap;
 use axum::http::header::{AUTHORIZATION, COOKIE};
 use meshspan_api_contract::{
     AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
-    CreateFaultGroupRequest, CreateFaultGroupResponse, CreateProtectionPolicyRequest,
-    CreateProtectionPolicyResponse, ListFaultGroupMembershipsResponse, ListFaultGroupsResponse,
+    CreateAvailabilityCellRequest, CreateAvailabilityCellResponse, CreateFaultGroupRequest,
+    CreateFaultGroupResponse, CreateProtectionPolicyRequest, CreateProtectionPolicyResponse,
+    ListAvailabilityCellsResponse, ListFaultGroupMembershipsResponse, ListFaultGroupsResponse,
     ListProtectionPoliciesResponse, ListTopologyNodesResponse, ListTopologyQuery,
-    ListTopologyTargetsResponse, SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse,
-    validate_list_topology_query,
+    ListTopologyTargetsResponse, SetAvailabilityCellMembershipResponse,
+    SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse, validate_list_topology_query,
 };
 use meshspan_domain::{AssuranceLevel, UnixMicros};
 use meshspan_metadata::{EntityKind, PageLimit};
 
 use super::model::{
-    assignment_response, command_context, create_command, decode_group_cursor,
-    decode_membership_cursor, decode_node_cursor, decode_policy_cursor, decode_target_cursor,
-    group_response, group_summary, membership_command, membership_response, node_response,
-    policy_summary, protection_assignment_command, protection_policy_command,
-    protection_policy_response, target_response,
+    assignment_response, availability_cell_command, availability_cell_response,
+    cell_membership_response, cell_summary, command_context, create_command, decode_cell_cursor,
+    decode_group_cursor, decode_membership_cursor, decode_node_cursor, decode_policy_cursor,
+    decode_target_cursor, group_response, group_summary, host_cell_membership_command,
+    membership_command, membership_response, node_response, policy_summary,
+    protection_assignment_command, protection_policy_command, protection_policy_response,
+    target_cell_membership_command, target_response,
 };
 use super::{
     TopologyAdministrationAuthority, TopologyAdministrationAuthorityError,
@@ -172,6 +175,21 @@ where
         protection_policy_response(&query, page)
     }
 
+    fn list_availability_cells(
+        &self,
+        _administrator: IdentityAdministrator,
+        query: ListTopologyQuery,
+    ) -> Result<ListAvailabilityCellsResponse, TopologyAdministrationError> {
+        validate_list_topology_query(&query)
+            .map_err(|_| TopologyAdministrationError::InvalidInput)?;
+        let cursor = query.cursor.as_ref().map(decode_cell_cursor).transpose()?;
+        let page = self
+            .authority
+            .availability_cells(cursor.as_ref(), page_limit(&query)?)
+            .map_err(map_authority_error)?;
+        availability_cell_response(&query, page)
+    }
+
     fn create_fault_group(
         &mut self,
         administrator: IdentityAdministrator,
@@ -292,6 +310,111 @@ where
             receipt.committed_revision.get(),
         ))
     }
+
+    fn create_availability_cell(
+        &mut self,
+        administrator: IdentityAdministrator,
+        request: CreateAvailabilityCellRequest,
+    ) -> Result<CreateAvailabilityCellResponse, TopologyAdministrationError> {
+        let operation = request.operation_id.clone();
+        let (operation_id, cell_id, command) = availability_cell_command(&request)?;
+        let context = command_context(administrator, operation_id)?;
+        let expected_digest = command.request_digest(context);
+        let receipt = self
+            .authority
+            .commit_topology_operation(context, &command)
+            .map_err(map_authority_error)?;
+        if receipt.request_digest != expected_digest
+            || receipt.entity.kind != EntityKind::AvailabilityCell
+            || receipt.entity.id != cell_id.as_bytes()
+        {
+            return Err(TopologyAdministrationError::Conflict);
+        }
+        let record = self
+            .authority
+            .availability_cell(cell_id)
+            .map_err(map_authority_error)?
+            .ok_or(TopologyAdministrationError::Failed)?;
+        Ok(CreateAvailabilityCellResponse {
+            operation_id: operation,
+            cell: cell_summary(record),
+        })
+    }
+
+    fn set_host_availability_cell_membership(
+        &mut self,
+        administrator: IdentityAdministrator,
+        cell_id: &str,
+        host_id: &str,
+        request: SetFaultGroupMembershipRequest,
+    ) -> Result<SetAvailabilityCellMembershipResponse, TopologyAdministrationError> {
+        let operation = request.operation_id.clone();
+        let present = request.present;
+        let (operation_id, cell_id, host_id, command) =
+            host_cell_membership_command(cell_id, host_id, &request)?;
+        let receipt = commit_cell_membership(
+            &mut self.authority,
+            administrator,
+            operation_id,
+            cell_id.as_bytes(),
+            &command,
+        )?;
+        Ok(cell_membership_response(
+            operation,
+            cell_id,
+            host_id.as_bytes(),
+            present,
+            receipt.committed_revision.get(),
+        ))
+    }
+
+    fn set_target_availability_cell_membership(
+        &mut self,
+        administrator: IdentityAdministrator,
+        cell_id: &str,
+        target_id: &str,
+        request: SetFaultGroupMembershipRequest,
+    ) -> Result<SetAvailabilityCellMembershipResponse, TopologyAdministrationError> {
+        let operation = request.operation_id.clone();
+        let present = request.present;
+        let (operation_id, cell_id, target_id, command) =
+            target_cell_membership_command(cell_id, target_id, &request)?;
+        let receipt = commit_cell_membership(
+            &mut self.authority,
+            administrator,
+            operation_id,
+            cell_id.as_bytes(),
+            &command,
+        )?;
+        Ok(cell_membership_response(
+            operation,
+            cell_id,
+            target_id.as_bytes(),
+            present,
+            receipt.committed_revision.get(),
+        ))
+    }
+}
+
+fn commit_cell_membership<A: TopologyAdministrationAuthority>(
+    authority: &mut A,
+    administrator: IdentityAdministrator,
+    operation_id: meshspan_domain::OperationId,
+    cell_id: [u8; 16],
+    command: &meshspan_metadata::AuthoritativeCommand,
+) -> Result<meshspan_metadata::CommandReceipt, TopologyAdministrationError> {
+    let context = command_context(administrator, operation_id)?;
+    let expected_digest = command.request_digest(context);
+    let receipt = authority
+        .commit_topology_operation(context, command)
+        .map_err(map_authority_error)?;
+    if receipt.request_digest != expected_digest
+        || receipt.entity.kind != EntityKind::AvailabilityCellMembership
+        || receipt.entity.id != cell_id
+    {
+        return Err(TopologyAdministrationError::Conflict);
+    }
+    Ok(receipt)
 }
 
 fn page_limit(query: &ListTopologyQuery) -> Result<PageLimit, TopologyAdministrationError> {

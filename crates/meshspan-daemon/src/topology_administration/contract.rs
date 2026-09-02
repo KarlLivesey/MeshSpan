@@ -2,12 +2,12 @@
 
 //! Replaceable replicated-authority boundary for topology administration.
 
-use meshspan_domain::{FaultGroupId, OperationId, ProtectionPolicyId};
+use meshspan_domain::{AvailabilityCellId, FaultGroupId, OperationId, ProtectionPolicyId};
 use meshspan_metadata::{
-    AuthoritativeCommand, CommandContext, CommandReceipt, FaultGroupCursor,
-    FaultGroupMembershipCursor, FaultGroupMembershipRecord, FaultGroupRecord, Page, PageLimit,
-    ProtectionPolicyCursor, ProtectionPolicyRecord, TopologyNodeCursor, TopologyNodeRecord,
-    TopologyTargetCursor, TopologyTargetRecord,
+    AuthoritativeCommand, AvailabilityCellCursor, AvailabilityCellRecord, CommandContext,
+    CommandReceipt, FaultGroupCursor, FaultGroupMembershipCursor, FaultGroupMembershipRecord,
+    FaultGroupRecord, Page, PageLimit, ProtectionPolicyCursor, ProtectionPolicyRecord,
+    TopologyNodeCursor, TopologyNodeRecord, TopologyTargetCursor, TopologyTargetRecord,
 };
 use thiserror::Error;
 
@@ -98,6 +98,30 @@ pub trait TopologyAdministrationAuthority: IdentityAdministrationAuthority {
         &self,
         policy_id: ProtectionPolicyId,
     ) -> Result<Option<ProtectionPolicyRecord>, TopologyAdministrationAuthorityError>;
+
+    /// Returns one bounded availability-cell page.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authority error when committed cell state cannot be read safely.
+    fn availability_cells(
+        &self,
+        after: Option<&AvailabilityCellCursor>,
+        limit: PageLimit,
+    ) -> Result<
+        Page<AvailabilityCellRecord, AvailabilityCellCursor>,
+        TopologyAdministrationAuthorityError,
+    >;
+
+    /// Returns one exact active availability cell.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authority error when committed cell state cannot be read safely.
+    fn availability_cell(
+        &self,
+        cell_id: AvailabilityCellId,
+    ) -> Result<Option<AvailabilityCellRecord>, TopologyAdministrationAuthorityError>;
 
     /// Resolves an already committed topology operation.
     ///

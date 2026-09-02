@@ -3,11 +3,11 @@
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId, AuthenticationMethodId,
-    AuthenticationService, ComponentInstanceId, DurationMicros, EntropyError, FailureScenario,
-    FailureTerm, FaultGroupClassId, FaultGroupId, GrantId, GroupId, HostId, MeshId, NodeId,
-    ObjectId, OperationId, OwnerSetId, PrincipalId, ProtectionPolicyId, ProtectionScenarioId,
-    RandomSource, RecoveryCodeId, Revision, Rights, RoleId, SessionId, SmbExportId, TargetId,
-    UnixMicros, VolumeId,
+    AuthenticationService, AvailabilityCellId, ComponentInstanceId, DurationMicros, EntropyError,
+    FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId, GrantId, GroupId, HostId,
+    MeshId, NodeId, ObjectId, OperationId, OwnerSetId, PrincipalId, ProtectionPolicyId,
+    ProtectionScenarioId, RandomSource, RecoveryCodeId, Revision, Rights, RoleId, SessionId,
+    SmbExportId, TargetId, UnixMicros, VolumeId,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -17,15 +17,16 @@ use sha2::{Digest, Sha256};
 use super::*;
 use crate::{
     AddGroupMember, AssignVolumeProtectionPolicy, BootstrapMesh, BootstrapRecoveryIdentity,
-    CommitSecretGeneration, CreateActivationPolicy, CreateAuthenticationMethod, CreateComponent,
-    CreateFaultGroup, CreateGroup, CreateProtectionPolicy, CreateUser, CreateVolume,
-    GrantInheritance, GrantPermission, GrantPermissionWithActivation, IssueAuthenticationSession,
-    NewAuthenticationCredential, NewRecoveryCode, PermissionScope, ProtectionScenarioConfiguration,
-    PublishSmbExport, RecordName, RegisterNodeWrappingKey, RegisterStorageTarget,
-    RemoveGroupMember, RevokeAuthenticationMethod, RevokeAuthenticationSession,
-    SessionAuthenticationFactor, SessionClientLabel, SetHostFaultGroupMembership,
-    SmbExportGatewaySelection, StepUpAuthenticationSession, StorageUsageLimit, TotpAlgorithm,
-    VOLUME_CONTENT_KEY_SECRET_KIND, WithdrawSmbExport,
+    CommitSecretGeneration, CreateActivationPolicy, CreateAuthenticationMethod,
+    CreateAvailabilityCell, CreateComponent, CreateFaultGroup, CreateGroup, CreateProtectionPolicy,
+    CreateUser, CreateVolume, GrantInheritance, GrantPermission, GrantPermissionWithActivation,
+    IssueAuthenticationSession, NewAuthenticationCredential, NewRecoveryCode, PermissionScope,
+    ProtectionScenarioConfiguration, PublishSmbExport, RecordName, RegisterNodeWrappingKey,
+    RegisterStorageTarget, RemoveGroupMember, RevokeAuthenticationMethod,
+    RevokeAuthenticationSession, SessionAuthenticationFactor, SessionClientLabel,
+    SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
+    SetTargetAvailabilityCellMembership, SmbExportGatewaySelection, StepUpAuthenticationSession,
+    StorageUsageLimit, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND, WithdrawSmbExport,
 };
 
 #[test]
@@ -127,6 +128,25 @@ fn topology_commands_round_trip_canonically() -> Result<(), Box<dyn std::error::
             host_id: HostId::from_bytes([92; 16])?,
             present: true,
         }),
+        AuthoritativeCommand::CreateAvailabilityCell(CreateAvailabilityCell {
+            cell_id: AvailabilityCellId::from_bytes([103; 16])?,
+            name: RecordName::new("Building A")?,
+            parent_cell_id: Some(AvailabilityCellId::from_bytes([104; 16])?),
+        }),
+        AuthoritativeCommand::SetHostAvailabilityCellMembership(
+            SetHostAvailabilityCellMembership {
+                cell_id: AvailabilityCellId::from_bytes([103; 16])?,
+                host_id: HostId::from_bytes([105; 16])?,
+                present: true,
+            },
+        ),
+        AuthoritativeCommand::SetTargetAvailabilityCellMembership(
+            SetTargetAvailabilityCellMembership {
+                cell_id: AvailabilityCellId::from_bytes([103; 16])?,
+                target_id: TargetId::from_bytes([106; 16])?,
+                present: false,
+            },
+        ),
     ] {
         assert_round_trip(context, command)?;
     }

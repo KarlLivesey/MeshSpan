@@ -9,10 +9,10 @@ use sha2::{Digest, Sha256};
 use super::receipt::{decode_receipt, encode_result, result_digest, validate_position};
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError,
-    authentication_method, authentication_method_creation, authentication_policy, bootstrap,
-    cleanup_attestation, cleanup_completion, cleanup_inventory, cleanup_permit,
-    cleanup_reclamation, cluster, component, federation_actor_attestation, federation_assignment,
-    federation_grant, federation_mutation_admission, federation_quarantine,
+    authentication_method, authentication_method_creation, authentication_policy,
+    availability_cell, bootstrap, cleanup_attestation, cleanup_completion, cleanup_inventory,
+    cleanup_permit, cleanup_reclamation, cluster, component, federation_actor_attestation,
+    federation_assignment, federation_grant, federation_mutation_admission, federation_quarantine,
     federation_relationship, federation_storage_allocation, federation_succession, identity,
     namespace, node_wrapping_key, protection_policy, recovery_authority, retention,
     root_delegation, routing, secret_generation, session, smb_export_configuration,
@@ -553,6 +553,9 @@ fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::SetHostFaultGroupMembership(_)
             | AuthoritativeCommand::CreateProtectionPolicy(_)
             | AuthoritativeCommand::AssignVolumeProtectionPolicy(_)
+            | AuthoritativeCommand::CreateAvailabilityCell(_)
+            | AuthoritativeCommand::SetHostAvailabilityCellMembership(_)
+            | AuthoritativeCommand::SetTargetAvailabilityCellMembership(_)
             | AuthoritativeCommand::PublishSmbExport(_)
             | AuthoritativeCommand::WithdrawSmbExport(_)
             | AuthoritativeCommand::RegisterNodeWrappingKey(_)
@@ -595,6 +598,15 @@ fn execute_infrastructure_command(
         }
         AuthoritativeCommand::AssignVolumeProtectionPolicy(value) => {
             protection_policy::assign_volume(transaction, *value, revision)
+        }
+        AuthoritativeCommand::CreateAvailabilityCell(value) => {
+            availability_cell::create(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::SetHostAvailabilityCellMembership(value) => {
+            availability_cell::set_host_membership(transaction, *value, revision)
+        }
+        AuthoritativeCommand::SetTargetAvailabilityCellMembership(value) => {
+            availability_cell::set_target_membership(transaction, *value, revision)
         }
         AuthoritativeCommand::PublishSmbExport(value) => {
             smb_export_configuration::publish(transaction, context, value, revision)
@@ -1124,6 +1136,9 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::WithdrawSmbExport(_) => 91,
         AuthoritativeCommand::CreateProtectionPolicy(_) => 92,
         AuthoritativeCommand::AssignVolumeProtectionPolicy(_) => 93,
+        AuthoritativeCommand::CreateAvailabilityCell(_) => 94,
+        AuthoritativeCommand::SetHostAvailabilityCellMembership(_) => 95,
+        AuthoritativeCommand::SetTargetAvailabilityCellMembership(_) => 96,
     }
 }
 

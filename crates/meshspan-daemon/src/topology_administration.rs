@@ -10,10 +10,12 @@ mod service;
 use axum::http::HeaderMap;
 use meshspan_api_contract::{
     AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
-    CreateFaultGroupRequest, CreateFaultGroupResponse, CreateProtectionPolicyRequest,
-    CreateProtectionPolicyResponse, ListFaultGroupMembershipsResponse, ListFaultGroupsResponse,
+    CreateAvailabilityCellRequest, CreateAvailabilityCellResponse, CreateFaultGroupRequest,
+    CreateFaultGroupResponse, CreateProtectionPolicyRequest, CreateProtectionPolicyResponse,
+    ListAvailabilityCellsResponse, ListFaultGroupMembershipsResponse, ListFaultGroupsResponse,
     ListProtectionPoliciesResponse, ListTopologyNodesResponse, ListTopologyQuery,
-    ListTopologyTargetsResponse, SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse,
+    ListTopologyTargetsResponse, SetAvailabilityCellMembershipResponse,
+    SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse,
 };
 use meshspan_domain::UnixMicros;
 use thiserror::Error;
@@ -93,6 +95,17 @@ pub trait TopologyAdministrationController: Send + 'static {
         query: ListTopologyQuery,
     ) -> Result<ListProtectionPoliciesResponse, TopologyAdministrationError>;
 
+    /// Returns one bounded availability-locality page.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid input or unavailable/corrupt committed cell state.
+    fn list_availability_cells(
+        &self,
+        administrator: IdentityAdministrator,
+        query: ListTopologyQuery,
+    ) -> Result<ListAvailabilityCellsResponse, TopologyAdministrationError>;
+
     /// Creates or exactly resolves one named shared-failure group.
     ///
     /// # Errors
@@ -140,6 +153,43 @@ pub trait TopologyAdministrationController: Send + 'static {
         policy_id: &str,
         request: AssignVolumeProtectionPolicyRequest,
     ) -> Result<AssignVolumeProtectionPolicyResponse, TopologyAdministrationError>;
+
+    /// Creates or exactly resolves one named availability locality.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, missing-parent, conflicting, unauthorised or uncommitted mutations.
+    fn create_availability_cell(
+        &mut self,
+        administrator: IdentityAdministrator,
+        request: CreateAvailabilityCellRequest,
+    ) -> Result<CreateAvailabilityCellResponse, TopologyAdministrationError>;
+
+    /// Sets one machine's desired availability-cell membership.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, missing, conflicting, unauthorised or uncommitted mutations.
+    fn set_host_availability_cell_membership(
+        &mut self,
+        administrator: IdentityAdministrator,
+        cell_id: &str,
+        host_id: &str,
+        request: SetFaultGroupMembershipRequest,
+    ) -> Result<SetAvailabilityCellMembershipResponse, TopologyAdministrationError>;
+
+    /// Sets one storage target's desired availability-cell membership.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid, missing, conflicting, unauthorised or uncommitted mutations.
+    fn set_target_availability_cell_membership(
+        &mut self,
+        administrator: IdentityAdministrator,
+        cell_id: &str,
+        target_id: &str,
+        request: SetFaultGroupMembershipRequest,
+    ) -> Result<SetAvailabilityCellMembershipResponse, TopologyAdministrationError>;
 }
 
 /// Closed non-secret topology-administration failure categories.

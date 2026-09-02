@@ -10,13 +10,14 @@ use meshspan_contracts::{
 use meshspan_domain::{
     ActivationId, ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId,
     AuthenticationFactorClasses, AuthenticationMethodId, AuthenticationOperationClass,
-    AuthenticationPolicyId, AuthenticationService, ComponentInstanceId, ContentManifestId,
-    DelegatedMetadataScope, DelegationAdmission, DurationMicros, FailureScenario,
-    FaultGroupClassId, FaultGroupId, FileVersionId, GrantId, GroupId, HandoffEvidence, HostId,
-    JoinGrantId, MeshId, MetadataKeyRange, MetadataOperationFamily, NamespaceCommitId, NodeId,
-    ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId,
-    ProtectionPolicyId, ProtectionScenarioId, RecoveryCodeId, Revision, Rights, RoleId, ScopeId,
-    SessionId, SmbExportId, SnapshotId, SnapshotScheduleId, TagId, TargetId, UnixMicros, VolumeId,
+    AuthenticationPolicyId, AuthenticationService, AvailabilityCellId, ComponentInstanceId,
+    ContentManifestId, DelegatedMetadataScope, DelegationAdmission, DurationMicros,
+    FailureScenario, FaultGroupClassId, FaultGroupId, FileVersionId, GrantId, GroupId,
+    HandoffEvidence, HostId, JoinGrantId, MeshId, MetadataKeyRange, MetadataOperationFamily,
+    NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId,
+    PrincipalId, ProtectionPolicyId, ProtectionScenarioId, RecoveryCodeId, Revision, Rights,
+    RoleId, ScopeId, SessionId, SmbExportId, SnapshotId, SnapshotScheduleId, TagId, TargetId,
+    UnixMicros, VolumeId,
 };
 use meshspan_secret_envelope::{EncryptedSecretParts, RecipientEnvelopeParts};
 use sha2::{Digest, Sha256};
@@ -167,6 +168,12 @@ pub enum AuthoritativeCommand {
     CreateProtectionPolicy(CreateProtectionPolicy),
     /// Selects one existing protection policy as the volume-wide survival promise.
     AssignVolumeProtectionPolicy(AssignVolumeProtectionPolicy),
+    /// Creates one named availability cell used by locality and acknowledgement policies.
+    CreateAvailabilityCell(CreateAvailabilityCell),
+    /// Adds or removes one machine from one availability cell.
+    SetHostAvailabilityCellMembership(SetHostAvailabilityCellMembership),
+    /// Adds or removes one storage target from one availability cell.
+    SetTargetAvailabilityCellMembership(SetTargetAvailabilityCellMembership),
     /// Publishes one volume or folder through explicitly selected SMB gateways.
     PublishSmbExport(PublishSmbExport),
     /// Withdraws one exact SMB export while retaining its audit history.
@@ -319,6 +326,9 @@ impl AuthoritativeCommand {
             Self::SetHostFaultGroupMembership(value) => value.update_digest(digest),
             Self::CreateProtectionPolicy(value) => value.update_digest(digest),
             Self::AssignVolumeProtectionPolicy(value) => value.update_digest(digest),
+            Self::CreateAvailabilityCell(value) => value.update_digest(digest),
+            Self::SetHostAvailabilityCellMembership(value) => value.update_digest(digest),
+            Self::SetTargetAvailabilityCellMembership(value) => value.update_digest(digest),
             Self::PublishSmbExport(value) => value.update_digest(digest),
             Self::WithdrawSmbExport(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
@@ -1727,6 +1737,39 @@ pub struct AssignVolumeProtectionPolicy {
     pub policy_id: ProtectionPolicyId,
 }
 
+/// One administrator-defined availability locality.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateAvailabilityCell {
+    /// Stable availability-cell identity.
+    pub cell_id: AvailabilityCellId,
+    /// Human-readable cell name.
+    pub name: RecordName,
+    /// Optional presentation parent; placement still evaluates explicit membership.
+    pub parent_cell_id: Option<AvailabilityCellId>,
+}
+
+/// Desired membership of one machine in one availability cell.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SetHostAvailabilityCellMembership {
+    /// Existing availability cell.
+    pub cell_id: AvailabilityCellId,
+    /// Existing non-retired machine.
+    pub host_id: HostId,
+    /// `true` to add the machine or `false` to remove it.
+    pub present: bool,
+}
+
+/// Desired membership of one storage target in one availability cell.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SetTargetAvailabilityCellMembership {
+    /// Existing availability cell.
+    pub cell_id: AvailabilityCellId,
+    /// Existing non-retired storage target.
+    pub target_id: TargetId,
+    /// `true` to add the target or `false` to remove it.
+    pub present: bool,
+}
+
 /// Explicit gateway selection for one SMB export.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SmbExportGatewaySelection {
@@ -2800,6 +2843,33 @@ digest_simple_record!(
     |value, digest| {
         digest.identifier(value.volume_id.as_bytes());
         digest.identifier(value.policy_id.as_bytes());
+    }
+);
+digest_simple_record!(
+    CreateAvailabilityCell,
+    b"create-availability-cell",
+    |value, digest| {
+        digest.identifier(value.cell_id.as_bytes());
+        digest.name(&value.name);
+        digest.optional_identifier(value.parent_cell_id.map(AvailabilityCellId::as_bytes));
+    }
+);
+digest_simple_record!(
+    SetHostAvailabilityCellMembership,
+    b"set-host-availability-cell-membership",
+    |value, digest| {
+        digest.identifier(value.cell_id.as_bytes());
+        digest.identifier(value.host_id.as_bytes());
+        digest.boolean(value.present);
+    }
+);
+digest_simple_record!(
+    SetTargetAvailabilityCellMembership,
+    b"set-target-availability-cell-membership",
+    |value, digest| {
+        digest.identifier(value.cell_id.as_bytes());
+        digest.identifier(value.target_id.as_bytes());
+        digest.boolean(value.present);
     }
 );
 digest_simple_record!(PublishSmbExport, b"publish-smb-export", |value, digest| {

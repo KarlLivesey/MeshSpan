@@ -3,6 +3,7 @@
 //! Bounded canonical bytes for authoritative commands carried by consensus.
 
 mod authentication;
+mod availability_cell;
 mod bootstrap;
 mod decoder;
 mod encoder;
@@ -150,6 +151,15 @@ fn encode_command(
         AuthoritativeCommand::AssignVolumeProtectionPolicy(value) => {
             protection_policy::encode_assignment(encoder, *value)
         }
+        AuthoritativeCommand::CreateAvailabilityCell(value) => {
+            availability_cell::encode_create(encoder, value)
+        }
+        AuthoritativeCommand::SetHostAvailabilityCellMembership(value) => {
+            availability_cell::encode_host_membership(encoder, *value)
+        }
+        AuthoritativeCommand::SetTargetAvailabilityCellMembership(value) => {
+            availability_cell::encode_target_membership(encoder, *value)
+        }
         AuthoritativeCommand::PublishSmbExport(value) => smb_export::encode_publish(encoder, value),
         AuthoritativeCommand::WithdrawSmbExport(value) => {
             smb_export::encode_withdraw(encoder, value)
@@ -216,6 +226,16 @@ fn decode_command(
         protection_policy::ASSIGN_VOLUME_PROTECTION_POLICY => {
             protection_policy::decode_assignment(decoder)
                 .map(AuthoritativeCommand::AssignVolumeProtectionPolicy)
+        }
+        availability_cell::CREATE_AVAILABILITY_CELL => availability_cell::decode_create(decoder)
+            .map(AuthoritativeCommand::CreateAvailabilityCell),
+        availability_cell::SET_HOST_AVAILABILITY_CELL_MEMBERSHIP => {
+            availability_cell::decode_host_membership(decoder)
+                .map(AuthoritativeCommand::SetHostAvailabilityCellMembership)
+        }
+        availability_cell::SET_TARGET_AVAILABILITY_CELL_MEMBERSHIP => {
+            availability_cell::decode_target_membership(decoder)
+                .map(AuthoritativeCommand::SetTargetAvailabilityCellMembership)
         }
         smb_export::PUBLISH_SMB_EXPORT => {
             smb_export::decode_publish(decoder).map(AuthoritativeCommand::PublishSmbExport)
