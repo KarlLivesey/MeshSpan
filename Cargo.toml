@@ -20,6 +20,7 @@ members = [
     "crates/meshspan-recovery-bundle",
     "crates/meshspan-rustls-provider",
     "crates/meshspan-secret-envelope",
+    "crates/meshspan-smb",
     "crates/meshspan-storage",
     "crates/meshspan-sync-wrapper",
     "crates/meshspan-test-certificates",
