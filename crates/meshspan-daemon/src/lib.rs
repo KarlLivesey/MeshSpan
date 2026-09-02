@@ -163,6 +163,8 @@ mod protected_recovery_code_issuance;
 mod public_contract_api;
 #[cfg(test)]
 mod public_contract_api_tests;
+mod rebalance_scheduler;
+mod rebalance_worker;
 mod recovery_bundle_verification;
 mod recovery_bundle_verification_api;
 #[cfg(test)]
@@ -196,6 +198,14 @@ pub use maintenance_dispatcher::{
 pub use periodic_scrub_scheduler::{
     PeriodicScrubAdmissionPage, PeriodicScrubAuthority, PeriodicScrubScheduler,
     PeriodicScrubSchedulingError,
+};
+pub use rebalance_scheduler::{
+    RebalanceAdmissionPage, RebalanceScheduler, RebalanceSchedulingAuthority,
+    RebalanceSchedulingError,
+};
+pub use rebalance_worker::{
+    RebalanceCatalogue, RebalanceExecution, RebalanceExecutionError, RebalanceMaintenanceAuthority,
+    RebalanceStepReceipt, execute_rebalance_step,
 };
 pub use scrub_finding_scheduler::{
     AutomaticScrubFindingScheduler, RepairCandidateResolver, ScrubFindingSchedulingError,

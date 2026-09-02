@@ -68,9 +68,13 @@ fn protection_configuration(
     if local_targets.is_empty() {
         return Err(ContentPublicationError::Unavailable);
     }
-    let revision = authority
+    let capacity_revision = authority
         .current_revision()
         .map_err(|_| ContentPublicationError::Unavailable)?;
+    let topology_revision = authority
+        .mesh_configuration_revision()
+        .map_err(|_| ContentPublicationError::Unavailable)?
+        .ok_or(ContentPublicationError::Unavailable)?;
     let targets = active_targets(authority)?;
     if !local_targets.iter().all(|local| {
         targets
@@ -137,8 +141,8 @@ fn protection_configuration(
     });
     ProtectionConfiguration::from_acknowledgement_snapshot(
         topology,
-        revision,
-        revision,
+        topology_revision,
+        capacity_revision,
         scenarios,
         candidates,
         required_scenarios,

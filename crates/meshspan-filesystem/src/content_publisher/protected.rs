@@ -10,9 +10,10 @@ use cap_std::fs::{Dir, OpenOptions};
 use meshspan_contracts::{
     BoundedBytes, BoundedItems, CodingLayout, CodingScheme, ContractError, ContractVersion,
     PlacementCandidate, PlacementCellRequirement, PlacementPolicy, PlacementRequest,
-    PutShardRequest, ReconstructionRequest, RepairPlacementPlan, RepairPlacementRequest,
-    RequestContext, ReservationClass, ReserveStorageRequest, ShardIdentity, ShardReadPermit,
-    ShardReceipt, StoragePermitMacKey, StorageProvider, StorageReservation, read_permit_mac,
+    PutShardRequest, RebalancePlacementPlan, RebalancePlacementRequest, ReconstructionRequest,
+    RepairPlacementPlan, RepairPlacementRequest, RequestContext, ReservationClass,
+    ReserveStorageRequest, ShardIdentity, ShardReadPermit, ShardReceipt, StoragePermitMacKey,
+    StorageProvider, StorageReservation, read_permit_mac,
 };
 use meshspan_domain::{
     DurabilityScope, FailureScenario, MeshId, OperationId, RandomSource, Revision, TargetId,
@@ -123,6 +124,18 @@ pub struct ProtectionConfiguration {
 }
 
 impl ProtectionConfiguration {
+    /// Returns the exact topology/policy revision bound into every decision from this snapshot.
+    #[must_use]
+    pub const fn topology_revision(&self) -> Revision {
+        self.topology_revision
+    }
+
+    /// Returns the exact capacity observation revision bound into this snapshot.
+    #[must_use]
+    pub const fn capacity_revision(&self) -> Revision {
+        self.capacity_revision
+    }
+
     /// Validates one bounded placement snapshot.
     ///
     /// # Errors
@@ -269,6 +282,32 @@ impl ProtectionConfiguration {
             context,
             coding_layout,
             source_shard_index,
+            current_targets,
+            scenarios: &self.scenarios,
+            required_scenarios: &self.required_scenarios,
+            topology: &self.topology,
+            topology_revision: self.topology_revision,
+            capacity_revision: self.capacity_revision,
+            candidates: &self.candidates,
+            cells: &self.cells,
+        })
+    }
+
+    /// Selects one strict layout improvement while retaining the stripe's coding geometry.
+    ///
+    /// # Errors
+    ///
+    /// Rejects contradictory geometry/routes or malformed fixed-revision policy evidence.
+    pub fn plan_rebalance<Placement: PlacementPolicy>(
+        &self,
+        placement: &Placement,
+        context: RequestContext,
+        coding_layout: CodingLayout,
+        current_targets: &[TargetId],
+    ) -> Result<Option<RebalancePlacementPlan>, ContractError> {
+        placement.plan_rebalance(RebalancePlacementRequest {
+            context,
+            coding_layout,
             current_targets,
             scenarios: &self.scenarios,
             required_scenarios: &self.required_scenarios,
