@@ -110,6 +110,7 @@ fn direct_headless_key_is_service_scoped_and_revoked_at_operation_time()
             credential: NewAuthenticationCredential::ApiKey {
                 key_id,
                 key_digest,
+                smb_verifier_ciphertext: None,
                 scopes: AuthenticationService::HeadlessApi.api_key_login_scope(),
                 valid_from: UnixMicros::new(100),
             },
@@ -765,6 +766,7 @@ pub(super) fn issue_session(
             credential: NewAuthenticationCredential::ApiKey {
                 key_id: ApiKeyId::from_bytes([seed.wrapping_add(2); 16])?,
                 key_digest: [seed.wrapping_add(3); 32],
+                smb_verifier_ciphertext: None,
                 scopes: AuthenticationService::Https.api_key_login_scope(),
                 valid_from: UnixMicros::new(100),
             },

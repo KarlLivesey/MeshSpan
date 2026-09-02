@@ -33,6 +33,7 @@ meshspan-protocol = { path = "../meshspan-protocol" }
 meshspan-recovery-bundle = { path = "../meshspan-recovery-bundle" }
 meshspan-rustls-provider = { path = "../meshspan-rustls-provider" }
 meshspan-secret-envelope = { path = "../meshspan-secret-envelope" }
+meshspan-smb = { path = "../meshspan-smb" }
 meshspan-storage = { path = "../meshspan-storage" }
 rustls.workspace = true
 serde_json.workspace = true

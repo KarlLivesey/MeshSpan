@@ -1158,6 +1158,7 @@ dependencies = [
  "meshspan-recovery-bundle",
  "meshspan-rustls-provider",
  "meshspan-secret-envelope",
+ "meshspan-smb",
  "meshspan-storage",
  "meshspan-test-certificates",
  "p256",

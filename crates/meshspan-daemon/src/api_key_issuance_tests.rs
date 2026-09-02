@@ -12,6 +12,7 @@ use meshspan_domain::{
 use meshspan_metadata::{
     AuthoritativeCommand, CommandContext, LogPosition, PartitionDatabase, RepositoryError,
 };
+use meshspan_smb::NtlmPasswordVerifier;
 use tempfile::tempdir;
 
 use crate::browser_session::CSRF_HEADER;
@@ -49,8 +50,13 @@ fn issued_key_replays_across_gateways_logs_in_and_rejects_changed_input()
     let authority = sessions.into_authority();
     let gateway = GatewaySessionIdentity::new(material.node_id, 1)?;
     let request = issuance_request("Automation and SMB", None)?;
-    let mut issuer =
-        ApiKeyIssuanceService::new(authority, ApiKeyIssuanceKey::from_bytes([21; 32])?, gateway);
+    let mut issuer = ApiKeyIssuanceService::new(
+        authority,
+        ApiKeyIssuanceKey::from_bytes([21; 32])?,
+        crate::SmbVerifierEnvelopeKey::from_parts([22; 32], [23; 32])?,
+        1,
+        gateway,
+    )?;
     let first = issuer
         .issue(&request, &headers, UnixMicros::new(30))
         .map_err(|error| format!("initial issuance failed: {error:?}"))?;
@@ -63,8 +69,13 @@ fn issued_key_replays_across_gateways_logs_in_and_rejects_changed_input()
     );
 
     let authority = issuer.into_authority();
-    let mut replay_issuer =
-        ApiKeyIssuanceService::new(authority, ApiKeyIssuanceKey::from_bytes([21; 32])?, gateway);
+    let mut replay_issuer = ApiKeyIssuanceService::new(
+        authority,
+        ApiKeyIssuanceKey::from_bytes([21; 32])?,
+        crate::SmbVerifierEnvelopeKey::from_parts([22; 32], [23; 32])?,
+        1,
+        gateway,
+    )?;
     let replay = replay_issuer
         .issue(&request, &headers, UnixMicros::new(40))
         .map_err(|error| format!("cross-gateway replay failed: {error:?}"))?;
@@ -79,6 +90,37 @@ fn issued_key_replays_across_gateways_logs_in_and_rejects_changed_input()
     let mut login = CreateSessionService::new(authority);
     let session = login.create(&issued_session_request(&first.secret)?, UnixMicros::new(42))?;
     assert_eq!(session.response.expires_at_epoch_micros, 43_200_000_042);
+    let authority = login.into_authority();
+    let materials = authority.repository.smb_verification_materials(
+        &meshspan_metadata::RecordName::new("Administrator")?,
+        UnixMicros::new(42),
+    )?;
+    assert_eq!(materials.len(), 2);
+    let method_id = meshspan_domain::AuthenticationMethodId::from_bytes(
+        crate::create_mesh_setup::parse_uuid(first.method_id.as_str())?,
+    )?;
+    let issued_material = materials
+        .iter()
+        .find(|material| material.method_id == method_id)
+        .ok_or("issued SMB verification material was not queryable")?;
+    let binding = crate::SmbVerifierBinding {
+        method_id,
+        principal_id: material.administrator_id,
+        key_id: meshspan_domain::ApiKeyId::from_bytes(crate::create_mesh_setup::parse_uuid(
+            first.key_id.as_str(),
+        )?)?,
+        service_scope: 7,
+        scopes: 7,
+    };
+    let verifier = crate::SmbVerifierCipher::new(
+        crate::SmbVerifierEnvelopeKey::from_parts([22; 32], [23; 32])?,
+        1,
+    )?
+    .decrypt(binding, &issued_material.verifier_ciphertext)?;
+    assert_eq!(
+        verifier.expose_for_encryption(),
+        NtlmPasswordVerifier::derive(&first.secret)?.expose_for_encryption()
+    );
     Ok(())
 }
 

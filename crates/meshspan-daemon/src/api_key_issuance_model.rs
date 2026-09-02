@@ -32,6 +32,15 @@ pub(crate) struct NormalizedIssuance {
     pub(crate) service_scope: u8,
 }
 
+pub(crate) struct ApiKeyCommandMaterial<'a> {
+    pub(crate) key: &'a ApiKeyBundle,
+    pub(crate) method_id: AuthenticationMethodId,
+    pub(crate) principal_id: PrincipalId,
+    pub(crate) created_at: UnixMicros,
+    pub(crate) expires_at: Option<UnixMicros>,
+    pub(crate) smb_verifier_ciphertext: Option<Vec<u8>>,
+}
+
 pub(crate) fn normalize_request(
     request: &CreateApiKeyRequest,
 ) -> Result<NormalizedIssuance, ApiKeyIssuanceError> {
@@ -102,23 +111,20 @@ pub(crate) fn method_id(
 pub(crate) fn command(
     request: &CreateApiKeyRequest,
     normalized: &NormalizedIssuance,
-    key: &ApiKeyBundle,
-    method_id: AuthenticationMethodId,
-    principal_id: PrincipalId,
-    created_at: UnixMicros,
-    expires_at: Option<UnixMicros>,
+    material: ApiKeyCommandMaterial<'_>,
 ) -> AuthoritativeCommand {
     AuthoritativeCommand::CreateAuthenticationMethod(CreateAuthenticationMethod {
-        method_id,
-        principal_id,
+        method_id: material.method_id,
+        principal_id: material.principal_id,
         label: request.label.as_str().to_owned(),
         service_scope: normalized.service_scope,
-        expires_at,
+        expires_at: material.expires_at,
         credential: NewAuthenticationCredential::ApiKey {
-            key_id: key.key_id(),
-            key_digest: key.secret_digest(),
+            key_id: material.key.key_id(),
+            key_digest: material.key.secret_digest(),
+            smb_verifier_ciphertext: material.smb_verifier_ciphertext,
             scopes: normalized.scope_bits,
-            valid_from: created_at,
+            valid_from: material.created_at,
         },
     })
 }

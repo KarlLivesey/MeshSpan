@@ -178,6 +178,8 @@ mod revoke_session_api;
 mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
+mod smb_authentication;
+mod smb_verifier_secret;
 mod step_up_session;
 mod step_up_session_api;
 #[cfg(test)]
@@ -433,6 +435,14 @@ pub use setup_api::{
     CreateMeshSetupController, JoinMeshSetupController, SetupApiError, SetupLifecycleError,
     SetupStateSnapshot, SetupStatusSource, setup_api_router, setup_api_router_with_creation,
     setup_api_router_with_mutations,
+};
+pub use smb_authentication::{
+    ProtectedSmbVerifierKeySource, SmbAuthenticatedIdentity, SmbAuthentication,
+    SmbAuthenticationAuthority, SmbAuthenticationAuthorityError, SmbAuthenticationError,
+    SmbAuthenticationService, SmbVerifierKeySource,
+};
+pub use smb_verifier_secret::{
+    SmbVerifierBinding, SmbVerifierCipher, SmbVerifierEnvelopeKey, SmbVerifierSecretError,
 };
 pub use step_up_session::{
     StepUpCurrentSessionError, StepUpCurrentSessionService, StepUpSessionAuthority,

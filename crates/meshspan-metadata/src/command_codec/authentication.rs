@@ -115,12 +115,20 @@ fn encode_credential(
         NewAuthenticationCredential::ApiKey {
             key_id,
             key_digest,
+            smb_verifier_ciphertext,
             scopes,
             valid_from,
         } => {
             encoder.u8(API_KEY)?;
             encoder.identifier(key_id.as_bytes())?;
             encoder.fixed(key_digest)?;
+            match smb_verifier_ciphertext {
+                Some(ciphertext) => {
+                    encoder.u8(1)?;
+                    encoder.bytes(ciphertext, MAXIMUM_CREDENTIAL_BYTES)?;
+                }
+                None => encoder.u8(0)?,
+            }
             encoder.u64(*scopes)?;
             encoder.i64(valid_from.get())
         }
@@ -167,6 +175,11 @@ fn decode_credential(
         API_KEY => Ok(NewAuthenticationCredential::ApiKey {
             key_id: ApiKeyId::from_bytes(decoder.identifier()?)?,
             key_digest: decoder.fixed()?,
+            smb_verifier_ciphertext: match decoder.u8()? {
+                0 => None,
+                1 => Some(decoder.bytes(MAXIMUM_CREDENTIAL_BYTES)?),
+                _ => return Err(MetadataCommandCodecError::Invalid),
+            },
             scopes: decoder.u64()?,
             valid_from: UnixMicros::new(decoder.i64()?),
         }),

@@ -50,14 +50,18 @@ where
         headers: &HeaderMap,
         now: UnixMicros,
     ) -> Result<CreateApiKeyResponse, ApiKeyIssuanceError> {
-        let issuance_key = self
+        let (issuance_key, smb_verifier_key, smb_verifier_generation) = self
             .roots
             .load_latest()
-            .map(AuthenticationRuntimeKeys::into_api_key_issuance_key)
+            .map(AuthenticationRuntimeKeys::into_api_key_issuance_parts)
             .map_err(map_loading_error)?;
+        let smb_verifier_cipher =
+            crate::SmbVerifierCipher::new(smb_verifier_key, smb_verifier_generation)
+                .map_err(|_| ApiKeyIssuanceError::Material)?;
         issue_api_key_with(
             &mut self.authority,
             &issuance_key,
+            &smb_verifier_cipher,
             self.gateway,
             request,
             headers,

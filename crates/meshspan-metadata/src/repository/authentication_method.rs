@@ -17,6 +17,7 @@ const REVOKED: i64 = 3;
 const MAXIMUM_REASON_CHARACTERS: usize = 1_024;
 const MAXIMUM_SERVICE_SCOPE: u8 = 7;
 const MAXIMUM_TOTP_METHODS_PER_USER: usize = 64;
+const MAXIMUM_SMB_METHODS_PER_USER: usize = 64;
 
 /// Validated active API-key authority without its secret or verifier digest.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,6 +36,27 @@ pub struct ApiKeyAuthentication {
     pub revision: Revision,
     /// Exclusive expiry of the key or containing method, whichever occurs first.
     pub expires_at: Option<UnixMicros>,
+}
+
+/// One active encrypted SMB verifier selected by a canonical user name.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SmbVerificationMaterial {
+    /// User principal authenticated by the method.
+    pub principal_id: PrincipalId,
+    /// Common authentication-method identity.
+    pub method_id: AuthenticationMethodId,
+    /// Public API-key identity.
+    pub key_id: ApiKeyId,
+    /// Exact connector compatibility bits authenticated by the envelope.
+    pub service_scope: u8,
+    /// Exact API-key capability bits authenticated by the envelope.
+    pub scopes: u64,
+    /// Credential generation used to fence established sessions.
+    pub credential_generation: u64,
+    /// Current method revision used to fence established sessions.
+    pub revision: Revision,
+    /// Authenticated ciphertext decrypted only inside an authorised SMB gateway.
+    pub verifier_ciphertext: Vec<u8>,
 }
 
 /// Exact durable facts needed to reproduce one authentication-method revocation result.
@@ -588,6 +610,98 @@ pub(super) fn authenticate_api_key_for_operation(
         now,
     )?;
     Ok(permitted.then_some(authentication))
+}
+
+/// Resolves a bounded set of current SMB verifier envelopes for one canonical user.
+pub(super) fn smb_verification_materials(
+    connection: &rusqlite::Connection,
+    canonical_user_name: &str,
+    now: UnixMicros,
+) -> Result<Vec<SmbVerificationMaterial>, RepositoryError> {
+    if canonical_user_name.is_empty() || canonical_user_name.len() > 256 {
+        return Ok(Vec::new());
+    }
+    let mut statement = connection.prepare(
+        "SELECT method.user_principal_id, method.method_id, key.key_id,
+                method.service_scope, key.scopes, method.credential_generation,
+                method.revision, key.smb_verifier_ciphertext
+         FROM principals AS principal
+         JOIN users AS user ON user.principal_id = principal.principal_id
+         JOIN authentication_methods AS method
+           ON method.user_principal_id = principal.principal_id
+         JOIN api_keys AS key ON key.method_id = method.method_id
+         WHERE principal.canonical_name = ?1
+           AND principal.principal_kind = 1
+           AND principal.state = 1
+           AND method.method_kind = 4
+           AND method.state = 1
+           AND (method.service_scope & 4) = 4
+           AND (key.scopes & 4) = 4
+           AND key.valid_from <= ?2
+           AND (key.valid_until IS NULL OR key.valid_until > ?2)
+           AND (method.expires_at IS NULL OR method.expires_at > ?2)
+         ORDER BY method.method_id
+         LIMIT 65",
+    )?;
+    let rows = statement.query_map(params![canonical_user_name, now.get()], |row| {
+        Ok(StoredSmbVerificationMaterial {
+            principal_id: row.get(0)?,
+            method_id: row.get(1)?,
+            key_id: row.get(2)?,
+            service_scope: row.get(3)?,
+            scopes: row.get(4)?,
+            credential_generation: row.get(5)?,
+            revision: row.get(6)?,
+            verifier_ciphertext: row.get(7)?,
+        })
+    })?;
+    let mut materials = Vec::with_capacity(MAXIMUM_SMB_METHODS_PER_USER);
+    for row in rows {
+        if materials.len() == MAXIMUM_SMB_METHODS_PER_USER {
+            return Err(RepositoryError::CapacityExceeded);
+        }
+        materials.push(row?.validated()?);
+    }
+    Ok(materials)
+}
+
+struct StoredSmbVerificationMaterial {
+    principal_id: Vec<u8>,
+    method_id: Vec<u8>,
+    key_id: Vec<u8>,
+    service_scope: i64,
+    scopes: i64,
+    credential_generation: i64,
+    revision: i64,
+    verifier_ciphertext: Vec<u8>,
+}
+
+impl StoredSmbVerificationMaterial {
+    fn validated(self) -> Result<SmbVerificationMaterial, RepositoryError> {
+        let service_scope = u8::try_from(self.service_scope)
+            .ok()
+            .filter(|value| *value & AuthenticationService::Smb.scope_bit() != 0)
+            .ok_or(RepositoryError::CorruptState)?;
+        let scopes = positive_u64(self.scopes)?;
+        if scopes & AuthenticationService::Smb.api_key_login_scope() == 0
+            || !(65..=256).contains(&self.verifier_ciphertext.len())
+        {
+            return Err(RepositoryError::CorruptState);
+        }
+        Ok(SmbVerificationMaterial {
+            principal_id: PrincipalId::from_bytes(fixed(self.principal_id)?)
+                .map_err(|_| RepositoryError::CorruptState)?,
+            method_id: AuthenticationMethodId::from_bytes(fixed(self.method_id)?)
+                .map_err(|_| RepositoryError::CorruptState)?,
+            key_id: ApiKeyId::from_bytes(fixed(self.key_id)?)
+                .map_err(|_| RepositoryError::CorruptState)?,
+            service_scope,
+            scopes,
+            credential_generation: positive_u64(self.credential_generation)?,
+            revision: Revision::new(positive_u64(self.revision)?),
+            verifier_ciphertext: self.verifier_ciphertext,
+        })
+    }
 }
 
 struct StoredApiKey {

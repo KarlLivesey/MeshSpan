@@ -223,6 +223,7 @@ fn issue_home_session(
             credential: NewAuthenticationCredential::ApiKey {
                 key_id: ApiKeyId::from_bytes([98; 16])?,
                 key_digest: [99; 32],
+                smb_verifier_ciphertext: None,
                 scopes: AuthenticationService::Https.api_key_login_scope(),
                 valid_from: UnixMicros::new(1),
             },

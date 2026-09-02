@@ -81,16 +81,41 @@ pub(crate) fn check_method_shapes(connection: &Connection) -> Result<(), Metadat
     let invalid_session = invalid_session_shape(connection)?;
     let invalid_factor = invalid_session_factor(connection)?;
     let invalid_policy = invalid_authentication_policy(connection)?;
+    let invalid_smb_verifier = invalid_smb_verifier(connection)?;
     if invalid_subtype == 0
         && invalid_lifecycle == 0
         && invalid_session == 0
         && invalid_factor == 0
         && invalid_policy == 0
+        && invalid_smb_verifier == 0
     {
         Ok(())
     } else {
         Err(MetadataStoreError::IntegrityFailed)
     }
+}
+
+fn invalid_smb_verifier(connection: &Connection) -> Result<i64, rusqlite::Error> {
+    connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1
+            FROM authentication_methods AS method
+            JOIN api_keys AS api_key USING(method_id)
+            WHERE (
+                (method.service_scope & 4) = 4
+                AND (
+                    (api_key.scopes & 4) <> 4
+                    OR api_key.smb_verifier_ciphertext IS NULL
+                    OR length(api_key.smb_verifier_ciphertext) NOT BETWEEN 65 AND 256
+                )
+            ) OR (
+                (method.service_scope & 4) = 0
+                AND api_key.smb_verifier_ciphertext IS NOT NULL
+            )
+         )",
+        [],
+        |row| row.get(0),
+    )
 }
 
 fn invalid_authentication_policy(connection: &Connection) -> Result<i64, rusqlite::Error> {

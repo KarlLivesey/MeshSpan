@@ -96,6 +96,7 @@ fn real_replicated_repository_accepts_the_issued_native_api_key()
             credential: NewAuthenticationCredential::ApiKey {
                 key_id: key.key_id(),
                 key_digest: key.secret_digest(),
+                smb_verifier_ciphertext: None,
                 scopes: meshspan_domain::AuthenticationService::HeadlessApi.api_key_login_scope(),
                 valid_from: UnixMicros::new(20),
             },

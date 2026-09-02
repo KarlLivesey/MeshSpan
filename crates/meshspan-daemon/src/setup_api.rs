@@ -518,6 +518,7 @@ fn service_error_response(
             "bootstrap authority is temporarily unavailable",
         ),
         CreateMeshSetupError::Material(_)
+        | CreateMeshSetupError::InitialAuthentication
         | CreateMeshSetupError::Certificate
         | CreateMeshSetupError::InitialSecretEnvelope(_)
         | CreateMeshSetupError::RecoveryCode(_)
