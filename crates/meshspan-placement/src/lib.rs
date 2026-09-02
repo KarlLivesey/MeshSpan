@@ -653,7 +653,6 @@ fn acknowledgement_roles(
     targets: &[TargetId],
     data_slices: u16,
 ) -> Result<Vec<ShardAcknowledgement>, ContractError> {
-    let minimum_targets = request.minimum_durable_targets.max(data_slices);
     let mut required = BTreeSet::new();
     for requirement in request
         .cells
@@ -671,24 +670,32 @@ fn acknowledgement_roles(
         }));
     }
     for target in targets {
-        let distinct_hosts = required
-            .iter()
-            .filter_map(|required_target| {
-                request
-                    .candidates
-                    .iter()
-                    .find(|candidate| candidate.target_id == *required_target)
-                    .map(|candidate| candidate.host_id)
-            })
-            .collect::<BTreeSet<_>>()
-            .len();
-        if required.len() >= usize::from(minimum_targets)
-            && distinct_hosts >= usize::from(request.minimum_distinct_nodes)
-        {
+        if acknowledgement_predicates_satisfied(request, &required, data_slices)? {
             break;
         }
         required.insert(*target);
     }
+    if !acknowledgement_predicates_satisfied(request, &required, data_slices)? {
+        return Err(ContractError::ResourceExhausted);
+    }
+    Ok(targets
+        .iter()
+        .map(|target| {
+            if required.contains(target) {
+                ShardAcknowledgement::Required
+            } else {
+                ShardAcknowledgement::Eventual
+            }
+        })
+        .collect())
+}
+
+fn acknowledgement_predicates_satisfied(
+    request: PlacementRequest<'_>,
+    required: &BTreeSet<TargetId>,
+    data_slices: u16,
+) -> Result<bool, ContractError> {
+    let minimum_targets = request.minimum_durable_targets.max(data_slices);
     let required_hosts = required
         .iter()
         .filter_map(|target| {
@@ -702,18 +709,19 @@ fn acknowledgement_roles(
     if required.len() < usize::from(minimum_targets)
         || required_hosts.len() < usize::from(request.minimum_distinct_nodes)
     {
-        return Err(ContractError::ResourceExhausted);
+        return Ok(false);
     }
-    Ok(targets
-        .iter()
-        .map(|target| {
-            if required.contains(target) {
-                ShardAcknowledgement::Required
-            } else {
-                ShardAcknowledgement::Eventual
-            }
-        })
-        .collect())
+    if request.required_scenarios.is_empty() {
+        return Ok(true);
+    }
+    let layout = ProtectionLayout::new(data_slices, required.iter().copied().collect())
+        .map_err(|_| ContractError::InvalidInput)?;
+    for scenario in request.required_scenarios {
+        if !best_effort_proof(request.topology, scenario, &layout)?.survives {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn policy_evidence(
@@ -803,7 +811,8 @@ mod tests {
     };
     use meshspan_domain::{
         AvailabilityCellId, FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId,
-        FaultGroupMember, HostId, OperationId, Revision, TargetId, Topology, UnixMicros,
+        FaultGroupMember, HostId, OperationId, ProtectionLayout, Revision, TargetId, Topology,
+        UnixMicros,
     };
 
     use super::FaultAwarePlacement;
@@ -833,6 +842,49 @@ mod tests {
         assert!(plan.coding_layout.recovery_slices() >= 7);
         assert_eq!(plan.protection_proofs.len(), 1);
         assert!(plan.protection_proofs.as_slice()[0].survives);
+        Ok(())
+    }
+
+    #[test]
+    fn required_failure_scenario_is_proved_by_required_receipts_alone()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (topology, candidates) = six_machine_topology()?;
+        let scenario = FailureScenario::new(vec![
+            FailureTerm {
+                class_id: class(1)?,
+                failure_count: 2,
+            },
+            FailureTerm {
+                class_id: class(2)?,
+                failure_count: 3,
+            },
+        ])?;
+        let mut request = request(
+            &topology,
+            &candidates,
+            std::slice::from_ref(&scenario),
+            4 * 1_024 * 1_024,
+        )?;
+        request.required_scenarios = std::slice::from_ref(&scenario);
+        let placement = FaultAwarePlacement::new();
+        let plan = placement.plan_write(request)?;
+        let required_targets = plan
+            .slice_targets
+            .as_slice()
+            .iter()
+            .zip(plan.acknowledgement_roles.as_slice())
+            .filter_map(|(target, role)| {
+                (*role == meshspan_contracts::ShardAcknowledgement::Required).then_some(*target)
+            })
+            .collect();
+        let required_layout =
+            ProtectionLayout::new(plan.coding_layout.data_slices(), required_targets)?;
+
+        assert!(
+            placement
+                .evaluate(&scenario, &required_layout, &topology)?
+                .survives
+        );
         Ok(())
     }
 
