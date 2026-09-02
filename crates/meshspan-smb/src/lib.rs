@@ -11,6 +11,7 @@ mod header;
 mod negotiate;
 mod negotiate_response;
 mod ntlm_v2;
+mod ntlm_wire;
 mod session_keys;
 mod session_setup;
 mod signing;
@@ -30,6 +31,9 @@ pub use negotiate_response::{
     NegotiateSelection, SigningAlgorithm,
 };
 pub use ntlm_v2::{NtlmPasswordVerifier, NtlmSessionBaseKey, NtlmVerificationError};
+pub use ntlm_wire::{
+    NtlmAuthenticate, NtlmChallenge, NtlmChallengeConfig, NtlmNegotiate, NtlmWireError,
+};
 pub use session_keys::{Smb311PreauthHash, Smb311SessionKeys, SmbSessionKeyError};
 pub use session_setup::{
     SessionSetupRequest, SessionSetupResponse, SessionSetupResponseConfig, SmbSessionSetupError,
