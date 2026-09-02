@@ -80,23 +80,23 @@ use crate::{
     PeriodicScrubScheduler, PermissionAdministrationApiError, PermissionAdministrationService,
     ProtectedApiKeyIssuanceController, ProtectedRecoveryCodeIssuanceController,
     ProtectedTotpFactorVerifier, ProtectedTotpRegistrationSecretProtector, PublicContractApiError,
-    ReadinessSource, RecoveryBundleVerificationApiError, RecoveryBundleVerificationService,
-    RecoveryCodeIssuanceApiError, ResumableStorageScrubExecution, RevokeCurrentSessionApiError,
-    RevokeCurrentSessionService, SessionApiError, SetupApiError, SetupLifecycleError,
-    SetupStateSnapshot, SetupStatusSource, ShardRepairExecution, SmbExportAdministrationApiError,
-    SmbExportAdministrationService, SmbServer, SmbServerConfigurationError, SmbServerError,
-    SmbServerLimits, StepUpCurrentSessionApiError, StepUpCurrentSessionService,
-    StorageFolderAdministrationApiError, StorageFolderAdministrationService,
-    StoragePermitLoadingService, StorageProviderOpeningError, StorageProviderOpeningService,
-    StorageTargetRegistrationService, TargetDrainExecution, TopologyAdministrationApiError,
-    TopologyAdministrationService, TotpRegistrationApiError, TotpRegistrationConfiguration,
-    TotpRegistrationConfigurationError, TotpRegistrationService, VolumeAdministrationApiError,
-    VolumeAdministrationService, VolumeInventoryApiError, VolumeInventoryService,
-    api_key_issuance_api_router, authentication_method_listing_api_router,
+    ReadinessSource, RebalanceExecution, RebalanceScheduler, RecoveryBundleVerificationApiError,
+    RecoveryBundleVerificationService, RecoveryCodeIssuanceApiError,
+    ResumableStorageScrubExecution, RevokeCurrentSessionApiError, RevokeCurrentSessionService,
+    SessionApiError, SetupApiError, SetupLifecycleError, SetupStateSnapshot, SetupStatusSource,
+    ShardRepairExecution, SmbExportAdministrationApiError, SmbExportAdministrationService,
+    SmbServer, SmbServerConfigurationError, SmbServerError, SmbServerLimits,
+    StepUpCurrentSessionApiError, StepUpCurrentSessionService, StorageFolderAdministrationApiError,
+    StorageFolderAdministrationService, StoragePermitLoadingService, StorageProviderOpeningError,
+    StorageProviderOpeningService, StorageTargetRegistrationService, TargetDrainExecution,
+    TopologyAdministrationApiError, TopologyAdministrationService, TotpRegistrationApiError,
+    TotpRegistrationConfiguration, TotpRegistrationConfigurationError, TotpRegistrationService,
+    VolumeAdministrationApiError, VolumeAdministrationService, VolumeInventoryApiError,
+    VolumeInventoryService, api_key_issuance_api_router, authentication_method_listing_api_router,
     authentication_method_revocation_api_router, classify_native_filesystem_error,
-    current_session_api_router, directory_listing_api_router, execute_resumable_storage_scrub,
-    execute_shard_repair, execute_target_drain_step, file_read_api_router,
-    identity_administration_api_router, native_namespace_mutation_api_router,
+    current_session_api_router, directory_listing_api_router, execute_rebalance_step,
+    execute_resumable_storage_scrub, execute_shard_repair, execute_target_drain_step,
+    file_read_api_router, identity_administration_api_router, native_namespace_mutation_api_router,
     native_upload_api_router, node_enrolment_api_router, node_join_grant_api_router,
     object_stat_api_router, operation_status_api_router, passkey_challenge_api_router,
     passkey_registration_api_router, permission_administration_api_router,
@@ -130,6 +130,8 @@ const SCRUB_PAGE_IN_FLIGHT_BYTES: u64 =
 const MAINTENANCE_LEASE_MICROS: u64 = 5 * 60 * 1_000_000;
 const DRAIN_ROUTE_ITEMS: usize = 1;
 const DRAIN_RETRY_MICROS: u64 = 1_000_000;
+const REBALANCE_ADMISSION_INTERVAL_MICROS: u64 = 60 * 1_000_000;
+const REBALANCE_PAGE_ITEMS: usize = 64;
 
 type AuthorityTask = (
     MetadataAuthorityHandle,
@@ -1958,6 +1960,10 @@ struct StorageTargetRuntime {
     active: BTreeMap<PathBuf, NativeStorageTarget>,
     scrub_admission_cursor: Option<meshspan_metadata::DueStorageScrubCursor>,
     next_scrub_admission_at: Option<UnixMicros>,
+    rebalance_admission_cursor: Option<meshspan_metadata::VolumeInventoryCursor>,
+    rebalance_admission_revision: Option<Revision>,
+    completed_rebalance_revision: Option<Revision>,
+    next_rebalance_admission_at: Option<UnixMicros>,
     readiness: Arc<RuntimeReadiness>,
 }
 
@@ -1998,6 +2004,10 @@ impl StorageTargetRuntime {
             active: BTreeMap::new(),
             scrub_admission_cursor: None,
             next_scrub_admission_at: None,
+            rebalance_admission_cursor: None,
+            rebalance_admission_revision: None,
+            completed_rebalance_revision: None,
+            next_rebalance_admission_at: None,
             readiness,
         }
     }
@@ -2031,9 +2041,57 @@ impl StorageTargetRuntime {
 
     fn run_maintenance_tick(&mut self, now: UnixMicros) -> Result<(), ()> {
         self.admit_periodic_scrubs(now)?;
+        self.admit_rebalance_scans(now)?;
         self.execute_one_repair(now)?;
         self.execute_one_target_drain(now)?;
+        self.execute_one_rebalance(now)?;
         self.execute_one_scrub_page(now)
+    }
+
+    fn admit_rebalance_scans(&mut self, now: UnixMicros) -> Result<(), ()> {
+        if self
+            .next_rebalance_admission_at
+            .is_some_and(|eligible_at| eligible_at > now)
+        {
+            return Ok(());
+        }
+        let current_revision = self
+            .maintenance_authority
+            .reader()
+            .mesh_configuration_revision()
+            .map_err(|_| ())?
+            .ok_or(())?;
+        if self.completed_rebalance_revision == Some(current_revision) {
+            self.next_rebalance_admission_at =
+                now.checked_add(DurationMicros::new(REBALANCE_ADMISSION_INTERVAL_MICROS));
+            return Ok(());
+        }
+        if self.rebalance_admission_revision != Some(current_revision) {
+            self.rebalance_admission_revision = Some(current_revision);
+            self.rebalance_admission_cursor = None;
+        }
+        let actor = self.maintenance_actor(now)?;
+        let mut random = OperatingSystemRandom;
+        let page = RebalanceScheduler::new(&self.maintenance_authority, &mut random, actor)
+            .admit_page(
+                now,
+                self.rebalance_admission_revision,
+                self.rebalance_admission_cursor.as_ref(),
+                REBALANCE_PAGE_ITEMS,
+                SCRUB_PAGE_IN_FLIGHT_BYTES,
+            )
+            .map_err(|_| ())?;
+        self.rebalance_admission_cursor = page.next;
+        if self.rebalance_admission_cursor.is_some() {
+            self.rebalance_admission_revision = Some(page.configuration_revision);
+            self.next_rebalance_admission_at = Some(now);
+        } else {
+            self.completed_rebalance_revision = Some(page.configuration_revision);
+            self.rebalance_admission_revision = None;
+            self.next_rebalance_admission_at =
+                now.checked_add(DurationMicros::new(REBALANCE_ADMISSION_INTERVAL_MICROS));
+        }
+        Ok(())
     }
 
     fn admit_periodic_scrubs(&mut self, now: UnixMicros) -> Result<(), ()> {
@@ -2187,7 +2245,9 @@ impl StorageTargetRuntime {
                 &current_targets,
             )
             .map_err(|_| ())?;
-        if placement.topology_revision != authorization_revision {
+        if placement.topology_revision != configuration.topology_revision()
+            || placement.capacity_revision != configuration.capacity_revision()
+        {
             return Err(());
         }
         let actor = self.maintenance_actor(now)?;
@@ -2244,6 +2304,37 @@ impl StorageTargetRuntime {
         execute_target_drain_step(
             &self.maintenance_authority,
             &catalogue,
+            &mut OperatingSystemRandom,
+            &execution,
+        )
+        .map(|_| ())
+        .map_err(|_| ())
+    }
+
+    fn execute_one_rebalance(&mut self, now: UnixMicros) -> Result<(), ()> {
+        let Some(assignment) = self.next_maintenance_assignment(now, WorkKind::Rebalance)? else {
+            return Ok(());
+        };
+        let WorkSubject::Rebalance { volume_id, .. } = assignment.subject else {
+            return Err(());
+        };
+        let targets = self.active.values().cloned().collect::<Vec<_>>();
+        let configuration = self
+            .native_filesystem
+            .maintenance_protection_configuration(&targets, volume_id, now)
+            .map_err(|_| ())?;
+        let catalogue = self
+            .native_filesystem
+            .maintenance_catalogue(now)
+            .map_err(|_| ())?;
+        let actor = self.maintenance_actor(now)?;
+        let execution =
+            maintenance_rebalance_execution(assignment, self.local_node_id, actor, now)?;
+        execute_rebalance_step(
+            &self.maintenance_authority,
+            &catalogue,
+            &configuration,
+            &meshspan_placement::FaultAwarePlacement::new(),
             &mut OperatingSystemRandom,
             &execution,
         )
@@ -2417,6 +2508,48 @@ fn maintenance_target_drain_execution(
         subject: assignment.subject,
         route_limit: DRAIN_ROUTE_ITEMS,
         observed_authority_revision,
+        continuation_at,
+    })
+}
+
+fn maintenance_rebalance_execution(
+    assignment: crate::MaintenanceDispatchAssignment,
+    worker_node_id: NodeId,
+    actor_principal_id: PrincipalId,
+    now: UnixMicros,
+) -> Result<RebalanceExecution, ()> {
+    if !matches!(assignment.subject, WorkSubject::Rebalance { .. }) {
+        return Err(());
+    }
+    let lease_expires_at = now
+        .checked_add(DurationMicros::new(MAINTENANCE_LEASE_MICROS))
+        .ok_or(())?;
+    let continuation_at = now.checked_add(DurationMicros::new(1)).ok_or(())?;
+    let mut random = OperatingSystemRandom;
+    let claim_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
+    let scan_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
+    let completion_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
+    let mut fence_bytes = [0_u8; 8];
+    random.fill_bytes(&mut fence_bytes).map_err(|_| ())?;
+    let fence = u64::from_be_bytes(fence_bytes);
+    if fence == 0 {
+        return Err(());
+    }
+    Ok(RebalanceExecution {
+        claim_context,
+        scan_context,
+        completion_context,
+        claim: ClaimMaintenanceWork {
+            work_id: assignment.work_id,
+            claim_generation: assignment.claim_generation,
+            worker_node_id,
+            worker_incarnation: 1,
+            fence,
+            lease_expires_at,
+        },
+        subject: assignment.subject,
+        page_items: REBALANCE_PAGE_ITEMS,
+        planning_deadline: lease_expires_at,
         continuation_at,
     })
 }

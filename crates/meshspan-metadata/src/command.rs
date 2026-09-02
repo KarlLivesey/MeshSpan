@@ -190,6 +190,8 @@ pub enum AuthoritativeCommand {
     BeginStorageTargetDrain(BeginStorageTargetDrain),
     /// Records one gateway's exact empty-catalogue proof for a draining target.
     AttestStorageTargetDrain(AttestStorageTargetDrain),
+    /// Commits one bounded restart-safe volume rebalance scan page.
+    CommitRebalanceScanPage(CommitRebalanceScanPage),
     /// Fences one eligible worker's bounded lease over a ready maintenance job.
     ClaimMaintenanceWork(ClaimMaintenanceWork),
     /// Extends the same live claim without changing its fence or assignment.
@@ -365,6 +367,7 @@ impl AuthoritativeCommand {
             Self::QueueMaintenanceWork(value) => value.update_digest(digest),
             Self::BeginStorageTargetDrain(value) => value.update_digest(digest),
             Self::AttestStorageTargetDrain(value) => value.update_digest(digest),
+            Self::CommitRebalanceScanPage(value) => value.update_digest(digest),
             Self::ClaimMaintenanceWork(value) => value.update_digest(digest),
             Self::RenewMaintenanceWork(value) => value.update_digest(digest),
             Self::CompleteMaintenanceWork(value) => value.update_digest(digest),
@@ -1977,6 +1980,46 @@ pub struct AttestStorageTargetDrain {
     pub empty_catalogue_digest: [u8; 32],
 }
 
+/// Stable keyset position in a volume's protected-stripe catalogue.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct RebalanceScanCursor {
+    /// Publication owning the last scanned stripe.
+    pub publication_operation_id: OperationId,
+    /// Zero-based stripe index inside that publication.
+    pub stripe_index: u64,
+}
+
+/// One claim-bound, bounded and restart-safe volume rebalance scan checkpoint.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CommitRebalanceScanPage {
+    /// Existing claimed rebalance job.
+    pub work_id: WorkId,
+    /// Live claim generation fencing this attempt.
+    pub claim_generation: u64,
+    /// Exact worker committing the checkpoint.
+    pub worker_node_id: NodeId,
+    /// Current worker incarnation.
+    pub worker_incarnation: u64,
+    /// Unpredictable live claim fence.
+    pub fence: u64,
+    /// Volume bound into the rebalance subject.
+    pub volume_id: VolumeId,
+    /// Exact configuration revision whose policy the scan evaluated.
+    pub topology_revision: Revision,
+    /// Previously committed cursor, or `None` for the first page.
+    pub after: Option<RebalanceScanCursor>,
+    /// Last scanned cursor when another page remains; `None` makes this the terminal page.
+    pub next: Option<RebalanceScanCursor>,
+    /// Number of complete stripes examined in this page.
+    pub scanned_stripes: u16,
+    /// Number of strict improvements admitted as repair work from this page.
+    pub queued_repairs: u16,
+    /// Newer configuration revision terminating obsolete work without scanning stale policy.
+    pub superseded_by_revision: Option<Revision>,
+    /// Canonical digest of the exact ordered page and its selected improvements.
+    pub page_digest: [u8; 32],
+}
+
 /// One new fenced execution attempt over a durable maintenance job.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ClaimMaintenanceWork {
@@ -3423,6 +3466,37 @@ digest_simple_record!(CommitScrubPass, b"commit-scrub-pass", |value, digest| {
     digest.unsigned(value.deferred_count);
     digest.bytes(&value.evidence_digest);
 });
+digest_simple_record!(
+    CommitRebalanceScanPage,
+    b"commit-rebalance-scan-page",
+    |value, digest| {
+        digest.identifier(value.work_id.as_bytes());
+        digest.unsigned(value.claim_generation);
+        digest.identifier(value.worker_node_id.as_bytes());
+        digest.unsigned(value.worker_incarnation);
+        digest.unsigned(value.fence);
+        digest.identifier(value.volume_id.as_bytes());
+        digest.unsigned(value.topology_revision.get());
+        for cursor in [value.after, value.next] {
+            if let Some(cursor) = cursor {
+                digest.byte(1);
+                digest.identifier(cursor.publication_operation_id.as_bytes());
+                digest.unsigned(cursor.stripe_index);
+            } else {
+                digest.byte(0);
+            }
+        }
+        digest.unsigned(u64::from(value.scanned_stripes));
+        digest.unsigned(u64::from(value.queued_repairs));
+        if let Some(revision) = value.superseded_by_revision {
+            digest.byte(1);
+            digest.unsigned(revision.get());
+        } else {
+            digest.byte(0);
+        }
+        digest.bytes(&value.page_digest);
+    }
+);
 digest_simple_record!(PublishSmbExport, b"publish-smb-export", |value, digest| {
     digest.identifier(value.export_id.as_bytes());
     digest.identifier(value.volume_id.as_bytes());

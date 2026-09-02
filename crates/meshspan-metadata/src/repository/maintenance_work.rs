@@ -14,16 +14,19 @@ use crate::{
 };
 
 mod drain;
+mod rebalance;
 mod repair;
 mod scrub;
 mod scrub_schedule;
 
+pub use rebalance::RebalanceScanProgress;
 pub use repair::ShardRepairEffectRecord;
 pub use scrub::ScrubPassEffectRecord;
 pub use scrub_schedule::{DueStorageScrub, DueStorageScrubCursor, DueStorageScrubPage};
 
 pub use drain::empty_target_drain_catalogue_digest;
 pub(super) use drain::{attest_target, begin_target};
+pub(super) use rebalance::commit_page as commit_rebalance_page;
 
 const JOB_QUEUED: i64 = 1;
 const JOB_CLAIMED: i64 = 2;
@@ -175,6 +178,18 @@ impl AuthoritativeRepository {
         scrub::load(self.database.connection(), effect_operation_id)
     }
 
+    /// Returns restart-safe progress for one bounded rebalance scan.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when any persisted cursor, total, revision or digest is malformed.
+    pub fn rebalance_scan_progress(
+        &self,
+        work_id: WorkId,
+    ) -> Result<Option<RebalanceScanProgress>, RepositoryError> {
+        rebalance::load(self.database.connection(), work_id)
+    }
+
     /// Returns an already committed effect for one maintenance job, if present.
     ///
     /// This is the recovery boundary after the effect commits but its worker crashes before
@@ -270,7 +285,8 @@ fn effect_reference(
         WorkKind::Repair => ("maintenance_repair_effects", REPAIR_EFFECT_KIND),
         WorkKind::Scrub => ("maintenance_scrub_effects", SCRUB_EFFECT_KIND),
         WorkKind::Drain => ("storage_target_drain_effects", DRAIN_EFFECT_KIND),
-        WorkKind::Rebalance | WorkKind::Reconcile => return Ok(None),
+        WorkKind::Rebalance => ("maintenance_rebalance_effects", REBALANCE_EFFECT_KIND),
+        WorkKind::Reconcile => return Ok(None),
     };
     let sql = format!(
         "SELECT effect.effect_operation_id, operation.revision, operation.result_digest,
@@ -828,7 +844,18 @@ fn validate_effect(
                 |row| row.get::<_, i64>(0),
             )? == 1
         }
-        WorkKind::Rebalance | WorkKind::Reconcile => false,
+        WorkKind::Rebalance => {
+            transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM maintenance_rebalance_effects
+                 WHERE effect_operation_id = ?1 AND work_id = ?2)",
+                params![
+                    operation_id.as_bytes().as_slice(),
+                    work_id.as_bytes().as_slice(),
+                ],
+                |row| row.get::<_, i64>(0),
+            )? == 1
+        }
+        WorkKind::Reconcile => false,
     };
     if operation_matches && effect_matches {
         Ok(())

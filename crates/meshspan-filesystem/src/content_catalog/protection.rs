@@ -25,9 +25,11 @@ use crate::{
 
 mod repair;
 mod target_inventory;
+mod volume_inventory;
 
 pub use repair::{ShardRepairCandidate, ShardRepairTransition};
 pub use target_inventory::{TargetShardCursor, TargetShardPage, TargetShardRoute};
+pub use volume_inventory::{VolumeStripeCursor, VolumeStripePage, VolumeStripeRecord};
 
 const LAYOUT_DOMAIN: &[u8] = b"meshspan.content.protected-stripe-layout.v1\0";
 const MAXIMUM_POLICY_BYTES: usize = 4_096;
@@ -231,6 +233,23 @@ impl DurableContentCatalog {
         limit: usize,
     ) -> Result<TargetShardPage, ContentCatalogError> {
         target_inventory::page(&self.connection, target_id, target_generation, after, limit)
+    }
+
+    /// Returns one bounded keyset page of complete protected stripes belonging to a volume.
+    ///
+    /// Each record is independently reloaded through the committed manifest and protected-stripe
+    /// validators. Incomplete eventual placements are omitted until their receipts arrive.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid bounds and any malformed, incomplete or contradictory catalogue state.
+    pub fn current_volume_stripes(
+        &self,
+        volume_id: meshspan_domain::VolumeId,
+        after: Option<VolumeStripeCursor>,
+        limit: usize,
+    ) -> Result<VolumeStripePage, ContentCatalogError> {
+        volume_inventory::page(self, volume_id, after, limit)
     }
 
     /// Resolves one exact currently active shard route named by provider scrub evidence.

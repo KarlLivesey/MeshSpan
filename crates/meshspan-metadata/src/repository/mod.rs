@@ -209,7 +209,7 @@ pub use locality_policy::{
 pub use maintenance_work::{
     DueStorageScrub, DueStorageScrubCursor, DueStorageScrubPage, MaintenanceEffectReference,
     MaintenanceWorkClaim, MaintenanceWorkCursor, MaintenanceWorkRecord, MaintenanceWorkState,
-    ReadyMaintenanceWork, ReadyMaintenanceWorkPage, ShardRepairEffectRecord,
+    ReadyMaintenanceWork, ReadyMaintenanceWorkPage, RebalanceScanProgress, ShardRepairEffectRecord,
     empty_target_drain_catalogue_digest,
 };
 pub use membership::AuthoritativeMembership;
@@ -410,6 +410,33 @@ impl AuthoritativeRepository {
     /// Fails closed if persisted state is absent, malformed or outside the supported range.
     pub fn current_revision(&self) -> Result<Revision, RepositoryError> {
         apply::read_current_revision(&self.database)
+    }
+
+    /// Returns the current mesh-wide topology/policy configuration revision after bootstrap.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for multiple mesh rows, malformed revisions or database failure.
+    pub fn mesh_configuration_revision(&self) -> Result<Option<Revision>, RepositoryError> {
+        let mut statement = self
+            .database
+            .connection()
+            .prepare("SELECT configuration_revision FROM meshes ORDER BY mesh_id LIMIT 2")?;
+        let values = statement
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        match values.as_slice() {
+            [] => Ok(None),
+            [value] => {
+                let value = u64::try_from(*value).map_err(|_| RepositoryError::CorruptState)?;
+                if value == 0 {
+                    Err(RepositoryError::CorruptState)
+                } else {
+                    Ok(Some(Revision::new(value)))
+                }
+            }
+            [_, _, ..] => Err(RepositoryError::CorruptState),
+        }
     }
 
     /// Returns one independently validated durable scope route.

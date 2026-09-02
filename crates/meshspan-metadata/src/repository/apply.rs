@@ -557,6 +557,7 @@ fn is_maintenance_work_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::CompleteMaintenanceWork(_)
             | AuthoritativeCommand::CommitShardRepair(_)
             | AuthoritativeCommand::CommitScrubPass(_)
+            | AuthoritativeCommand::CommitRebalanceScanPage(_)
     )
 }
 
@@ -590,6 +591,9 @@ fn execute_maintenance_work_command(
         }
         AuthoritativeCommand::CommitScrubPass(value) => {
             maintenance_work::commit_scrub(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::CommitRebalanceScanPage(value) => {
+            maintenance_work::commit_rebalance_page(transaction, context, *value, revision)
         }
         _ => Err(RepositoryError::InvalidCommand),
     }
@@ -1223,6 +1227,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::CommitScrubPass(_) => 106,
         AuthoritativeCommand::BeginStorageTargetDrain(_) => 107,
         AuthoritativeCommand::AttestStorageTargetDrain(_) => 108,
+        AuthoritativeCommand::CommitRebalanceScanPage(_) => 109,
     }
 }
 
