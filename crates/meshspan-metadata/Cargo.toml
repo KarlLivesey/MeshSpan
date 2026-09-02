@@ -17,6 +17,7 @@ meshspan-contracts = { path = "../meshspan-contracts" }
 meshspan-consensus = { path = "../meshspan-consensus" }
 meshspan-domain = { path = "../meshspan-domain" }
 meshspan-secret-envelope = { path = "../meshspan-secret-envelope" }
+meshspan-work = { path = "../meshspan-work" }
 rusqlite.workspace = true
 sha2.workspace = true
 thiserror.workspace = true

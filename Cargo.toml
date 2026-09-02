@@ -27,6 +27,7 @@ members = [
     "crates/meshspan-sync-wrapper",
     "crates/meshspan-test-certificates",
     "crates/meshspan-transport",
+    "crates/meshspan-work",
 ]
 resolver = "3"
 

@@ -14,10 +14,10 @@ use super::{
     cleanup_inventory, cleanup_permit, cleanup_reclamation, cluster, component,
     federation_actor_attestation, federation_assignment, federation_grant,
     federation_mutation_admission, federation_quarantine, federation_relationship,
-    federation_storage_allocation, federation_succession, identity, locality_policy, namespace,
-    node_wrapping_key, protection_policy, recovery_authority, retention, root_delegation, routing,
-    secret_generation, session, smb_export_configuration, snapshot_schedule, storage_target, tags,
-    topology, user_snapshot, version_cleanup, volume_head,
+    federation_storage_allocation, federation_succession, identity, locality_policy,
+    maintenance_work, namespace, node_wrapping_key, protection_policy, recovery_authority,
+    retention, root_delegation, routing, secret_generation, session, smb_export_configuration,
+    snapshot_schedule, storage_target, tags, topology, user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -450,6 +450,9 @@ fn execute(
     if is_cleanup_command(command) {
         return execute_cleanup_command(transaction, context, command, revision);
     }
+    if is_maintenance_work_command(command) {
+        return execute_maintenance_work_command(transaction, context, command, revision);
+    }
     if is_identity_command(command) {
         return execute_identity_command(transaction, context, command, revision);
     }
@@ -538,6 +541,47 @@ fn execute(
         }
         AuthoritativeCommand::DetachTag(value) => {
             tags::detach(transaction, value.tag_id, value.target)
+        }
+        _ => Err(RepositoryError::InvalidCommand),
+    }
+}
+
+fn is_maintenance_work_command(command: &AuthoritativeCommand) -> bool {
+    matches!(
+        command,
+        AuthoritativeCommand::QueueMaintenanceWork(_)
+            | AuthoritativeCommand::ClaimMaintenanceWork(_)
+            | AuthoritativeCommand::RenewMaintenanceWork(_)
+            | AuthoritativeCommand::CompleteMaintenanceWork(_)
+            | AuthoritativeCommand::CommitShardRepair(_)
+            | AuthoritativeCommand::CommitScrubPass(_)
+    )
+}
+
+fn execute_maintenance_work_command(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    match command {
+        AuthoritativeCommand::QueueMaintenanceWork(value) => {
+            maintenance_work::queue(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::ClaimMaintenanceWork(value) => {
+            maintenance_work::claim(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::RenewMaintenanceWork(value) => {
+            maintenance_work::renew(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::CompleteMaintenanceWork(value) => {
+            maintenance_work::complete(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::CommitShardRepair(value) => {
+            maintenance_work::commit_repair(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::CommitScrubPass(value) => {
+            maintenance_work::commit_scrub(transaction, context, *value, revision)
         }
         _ => Err(RepositoryError::InvalidCommand),
     }
@@ -1163,6 +1207,12 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::AssignVolumeLocalityPolicy(_) => 98,
         AuthoritativeCommand::CreateAcknowledgementPolicy(_) => 99,
         AuthoritativeCommand::AssignVolumeAcknowledgementPolicy(_) => 100,
+        AuthoritativeCommand::QueueMaintenanceWork(_) => 101,
+        AuthoritativeCommand::ClaimMaintenanceWork(_) => 102,
+        AuthoritativeCommand::RenewMaintenanceWork(_) => 103,
+        AuthoritativeCommand::CompleteMaintenanceWork(_) => 104,
+        AuthoritativeCommand::CommitShardRepair(_) => 105,
+        AuthoritativeCommand::CommitScrubPass(_) => 106,
     }
 }
 

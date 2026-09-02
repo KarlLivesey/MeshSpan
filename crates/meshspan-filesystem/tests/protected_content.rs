@@ -19,11 +19,13 @@ use meshspan_domain::{
     RandomSource, Revision, TargetId, Topology, UnixMicros, VolumeId,
 };
 use meshspan_filesystem::{
-    CompletedStage, ContentAcknowledgementClass, ContentAcknowledgementPolicy, ContentChunkLimits,
-    ContentPublicationRequest, ContentReadError, ContentReadRequest, ContentShardRouter,
-    ContentStrongFallback, DurableContentPublisher, DurableContentReader, ProtectedContentAccess,
-    ProtectedContentPublisher, ProtectionConfiguration, ProtectionPolicySource,
-    PublishedContentReference, VolumeContentKeyring, VolumeKeyEncryptionKey,
+    CommittedProtectedStripe, CompletedStage, ContentAcknowledgementClass,
+    ContentAcknowledgementPolicy, ContentChunkLimits, ContentPublicationRequest, ContentReadError,
+    ContentReadRequest, ContentShardRouter, ContentStrongFallback, DurableContentPublisher,
+    DurableContentReader, ProtectedContentAccess, ProtectedContentPublisher,
+    ProtectedShardRepairer, ProtectionConfiguration, ProtectionPolicySource,
+    PublishedContentReference, ShardRepairRequest, ShardRepairTransition, VolumeContentKeyring,
+    VolumeKeyEncryptionKey,
 };
 use meshspan_placement::FaultAwarePlacement;
 use meshspan_storage::{
@@ -101,6 +103,94 @@ fn real_folders_commit_without_eventual_target_and_read_after_two_target_losses(
         publisher.stream_range(read_request(content, 51)?, &mut Vec::new()),
         Err(ContentReadError::Unavailable)
     ));
+    Ok(())
+}
+
+#[test]
+fn real_folders_reconstruct_exact_shards_and_reuse_the_repaired_copy()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempdir()?;
+    let mesh_id = MeshId::from_bytes([60; 16])?;
+    let fixture = protection_fixture(root.path(), mesh_id)?;
+    let repair_router = fixture.router.clone();
+    let state = root.path().join("repair-filesystem-state");
+    let volume_id = VolumeId::from_bytes([61; 16])?;
+    let request = publication_request(volume_id, 62)?;
+    let protection = fixture.protection.clone();
+    let mut publisher = protected_publisher(
+        &state,
+        fixture.router,
+        volume_id,
+        fixture.protection,
+        mesh_id,
+        63,
+    )?;
+    let content = publish(&mut publisher, request, &fixture_bytes())?;
+    let committed = publisher.catalog().committed_protected_stripe(content, 0)?;
+    let original = committed.receipts.as_slice();
+    if original.len() != 4 {
+        return Err("expected all four original shard receipts".into());
+    }
+    let first_source = original[0];
+    fixture.control.set_offline(first_source.target_id)?;
+
+    let mut repairer = ProtectedShardRepairer::new(
+        repair_router,
+        ReedSolomonCoding::new(),
+        mesh_id,
+        StoragePermitMacKey::from_bytes(PERMIT_KEY)?,
+    );
+    let first_replacement = repairer.repair(
+        repair_request(first_source, original[1].target_id, 70)?,
+        &committed,
+    )?;
+    assert_eq!(first_replacement.shard, first_source.shard);
+    assert_eq!(first_replacement.length, first_source.length);
+    assert_eq!(first_replacement.digest, first_source.digest);
+
+    let transition = ShardRepairTransition {
+        effect_operation_id: OperationId::from_bytes([72; 16])?,
+        source_layout_generation: 1,
+        replacement_layout_generation: 2,
+        source_receipt: first_source,
+        replacement_receipt: first_replacement,
+        committed_revision: Revision::new(2),
+    };
+    publisher.install_shard_repair(content, &transition)?;
+    publisher.install_shard_repair(content, &transition)?;
+    fixture.control.set_offline(original[2].target_id)?;
+    fixture.control.set_offline(original[3].target_id)?;
+    assert_exact_read(&mut publisher, content, &fixture_bytes(), 73)?;
+    let publisher_router = publisher.into_router();
+    let mut publisher =
+        protected_publisher(&state, publisher_router, volume_id, protection, mesh_id, 63)?;
+    assert_exact_read(&mut publisher, content, &fixture_bytes(), 74)?;
+    let mut obsolete_transition = transition;
+    obsolete_transition.effect_operation_id = OperationId::from_bytes([75; 16])?;
+    assert!(
+        publisher
+            .install_shard_repair(content, &obsolete_transition)
+            .is_err()
+    );
+
+    let second_source = original[2];
+    fixture.control.set_all_online()?;
+    fixture.control.set_offline(first_source.target_id)?;
+    fixture.control.set_offline(second_source.target_id)?;
+    let repaired_routes = CommittedProtectedStripe {
+        stripe: committed.stripe,
+        receipts: BoundedItems::new(
+            vec![first_replacement, original[1], second_source, original[3]],
+            24,
+        )?,
+    };
+    let second_replacement = repairer.repair(
+        repair_request(second_source, original[3].target_id, 71)?,
+        &repaired_routes,
+    )?;
+    assert_eq!(second_replacement.shard, second_source.shard);
+    assert_eq!(second_replacement.length, second_source.length);
+    assert_eq!(second_replacement.digest, second_source.digest);
     Ok(())
 }
 
@@ -593,6 +683,22 @@ fn read_request(
         authorization_revision: Revision::new(1),
         deadline: UnixMicros::new(1_000),
         observed_at: UnixMicros::new(20),
+    })
+}
+
+fn repair_request(
+    source_receipt: ShardReceipt,
+    replacement_target_id: TargetId,
+    operation: u8,
+) -> Result<ShardRepairRequest, meshspan_domain::IdentifierError> {
+    Ok(ShardRepairRequest {
+        replacement_operation_id: OperationId::from_bytes([operation; 16])?,
+        source_receipt,
+        replacement_target_id,
+        replacement_target_generation: 1,
+        authorization_revision: Revision::new(1),
+        deadline: UnixMicros::new(1_000),
+        observed_at: UnixMicros::new(30),
     })
 }
 

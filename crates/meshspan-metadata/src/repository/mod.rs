@@ -81,6 +81,9 @@ mod kernel;
 mod locality_policy;
 #[cfg(test)]
 mod locality_policy_tests;
+mod maintenance_work;
+#[cfg(test)]
+mod maintenance_work_tests;
 mod membership;
 mod mesh_identity;
 mod namespace;
@@ -202,6 +205,11 @@ pub use kernel::{
 };
 pub use locality_policy::{
     LocalityPolicyCursor, LocalityPolicyRecord, LocalityRequirementRecord, VolumeLocalityPolicy,
+};
+pub use maintenance_work::{
+    DueStorageScrub, DueStorageScrubCursor, DueStorageScrubPage, MaintenanceEffectReference,
+    MaintenanceWorkClaim, MaintenanceWorkCursor, MaintenanceWorkRecord, MaintenanceWorkState,
+    ReadyMaintenanceWork, ReadyMaintenanceWorkPage, ShardRepairEffectRecord,
 };
 pub use membership::AuthoritativeMembership;
 pub use meshspan_domain::AuthenticationService;

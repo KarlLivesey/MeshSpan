@@ -242,6 +242,10 @@ define_identifier!(
     OperationId,
     "Stable idempotency identity of one logical mutation."
 );
+define_identifier!(
+    WorkId,
+    "Stable identity of one durable background-work job."
+);
 define_identifier!(FaultGroupId, "Stable identity of one fault group.");
 define_identifier!(
     FaultGroupClassId,

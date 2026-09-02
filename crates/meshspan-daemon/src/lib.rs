@@ -92,6 +92,8 @@ mod local_node_identity_tests;
 mod local_passkey_ceremony_key;
 mod local_totp_ceremony_key;
 mod local_wrapping_key;
+mod maintenance_authority;
+mod maintenance_dispatcher;
 mod metadata_forwarding;
 mod multi_factor_session;
 mod namespace_mutation_api;
@@ -151,6 +153,7 @@ mod passkey_test_support;
 mod pending_recovery_bundle;
 #[cfg(test)]
 mod pending_recovery_bundle_tests;
+mod periodic_scrub_scheduler;
 mod permission_administration;
 mod pinned_https_client;
 mod private_consensus_runtime;
@@ -177,9 +180,36 @@ mod recovery_code_session_creation;
 mod recovery_code_session_creation_tests;
 mod revoke_session;
 mod revoke_session_api;
+mod scrub_finding_scheduler;
 mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
+mod shard_repair_worker;
+mod storage_scrub_worker;
+
+pub use maintenance_authority::MaintenanceMetadataAuthority;
+pub use maintenance_dispatcher::{
+    MaintenanceDispatchAssignment, MaintenanceDispatchBatch, MaintenanceDispatchError,
+    MaintenanceDispatcher, MaintenanceWorkSource,
+};
+pub use periodic_scrub_scheduler::{
+    PeriodicScrubAdmissionPage, PeriodicScrubAuthority, PeriodicScrubScheduler,
+    PeriodicScrubSchedulingError,
+};
+pub use scrub_finding_scheduler::{
+    AutomaticScrubFindingScheduler, RepairCandidateResolver, ScrubFindingSchedulingError,
+    ScrubFindingSink,
+};
+pub use shard_repair_worker::{
+    PhysicalShardRepair, ShardRepairExecution, ShardRepairExecutionError,
+    ShardRepairExecutionReceipt, execute_shard_repair,
+};
+pub use storage_scrub_worker::{
+    PhysicalStorageScrub, RecoverableMaintenanceAuthority, ResumableStorageScrubExecution,
+    ResumableStorageScrubReceipt, ScrubProgressStore, StorageScrubExecution,
+    StorageScrubExecutionError, StorageScrubExecutionReceipt, StorageScrubSummary,
+    execute_resumable_storage_scrub, execute_storage_scrub,
+};
 mod smb_authentication;
 mod smb_connection;
 mod smb_export_administration;

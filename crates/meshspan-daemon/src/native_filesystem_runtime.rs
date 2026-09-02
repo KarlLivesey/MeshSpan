@@ -18,8 +18,8 @@ use meshspan_filesystem::{
     ContentAcknowledgementClass, ContentChunkLimits, ContentPublicationError,
     FilesystemAdapterConfigurationError, FilesystemAdapterPolicy, FilesystemCommitError,
     FilesystemCommitService, NamespacePublicationReceipt, ProtectedContentAccess,
-    ProtectedContentPublisher, PublicationAcknowledgement, VerifiedPublicationHead,
-    VersionPublicationStore,
+    ProtectedContentPublisher, ProtectedShardRepairer, PublicationAcknowledgement,
+    VerifiedPublicationHead, VersionPublicationStore,
 };
 use meshspan_metadata::{
     AuthoritativeCommand, AuthoritativeRepository, CommandContext, CommitConvergedVolumeHead,
@@ -56,6 +56,8 @@ type ProductionPublisher = ProtectedContentPublisher<
 >;
 type ProductionFilesystem =
     BoundFilesystemAdapter<ProductionPublisher, ConsensusAuthenticationAuthority>;
+pub(crate) type ProductionShardRepairer =
+    ProtectedShardRepairer<ClusterShardRouter, meshspan_coding::ReedSolomonCoding>;
 pub(super) type ProductionFilesystemError =
     AuthorisedFilesystemError<MetadataFilesystemAuthorityError>;
 
@@ -214,6 +216,45 @@ impl NativeFilesystemRuntimeConfiguration {
             self.policy,
         ))
     }
+
+    fn repairer(
+        &self,
+        targets: &[NativeStorageTarget],
+        now: UnixMicros,
+    ) -> Result<ProductionShardRepairer, NativeFilesystemOpeningError> {
+        let primary = targets
+            .first()
+            .ok_or(NativeFilesystemOpeningError::Unavailable)?;
+        if targets
+            .iter()
+            .any(|target| target.context.mesh_id != primary.context.mesh_id)
+        {
+            return Err(NativeFilesystemOpeningError::Unavailable);
+        }
+        let authority = self.repository(now)?;
+        let permit_key =
+            StoragePermitLoadingService::new(self.authority(now)?, self.wrapping_key()?)
+                .load_latest(primary.context.mesh_id)?;
+        let read_permit_key =
+            StoragePermitLoadingService::new(self.authority(now)?, self.wrapping_key()?)
+                .load_latest(primary.context.mesh_id)?;
+        let router = ClusterShardRouter::new(
+            primary.context.mesh_id,
+            targets
+                .iter()
+                .map(|target| (target.context(), target.provider())),
+            permit_key,
+            authority,
+            Arc::clone(&self.network),
+            self.runtime.clone(),
+        );
+        Ok(ProtectedShardRepairer::new(
+            router,
+            meshspan_coding::ReedSolomonCoding::new(),
+            primary.context.mesh_id,
+            read_permit_key,
+        ))
+    }
 }
 
 struct NativeFilesystemRuntimeState {
@@ -262,6 +303,53 @@ impl NativeFilesystemRuntime {
         state.filesystem = Some(filesystem);
         state.active_targets = contexts;
         Ok(())
+    }
+
+    /// Opens an independent hardened content-catalogue connection for maintenance planning.
+    pub(crate) fn maintenance_catalogue(
+        &self,
+        now: UnixMicros,
+    ) -> Result<meshspan_filesystem::DurableContentCatalog, NativeFilesystemRuntimeError> {
+        let state_directory = self
+            .lock()?
+            .configuration
+            .filesystem_state_directory
+            .clone();
+        meshspan_filesystem::DurableContentCatalog::open(&state_directory, now)
+            .map_err(|_| NativeFilesystemRuntimeError::Unavailable)
+    }
+
+    /// Builds an independent cluster-routed repair executor without holding the filesystem lock
+    /// during provider IO.
+    pub(crate) fn maintenance_repairer(
+        &self,
+        targets: &[NativeStorageTarget],
+        now: UnixMicros,
+    ) -> Result<ProductionShardRepairer, NativeFilesystemRuntimeError> {
+        self.lock()?
+            .configuration
+            .repairer(targets, now)
+            .map_err(|_| NativeFilesystemRuntimeError::Unavailable)
+    }
+
+    /// Resolves one fixed-revision repair policy from the same authority and target snapshot used
+    /// by foreground protected writes.
+    pub(crate) fn maintenance_protection_configuration(
+        &self,
+        targets: &[NativeStorageTarget],
+        volume_id: meshspan_domain::VolumeId,
+        now: UnixMicros,
+    ) -> Result<meshspan_filesystem::ProtectionConfiguration, NativeFilesystemRuntimeError> {
+        let state = self.lock()?;
+        NativeProtectionPolicySource::new(
+            state
+                .configuration
+                .repository(now)
+                .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?,
+            targets.iter().map(NativeStorageTarget::context).collect(),
+        )
+        .current_configuration(volume_id)
+        .map_err(|_| NativeFilesystemRuntimeError::Unavailable)
     }
 
     fn lock_opening(

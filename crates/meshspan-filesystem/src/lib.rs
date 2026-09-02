@@ -15,6 +15,7 @@ mod content_key;
 mod content_key_transit;
 mod content_publisher;
 mod content_reader;
+mod content_repair;
 mod content_transfer;
 mod directory;
 mod handle_io;
@@ -69,7 +70,7 @@ pub use content_catalog::{
     CommittedContentLayoutTransfer, CommittedProtectedStripe, CommittedShardInventory,
     CommittedShardPage, ContentCatalogError, DurableContentCatalog, PendingContentChunkPage,
     PendingProtectedShardPage, PreparedContentChunk, PreparedContentLayout, PreparedProtectedShard,
-    PreparedProtectedStripe, ProtectedShardCursor,
+    PreparedProtectedStripe, ProtectedShardCursor, ShardRepairCandidate, ShardRepairTransition,
 };
 pub use content_crypto::{
     ContentChunkCipher, ContentChunkLimits, ContentCryptoError, ContentEncryptionKey,
@@ -90,6 +91,7 @@ pub use content_publisher::{
 pub use content_reader::{
     ContentReadError, ContentReadRequest, DurableContentReader, PublishedContentReference,
 };
+pub use content_repair::{ProtectedShardRepairer, ShardRepairRequest};
 pub use content_transfer::{
     ContentLayoutChunk, ContentLayoutTransferError, ContentLayoutTransferHeader,
     ContentLayoutTransferPage, MAXIMUM_CONTENT_LAYOUT_PAGE_ITEMS, provider_operation_id,
