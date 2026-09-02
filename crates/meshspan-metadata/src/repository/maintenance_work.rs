@@ -20,6 +20,7 @@ mod rebalance;
 mod reconcile;
 mod repair;
 mod scope_drain;
+mod scope_drain_state;
 mod scrub;
 mod scrub_schedule;
 
