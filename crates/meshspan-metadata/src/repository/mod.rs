@@ -102,6 +102,9 @@ mod session;
 mod session_access;
 #[cfg(test)]
 mod session_tests;
+mod smb_export;
+#[cfg(test)]
+mod smb_export_tests;
 mod snapshot;
 mod snapshot_schedule;
 mod storage_target;
@@ -213,6 +216,7 @@ pub use session_access::{
     BrowserSessionAccessRequest, BrowserSessionProtection, SessionAccessCapability,
     SessionAccessDecision, SessionAccessDenial, SessionAccessRequest,
 };
+pub use smb_export::{SmbExportGatewayPolicy, SmbExportRecord};
 pub use snapshot::{PartitionSnapshotManifest, PreservedVote, restore_partition_snapshot};
 pub use snapshot_schedule::{SnapshotSchedule, SnapshotScheduleCursor};
 pub use storage_target::{StorageTargetProviderContext, StorageTargetRegistrationContext};
@@ -1488,6 +1492,18 @@ impl AuthoritativeRepository {
         volume_id: meshspan_domain::VolumeId,
     ) -> Result<Option<VolumeInventoryRecord>, RepositoryError> {
         volume_inventory::volume_inventory_record(&self.database, volume_id)
+    }
+
+    /// Returns every active SMB export assigned to one gateway under replicated desired state.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for excessive exports, malformed roots, invalid identities or database errors.
+    pub fn smb_exports_for_gateway(
+        &self,
+        node_id: meshspan_domain::NodeId,
+    ) -> Result<Vec<SmbExportRecord>, RepositoryError> {
+        smb_export::smb_exports_for_gateway(&self.database, node_id)
     }
 
     /// Returns one stable, bounded page of active namespace children.

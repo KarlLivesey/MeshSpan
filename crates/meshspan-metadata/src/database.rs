@@ -360,8 +360,8 @@ mod tests {
         partition_principal_lifecycle_migration_digest,
         partition_recovery_authority_migration_digest, partition_roles_migration_digest,
         partition_root_delegation_directory_migration_digest, partition_routing_migration_digest,
-        partition_secret_generations_migration_digest, partition_snapshot_expiry_migration_digest,
-        partition_snapshot_restores_migration_digest,
+        partition_secret_generations_migration_digest, partition_smb_exports_migration_digest,
+        partition_snapshot_expiry_migration_digest, partition_snapshot_restores_migration_digest,
         partition_snapshot_retention_selection_migration_digest,
         partition_snapshot_root_removals_migration_digest,
         partition_snapshot_schedules_migration_digest, partition_storage_targets_migration_digest,
@@ -1575,6 +1575,18 @@ mod tests {
                 0xff, 0x45, 0x62, 0x90, 0xb5, 0xf6, 0x67, 0xdb, 0xc4, 0x73, 0x62, 0x0e, 0xc9, 0x1d,
                 0xc8, 0x63, 0x6c, 0x5a, 0x66, 0x21, 0x16, 0x8f, 0x5e, 0x13, 0x5d, 0x87, 0xb5, 0xa6,
                 0x45, 0x01, 0xcc, 0x00,
+            ]
+        );
+    }
+
+    #[test]
+    fn smb_exports_migration_digest_is_committed() {
+        assert_eq!(
+            partition_smb_exports_migration_digest(),
+            [
+                0xe2, 0xcb, 0x55, 0x39, 0xaf, 0x4a, 0x6a, 0x28, 0x62, 0x9b, 0xad, 0x19, 0x8c, 0x14,
+                0x44, 0xd7, 0xa1, 0x64, 0xdd, 0x3f, 0xe8, 0xd9, 0x75, 0x87, 0xc0, 0x20, 0x3b, 0xe5,
+                0x8d, 0x60, 0x53, 0x47,
             ]
         );
     }

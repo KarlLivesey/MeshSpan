@@ -79,8 +79,8 @@ pub use primitives::{
     FederationStorageAllocationId, FederationSuccessionId, FileVersionId, GrantId, GroupId,
     HandleId, HostId, IdentifierError, JoinGrantId, LockId, MeshId, NamespaceCommitId, NodeId,
     ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId, QuarantineId,
-    QuorumPlanId, RecoveryCodeId, Revision, RevisionError, RoleId, ScopeId, SessionId, SnapshotId,
-    SnapshotScheduleId, StageId, TagId, TargetId, UnixMicros, UploadId, VolumeId,
+    QuorumPlanId, RecoveryCodeId, Revision, RevisionError, RoleId, ScopeId, SessionId, SmbExportId,
+    SnapshotId, SnapshotScheduleId, StageId, TagId, TargetId, UnixMicros, UploadId, VolumeId,
 };
 pub use recovery_code::{
     ENCODED_RECOVERY_CODE_LENGTH, RecoveryCodeBundle, RecoveryCodeBundleError,
