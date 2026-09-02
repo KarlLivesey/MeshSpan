@@ -20,7 +20,7 @@ use super::*;
 use crate::{
     AcknowledgementCellRequirement, AcknowledgementCellRole, AcknowledgementConsistencyClass,
     AddGroupMember, AssignVolumeAcknowledgementPolicy, AssignVolumeLocalityPolicy,
-    AssignVolumeProtectionPolicy, BeginStorageTargetDrain, BootstrapMesh,
+    AssignVolumeProtectionPolicy, AttestStorageTargetDrain, BeginStorageTargetDrain, BootstrapMesh,
     BootstrapRecoveryIdentity, ClaimMaintenanceWork, CommitConvergedVolumeHead, CommitScrubPass,
     CommitSecretGeneration, CommitShardRepair, CompleteMaintenanceWork, ConvergedHeadEvidence,
     CreateAcknowledgementPolicy, CreateActivationPolicy, CreateAuthenticationMethod,
@@ -434,6 +434,20 @@ fn storage_target_drain_command_round_trips_its_policy_and_work()
         cleanup_requested: false,
     });
     assert_round_trip(context, command)?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::AttestStorageTargetDrain(AttestStorageTargetDrain {
+            work_id: WorkId::from_bytes([93; 16])?,
+            claim_generation: 3,
+            worker_node_id: NodeId::from_bytes([96; 16])?,
+            worker_incarnation: 4,
+            fence: 5,
+            target_id: TargetId::from_bytes([95; 16])?,
+            target_generation: 2,
+            observed_authority_revision: Revision::new(7),
+            empty_catalogue_digest: [97; 32],
+        }),
+    )?;
     Ok(())
 }
 

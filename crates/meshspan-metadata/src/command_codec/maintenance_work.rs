@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_contracts::{ShardIdentity, ShardReceipt};
-use meshspan_domain::{NodeId, OperationId, TargetId, UnixMicros, WorkId};
+use meshspan_domain::{NodeId, OperationId, Revision, TargetId, UnixMicros, WorkId};
 use meshspan_work::{MAXIMUM_WORK_SUBJECT_BYTES, WorkDemand, WorkSignals, WorkSubject};
 
 use super::MetadataCommandCodecError;
 use super::decoder::Decoder;
 use super::encoder::Encoder;
 use crate::{
-    BeginStorageTargetDrain, ClaimMaintenanceWork, CommitScrubPass, CommitShardRepair,
-    CompleteMaintenanceWork, MaintenanceWorkCompletion, QueueMaintenanceWork, RenewMaintenanceWork,
+    AttestStorageTargetDrain, BeginStorageTargetDrain, ClaimMaintenanceWork, CommitScrubPass,
+    CommitShardRepair, CompleteMaintenanceWork, MaintenanceWorkCompletion, QueueMaintenanceWork,
+    RenewMaintenanceWork,
 };
 
 pub(super) const QUEUE_MAINTENANCE_WORK: u16 = 36;
@@ -19,6 +20,7 @@ pub(super) const COMPLETE_MAINTENANCE_WORK: u16 = 39;
 pub(super) const COMMIT_SHARD_REPAIR: u16 = 40;
 pub(super) const COMMIT_SCRUB_PASS: u16 = 41;
 pub(super) const BEGIN_STORAGE_TARGET_DRAIN: u16 = 42;
+pub(super) const ATTEST_STORAGE_TARGET_DRAIN: u16 = 43;
 
 pub(super) fn encode_command(
     encoder: &mut Encoder,
@@ -46,6 +48,9 @@ pub(super) fn encode_command(
         crate::AuthoritativeCommand::BeginStorageTargetDrain(value) => {
             encode_begin_target_drain(encoder, *value)?;
         }
+        crate::AuthoritativeCommand::AttestStorageTargetDrain(value) => {
+            encode_target_drain_attestation(encoder, *value)?;
+        }
         _ => return Ok(false),
     }
     Ok(true)
@@ -61,6 +66,7 @@ pub(super) const fn is_command_kind(kind: u16) -> bool {
             | COMMIT_SHARD_REPAIR
             | COMMIT_SCRUB_PASS
             | BEGIN_STORAGE_TARGET_DRAIN
+            | ATTEST_STORAGE_TARGET_DRAIN
     )
 }
 
@@ -89,6 +95,8 @@ pub(super) fn decode_command(
         }
         BEGIN_STORAGE_TARGET_DRAIN => decode_begin_target_drain(decoder)
             .map(crate::AuthoritativeCommand::BeginStorageTargetDrain),
+        ATTEST_STORAGE_TARGET_DRAIN => decode_target_drain_attestation(decoder)
+            .map(crate::AuthoritativeCommand::AttestStorageTargetDrain),
         _ => Err(MetadataCommandCodecError::Unsupported),
     }
 }
@@ -179,6 +187,42 @@ fn decode_begin_target_drain(
         work: decode_queue_fields(decoder)?,
         allow_temporary_degraded: decoder.bool()?,
         cleanup_requested: decoder.bool()?,
+    })
+}
+
+fn encode_target_drain_attestation(
+    encoder: &mut Encoder,
+    value: AttestStorageTargetDrain,
+) -> Result<(), MetadataCommandCodecError> {
+    encoder.u16(ATTEST_STORAGE_TARGET_DRAIN)?;
+    encode_claim_identity(
+        encoder,
+        value.work_id,
+        value.claim_generation,
+        value.worker_node_id,
+        value.worker_incarnation,
+        value.fence,
+    )?;
+    encoder.identifier(value.target_id.as_bytes())?;
+    encoder.u64(positive(value.target_generation)?)?;
+    encoder.u64(positive(value.observed_authority_revision.get())?)?;
+    encoder.fixed(&nonzero_digest(value.empty_catalogue_digest)?)
+}
+
+fn decode_target_drain_attestation(
+    decoder: &mut Decoder<'_>,
+) -> Result<AttestStorageTargetDrain, MetadataCommandCodecError> {
+    let identity = decode_claim_identity(decoder)?;
+    Ok(AttestStorageTargetDrain {
+        work_id: identity.work_id,
+        claim_generation: identity.claim_generation,
+        worker_node_id: identity.worker_node_id,
+        worker_incarnation: identity.worker_incarnation,
+        fence: identity.fence,
+        target_id: TargetId::from_bytes(decoder.identifier()?)?,
+        target_generation: positive(decoder.u64()?)?,
+        observed_authority_revision: Revision::new(positive(decoder.u64()?)?),
+        empty_catalogue_digest: nonzero_digest(decoder.fixed()?)?,
     })
 }
 

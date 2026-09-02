@@ -2217,13 +2217,30 @@ impl StorageTargetRuntime {
         let Some(assignment) = self.next_maintenance_assignment(now, WorkKind::Drain)? else {
             return Ok(());
         };
+        let reader = self.maintenance_authority.reader();
+        let owes_attestation = reader
+            .target_drain_attestation_pending(assignment.work_id, self.local_node_id)
+            .map_err(|_| ())?;
+        let completion_recovery = reader
+            .maintenance_effect_reference(assignment.work_id)
+            .map_err(|_| ())?
+            .is_some();
+        if !owes_attestation && !completion_recovery {
+            return Ok(());
+        }
+        let observed_authority_revision = reader.current_revision().map_err(|_| ())?;
         let catalogue = self
             .native_filesystem
             .maintenance_catalogue(now)
             .map_err(|_| ())?;
         let actor = self.maintenance_actor(now)?;
-        let execution =
-            maintenance_target_drain_execution(assignment, self.local_node_id, actor, now)?;
+        let execution = maintenance_target_drain_execution(
+            assignment,
+            self.local_node_id,
+            actor,
+            observed_authority_revision,
+            now,
+        )?;
         execute_target_drain_step(
             &self.maintenance_authority,
             &catalogue,
@@ -2360,6 +2377,7 @@ fn maintenance_target_drain_execution(
     assignment: crate::MaintenanceDispatchAssignment,
     worker_node_id: NodeId,
     actor_principal_id: PrincipalId,
+    observed_authority_revision: Revision,
     now: UnixMicros,
 ) -> Result<TargetDrainExecution, ()> {
     if !matches!(
@@ -2376,6 +2394,7 @@ fn maintenance_target_drain_execution(
         .ok_or(())?;
     let mut random = OperatingSystemRandom;
     let claim_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
+    let attestation_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
     let completion_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
     let mut fence_bytes = [0_u8; 8];
     random.fill_bytes(&mut fence_bytes).map_err(|_| ())?;
@@ -2385,6 +2404,7 @@ fn maintenance_target_drain_execution(
     }
     Ok(TargetDrainExecution {
         claim_context,
+        attestation_context,
         completion_context,
         claim: ClaimMaintenanceWork {
             work_id: assignment.work_id,
@@ -2396,6 +2416,7 @@ fn maintenance_target_drain_execution(
         },
         subject: assignment.subject,
         route_limit: DRAIN_ROUTE_ITEMS,
+        observed_authority_revision,
         continuation_at,
     })
 }

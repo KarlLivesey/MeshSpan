@@ -9,10 +9,13 @@ use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tempfile::tempdir;
 
+use super::tests::{mark_test_recovery_verified, protected_bootstrap};
 use super::{ApplyDisposition, AuthoritativeRepository, EntityKind, LogPosition, RepositoryError};
 use crate::{
-    AuthoritativeCommand, BeginStorageTargetDrain, BootstrapMesh, CommandContext, CreateComponent,
-    PartitionDatabase, QueueMaintenanceWork, RecordName, RegisterStorageTarget, StorageUsageLimit,
+    ActivateNode, AttestStorageTargetDrain, AuthoritativeCommand, BeginStorageTargetDrain,
+    BootstrapMesh, ClaimMaintenanceWork, CommandContext, CompleteMaintenanceWork, CreateComponent,
+    MaintenanceWorkCompletion, PartitionDatabase, QueueMaintenanceWork, RecordName,
+    RegisterStorageTarget, StorageUsageLimit, empty_target_drain_catalogue_digest,
 };
 
 struct Fixture {
@@ -22,6 +25,13 @@ struct Fixture {
     node: NodeId,
     host: HostId,
     provider: ComponentInstanceId,
+}
+
+struct ActiveTwoGatewayDrain {
+    fixture: Fixture,
+    second_node: NodeId,
+    target_id: TargetId,
+    work_id: WorkId,
 }
 
 struct StoredTarget {
@@ -261,32 +271,7 @@ fn target_drain_atomically_excludes_writes_and_queues_evacuating_work()
     )?;
     let target_id = TargetId::from_bytes([40; 16])?;
     let work_id = WorkId::from_bytes([50; 16])?;
-    let command = AuthoritativeCommand::BeginStorageTargetDrain(BeginStorageTargetDrain {
-        work: QueueMaintenanceWork {
-            work_id,
-            deduplication_key: [51; 32],
-            subject: WorkSubject::Drain(DrainScope::Target {
-                target_id,
-                target_generation: 1,
-            }),
-            signals: WorkSignals {
-                data_unavailable: false,
-                remaining_recovery_margin: 1,
-                protection_debt: 0,
-                locality_debt: 0,
-                instability: 0,
-                access_heat: 0,
-                created_at: UnixMicros::new(40),
-                due_at: Some(UnixMicros::new(40)),
-            },
-            demand: WorkDemand {
-                in_flight_bytes: 4_096,
-            },
-            next_attempt_at: UnixMicros::new(40),
-        },
-        allow_temporary_degraded: true,
-        cleanup_requested: false,
-    });
+    let command = drain_command(target_id, work_id);
     let receipt = fixture.repository.apply_committed(
         LogPosition { index: 3, term: 1 },
         context(52, fixture.administrator, 53, 40, Some(2))?,
@@ -318,7 +303,8 @@ fn target_drain_atomically_excludes_writes_and_queues_evacuating_work()
             .readable_storage_target_provider_context_by_target(target_id)?
             .is_some()
     );
-    let stored = fixture.repository.into_database().connection().query_row(
+    let database = fixture.repository.into_database();
+    let stored = database.connection().query_row(
         "SELECT allow_temporary_degraded, cleanup_requested, state, requested_at
          FROM storage_target_drains WHERE work_id = ?1",
         [work_id.as_bytes().as_slice()],
@@ -332,7 +318,283 @@ fn target_drain_atomically_excludes_writes_and_queues_evacuating_work()
         },
     )?;
     assert_eq!(stored, (1, 0, 1, 40));
+    let participants: i64 = database.connection().query_row(
+        "SELECT count(*) FROM storage_target_drain_participants WHERE work_id = ?1",
+        [work_id.as_bytes().as_slice()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(participants, 1);
     Ok(())
+}
+
+#[test]
+fn every_snapshotted_gateway_attestation_is_required_before_drain_completion()
+-> Result<(), Box<dyn std::error::Error>> {
+    let ActiveTwoGatewayDrain {
+        mut fixture,
+        second_node,
+        target_id,
+        work_id,
+    } = prepare_two_gateway_drain()?;
+    assert!(
+        fixture
+            .repository
+            .target_drain_attestation_pending(work_id, fixture.node)?
+    );
+    assert!(
+        fixture
+            .repository
+            .target_drain_attestation_pending(work_id, second_node)?
+    );
+    assert_eq!(
+        attest_gateway(
+            &mut fixture.repository,
+            fixture.administrator,
+            target_id,
+            work_id,
+            fixture.node,
+            1,
+            9,
+            7,
+            104,
+        )?,
+        None
+    );
+    assert!(
+        !fixture
+            .repository
+            .target_drain_attestation_pending(work_id, fixture.node)?
+    );
+    assert!(
+        fixture
+            .repository
+            .target_drain_attestation_pending(work_id, second_node)?
+    );
+    let reference = attest_gateway(
+        &mut fixture.repository,
+        fixture.administrator,
+        target_id,
+        work_id,
+        second_node,
+        2,
+        10,
+        10,
+        108,
+    )?
+    .ok_or("final gateway attestation did not create its terminal effect")?;
+
+    fixture
+        .repository
+        .apply_committed(
+            LogPosition { index: 12, term: 1 },
+            context(70, fixture.administrator, 71, 110, Some(11))?,
+            &AuthoritativeCommand::CompleteMaintenanceWork(CompleteMaintenanceWork {
+                work_id,
+                claim_generation: 2,
+                worker_node_id: second_node,
+                worker_incarnation: 1,
+                fence: 10,
+                outcome: MaintenanceWorkCompletion::Succeeded {
+                    effect_operation_id: reference.operation_id,
+                    effect_revision: reference.revision,
+                    effect_result_digest: reference.result_digest,
+                },
+            }),
+        )
+        .map_err(|error| format!("completing terminal drain work failed: {error:?}"))?;
+    assert!(matches!(
+        fixture
+            .repository
+            .maintenance_work(work_id)?
+            .ok_or("completed drain work missing")?
+            .state,
+        super::MaintenanceWorkState::Complete
+    ));
+    Ok(())
+}
+
+fn prepare_two_gateway_drain() -> Result<ActiveTwoGatewayDrain, Box<dyn std::error::Error>> {
+    let mut fixture = fixture()?;
+    fixture
+        .repository
+        .apply_committed(
+            LogPosition { index: 2, term: 1 },
+            context(30, fixture.administrator, 31, 30, Some(1))?,
+            &target_command(&fixture, StorageUsageLimit::Percent(95))?,
+        )
+        .map_err(|error| format!("registering the drain target failed: {error:?}"))?;
+    let second_node = super::cleanup_attestation_tests::enrol_second_gateway(
+        &mut fixture.repository,
+        fixture.administrator,
+    )
+    .map_err(|error| format!("enrolling the second drain gateway failed: {error}"))?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 5, term: 1 },
+        context(54, fixture.administrator, 55, 102, Some(4))?,
+        &AuthoritativeCommand::ActivateNode(ActivateNode {
+            node_id: second_node,
+            incarnation: 1,
+            private_endpoint: "second-gateway.meshspan.local:7443".to_owned(),
+            capability_digest: [56; 32],
+        }),
+    )?;
+    let target_id = TargetId::from_bytes([40; 16])?;
+    let work_id = WorkId::from_bytes([50; 16])?;
+    fixture
+        .repository
+        .apply_committed(
+            LogPosition { index: 6, term: 1 },
+            context(52, fixture.administrator, 53, 103, Some(5))?,
+            &drain_command(target_id, work_id),
+        )
+        .map_err(|error| format!("beginning the two-gateway drain failed: {error:?}"))?;
+    Ok(ActiveTwoGatewayDrain {
+        fixture,
+        second_node,
+        target_id,
+        work_id,
+    })
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the exact drain, participant, claim and committed-position fences remain explicit"
+)]
+fn attest_gateway(
+    repository: &mut AuthoritativeRepository,
+    administrator: PrincipalId,
+    target_id: TargetId,
+    work_id: WorkId,
+    node_id: NodeId,
+    claim_generation: u64,
+    fence: u64,
+    claim_position: u64,
+    now: i64,
+) -> Result<Option<super::MaintenanceEffectReference>, Box<dyn std::error::Error>> {
+    let claim_operation = u8::try_from(claim_position.checked_add(50).ok_or("position overflow")?)?;
+    repository
+        .apply_committed(
+            LogPosition {
+                index: claim_position,
+                term: 1,
+            },
+            context(
+                claim_operation,
+                administrator,
+                claim_operation + 1,
+                now,
+                Some(claim_position - 1),
+            )?,
+            &AuthoritativeCommand::ClaimMaintenanceWork(ClaimMaintenanceWork {
+                work_id,
+                claim_generation,
+                worker_node_id: node_id,
+                worker_incarnation: 1,
+                fence,
+                lease_expires_at: UnixMicros::new(now + 20),
+            }),
+        )
+        .map_err(|error| format!("claiming drain work at {claim_position} failed: {error:?}"))?;
+    let observed_revision = Revision::new(claim_position);
+    repository
+        .apply_committed(
+            LogPosition {
+                index: claim_position + 1,
+                term: 1,
+            },
+            context(
+                claim_operation + 2,
+                administrator,
+                claim_operation + 3,
+                now + 1,
+                Some(claim_position),
+            )?,
+            &AuthoritativeCommand::AttestStorageTargetDrain(AttestStorageTargetDrain {
+                work_id,
+                claim_generation,
+                worker_node_id: node_id,
+                worker_incarnation: 1,
+                fence,
+                target_id,
+                target_generation: 1,
+                observed_authority_revision: observed_revision,
+                empty_catalogue_digest: empty_target_drain_catalogue_digest(
+                    target_id,
+                    1,
+                    observed_revision,
+                ),
+            }),
+        )
+        .map_err(|error| {
+            format!(
+                "attesting empty target catalogue at {} failed: {error:?}",
+                claim_position + 1
+            )
+        })?;
+    let effect = repository.maintenance_effect_reference(work_id)?;
+    if effect.is_none() {
+        repository
+            .apply_committed(
+                LogPosition {
+                    index: claim_position + 2,
+                    term: 1,
+                },
+                context(
+                    claim_operation + 4,
+                    administrator,
+                    claim_operation + 5,
+                    now + 2,
+                    Some(claim_position + 1),
+                )?,
+                &AuthoritativeCommand::CompleteMaintenanceWork(CompleteMaintenanceWork {
+                    work_id,
+                    claim_generation,
+                    worker_node_id: node_id,
+                    worker_incarnation: 1,
+                    fence,
+                    outcome: MaintenanceWorkCompletion::Continue {
+                        progress_digest: [80; 32],
+                        retry_at: UnixMicros::new(now + 3),
+                    },
+                }),
+            )
+            .map_err(|error| {
+                format!(
+                    "releasing incomplete drain attestation at {} failed: {error:?}",
+                    claim_position + 2
+                )
+            })?;
+    }
+    Ok(effect)
+}
+
+fn drain_command(target_id: TargetId, work_id: WorkId) -> AuthoritativeCommand {
+    AuthoritativeCommand::BeginStorageTargetDrain(BeginStorageTargetDrain {
+        work: QueueMaintenanceWork {
+            work_id,
+            deduplication_key: [51; 32],
+            subject: WorkSubject::Drain(DrainScope::Target {
+                target_id,
+                target_generation: 1,
+            }),
+            signals: WorkSignals {
+                data_unavailable: false,
+                remaining_recovery_margin: 1,
+                protection_debt: 0,
+                locality_debt: 0,
+                instability: 0,
+                access_heat: 0,
+                created_at: UnixMicros::new(40),
+                due_at: Some(UnixMicros::new(40)),
+            },
+            demand: WorkDemand {
+                in_flight_bytes: 4_096,
+            },
+            next_attempt_at: UnixMicros::new(40),
+        },
+        allow_temporary_degraded: true,
+        cleanup_requested: false,
+    })
 }
 
 fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
@@ -347,11 +609,12 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
     let administrator = PrincipalId::from_bytes([2; 16])?;
     let host = HostId::from_bytes([3; 16])?;
     let node = NodeId::from_bytes([4; 16])?;
+    let mesh_id = MeshId::from_bytes([7; 16])?;
     repository.apply_committed(
         LogPosition { index: 1, term: 1 },
         context(5, administrator, 6, 10, Some(0))?,
-        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
-            mesh_id: MeshId::from_bytes([7; 16])?,
+        &protected_bootstrap(BootstrapMesh {
+            mesh_id,
             mesh_name: RecordName::new("Storage target mesh")?,
             administrator_id: administrator,
             administrator_name: RecordName::new("Administrator")?,
@@ -361,8 +624,9 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
             node_id: node,
             node_name: RecordName::new("Node")?,
             partition_name: RecordName::new("Root authority")?,
-        }),
+        })?,
     )?;
+    mark_test_recovery_verified(&mut repository, mesh_id, administrator)?;
     let provider = ComponentInstanceId::from_bytes([20; 16])?;
     Ok(Fixture {
         _directory: directory,

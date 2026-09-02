@@ -266,46 +266,50 @@ fn every_snapshotted_gateway_must_attest_before_coverage_is_complete()
     Ok(())
 }
 
-fn enrol_second_gateway(
+pub(super) fn enrol_second_gateway(
     repository: &mut super::AuthoritativeRepository,
     administrator: meshspan_domain::PrincipalId,
 ) -> Result<NodeId, Box<dyn std::error::Error>> {
     let grant_id = JoinGrantId::from_bytes([90; 16])?;
     let secret_digest = [91; 32];
     let roles = JoinRoles::new(JoinRoles::GATEWAY)?;
-    repository.apply_committed(
-        LogPosition { index: 3, term: 1 },
-        context(92, administrator, 93, 100, Some(2))?,
-        &AuthoritativeCommand::IssueJoinGrant(IssueJoinGrant {
-            join_grant_id: grant_id,
-            secret_digest,
-            allowed_roles: roles,
-            maximum_uses: 1,
-            expires_at: UnixMicros::new(1_000),
-        }),
-    )?;
+    repository
+        .apply_committed(
+            LogPosition { index: 3, term: 1 },
+            context(92, administrator, 93, 100, Some(2))?,
+            &AuthoritativeCommand::IssueJoinGrant(IssueJoinGrant {
+                join_grant_id: grant_id,
+                secret_digest,
+                allowed_roles: roles,
+                maximum_uses: 1,
+                expires_at: UnixMicros::new(1_000),
+            }),
+        )
+        .map_err(|error| format!("issuing the second-gateway join grant failed: {error:?}"))?;
     let certificate_der = b"second gateway certificate".to_vec();
     let certificate_fingerprint = Sha256::digest(&certificate_der).into();
     let node_id = NodeId::from_bytes([94; 16])?;
-    repository.apply_committed(
-        LogPosition { index: 4, term: 1 },
-        context(95, administrator, 96, 101, Some(3))?,
-        &AuthoritativeCommand::ConsumeJoinGrant(ConsumeJoinGrant {
-            join_grant_id: grant_id,
-            secret_digest,
-            host_id: HostId::from_bytes([97; 16])?,
-            new_host_name: Some(RecordName::new("Second gateway host")?),
-            node_id,
-            node_name: RecordName::new("Second gateway")?,
-            incarnation: 1,
-            requested_roles: roles,
-            wrapping_public_key: [98; 32],
-            private_endpoint: "second-gateway.meshspan.local:7443".to_owned(),
-            certificate_der,
-            certificate_fingerprint,
-            certificate_valid_until: UnixMicros::new(10_000),
-        }),
-    )?;
+    repository
+        .apply_committed(
+            LogPosition { index: 4, term: 1 },
+            context(95, administrator, 96, 101, Some(3))?,
+            &AuthoritativeCommand::ConsumeJoinGrant(ConsumeJoinGrant {
+                join_grant_id: grant_id,
+                secret_digest,
+                host_id: HostId::from_bytes([97; 16])?,
+                new_host_name: Some(RecordName::new("Second gateway host")?),
+                node_id,
+                node_name: RecordName::new("Second gateway")?,
+                incarnation: 1,
+                requested_roles: roles,
+                wrapping_public_key: [98; 32],
+                private_endpoint: "second-gateway.meshspan.local:7443".to_owned(),
+                certificate_der,
+                certificate_fingerprint,
+                certificate_valid_until: UnixMicros::new(10_000),
+            }),
+        )
+        .map_err(|error| format!("consuming the second-gateway join grant failed: {error:?}"))?;
     Ok(node_id)
 }
 
