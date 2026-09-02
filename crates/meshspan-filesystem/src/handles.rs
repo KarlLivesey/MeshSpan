@@ -1010,14 +1010,21 @@ fn validate_open_lineage(
     version_id: FileVersionId,
 ) -> Result<(), HandleError> {
     let valid: i64 = connection.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM namespace_commits c
+        "WITH RECURSIVE lineage(namespace_commit_id) AS (
+            SELECT namespace_commit_id FROM branch_namespace_heads
+            WHERE branch_id = ?2 AND volume_id = ?3
+            UNION
+            SELECT p.parent_commit_id FROM namespace_commit_parents p
+            JOIN lineage l ON p.namespace_commit_id = l.namespace_commit_id
+         )
+         SELECT EXISTS(
+            SELECT 1 FROM lineage l
+            JOIN namespace_commits c USING(namespace_commit_id)
             JOIN object_revisions r ON r.object_revision_id = ?4
             JOIN file_versions v ON v.version_id = ?5
-            WHERE c.namespace_commit_id = ?1 AND c.branch_id = ?2 AND c.volume_id = ?3
+            WHERE l.namespace_commit_id = ?1 AND c.volume_id = ?3
               AND r.volume_id = ?3 AND r.object_id = ?6 AND r.object_kind = 2
-              AND r.file_version_id = ?5 AND v.branch_id = ?2
-              AND v.volume_id = ?3 AND v.object_id = ?6
+              AND r.file_version_id = ?5 AND v.volume_id = ?3 AND v.object_id = ?6
          )",
         params![
             namespace_commit_id.as_bytes().as_slice(),
