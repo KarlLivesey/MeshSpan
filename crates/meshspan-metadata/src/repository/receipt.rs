@@ -126,6 +126,8 @@ pub enum EntityKind {
     AvailabilityCellMembership = 45,
     /// Immutable desired-locality policy revision.
     LocalityPolicy = 46,
+    /// Immutable write-acknowledgement policy revision.
+    AcknowledgementPolicy = 47,
 }
 
 impl EntityKind {
@@ -177,6 +179,7 @@ impl EntityKind {
             44 => Ok(Self::AvailabilityCell),
             45 => Ok(Self::AvailabilityCellMembership),
             46 => Ok(Self::LocalityPolicy),
+            47 => Ok(Self::AcknowledgementPolicy),
             _ => Err(RepositoryError::CorruptState),
         }
     }

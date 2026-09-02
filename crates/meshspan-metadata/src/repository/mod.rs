@@ -4,6 +4,9 @@
 
 mod access_evaluation;
 mod access_query;
+mod acknowledgement_policy;
+#[cfg(test)]
+mod acknowledgement_policy_tests;
 mod apply;
 mod authentication_method;
 mod authentication_method_creation;
@@ -143,6 +146,9 @@ pub use access_evaluation::{
 pub use access_query::{
     AccessActivationCursor, AccessActivationRecord, ObjectOwnerCursor, ObjectOwnerRecord,
     PermissionGrantRecord, PermissionGrantRevocationRecord, ScopedGrantCursor, SubjectGrantCursor,
+};
+pub use acknowledgement_policy::{
+    AcknowledgementPolicyCursor, AcknowledgementPolicyRecord, VolumeAcknowledgementPolicy,
 };
 pub use authentication_method::{
     ApiKeyAuthentication, AuthenticationMethodRevocationReplay, PasskeyVerificationMaterial,
@@ -1441,6 +1447,34 @@ impl AuthoritativeRepository {
         limit: PageLimit,
     ) -> Result<Page<LocalityPolicyRecord, LocalityPolicyCursor>, RepositoryError> {
         locality_policy::policies(&self.database, after, limit)
+    }
+
+    /// Returns the immutable write-acknowledgement policy selected by one volume.
+    ///
+    /// `None` means the volume uses the built-in availability-first eventual default.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when policy, scenario, cell or revision state is malformed.
+    pub fn volume_acknowledgement_policy(
+        &self,
+        volume_id: meshspan_domain::VolumeId,
+    ) -> Result<Option<VolumeAcknowledgementPolicy>, RepositoryError> {
+        acknowledgement_policy::for_volume(&self.database, volume_id)
+    }
+
+    /// Returns one bounded stable page of immutable write-acknowledgement policies.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored policy predicates or revisions are malformed.
+    pub fn acknowledgement_policies(
+        &self,
+        after: Option<&AcknowledgementPolicyCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<AcknowledgementPolicyRecord, AcknowledgementPolicyCursor>, RepositoryError>
+    {
+        acknowledgement_policy::policies(&self.database, after, limit)
     }
 
     /// Returns the current public secret-wrapping-key generation for one node.

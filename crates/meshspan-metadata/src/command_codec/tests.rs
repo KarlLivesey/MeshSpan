@@ -2,12 +2,13 @@
 
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId, AuthenticationMethodId,
-    AuthenticationService, AvailabilityCellId, ComponentInstanceId, DurationMicros, EntropyError,
-    FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId, GrantId, GroupId, HostId,
-    LocalityPolicyId, LocalityRequirementId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId,
-    PrincipalId, ProtectionPolicyId, ProtectionScenarioId, RandomSource, RecoveryCodeId, Revision,
-    Rights, RoleId, SessionId, SmbExportId, TargetId, UnixMicros, VolumeId,
+    AcknowledgementPolicyId, ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId,
+    AuthenticationMethodId, AuthenticationService, AvailabilityCellId, ComponentInstanceId,
+    DurationMicros, EntropyError, FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId,
+    GrantId, GroupId, HostId, LocalityPolicyId, LocalityRequirementId, MeshId, NodeId, ObjectId,
+    OperationId, OwnerSetId, PrincipalId, ProtectionPolicyId, ProtectionScenarioId, RandomSource,
+    RecoveryCodeId, Revision, Rights, RoleId, SessionId, SmbExportId, TargetId, UnixMicros,
+    VolumeId,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -16,18 +17,20 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::{
-    AddGroupMember, AssignVolumeLocalityPolicy, AssignVolumeProtectionPolicy, BootstrapMesh,
-    BootstrapRecoveryIdentity, CommitSecretGeneration, CreateActivationPolicy,
-    CreateAuthenticationMethod, CreateAvailabilityCell, CreateComponent, CreateFaultGroup,
-    CreateGroup, CreateLocalityPolicy, CreateProtectionPolicy, CreateUser, CreateVolume,
-    GrantInheritance, GrantPermission, GrantPermissionWithActivation, IssueAuthenticationSession,
-    LocalityRequirementConfiguration, NewAuthenticationCredential, NewRecoveryCode,
-    PermissionScope, ProtectionScenarioConfiguration, PublishSmbExport, RecordName,
-    RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember, RevokeAuthenticationMethod,
-    RevokeAuthenticationSession, SessionAuthenticationFactor, SessionClientLabel,
-    SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
-    SetTargetAvailabilityCellMembership, SmbExportGatewaySelection, StepUpAuthenticationSession,
-    StorageUsageLimit, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND, WithdrawSmbExport,
+    AcknowledgementCellRequirement, AcknowledgementCellRole, AcknowledgementConsistencyClass,
+    AddGroupMember, AssignVolumeAcknowledgementPolicy, AssignVolumeLocalityPolicy,
+    AssignVolumeProtectionPolicy, BootstrapMesh, BootstrapRecoveryIdentity, CommitSecretGeneration,
+    CreateAcknowledgementPolicy, CreateActivationPolicy, CreateAuthenticationMethod,
+    CreateAvailabilityCell, CreateComponent, CreateFaultGroup, CreateGroup, CreateLocalityPolicy,
+    CreateProtectionPolicy, CreateUser, CreateVolume, GrantInheritance, GrantPermission,
+    GrantPermissionWithActivation, IssueAuthenticationSession, LocalityRequirementConfiguration,
+    NewAuthenticationCredential, NewRecoveryCode, PermissionScope, ProtectionScenarioConfiguration,
+    PublishSmbExport, RecordName, RegisterNodeWrappingKey, RegisterStorageTarget,
+    RemoveGroupMember, RevokeAuthenticationMethod, RevokeAuthenticationSession,
+    SessionAuthenticationFactor, SessionClientLabel, SetHostAvailabilityCellMembership,
+    SetHostFaultGroupMembership, SetTargetAvailabilityCellMembership, SmbExportGatewaySelection,
+    StepUpAuthenticationSession, StorageUsageLimit, StrongFallbackMode, TotpAlgorithm,
+    VOLUME_CONTENT_KEY_SECRET_KIND, WithdrawSmbExport,
 };
 
 #[test]
@@ -214,6 +217,47 @@ fn locality_policy_commands_round_trip_complete_local_requirements()
             volume_id: VolumeId::from_bytes([111; 16])?,
             policy_id,
         }),
+    ] {
+        assert_round_trip(context, command)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn acknowledgement_policy_commands_round_trip_exact_barriers()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let policy_id = AcknowledgementPolicyId::from_bytes([112; 16])?;
+    for command in [
+        AuthoritativeCommand::CreateAcknowledgementPolicy(CreateAcknowledgementPolicy {
+            policy_id,
+            name: RecordName::new("Required office, eventual archive")?,
+            consistency: AcknowledgementConsistencyClass::Strong,
+            minimum_durable_targets: 2,
+            minimum_distinct_nodes: 2,
+            strong_wait: Some(DurationMicros::new(5_000_000)),
+            fallback: StrongFallbackMode::FailAtDeadline,
+            required_scenarios: BoundedItems::new(
+                vec![ProtectionScenarioId::from_bytes([113; 16])?],
+                64,
+            )?,
+            cells: BoundedItems::new(
+                vec![AcknowledgementCellRequirement {
+                    cell_id: AvailabilityCellId::from_bytes([114; 16])?,
+                    role: AcknowledgementCellRole::RequiredBeforeCommit,
+                    minimum_durable_targets: Some(2),
+                    minimum_distinct_nodes: Some(2),
+                    local_protection_policy_id: Some(ProtectionPolicyId::from_bytes([115; 16])?),
+                }],
+                256,
+            )?,
+        }),
+        AuthoritativeCommand::AssignVolumeAcknowledgementPolicy(
+            AssignVolumeAcknowledgementPolicy {
+                volume_id: VolumeId::from_bytes([116; 16])?,
+                policy_id,
+            },
+        ),
     ] {
         assert_round_trip(context, command)?;
     }

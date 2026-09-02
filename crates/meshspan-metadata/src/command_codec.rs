@@ -2,6 +2,7 @@
 
 //! Bounded canonical bytes for authoritative commands carried by consensus.
 
+mod acknowledgement_policy;
 mod authentication;
 mod availability_cell;
 mod bootstrap;
@@ -167,6 +168,12 @@ fn encode_command(
         AuthoritativeCommand::AssignVolumeLocalityPolicy(value) => {
             locality_policy::encode_assignment(encoder, *value)
         }
+        AuthoritativeCommand::CreateAcknowledgementPolicy(value) => {
+            acknowledgement_policy::encode_create(encoder, value)
+        }
+        AuthoritativeCommand::AssignVolumeAcknowledgementPolicy(value) => {
+            acknowledgement_policy::encode_assignment(encoder, *value)
+        }
         AuthoritativeCommand::PublishSmbExport(value) => smb_export::encode_publish(encoder, value),
         AuthoritativeCommand::WithdrawSmbExport(value) => {
             smb_export::encode_withdraw(encoder, value)
@@ -250,6 +257,14 @@ fn decode_command(
         locality_policy::ASSIGN_VOLUME_LOCALITY_POLICY => {
             locality_policy::decode_assignment(decoder)
                 .map(AuthoritativeCommand::AssignVolumeLocalityPolicy)
+        }
+        acknowledgement_policy::CREATE_ACKNOWLEDGEMENT_POLICY => {
+            acknowledgement_policy::decode_create(decoder)
+                .map(AuthoritativeCommand::CreateAcknowledgementPolicy)
+        }
+        acknowledgement_policy::ASSIGN_VOLUME_ACKNOWLEDGEMENT_POLICY => {
+            acknowledgement_policy::decode_assignment(decoder)
+                .map(AuthoritativeCommand::AssignVolumeAcknowledgementPolicy)
         }
         smb_export::PUBLISH_SMB_EXPORT => {
             smb_export::decode_publish(decoder).map(AuthoritativeCommand::PublishSmbExport)

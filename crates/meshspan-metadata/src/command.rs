@@ -8,16 +8,16 @@ use meshspan_contracts::{
     BoundedItems, ReclamationReceipt, RemovalPermit, ShardIdentity, TombstoneReceipt,
 };
 use meshspan_domain::{
-    ActivationId, ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId,
-    AuthenticationFactorClasses, AuthenticationMethodId, AuthenticationOperationClass,
-    AuthenticationPolicyId, AuthenticationService, AvailabilityCellId, ComponentInstanceId,
-    ContentManifestId, DelegatedMetadataScope, DelegationAdmission, DurationMicros,
-    FailureScenario, FaultGroupClassId, FaultGroupId, FileVersionId, GrantId, GroupId,
-    HandoffEvidence, HostId, JoinGrantId, LocalityPolicyId, LocalityRequirementId, MeshId,
-    MetadataKeyRange, MetadataOperationFamily, NamespaceCommitId, NodeId, ObjectId,
-    ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId, ProtectionPolicyId,
-    ProtectionScenarioId, RecoveryCodeId, Revision, Rights, RoleId, ScopeId, SessionId,
-    SmbExportId, SnapshotId, SnapshotScheduleId, TagId, TargetId, UnixMicros, VolumeId,
+    AcknowledgementPolicyId, ActivationId, ActivationPolicyId, ApiKeyId, AssuranceLevel,
+    AuditEventId, AuthenticationFactorClasses, AuthenticationMethodId,
+    AuthenticationOperationClass, AuthenticationPolicyId, AuthenticationService,
+    AvailabilityCellId, ComponentInstanceId, ContentManifestId, DelegatedMetadataScope,
+    DelegationAdmission, DurationMicros, FailureScenario, FaultGroupClassId, FaultGroupId,
+    FileVersionId, GrantId, GroupId, HandoffEvidence, HostId, JoinGrantId, LocalityPolicyId,
+    LocalityRequirementId, MeshId, MetadataKeyRange, MetadataOperationFamily, NamespaceCommitId,
+    NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId,
+    ProtectionPolicyId, ProtectionScenarioId, RecoveryCodeId, Revision, Rights, RoleId, ScopeId,
+    SessionId, SmbExportId, SnapshotId, SnapshotScheduleId, TagId, TargetId, UnixMicros, VolumeId,
 };
 use meshspan_secret_envelope::{EncryptedSecretParts, RecipientEnvelopeParts};
 use sha2::{Digest, Sha256};
@@ -178,6 +178,10 @@ pub enum AuthoritativeCommand {
     CreateLocalityPolicy(CreateLocalityPolicy),
     /// Selects one locality policy as the volume-wide inherited default.
     AssignVolumeLocalityPolicy(AssignVolumeLocalityPolicy),
+    /// Creates one immutable write-acknowledgement policy.
+    CreateAcknowledgementPolicy(CreateAcknowledgementPolicy),
+    /// Selects one acknowledgement policy as the volume-wide inherited default.
+    AssignVolumeAcknowledgementPolicy(AssignVolumeAcknowledgementPolicy),
     /// Publishes one volume or folder through explicitly selected SMB gateways.
     PublishSmbExport(PublishSmbExport),
     /// Withdraws one exact SMB export while retaining its audit history.
@@ -338,6 +342,8 @@ impl AuthoritativeCommand {
             Self::SetTargetAvailabilityCellMembership(value) => value.update_digest(digest),
             Self::CreateLocalityPolicy(value) => value.update_digest(digest),
             Self::AssignVolumeLocalityPolicy(value) => value.update_digest(digest),
+            Self::CreateAcknowledgementPolicy(value) => value.update_digest(digest),
+            Self::AssignVolumeAcknowledgementPolicy(value) => value.update_digest(digest),
             Self::PublishSmbExport(value) => value.update_digest(digest),
             Self::WithdrawSmbExport(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
@@ -1812,6 +1818,87 @@ pub struct AssignVolumeLocalityPolicy {
     pub policy_id: LocalityPolicyId,
 }
 
+/// Whether a write acknowledges local durability or waits for a converged strong barrier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum AcknowledgementConsistencyClass {
+    /// Commit a durable local branch and reconcile wider promises automatically.
+    Eventual = 1,
+    /// Wait for every required predicate and the globally converged metadata commit.
+    Strong = 2,
+}
+
+/// Explicit outcome when a strong acknowledgement cannot meet its deadline.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum StrongFallbackMode {
+    /// Retain the operation as pending for later completion.
+    RemainPending = 1,
+    /// Return failure at the deadline while retaining safe staged work.
+    FailAtDeadline = 2,
+    /// Explicitly permit a weaker eventual branch receipt at the deadline.
+    Eventual = 3,
+}
+
+/// How one cell participates in acknowledgement and placement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum AcknowledgementCellRole {
+    /// This cell's predicates must complete before a strong acknowledgement.
+    RequiredBeforeCommit = 1,
+    /// Copy here automatically without delaying acknowledgement.
+    Eventual = 2,
+    /// Never place this policy's content in this cell.
+    Excluded = 3,
+}
+
+/// One cell-specific acknowledgement predicate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcknowledgementCellRequirement {
+    /// Availability cell receiving this role.
+    pub cell_id: AvailabilityCellId,
+    /// Whether the cell blocks, follows, or is excluded from placement.
+    pub role: AcknowledgementCellRole,
+    /// Optional required durable target count within the cell.
+    pub minimum_durable_targets: Option<u16>,
+    /// Optional required distinct machine count within the cell.
+    pub minimum_distinct_nodes: Option<u16>,
+    /// Optional local failure-survival promise.
+    pub local_protection_policy_id: Option<ProtectionPolicyId>,
+}
+
+/// One immutable write-acknowledgement policy revision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateAcknowledgementPolicy {
+    /// Stable policy identity.
+    pub policy_id: AcknowledgementPolicyId,
+    /// Human-readable policy name.
+    pub name: RecordName,
+    /// Availability-first or strong publication semantics.
+    pub consistency: AcknowledgementConsistencyClass,
+    /// Minimum durable targets before any acknowledgement.
+    pub minimum_durable_targets: u16,
+    /// Minimum distinct machines represented by those targets.
+    pub minimum_distinct_nodes: u16,
+    /// Optional deadline used only by strong policies.
+    pub strong_wait: Option<DurationMicros>,
+    /// Explicit result when a strong deadline cannot be met.
+    pub fallback: StrongFallbackMode,
+    /// Protection scenarios that must be proved before acknowledgement.
+    pub required_scenarios: BoundedItems<ProtectionScenarioId>,
+    /// Per-cell placement and acknowledgement roles.
+    pub cells: BoundedItems<AcknowledgementCellRequirement>,
+}
+
+/// Volume-wide selection of one existing immutable acknowledgement policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AssignVolumeAcknowledgementPolicy {
+    /// Existing volume receiving the inherited default.
+    pub volume_id: VolumeId,
+    /// Existing active acknowledgement policy.
+    pub policy_id: AcknowledgementPolicyId,
+}
+
 /// Explicit gateway selection for one SMB export.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SmbExportGatewaySelection {
@@ -2936,6 +3023,42 @@ digest_simple_record!(
 digest_simple_record!(
     AssignVolumeLocalityPolicy,
     b"assign-volume-locality-policy",
+    |value, digest| {
+        digest.identifier(value.volume_id.as_bytes());
+        digest.identifier(value.policy_id.as_bytes());
+    }
+);
+digest_simple_record!(
+    CreateAcknowledgementPolicy,
+    b"create-acknowledgement-policy",
+    |value, digest| {
+        digest.identifier(value.policy_id.as_bytes());
+        digest.name(&value.name);
+        digest.byte(value.consistency as u8);
+        digest.unsigned(u64::from(value.minimum_durable_targets));
+        digest.unsigned(u64::from(value.minimum_distinct_nodes));
+        digest.optional_unsigned(value.strong_wait.map(DurationMicros::get));
+        digest.byte(value.fallback as u8);
+        digest.unsigned(u64::try_from(value.required_scenarios.len()).unwrap_or(u64::MAX));
+        for scenario_id in value.required_scenarios.as_slice() {
+            digest.identifier(scenario_id.as_bytes());
+        }
+        digest.unsigned(u64::try_from(value.cells.len()).unwrap_or(u64::MAX));
+        for cell in value.cells.as_slice() {
+            digest.identifier(cell.cell_id.as_bytes());
+            digest.byte(cell.role as u8);
+            digest.optional_unsigned(cell.minimum_durable_targets.map(u64::from));
+            digest.optional_unsigned(cell.minimum_distinct_nodes.map(u64::from));
+            digest.optional_identifier(
+                cell.local_protection_policy_id
+                    .map(ProtectionPolicyId::as_bytes),
+            );
+        }
+    }
+);
+digest_simple_record!(
+    AssignVolumeAcknowledgementPolicy,
+    b"assign-volume-acknowledgement-policy",
     |value, digest| {
         digest.identifier(value.volume_id.as_bytes());
         digest.identifier(value.policy_id.as_bytes());
