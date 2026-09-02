@@ -6,6 +6,7 @@
 //! namespace semantics or provider paths; those remain behind `MeshSpan`'s shared
 //! authentication and filesystem interfaces.
 
+mod create;
 mod direct_tcp;
 mod file_id;
 mod file_io;
@@ -22,6 +23,10 @@ mod status;
 mod transform;
 mod tree_connect;
 
+pub use create::{
+    CreateAction, CreateDisposition, CreateOptions, CreateRequest, CreateResponse,
+    CreateResponseValues, CreateTargetKind, SmbCreateError, SmbRequestedAccess, SmbShareAccess,
+};
 pub use direct_tcp::{
     DirectTcpFrame, DirectTcpFrameError, DirectTcpFrameHeader, encode_direct_tcp_header,
 };
