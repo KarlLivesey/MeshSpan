@@ -4,7 +4,9 @@
 
 use std::collections::BTreeSet;
 
-use meshspan_contracts::{BoundedItems, CodingLayout, ShardReceipt, VersionedPayload};
+use meshspan_contracts::{
+    BoundedItems, CodingLayout, ShardAcknowledgement, ShardReceipt, VersionedPayload,
+};
 use meshspan_domain::{OperationId, Revision, TargetId, UnixMicros};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
@@ -38,6 +40,8 @@ pub struct PreparedProtectedShard {
     pub target_id: TargetId,
     /// Target incarnation fence observed by placement.
     pub target_generation: u64,
+    /// Whether this receipt gates acknowledgement of the logical write.
+    pub acknowledgement: ShardAcknowledgement,
 }
 
 /// One immutable, revision-bound protected stripe plan.
@@ -137,6 +141,38 @@ impl PreparedProtectedStripe {
     pub fn shards(&self) -> &[PreparedProtectedShard] {
         self.shards.as_slice()
     }
+
+    fn from_stored(
+        request: ContentPublicationRequest,
+        chunk: PreparedContentChunk,
+        coding_layout: CodingLayout,
+        topology_revision: Revision,
+        capacity_revision: Revision,
+        policy_evidence: VersionedPayload,
+        shards: Vec<PreparedProtectedShard>,
+    ) -> Result<Self, ContentCatalogError> {
+        if chunk.storage_layout_digest == [0; 32] {
+            return Err(ContentCatalogError::Corrupt);
+        }
+        let expected_digest = chunk.storage_layout_digest;
+        let mut unbound = chunk;
+        unbound.storage_layout_digest = [0; 32];
+        let loaded = Self::from_untrusted(
+            request,
+            unbound,
+            coding_layout,
+            topology_revision,
+            capacity_revision,
+            policy_evidence,
+            shards,
+        )
+        .map_err(|_| ContentCatalogError::Corrupt)?;
+        if loaded.chunk.storage_layout_digest == expected_digest {
+            Ok(loaded)
+        } else {
+            Err(ContentCatalogError::Corrupt)
+        }
+    }
 }
 
 /// Stable keyset position for one protected shard page.
@@ -223,7 +259,8 @@ impl DurableContentCatalog {
         });
         let mut statement = self.connection.prepare(
             "SELECT chunk_index, shard_index, shard_generation, provider_operation_id,
-                    expected_length, expected_digest, target_id, target_generation
+                    expected_length, expected_digest, target_id, target_generation,
+                    required_for_commit
              FROM content_stripe_shards
              WHERE operation_id = ?1 AND receipt_recorded_at IS NULL
                AND (chunk_index > ?2 OR (chunk_index = ?2 AND shard_index > ?3))
@@ -250,6 +287,23 @@ impl DurableContentCatalog {
             shards: BoundedItems::new(shards, limit).map_err(|_| ContentCatalogError::Corrupt)?,
             next,
         })
+    }
+
+    /// Loads and independently revalidates one complete protected stripe plan.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an unknown stripe and any malformed, incomplete or substituted durable field.
+    pub fn protected_stripe(
+        &self,
+        request: ContentPublicationRequest,
+        chunk_index: u64,
+    ) -> Result<PreparedProtectedStripe, ContentCatalogError> {
+        validate_exact_request(&self.connection, request)?;
+        if request.format_version != 2 {
+            return Err(ContentCatalogError::InvalidInput);
+        }
+        load_protected_stripe(&self.connection, request, chunk_index)
     }
 
     /// Records one exact durable receipt for a protected shard.
@@ -318,6 +372,14 @@ fn validate_shards(
     layout: CodingLayout,
     shards: &[PreparedProtectedShard],
 ) -> Result<(), ContentCatalogError> {
+    if shards
+        .iter()
+        .filter(|shard| shard.acknowledgement == ShardAcknowledgement::Required)
+        .count()
+        < usize::from(layout.data_slices())
+    {
+        return Err(ContentCatalogError::InvalidInput);
+    }
     let mut operations = BTreeSet::new();
     let mut targets = BTreeSet::new();
     for (index, shard) in shards.iter().enumerate() {
@@ -380,6 +442,10 @@ fn layout_digest(
         digest.update(&shard.expected_digest);
         digest.update(&shard.target_id.as_bytes());
         digest.update(&shard.target_generation.to_be_bytes());
+        digest.update(&[match shard.acknowledgement {
+            ShardAcknowledgement::Required => 1,
+            ShardAcknowledgement::Eventual => 0,
+        }]);
     }
     digest.finalize().into()
 }
@@ -430,8 +496,8 @@ fn insert_stripe(
             "INSERT INTO content_stripe_shards(
                 operation_id, chunk_index, shard_index, shard_generation,
                 provider_operation_id, expected_length, expected_digest, target_id,
-                target_generation
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                target_generation, required_for_commit
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             params![
                 operation_id.as_bytes().as_slice(),
                 to_i64(stripe.chunk.chunk_index)?,
@@ -442,6 +508,10 @@ fn insert_stripe(
                 shard.expected_digest.as_slice(),
                 shard.target_id.as_bytes().as_slice(),
                 to_i64(shard.target_generation)?,
+                match shard.acknowledgement {
+                    ShardAcknowledgement::Required => 1,
+                    ShardAcknowledgement::Eventual => 0,
+                },
             ],
         )?;
     }
@@ -468,6 +538,11 @@ fn decode_pending_shard(
             expected_digest: copy_array(&row.get::<_, Vec<u8>>(5)?)?,
             target_id: decode_target(&row.get::<_, Vec<u8>>(6)?)?,
             target_generation: from_sql(row.get(7)?)?,
+            acknowledgement: if row.get::<_, bool>(8)? {
+                ShardAcknowledgement::Required
+            } else {
+                ShardAcknowledgement::Eventual
+            },
         },
     ))
 }
@@ -480,7 +555,8 @@ fn load_protected_shard(
     connection
         .query_row(
             "SELECT chunk_index, shard_index, shard_generation, provider_operation_id,
-                    expected_length, expected_digest, target_id, target_generation
+                    expected_length, expected_digest, target_id, target_generation,
+                    required_for_commit
              FROM content_stripe_shards
              WHERE operation_id = ?1 AND chunk_index = ?2 AND shard_index = ?3",
             params![
@@ -492,6 +568,79 @@ fn load_protected_shard(
         )
         .optional()?
         .ok_or(ContentCatalogError::InvalidInput)
+}
+
+fn load_protected_stripe(
+    connection: &rusqlite::Connection,
+    request: ContentPublicationRequest,
+    chunk_index: u64,
+) -> Result<PreparedProtectedStripe, ContentCatalogError> {
+    let chunk = super::repository::load_chunk(connection, request.operation_id, chunk_index)?;
+    let stored = connection
+        .query_row(
+            "SELECT data_slices, recovery_slices, slice_bytes, topology_revision,
+                    capacity_revision, policy_format_version, policy_evidence, layout_digest
+             FROM content_stripe_layouts WHERE operation_id = ?1 AND chunk_index = ?2",
+            params![
+                request.operation_id.as_bytes().as_slice(),
+                to_i64(chunk_index)?,
+            ],
+            |row| {
+                Ok((
+                    u16::try_from(row.get::<_, i64>(0)?)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    u16::try_from(row.get::<_, i64>(1)?)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    u32::try_from(row.get::<_, i64>(2)?)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    Revision::new(from_sql(row.get(3)?)?),
+                    Revision::new(from_sql(row.get(4)?)?),
+                    u32::try_from(row.get::<_, i64>(5)?)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    row.get::<_, Vec<u8>>(6)?,
+                    copy_array::<32>(&row.get::<_, Vec<u8>>(7)?)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or(ContentCatalogError::InvalidInput)?;
+    if stored.7 != chunk.storage_layout_digest {
+        return Err(ContentCatalogError::Corrupt);
+    }
+    let layout = CodingLayout::new(stored.0, stored.1, stored.2)
+        .map_err(|_| ContentCatalogError::Corrupt)?;
+    let policy_evidence = VersionedPayload {
+        format_version: stored.5,
+        bytes: meshspan_contracts::BoundedBytes::from_vec(stored.6, MAXIMUM_POLICY_BYTES)
+            .map_err(|_| ContentCatalogError::Corrupt)?,
+    };
+    let mut statement = connection.prepare(
+        "SELECT chunk_index, shard_index, shard_generation, provider_operation_id,
+                expected_length, expected_digest, target_id, target_generation,
+                required_for_commit
+         FROM content_stripe_shards WHERE operation_id = ?1 AND chunk_index = ?2
+         ORDER BY shard_index LIMIT ?3",
+    )?;
+    let shards = statement
+        .query_map(
+            params![
+                request.operation_id.as_bytes().as_slice(),
+                to_i64(chunk_index)?,
+                i64::try_from(MAXIMUM_STRIPE_SHARDS + 1)
+                    .map_err(|_| ContentCatalogError::Corrupt)?,
+            ],
+            |row| decode_pending_shard(row).map(|(_, shard)| shard),
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    PreparedProtectedStripe::from_stored(
+        request,
+        chunk,
+        layout,
+        stored.3,
+        stored.4,
+        policy_evidence,
+        shards,
+    )
 }
 
 fn receipt_matches(receipt: ShardReceipt, expected: PreparedProtectedShard) -> bool {

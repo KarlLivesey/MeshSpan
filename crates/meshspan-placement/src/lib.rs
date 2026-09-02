@@ -9,7 +9,7 @@ use meshspan_contracts::{
     BoundedBytes, BoundedItems, CodingLayout, ComponentConfiguration, ComponentLifecycle,
     ComponentObservation, ComponentTransition, ContractError, ContractKind, ContractLimits,
     ContractVersion, ImplementationDescriptor, PlacementCandidate, PlacementPlan, PlacementPolicy,
-    PlacementRequest, VersionedPayload,
+    PlacementRequest, ShardAcknowledgement, VersionedPayload,
 };
 use meshspan_domain::{
     FailureScenario, LifecycleState, ProtectionLayout, ProtectionProof, Revision, TargetId,
@@ -392,10 +392,37 @@ fn build_plan(
     targets: Vec<TargetId>,
     proofs: Vec<ProtectionProof>,
 ) -> Result<PlacementPlan, ContractError> {
-    let evidence = policy_evidence(request, coding_layout, &targets, &proofs)?;
+    let acknowledgement_roles = targets
+        .iter()
+        .map(|target| {
+            request
+                .candidates
+                .iter()
+                .find(|candidate| candidate.target_id == *target)
+                .map(|candidate| candidate.acknowledgement)
+                .ok_or(ContractError::InternalContract)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if acknowledgement_roles
+        .iter()
+        .filter(|role| **role == ShardAcknowledgement::Required)
+        .count()
+        < usize::from(coding_layout.data_slices())
+    {
+        return Err(ContractError::ResourceExhausted);
+    }
+    let evidence = policy_evidence(
+        request,
+        coding_layout,
+        &targets,
+        &acknowledgement_roles,
+        &proofs,
+    )?;
     Ok(PlacementPlan {
         coding_layout,
         slice_targets: BoundedItems::new(targets, MAXIMUM_SLICES)
+            .map_err(|_| ContractError::InternalContract)?,
+        acknowledgement_roles: BoundedItems::new(acknowledgement_roles, MAXIMUM_SLICES)
             .map_err(|_| ContractError::InternalContract)?,
         topology_revision: request.topology_revision,
         capacity_revision: request.capacity_revision,
@@ -413,6 +440,7 @@ fn policy_evidence(
     request: PlacementRequest<'_>,
     layout: CodingLayout,
     targets: &[TargetId],
+    acknowledgement_roles: &[ShardAcknowledgement],
     proofs: &[ProtectionProof],
 ) -> Result<blake3::Hash, ContractError> {
     let mut digest = blake3::Hasher::new();
@@ -422,8 +450,12 @@ fn policy_evidence(
     digest.update(&layout.data_slices().to_be_bytes());
     digest.update(&layout.recovery_slices().to_be_bytes());
     digest.update(&layout.slice_bytes().to_be_bytes());
-    for target in targets {
+    for (target, acknowledgement) in targets.iter().zip(acknowledgement_roles) {
         digest.update(&target.as_bytes());
+        digest.update(&[match acknowledgement {
+            ShardAcknowledgement::Required => 1,
+            ShardAcknowledgement::Eventual => 0,
+        }]);
     }
     for proof in proofs {
         digest.update(&[u8::from(proof.survives)]);
@@ -444,7 +476,7 @@ fn policy_evidence(
 #[cfg(test)]
 mod tests {
     use meshspan_contracts::{
-        PlacementCandidate, PlacementPolicy, PlacementRequest, RequestContext,
+        PlacementCandidate, PlacementPolicy, PlacementRequest, RequestContext, ShardAcknowledgement,
     };
     use meshspan_domain::{
         FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId, FaultGroupMember, HostId,
@@ -601,6 +633,7 @@ mod tests {
             target_generation: 1,
             writable_bytes: 8 * 1_024 * 1_024,
             performance_weight: 100,
+            acknowledgement: ShardAcknowledgement::Required,
         }
     }
 

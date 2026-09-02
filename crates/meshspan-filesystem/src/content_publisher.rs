@@ -24,7 +24,12 @@ use crate::{
     VolumeContentKeyring, VolumeContentKeys,
 };
 
+mod protected;
 mod recovery;
+
+pub use protected::{
+    ContentShardRouter, ProtectedContentAccess, ProtectedContentPublisher, ProtectionConfiguration,
+};
 
 const SPOOL_DIRECTORY: &str = "content-spools";
 const PREPARE_PAGE_ITEMS: usize = 1_000;
@@ -122,17 +127,11 @@ impl<P: StorageProvider, R: RandomSource, K: VolumeContentKeys>
         chunk_limits: ContentChunkLimits,
         access: UnprotectedContentAccess,
     ) -> Result<Self, ContentPublicationError> {
-        fs::create_dir_all(state_directory)?;
-        let root = Dir::open_ambient_dir(state_directory, ambient_authority())?;
-        match root.create_dir(SPOOL_DIRECTORY) {
-            Ok(()) => sync_directory(&root)?,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error.into()),
-        }
+        let spools = open_spools(state_directory)?;
         Ok(Self {
             catalog: DurableContentCatalog::open(state_directory, opened_at)
                 .map_err(map_catalog)?,
-            spools: root.open_dir(SPOOL_DIRECTORY)?,
+            spools,
             provider,
             random,
             key_envelopes,
@@ -550,11 +549,7 @@ impl<P: StorageProvider, R, K> UnprotectedContentPublisher<P, R, K> {
 
 impl<P, R, K> UnprotectedContentPublisher<P, R, K> {
     fn cleanup_spool(&self, operation_id: OperationId) -> std::io::Result<()> {
-        match self.spools.remove_file(spool_name(operation_id)) {
-            Ok(()) => sync_directory(&self.spools),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
-        }
+        cleanup_spool(&self.spools, operation_id)
     }
 }
 
@@ -639,6 +634,25 @@ fn spool_name(operation_id: OperationId) -> String {
 
 fn sync_directory(directory: &Dir) -> std::io::Result<()> {
     directory.open(".")?.sync_all()
+}
+
+fn open_spools(state_directory: &Path) -> Result<Dir, ContentPublicationError> {
+    fs::create_dir_all(state_directory)?;
+    let root = Dir::open_ambient_dir(state_directory, ambient_authority())?;
+    match root.create_dir(SPOOL_DIRECTORY) {
+        Ok(()) => sync_directory(&root)?,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(root.open_dir(SPOOL_DIRECTORY)?)
+}
+
+fn cleanup_spool(spools: &Dir, operation_id: OperationId) -> std::io::Result<()> {
+    match spools.remove_file(spool_name(operation_id)) {
+        Ok(()) => sync_directory(spools),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn map_catalog(error: ContentCatalogError) -> ContentPublicationError {

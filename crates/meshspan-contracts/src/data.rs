@@ -129,6 +129,8 @@ pub struct PlacementPlan {
     pub coding_layout: CodingLayout,
     /// Target selected for every indexed slice.
     pub slice_targets: BoundedItems<TargetId>,
+    /// Commit requirement for every indexed slice in the same order as `slice_targets`.
+    pub acknowledgement_roles: BoundedItems<ShardAcknowledgement>,
     /// Topology revision used for eligibility and failure proof.
     pub topology_revision: Revision,
     /// Capacity observation revision used for admission.
@@ -137,6 +139,15 @@ pub struct PlacementPlan {
     pub protection_proofs: BoundedItems<ProtectionProof>,
     /// Independently versioned acknowledgement/locality evidence.
     pub policy_evidence: VersionedPayload,
+}
+
+/// Whether one planned shard gates acknowledgement of the logical write.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShardAcknowledgement {
+    /// The logical write cannot commit until this exact shard is durable.
+    Required,
+    /// The shard remains repair work but does not delay logical commit.
+    Eventual,
 }
 
 /// One fixed-revision target candidate admitted to placement planning.
@@ -150,6 +161,8 @@ pub struct PlacementCandidate {
     pub writable_bytes: u64,
     /// Relative performance preference; independence remains a hard constraint.
     pub performance_weight: u16,
+    /// Whether a shard on this target gates logical write acknowledgement.
+    pub acknowledgement: ShardAcknowledgement,
 }
 
 /// Complete fixed-revision input to one placement decision.

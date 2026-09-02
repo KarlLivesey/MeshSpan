@@ -78,7 +78,8 @@ pub use content_key_transit::{
     ContentKeyTransitCipher, ContentKeyTransitError, TransitWrappedContentKey,
 };
 pub use content_publisher::{
-    DurableContentSink, UnprotectedContentAccess, UnprotectedContentPublisher,
+    ContentShardRouter, DurableContentSink, ProtectedContentAccess, ProtectedContentPublisher,
+    ProtectionConfiguration, UnprotectedContentAccess, UnprotectedContentPublisher,
 };
 pub use content_reader::{
     ContentReadError, ContentReadRequest, DurableContentReader, PublishedContentReference,

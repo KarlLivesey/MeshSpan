@@ -39,7 +39,7 @@ pub use conformance::{
 };
 pub use data::{
     CodingLayout, CodingLayoutError, CodingScheme, PlacementCandidate, PlacementPlan,
-    PlacementPolicy, PlacementRequest, ReconstructionRequest,
+    PlacementPolicy, PlacementRequest, ReconstructionRequest, ShardAcknowledgement,
 };
 pub use federation_storage::{
     FederatedShardPermit, FederatedStorageInventoryRecord, FederatedStoragePermitMacKey,

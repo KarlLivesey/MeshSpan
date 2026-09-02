@@ -659,7 +659,8 @@ impl DurableContentCatalog {
                      WHERE chunks.operation_id = ?1 AND layouts.operation_id IS NULL)
                     +
                     (SELECT COUNT(*) FROM content_stripe_shards
-                     WHERE operation_id = ?1 AND receipt_recorded_at IS NULL)",
+                     WHERE operation_id = ?1 AND receipt_recorded_at IS NULL
+                       AND required_for_commit = 1)",
                 [request.operation_id.as_bytes().as_slice()],
                 |row| row.get(0),
             )?

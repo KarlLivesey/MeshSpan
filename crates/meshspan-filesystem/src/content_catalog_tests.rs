@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_contracts::{
-    BoundedBytes, CodingLayout, ShardIdentity, ShardReceipt, VersionedPayload,
+    BoundedBytes, CodingLayout, ShardAcknowledgement, ShardIdentity, ShardReceipt, VersionedPayload,
 };
 use meshspan_domain::{
     ContentManifestId, EntropyError, NodeId, OperationId, RandomSource, Revision, TargetId,
@@ -31,41 +31,7 @@ struct SourceLayoutFixture {
 fn protected_stripe_plan_and_receipts_survive_restart_before_commit()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
-    let request = ContentPublicationRequest {
-        format_version: 2,
-        logical_length: 2,
-        ..request()?
-    };
-    let chunk = PreparedContentChunk {
-        storage_layout_digest: [0; 32],
-        ..chunk(0, 20)?
-    };
-    let layout = CodingLayout::new(2, 2, 16)?;
-    let shards = (0_u8..4)
-        .map(|index| {
-            Ok(PreparedProtectedShard {
-                shard_index: u16::from(index),
-                shard_generation: 1,
-                provider_operation_id: OperationId::from_bytes([30 + index; 16])?,
-                expected_length: 16,
-                expected_digest: [50 + index; 32],
-                target_id: TargetId::from_bytes([70 + index; 16])?,
-                target_generation: 2,
-            })
-        })
-        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
-    let stripe = PreparedProtectedStripe::from_untrusted(
-        request,
-        chunk,
-        layout,
-        Revision::new(5),
-        Revision::new(6),
-        VersionedPayload {
-            format_version: 1,
-            bytes: BoundedBytes::copy_from(b"two-device-loss", 64)?,
-        },
-        shards,
-    )?;
+    let (request, stripe) = protected_fixture()?;
     assert_ne!(stripe.chunk().storage_layout_digest, [0; 32]);
 
     let manifest = {
@@ -102,37 +68,103 @@ fn protected_stripe_plan_and_receipts_survive_restart_before_commit()
     };
 
     let mut catalog = DurableContentCatalog::open(directory.path(), UnixMicros::new(5))?;
+    assert_eq!(catalog.protected_stripe(request, 0)?, stripe);
     let pending = catalog.pending_protected_shards(request, None, 10)?;
     assert_eq!(pending.shards.len(), 4);
-    for (cursor, shard) in pending.shards.as_slice() {
-        let receipt = ShardReceipt {
-            operation_id: shard.provider_operation_id,
-            shard: ShardIdentity {
-                manifest_digest: manifest.root_digest,
-                stripe_index: cursor.chunk_index,
-                shard_index: shard.shard_index,
-                generation: shard.shard_generation,
-            },
-            length: shard.expected_length,
-            digest: shard.expected_digest,
-            target_id: shard.target_id,
-            target_generation: shard.target_generation,
-        };
+    for (cursor, shard) in pending
+        .shards
+        .as_slice()
+        .iter()
+        .filter(|(_, shard)| shard.acknowledgement == ShardAcknowledgement::Required)
+    {
+        let receipt = protected_receipt(manifest.root_digest, *cursor, *shard);
         catalog.record_protected_receipt(request, receipt, UnixMicros::new(6))?;
         catalog.record_protected_receipt(request, receipt, UnixMicros::new(7))?;
     }
+    let eventual = catalog.pending_protected_shards(request, None, 10)?;
+    assert_eq!(eventual.shards.len(), 1);
+    assert_eq!(catalog.finish(request, UnixMicros::new(8))?, manifest);
+    let (cursor, shard) = eventual.shards.as_slice()[0];
+    catalog.record_protected_receipt(
+        request,
+        protected_receipt(manifest.root_digest, cursor, shard),
+        UnixMicros::new(9),
+    )?;
     assert!(
         catalog
             .pending_protected_shards(request, None, 10)?
             .shards
             .is_empty()
     );
-    assert_eq!(catalog.finish(request, UnixMicros::new(8))?, manifest);
     drop(catalog);
 
     let catalog = DurableContentCatalog::open(directory.path(), UnixMicros::new(9))?;
     assert_eq!(catalog.resolve(request)?, Some(manifest));
     Ok(())
+}
+
+fn protected_fixture()
+-> Result<(ContentPublicationRequest, PreparedProtectedStripe), Box<dyn std::error::Error>> {
+    let request = ContentPublicationRequest {
+        format_version: 2,
+        logical_length: 2,
+        ..request()?
+    };
+    let chunk = PreparedContentChunk {
+        storage_layout_digest: [0; 32],
+        ..chunk(0, 20)?
+    };
+    let shards = (0_u8..4)
+        .map(|index| {
+            Ok(PreparedProtectedShard {
+                shard_index: u16::from(index),
+                shard_generation: 1,
+                provider_operation_id: OperationId::from_bytes([30 + index; 16])?,
+                expected_length: 16,
+                expected_digest: [50 + index; 32],
+                target_id: TargetId::from_bytes([70 + index; 16])?,
+                target_generation: 2,
+                acknowledgement: if index == 3 {
+                    ShardAcknowledgement::Eventual
+                } else {
+                    ShardAcknowledgement::Required
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+    let stripe = PreparedProtectedStripe::from_untrusted(
+        request,
+        chunk,
+        CodingLayout::new(2, 2, 16)?,
+        Revision::new(5),
+        Revision::new(6),
+        VersionedPayload {
+            format_version: 1,
+            bytes: BoundedBytes::copy_from(b"two-device-loss", 64)?,
+        },
+        shards,
+    )?;
+    Ok((request, stripe))
+}
+
+const fn protected_receipt(
+    manifest_digest: [u8; 32],
+    cursor: ProtectedShardCursor,
+    shard: PreparedProtectedShard,
+) -> ShardReceipt {
+    ShardReceipt {
+        operation_id: shard.provider_operation_id,
+        shard: ShardIdentity {
+            manifest_digest,
+            stripe_index: cursor.chunk_index,
+            shard_index: shard.shard_index,
+            generation: shard.shard_generation,
+        },
+        length: shard.expected_length,
+        digest: shard.expected_digest,
+        target_id: shard.target_id,
+        target_generation: shard.target_generation,
+    }
 }
 
 #[test]
