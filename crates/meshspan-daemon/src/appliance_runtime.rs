@@ -37,7 +37,8 @@ use meshspan_domain::{
 };
 use meshspan_metadata::{
     AuthoritativeRepository, ClaimMaintenanceWork, CommandContext, ConsensusStoreError, JoinRoles,
-    LocalDatabase, MetadataStoreError, PartitionDatabase, RepositoryError,
+    LocalDatabase, MetadataStoreError, PageLimit, PartitionDatabase, RepositoryError,
+    StorageScopeDrainCursor,
 };
 use meshspan_protocol::v1::control_envelope::Message;
 use meshspan_protocol::v1::{
@@ -95,17 +96,18 @@ use crate::{
     VolumeInventoryService, api_key_issuance_api_router, authentication_method_listing_api_router,
     authentication_method_revocation_api_router, classify_native_filesystem_error,
     current_session_api_router, directory_listing_api_router, execute_rebalance_step,
-    execute_resumable_storage_scrub, execute_resumable_target_reconciliation, execute_shard_repair,
-    execute_target_drain_step, file_read_api_router, identity_administration_api_router,
-    native_namespace_mutation_api_router, native_upload_api_router, node_enrolment_api_router,
-    node_join_grant_api_router, object_stat_api_router, operation_status_api_router,
-    passkey_challenge_api_router, passkey_registration_api_router,
-    permission_administration_api_router, public_contract_api_router,
-    recovery_bundle_verification_api_router, recovery_code_issuance_api_router,
-    revoke_current_session_api_router, session_api_router, setup_api_router_with_mutations,
-    smb_export_administration_api_router, step_up_current_session_api_router,
-    storage_folder_administration_api_router, topology_administration_api_router,
-    totp_registration_api_router, volume_administration_api_router, volume_inventory_api_router,
+    execute_resumable_storage_scrub, execute_resumable_target_reconciliation,
+    execute_scope_drain_action, execute_shard_repair, execute_target_drain_step,
+    file_read_api_router, identity_administration_api_router, native_namespace_mutation_api_router,
+    native_upload_api_router, node_enrolment_api_router, node_join_grant_api_router,
+    object_stat_api_router, operation_status_api_router, passkey_challenge_api_router,
+    passkey_registration_api_router, permission_administration_api_router,
+    public_contract_api_router, recovery_bundle_verification_api_router,
+    recovery_code_issuance_api_router, revoke_current_session_api_router, session_api_router,
+    setup_api_router_with_mutations, smb_export_administration_api_router,
+    step_up_current_session_api_router, storage_folder_administration_api_router,
+    topology_administration_api_router, totp_registration_api_router,
+    volume_administration_api_router, volume_inventory_api_router,
 };
 
 mod storage_folder_backend;
@@ -134,6 +136,7 @@ const DRAIN_ROUTE_ITEMS: usize = 1;
 const DRAIN_RETRY_MICROS: u64 = 1_000_000;
 const REBALANCE_ADMISSION_INTERVAL_MICROS: u64 = 60 * 1_000_000;
 const REBALANCE_PAGE_ITEMS: usize = 64;
+const SCOPE_DRAIN_PAGE_ITEMS: usize = 32;
 
 type AuthorityTask = (
     MetadataAuthorityHandle,
@@ -1968,6 +1971,7 @@ struct StorageTargetRuntime {
     rebalance_admission_revision: Option<Revision>,
     completed_rebalance_revision: Option<Revision>,
     next_rebalance_admission_at: Option<UnixMicros>,
+    scope_drain_cursor: Option<StorageScopeDrainCursor>,
     readiness: Arc<RuntimeReadiness>,
 }
 
@@ -2014,6 +2018,7 @@ impl StorageTargetRuntime {
             rebalance_admission_revision: None,
             completed_rebalance_revision: None,
             next_rebalance_admission_at: None,
+            scope_drain_cursor: None,
             readiness,
         }
     }
@@ -2049,10 +2054,33 @@ impl StorageTargetRuntime {
         self.admit_periodic_scrubs(now)?;
         self.admit_rebalance_scans(now)?;
         self.execute_one_repair(now)?;
+        self.execute_one_scope_drain()?;
         self.execute_one_target_drain(now)?;
         self.execute_one_rebalance(now)?;
         self.execute_one_reconciliation(now)?;
         self.execute_one_scrub_page(now)
+    }
+
+    fn execute_one_scope_drain(&mut self) -> Result<(), ()> {
+        let reader = self.maintenance_authority.reader();
+        let page = reader
+            .pending_storage_scope_drains(
+                self.scope_drain_cursor,
+                PageLimit::new(SCOPE_DRAIN_PAGE_ITEMS).map_err(|_| ())?,
+            )
+            .map_err(|_| ())?;
+        for record in page.items {
+            if let Some(action) = reader
+                .storage_scope_drain_action(record.drain_id)
+                .map_err(|_| ())?
+            {
+                execute_scope_drain_action(&self.maintenance_authority, action).map_err(|_| ())?;
+                self.scope_drain_cursor = None;
+                return Ok(());
+            }
+        }
+        self.scope_drain_cursor = page.next;
+        Ok(())
     }
 
     fn admit_rebalance_scans(&mut self, now: UnixMicros) -> Result<(), ()> {

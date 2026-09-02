@@ -182,6 +182,7 @@ mod recovery_code_session_creation;
 mod recovery_code_session_creation_tests;
 mod revoke_session;
 mod revoke_session_api;
+mod scope_drain_worker;
 mod scrub_finding_scheduler;
 mod setup_api;
 #[cfg(test)]
@@ -207,6 +208,7 @@ pub use rebalance_worker::{
     RebalanceCatalogue, RebalanceExecution, RebalanceExecutionError, RebalanceMaintenanceAuthority,
     RebalanceStepReceipt, execute_rebalance_step,
 };
+pub use scope_drain_worker::{ScopeDrainCoordinatorError, execute_scope_drain_action};
 pub use scrub_finding_scheduler::{
     AutomaticScrubFindingScheduler, RepairCandidateResolver, ScrubFindingSchedulingError,
     ScrubFindingSink,

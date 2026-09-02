@@ -100,8 +100,16 @@ fn load_provider_context(
                     OR (?4 = 1 AND st.state IN (?2, 3)))
                AND st.retired_at IS NULL
                AND tg.state = ?3 AND tg.retired_at IS NULL
-               AND n.state = 2 AND n.retired_at IS NULL
+               AND ((?4 = 0 AND n.state = 2) OR (?4 = 1 AND n.state IN (2, 3)))
+               AND n.retired_at IS NULL
                AND h.state = 1 AND h.retired_at IS NULL
+               AND (?4 = 1 OR NOT EXISTS(
+                    SELECT 1 FROM storage_scope_drains d
+                    WHERE d.state < 3 AND (
+                        (d.scope_kind = 1 AND d.scope_id = st.node_id)
+                        OR (d.scope_kind = 2 AND EXISTS(
+                            SELECT 1 FROM host_fault_group_memberships hfg
+                            WHERE hfg.host_id = st.host_id AND hfg.group_id = d.scope_id)))))
                AND (SELECT COUNT(*) FROM meshes) = 1",
             params![
                 target_id.as_bytes().as_slice(),
@@ -212,6 +220,7 @@ pub(super) fn register(
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
     let (usage_limit_kind, usage_limit_value) = validate(command)?;
+    reject_draining_scope(transaction, command.node_id, command.host_id)?;
     let target = command.target_id.as_bytes();
     let node = command.node_id.as_bytes();
     let host = command.host_id.as_bytes();
@@ -266,6 +275,30 @@ pub(super) fn register(
         kind: EntityKind::StorageTarget,
         id: target,
     })
+}
+
+fn reject_draining_scope(
+    transaction: &Transaction<'_>,
+    node_id: NodeId,
+    host_id: HostId,
+) -> Result<(), RepositoryError> {
+    let blocked = transaction.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM storage_scope_drains d
+            WHERE d.state < 3 AND (
+                (d.scope_kind = 1 AND d.scope_id = ?1)
+                OR (d.scope_kind = 2 AND EXISTS(
+                    SELECT 1 FROM host_fault_group_memberships hfg
+                    WHERE hfg.host_id = ?2 AND hfg.group_id = d.scope_id)))
+         )",
+        params![node_id.as_bytes().as_slice(), host_id.as_bytes().as_slice()],
+        |row| row.get::<_, i64>(0),
+    )?;
+    if blocked == 0 {
+        Ok(())
+    } else {
+        Err(RepositoryError::InvalidCommand)
+    }
 }
 
 fn validate(command: &RegisterStorageTarget) -> Result<(u8, i64), RepositoryError> {

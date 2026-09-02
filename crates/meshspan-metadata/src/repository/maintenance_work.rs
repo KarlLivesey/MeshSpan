@@ -18,17 +18,26 @@ mod drain;
 mod rebalance;
 mod reconcile;
 mod repair;
+mod scope_drain;
 mod scrub;
 mod scrub_schedule;
 
 pub use rebalance::RebalanceScanProgress;
 pub use repair::ShardRepairEffectRecord;
+pub use scope_drain::{
+    StorageScopeDrainAction, StorageScopeDrainCursor, StorageScopeDrainRecord,
+    StorageScopeDrainState,
+};
 pub use scrub::ScrubPassEffectRecord;
 pub use scrub_schedule::{DueStorageScrub, DueStorageScrubCursor, DueStorageScrubPage};
 
 pub use drain::empty_target_drain_catalogue_digest;
 pub(super) use drain::{attest_target, begin_target};
 pub(super) use rebalance::commit_page as commit_rebalance_page;
+pub(super) use scope_drain::{
+    begin as begin_scope, complete as complete_scope,
+    fence_node_membership as fence_scope_node_membership,
+};
 
 const JOB_QUEUED: i64 = 1;
 const JOB_CLAIMED: i64 = 2;
@@ -124,6 +133,46 @@ pub struct MaintenanceEffectReference {
 }
 
 impl AuthoritativeRepository {
+    /// Returns one independently validated node or fault-group drain.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed identities, scope/state combinations or SQLite errors.
+    pub fn storage_scope_drain(
+        &self,
+        drain_id: WorkId,
+    ) -> Result<Option<StorageScopeDrainRecord>, RepositoryError> {
+        scope_drain::load(&self.database, drain_id)
+    }
+
+    /// Returns the unique currently actionable transition for one scope drain.
+    ///
+    /// `None` means a child target drain or consensus membership transition must converge first.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when scope, child evidence or active quorum state is contradictory.
+    pub fn storage_scope_drain_action(
+        &self,
+        drain_id: WorkId,
+    ) -> Result<Option<StorageScopeDrainAction>, RepositoryError> {
+        scope_drain::next_action(&self.database, drain_id)
+    }
+
+    /// Pages active node and fault-group drains for restart-safe coordinator discovery.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid bounds and malformed persisted scope state.
+    pub fn pending_storage_scope_drains(
+        &self,
+        after: Option<StorageScopeDrainCursor>,
+        limit: super::PageLimit,
+    ) -> Result<super::Page<StorageScopeDrainRecord, StorageScopeDrainCursor>, RepositoryError>
+    {
+        scope_drain::pending_page(&self.database, after, limit)
+    }
+
     /// Returns one exact durable maintenance job and its current claim.
     ///
     /// # Errors

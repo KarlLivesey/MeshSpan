@@ -358,7 +358,14 @@ fn active_target_generation_exists(
               AND tg.state = 1 AND tg.retired_at IS NULL
               AND n.state = 2 AND n.retired_at IS NULL
               AND h.state = 1 AND h.retired_at IS NULL
-         )",
+              AND NOT EXISTS(
+                SELECT 1 FROM storage_scope_drains d
+                WHERE d.state < 3 AND (
+                    (d.scope_kind = 1 AND d.scope_id = st.node_id)
+                    OR (d.scope_kind = 2 AND EXISTS(
+                        SELECT 1 FROM host_fault_group_memberships hfg
+                        WHERE hfg.host_id = st.host_id AND hfg.group_id = d.scope_id)))
+         ))",
         params![target_id.as_bytes().as_slice(), super::to_i64(generation)?],
         |row| row.get::<_, i64>(0),
     )? == 1)

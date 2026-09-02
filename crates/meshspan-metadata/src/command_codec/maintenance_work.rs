@@ -8,10 +8,11 @@ use super::MetadataCommandCodecError;
 use super::decoder::Decoder;
 use super::encoder::Encoder;
 use crate::{
-    AttestStorageTargetDrain, BeginStorageTargetDrain, ClaimMaintenanceWork,
-    CommitRebalanceScanPage, CommitScrubPass, CommitShardRepair, CommitTargetReconciliation,
-    CompleteMaintenanceWork, MaintenanceWorkCompletion, QueueMaintenanceWork, RebalanceScanCursor,
-    RenewMaintenanceWork,
+    AttestStorageTargetDrain, BeginStorageScopeDrain, BeginStorageTargetDrain,
+    ClaimMaintenanceWork, CommitRebalanceScanPage, CommitScrubPass, CommitShardRepair,
+    CommitTargetReconciliation, CompleteMaintenanceWork, CompleteStorageScopeDrain,
+    FenceStorageNodeDrainMembership, MaintenanceWorkCompletion, QueueMaintenanceWork,
+    RebalanceScanCursor, RenewMaintenanceWork,
 };
 
 pub(super) const QUEUE_MAINTENANCE_WORK: u16 = 36;
@@ -24,6 +25,9 @@ pub(super) const BEGIN_STORAGE_TARGET_DRAIN: u16 = 42;
 pub(super) const ATTEST_STORAGE_TARGET_DRAIN: u16 = 43;
 pub(super) const COMMIT_REBALANCE_SCAN_PAGE: u16 = 44;
 pub(super) const COMMIT_TARGET_RECONCILIATION: u16 = 45;
+pub(super) const BEGIN_STORAGE_SCOPE_DRAIN: u16 = 46;
+pub(super) const FENCE_STORAGE_NODE_DRAIN_MEMBERSHIP: u16 = 47;
+pub(super) const COMPLETE_STORAGE_SCOPE_DRAIN: u16 = 48;
 
 pub(super) fn encode_command(
     encoder: &mut Encoder,
@@ -50,6 +54,15 @@ pub(super) fn encode_command(
         }
         crate::AuthoritativeCommand::BeginStorageTargetDrain(value) => {
             encode_begin_target_drain(encoder, *value)?;
+        }
+        crate::AuthoritativeCommand::BeginStorageScopeDrain(value) => {
+            encode_begin_scope_drain(encoder, *value)?;
+        }
+        crate::AuthoritativeCommand::FenceStorageNodeDrainMembership(value) => {
+            encode_fence_node_drain(encoder, *value)?;
+        }
+        crate::AuthoritativeCommand::CompleteStorageScopeDrain(value) => {
+            encode_complete_scope_drain(encoder, *value)?;
         }
         crate::AuthoritativeCommand::AttestStorageTargetDrain(value) => {
             encode_target_drain_attestation(encoder, *value)?;
@@ -78,6 +91,9 @@ pub(super) const fn is_command_kind(kind: u16) -> bool {
             | ATTEST_STORAGE_TARGET_DRAIN
             | COMMIT_REBALANCE_SCAN_PAGE
             | COMMIT_TARGET_RECONCILIATION
+            | BEGIN_STORAGE_SCOPE_DRAIN
+            | FENCE_STORAGE_NODE_DRAIN_MEMBERSHIP
+            | COMPLETE_STORAGE_SCOPE_DRAIN
     )
 }
 
@@ -112,6 +128,12 @@ pub(super) fn decode_command(
             .map(crate::AuthoritativeCommand::CommitRebalanceScanPage),
         COMMIT_TARGET_RECONCILIATION => decode_reconciliation(decoder)
             .map(crate::AuthoritativeCommand::CommitTargetReconciliation),
+        BEGIN_STORAGE_SCOPE_DRAIN => decode_begin_scope_drain(decoder)
+            .map(crate::AuthoritativeCommand::BeginStorageScopeDrain),
+        FENCE_STORAGE_NODE_DRAIN_MEMBERSHIP => decode_fence_node_drain(decoder)
+            .map(crate::AuthoritativeCommand::FenceStorageNodeDrainMembership),
+        COMPLETE_STORAGE_SCOPE_DRAIN => decode_complete_scope_drain(decoder)
+            .map(crate::AuthoritativeCommand::CompleteStorageScopeDrain),
         _ => Err(MetadataCommandCodecError::Unsupported),
     }
 }
@@ -202,6 +224,84 @@ fn decode_begin_target_drain(
         work: decode_queue_fields(decoder)?,
         allow_temporary_degraded: decoder.bool()?,
         cleanup_requested: decoder.bool()?,
+    })
+}
+
+fn encode_begin_scope_drain(
+    encoder: &mut Encoder,
+    value: BeginStorageScopeDrain,
+) -> Result<(), MetadataCommandCodecError> {
+    let subject = WorkSubject::Drain(value.scope).encode();
+    if !matches!(
+        value.scope,
+        meshspan_work::DrainScope::Node { .. } | meshspan_work::DrainScope::FaultGroup { .. }
+    ) || WorkSubject::decode(&subject).ok() != Some(WorkSubject::Drain(value.scope))
+    {
+        return Err(MetadataCommandCodecError::Invalid);
+    }
+    encoder.u16(BEGIN_STORAGE_SCOPE_DRAIN)?;
+    encoder.identifier(value.drain_id.as_bytes())?;
+    encoder.bytes(&subject, MAXIMUM_WORK_SUBJECT_BYTES)?;
+    encoder.bool(value.allow_temporary_degraded)?;
+    encoder.bool(value.cleanup_requested)
+}
+
+fn decode_begin_scope_drain(
+    decoder: &mut Decoder<'_>,
+) -> Result<BeginStorageScopeDrain, MetadataCommandCodecError> {
+    let drain_id = WorkId::from_bytes(decoder.identifier()?)?;
+    let subject = WorkSubject::decode(&decoder.bytes(MAXIMUM_WORK_SUBJECT_BYTES)?)
+        .map_err(|_| MetadataCommandCodecError::Invalid)?;
+    let WorkSubject::Drain(
+        scope @ (meshspan_work::DrainScope::Node { .. }
+        | meshspan_work::DrainScope::FaultGroup { .. }),
+    ) = subject
+    else {
+        return Err(MetadataCommandCodecError::Invalid);
+    };
+    Ok(BeginStorageScopeDrain {
+        drain_id,
+        scope,
+        allow_temporary_degraded: decoder.bool()?,
+        cleanup_requested: decoder.bool()?,
+    })
+}
+
+fn encode_fence_node_drain(
+    encoder: &mut Encoder,
+    value: FenceStorageNodeDrainMembership,
+) -> Result<(), MetadataCommandCodecError> {
+    encoder.u16(FENCE_STORAGE_NODE_DRAIN_MEMBERSHIP)?;
+    encoder.identifier(value.drain_id.as_bytes())?;
+    encoder.identifier(value.node_id.as_bytes())?;
+    encoder.u64(positive(value.node_incarnation)?)
+}
+
+fn decode_fence_node_drain(
+    decoder: &mut Decoder<'_>,
+) -> Result<FenceStorageNodeDrainMembership, MetadataCommandCodecError> {
+    Ok(FenceStorageNodeDrainMembership {
+        drain_id: WorkId::from_bytes(decoder.identifier()?)?,
+        node_id: NodeId::from_bytes(decoder.identifier()?)?,
+        node_incarnation: positive(decoder.u64()?)?,
+    })
+}
+
+fn encode_complete_scope_drain(
+    encoder: &mut Encoder,
+    value: CompleteStorageScopeDrain,
+) -> Result<(), MetadataCommandCodecError> {
+    encoder.u16(COMPLETE_STORAGE_SCOPE_DRAIN)?;
+    encoder.identifier(value.drain_id.as_bytes())?;
+    encoder.fixed(&nonzero_digest(value.safety_evidence_digest)?)
+}
+
+fn decode_complete_scope_drain(
+    decoder: &mut Decoder<'_>,
+) -> Result<CompleteStorageScopeDrain, MetadataCommandCodecError> {
+    Ok(CompleteStorageScopeDrain {
+        drain_id: WorkId::from_bytes(decoder.identifier()?)?,
+        safety_evidence_digest: nonzero_digest(decoder.fixed()?)?,
     })
 }
 

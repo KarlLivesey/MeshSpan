@@ -551,6 +551,9 @@ fn is_maintenance_work_command(command: &AuthoritativeCommand) -> bool {
         command,
         AuthoritativeCommand::QueueMaintenanceWork(_)
             | AuthoritativeCommand::BeginStorageTargetDrain(_)
+            | AuthoritativeCommand::BeginStorageScopeDrain(_)
+            | AuthoritativeCommand::FenceStorageNodeDrainMembership(_)
+            | AuthoritativeCommand::CompleteStorageScopeDrain(_)
             | AuthoritativeCommand::AttestStorageTargetDrain(_)
             | AuthoritativeCommand::ClaimMaintenanceWork(_)
             | AuthoritativeCommand::RenewMaintenanceWork(_)
@@ -574,6 +577,15 @@ fn execute_maintenance_work_command(
         }
         AuthoritativeCommand::BeginStorageTargetDrain(value) => {
             maintenance_work::begin_target(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::BeginStorageScopeDrain(value) => {
+            maintenance_work::begin_scope(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::FenceStorageNodeDrainMembership(value) => {
+            maintenance_work::fence_scope_node_membership(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::CompleteStorageScopeDrain(value) => {
+            maintenance_work::complete_scope(transaction, context, *value, revision)
         }
         AuthoritativeCommand::AttestStorageTargetDrain(value) => {
             maintenance_work::attest_target(transaction, context, *value, revision)
@@ -1233,6 +1245,9 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::AttestStorageTargetDrain(_) => 108,
         AuthoritativeCommand::CommitRebalanceScanPage(_) => 109,
         AuthoritativeCommand::CommitTargetReconciliation(_) => 110,
+        AuthoritativeCommand::BeginStorageScopeDrain(_) => 111,
+        AuthoritativeCommand::FenceStorageNodeDrainMembership(_) => 112,
+        AuthoritativeCommand::CompleteStorageScopeDrain(_) => 113,
     }
 }
 
