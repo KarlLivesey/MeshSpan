@@ -34,6 +34,12 @@ const MAXIMUM_SCENARIOS: usize = 16;
 
 /// Narrow target-aware byte path used by protected publication and reads.
 pub trait ContentShardRouter {
+    /// Returns a stable relative read cost; lower-cost routes are attempted first.
+    #[must_use]
+    fn read_priority(&self, _target_id: meshspan_domain::TargetId, _generation: u64) -> u8 {
+        0
+    }
+
     /// Reserves bytes on the exact target incarnation.
     ///
     /// # Errors
@@ -684,16 +690,31 @@ where
         stripe: &PreparedProtectedStripe,
     ) -> Result<EncryptedContentChunk, ContentReadError> {
         let chunk = stripe.chunk();
-        let mut available = Vec::with_capacity(stripe.shards().len());
-        let mut digests = Vec::with_capacity(stripe.shards().len());
+        let mut available = std::iter::repeat_with(|| None)
+            .take(stripe.shards().len())
+            .collect::<Vec<_>>();
+        let digests = stripe
+            .shards()
+            .iter()
+            .map(|shard| shard.expected_digest)
+            .collect::<Vec<_>>();
+        let mut read_order = (0..stripe.shards().len()).collect::<Vec<_>>();
+        read_order.sort_by_key(|index| {
+            let shard = stripe.shards()[*index];
+            self.router
+                .read_priority(shard.target_id, shard.target_generation)
+        });
         let mut valid = 0_usize;
-        for shard in stripe.shards() {
-            digests.push(shard.expected_digest);
-            let bytes = self.read_shard(read, manifest, chunk.chunk_index, *shard)?;
+        for index in read_order {
+            if valid >= usize::from(stripe.coding_layout().data_slices()) {
+                break;
+            }
+            let bytes =
+                self.read_shard(read, manifest, chunk.chunk_index, stripe.shards()[index])?;
             if bytes.is_some() {
                 valid += 1;
             }
-            available.push(bytes);
+            available[index] = bytes;
         }
         if valid < usize::from(stripe.coding_layout().data_slices()) {
             return Err(ContentReadError::Unavailable);

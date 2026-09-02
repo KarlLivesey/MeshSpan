@@ -578,7 +578,10 @@ async fn clean_machine_operator_flow_uses_only_cli_and_public_https() -> Result<
 
         let content = b"clean machine native HTTPS round trip";
         upload_file(root.address, &root_client, api_key, &volume_id, content).await?;
-        wait_for_file_surfaces(peer.address, &peer_client, api_key, &volume_id, content).await
+        wait_for_file_surfaces(peer.address, &peer_client, api_key, &volume_id, content).await?;
+        processes[0].kill()?;
+        processes[0].wait()?;
+        assert_file_surfaces(peer.address, &peer_client, api_key, &volume_id, content).await
     }
     .await;
     stop_processes(&mut processes);

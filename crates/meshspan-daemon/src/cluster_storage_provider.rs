@@ -196,6 +196,10 @@ impl ClusterShardRouter {
 }
 
 impl ContentShardRouter for ClusterShardRouter {
+    fn read_priority(&self, target_id: TargetId, generation: u64) -> u8 {
+        u8::from(self.local(target_id, generation).is_none())
+    }
+
     fn reserve(
         &mut self,
         request: ReserveStorageRequest,

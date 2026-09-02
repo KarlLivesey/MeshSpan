@@ -2,7 +2,7 @@
 
 //! Production protection snapshot derived from current replicated topology and local capacity.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use meshspan_contracts::{PlacementCandidate, ShardAcknowledgement};
 use meshspan_domain::{
@@ -10,7 +10,9 @@ use meshspan_domain::{
     TargetId, Topology, uuid_v8,
 };
 use meshspan_filesystem::{ContentPublicationError, ProtectionConfiguration};
-use meshspan_metadata::{AuthoritativeRepository, PageLimit, StorageUsageLimit};
+use meshspan_metadata::{
+    AuthoritativeRepository, PageLimit, StorageTargetProviderContext, StorageUsageLimit,
+};
 
 use crate::NativeStorageTarget;
 
@@ -27,23 +29,23 @@ pub(crate) fn protection_configuration(
     let revision = authority
         .current_revision()
         .map_err(|_| ContentPublicationError::Unavailable)?;
-    let hosts = active_hosts(authority)?;
-    let target_hosts = active_target_hosts(authority)?;
+    let targets = active_targets(authority)?;
+    if !local_targets.iter().all(|local| {
+        targets
+            .iter()
+            .any(|(context, _)| same_target_generation(*context, local.context()))
+    }) {
+        return Err(ContentPublicationError::Unavailable);
+    }
     let mut topology = Topology::default();
     let machine_class = derived_class(b"meshspan.fault-class.machine.v1\0")?;
     let device_class = derived_class(b"meshspan.fault-class.storage-device.v1\0")?;
     let mut registered_hosts = BTreeSet::new();
-    for target in local_targets {
-        let context = target.context();
-        let host = target_hosts
-            .get(&context.target_id)
-            .copied()
-            .or_else(|| hosts.get(&context.node_id).copied())
-            .ok_or(ContentPublicationError::Unavailable)?;
+    for (context, host) in &targets {
         register_builtin_topology(
             &mut topology,
             &mut registered_hosts,
-            host,
+            *host,
             context.target_id,
             machine_class,
             device_class,
@@ -62,12 +64,12 @@ pub(crate) fn protection_configuration(
         }])
         .map_err(|_| ContentPublicationError::InvalidInput)?,
     ];
-    let candidates = local_targets
+    let candidates = targets
         .iter()
-        .map(|target| PlacementCandidate {
-            target_id: target.context().target_id,
-            target_generation: target.context().generation,
-            writable_bytes: planning_ceiling(target.context().usage_limit),
+        .map(|(context, _)| PlacementCandidate {
+            target_id: context.target_id,
+            target_generation: context.generation,
+            writable_bytes: planning_ceiling(context.usage_limit),
             performance_weight: 100,
             acknowledgement: ShardAcknowledgement::Required,
         })
@@ -75,45 +77,45 @@ pub(crate) fn protection_configuration(
     ProtectionConfiguration::from_untrusted(topology, revision, revision, scenarios, candidates)
 }
 
-fn active_hosts(
-    authority: &AuthoritativeRepository,
-) -> Result<BTreeMap<meshspan_domain::NodeId, HostId>, ContentPublicationError> {
-    let limit = PageLimit::new(PAGE_ITEMS).map_err(|_| ContentPublicationError::Unavailable)?;
-    let mut cursor = None;
-    let mut hosts = BTreeMap::new();
-    loop {
-        let page = authority
-            .topology_nodes(cursor.as_ref(), limit)
-            .map_err(|_| ContentPublicationError::Unavailable)?;
-        hosts.extend(
-            page.items
-                .into_iter()
-                .map(|node| (node.node_id, node.host_id)),
-        );
-        let Some(next) = page.next else {
-            return Ok(hosts);
-        };
-        cursor = Some(next);
-    }
+fn same_target_generation(
+    current: StorageTargetProviderContext,
+    opened: StorageTargetProviderContext,
+) -> bool {
+    current.mesh_id == opened.mesh_id
+        && current.node_id == opened.node_id
+        && current.target_id == opened.target_id
+        && current.generation == opened.generation
+        && current.usage_limit == opened.usage_limit
+        && current.policy_revision == opened.policy_revision
 }
 
-fn active_target_hosts(
+fn active_targets(
     authority: &AuthoritativeRepository,
-) -> Result<BTreeMap<TargetId, HostId>, ContentPublicationError> {
+) -> Result<Vec<(StorageTargetProviderContext, HostId)>, ContentPublicationError> {
     let limit = PageLimit::new(PAGE_ITEMS).map_err(|_| ContentPublicationError::Unavailable)?;
     let mut cursor = None;
-    let mut hosts = BTreeMap::new();
+    let mut targets = Vec::new();
     loop {
         let page = authority
             .topology_targets(cursor.as_ref(), limit)
             .map_err(|_| ContentPublicationError::Unavailable)?;
-        hosts.extend(
-            page.items
-                .into_iter()
-                .map(|target| (target.target_id, target.host_id)),
-        );
+        for target in page.items {
+            let Some(context) = authority
+                .storage_target_provider_context_by_target(target.target_id)
+                .map_err(|_| ContentPublicationError::Unavailable)?
+            else {
+                continue;
+            };
+            if context.node_id != target.node_id
+                || context.generation != target.generation
+                || context.usage_limit != target.usage_limit
+            {
+                return Err(ContentPublicationError::Unavailable);
+            }
+            targets.push((context, target.host_id));
+        }
         let Some(next) = page.next else {
-            return Ok(hosts);
+            return Ok(targets);
         };
         cursor = Some(next);
     }
