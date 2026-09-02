@@ -8,15 +8,15 @@ use std::path::Path;
 
 use cap_std::fs::{Dir, OpenOptions};
 use meshspan_contracts::{
-    BoundedBytes, BoundedItems, CodingScheme, ContractError, ContractVersion, PlacementCandidate,
-    PlacementCellRequirement, PlacementPolicy, PlacementRequest, PutShardRequest,
-    ReconstructionRequest, RequestContext, ReservationClass, ReserveStorageRequest, ShardIdentity,
-    ShardReadPermit, ShardReceipt, StoragePermitMacKey, StorageProvider, StorageReservation,
-    read_permit_mac,
+    BoundedBytes, BoundedItems, CodingLayout, CodingScheme, ContractError, ContractVersion,
+    PlacementCandidate, PlacementCellRequirement, PlacementPolicy, PlacementRequest,
+    PutShardRequest, ReconstructionRequest, RepairPlacementPlan, RepairPlacementRequest,
+    RequestContext, ReservationClass, ReserveStorageRequest, ShardIdentity, ShardReadPermit,
+    ShardReceipt, StoragePermitMacKey, StorageProvider, StorageReservation, read_permit_mac,
 };
 use meshspan_domain::{
-    DurabilityScope, FailureScenario, MeshId, OperationId, RandomSource, Revision, Topology,
-    VolumeId,
+    DurabilityScope, FailureScenario, MeshId, OperationId, RandomSource, Revision, TargetId,
+    Topology, VolumeId,
 };
 
 use super::{
@@ -248,6 +248,35 @@ impl ProtectionConfiguration {
             cells,
             acknowledgement_policy,
             content_scope,
+        })
+    }
+
+    /// Plans one exact shard replacement against this immutable policy snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Rejects contradictory geometry/routes or returns the injected placement policy's explicit
+    /// resource failure when no distinct writable destination exists.
+    pub fn plan_repair<Placement: PlacementPolicy>(
+        &self,
+        placement: &Placement,
+        context: RequestContext,
+        coding_layout: CodingLayout,
+        source_shard_index: u16,
+        current_targets: &[TargetId],
+    ) -> Result<RepairPlacementPlan, ContractError> {
+        placement.plan_repair(RepairPlacementRequest {
+            context,
+            coding_layout,
+            source_shard_index,
+            current_targets,
+            scenarios: &self.scenarios,
+            required_scenarios: &self.required_scenarios,
+            topology: &self.topology,
+            topology_revision: self.topology_revision,
+            capacity_revision: self.capacity_revision,
+            candidates: &self.candidates,
+            cells: &self.cells,
         })
     }
 }

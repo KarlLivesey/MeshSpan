@@ -42,6 +42,13 @@ impl NativeProtectionPolicySource {
             local_targets,
         }
     }
+
+    pub(crate) fn current_configuration(
+        &self,
+        volume_id: VolumeId,
+    ) -> Result<ProtectionConfiguration, ContentPublicationError> {
+        protection_configuration(&self.authority, &self.local_targets, volume_id)
+    }
 }
 
 impl ProtectionPolicySource for NativeProtectionPolicySource {
