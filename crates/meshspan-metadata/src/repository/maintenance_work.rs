@@ -9,13 +9,15 @@ use rusqlite::{OptionalExtension, Row, Transaction, params};
 use super::apply::to_i64;
 use super::{AuthoritativeRepository, EntityKind, EntityReference, RepositoryError};
 use crate::{
-    ClaimMaintenanceWork, CommandContext, CommitShardRepair, CompleteMaintenanceWork,
-    MaintenanceWorkCompletion, QueueMaintenanceWork, RenewMaintenanceWork,
+    ClaimMaintenanceWork, CommandContext, CommitScrubPass, CommitShardRepair,
+    CompleteMaintenanceWork, MaintenanceWorkCompletion, QueueMaintenanceWork, RenewMaintenanceWork,
 };
 
 mod repair;
+mod scrub;
 
 pub use repair::ShardRepairEffectRecord;
+pub use scrub::ScrubPassEffectRecord;
 
 const JOB_QUEUED: i64 = 1;
 const JOB_CLAIMED: i64 = 2;
@@ -140,6 +142,18 @@ impl AuthoritativeRepository {
         effect_operation_id: OperationId,
     ) -> Result<Option<ShardRepairEffectRecord>, RepositoryError> {
         repair::load(self.database.connection(), effect_operation_id)
+    }
+
+    /// Returns one committed complete scrub-pass summary.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when any persisted identity, count, digest or generation is malformed.
+    pub fn scrub_pass_effect(
+        &self,
+        effect_operation_id: OperationId,
+    ) -> Result<Option<ScrubPassEffectRecord>, RepositoryError> {
+        scrub::load(self.database.connection(), effect_operation_id)
     }
 }
 
@@ -521,6 +535,15 @@ pub(super) fn commit_repair(
     repair::commit(transaction, context, value, revision)
 }
 
+pub(super) fn commit_scrub(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    value: CommitScrubPass,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    scrub::commit(transaction, context, value, revision)
+}
+
 type CompletionValues = (
     i64,
     i64,
@@ -632,7 +655,18 @@ fn validate_effect(
                 |row| row.get::<_, i64>(0),
             )? == 1
         }
-        WorkKind::Scrub | WorkKind::Drain | WorkKind::Rebalance | WorkKind::Reconcile => false,
+        WorkKind::Scrub => {
+            transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM maintenance_scrub_effects
+                 WHERE effect_operation_id = ?1 AND work_id = ?2)",
+                params![
+                    operation_id.as_bytes().as_slice(),
+                    work_id.as_bytes().as_slice(),
+                ],
+                |row| row.get::<_, i64>(0),
+            )? == 1
+        }
+        WorkKind::Drain | WorkKind::Rebalance | WorkKind::Reconcile => false,
     };
     if operation_matches && effect_matches {
         Ok(())

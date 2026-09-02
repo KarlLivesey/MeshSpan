@@ -181,10 +181,16 @@ mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
 mod shard_repair_worker;
+mod storage_scrub_worker;
 
 pub use shard_repair_worker::{
     PhysicalShardRepair, RepairMetadataAuthority, ShardRepairExecution, ShardRepairExecutionError,
     ShardRepairExecutionReceipt, execute_shard_repair,
+};
+pub use storage_scrub_worker::{
+    PhysicalStorageScrub, ScrubMetadataAuthority, StorageScrubExecution,
+    StorageScrubExecutionError, StorageScrubExecutionReceipt, StorageScrubSummary,
+    execute_storage_scrub,
 };
 mod smb_authentication;
 mod smb_connection;

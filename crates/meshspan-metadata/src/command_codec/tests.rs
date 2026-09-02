@@ -21,15 +21,15 @@ use crate::{
     AcknowledgementCellRequirement, AcknowledgementCellRole, AcknowledgementConsistencyClass,
     AddGroupMember, AssignVolumeAcknowledgementPolicy, AssignVolumeLocalityPolicy,
     AssignVolumeProtectionPolicy, BootstrapMesh, BootstrapRecoveryIdentity, ClaimMaintenanceWork,
-    CommitConvergedVolumeHead, CommitSecretGeneration, CommitShardRepair, CompleteMaintenanceWork,
-    ConvergedHeadEvidence, CreateAcknowledgementPolicy, CreateActivationPolicy,
-    CreateAuthenticationMethod, CreateAvailabilityCell, CreateComponent, CreateFaultGroup,
-    CreateGroup, CreateLocalityPolicy, CreateProtectionPolicy, CreateUser, CreateVolume,
-    GrantInheritance, GrantPermission, GrantPermissionWithActivation, IssueAuthenticationSession,
-    LocalityRequirementConfiguration, MaintenanceWorkCompletion, NewAuthenticationCredential,
-    NewRecoveryCode, PermissionScope, ProtectionScenarioConfiguration, PublishSmbExport,
-    QueueMaintenanceWork, RecordName, RegisterNodeWrappingKey, RegisterStorageTarget,
-    RemoveGroupMember, RenewMaintenanceWork, RevokeAuthenticationMethod,
+    CommitConvergedVolumeHead, CommitScrubPass, CommitSecretGeneration, CommitShardRepair,
+    CompleteMaintenanceWork, ConvergedHeadEvidence, CreateAcknowledgementPolicy,
+    CreateActivationPolicy, CreateAuthenticationMethod, CreateAvailabilityCell, CreateComponent,
+    CreateFaultGroup, CreateGroup, CreateLocalityPolicy, CreateProtectionPolicy, CreateUser,
+    CreateVolume, GrantInheritance, GrantPermission, GrantPermissionWithActivation,
+    IssueAuthenticationSession, LocalityRequirementConfiguration, MaintenanceWorkCompletion,
+    NewAuthenticationCredential, NewRecoveryCode, PermissionScope, ProtectionScenarioConfiguration,
+    PublishSmbExport, QueueMaintenanceWork, RecordName, RegisterNodeWrappingKey,
+    RegisterStorageTarget, RemoveGroupMember, RenewMaintenanceWork, RevokeAuthenticationMethod,
     RevokeAuthenticationSession, SessionAuthenticationFactor, SessionClientLabel,
     SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
     SetTargetAvailabilityCellMembership, SmbExportGatewaySelection, StepUpAuthenticationSession,
@@ -372,6 +372,7 @@ fn maintenance_work_commands_round_trip_subject_claim_and_outcomes()
             source_receipt: repair_receipt(89, 90)?,
             replacement_receipt: repair_receipt(91, 92)?,
         }),
+        scrub_pass_command(identity.0, identity.2)?,
         AuthoritativeCommand::CompleteMaintenanceWork(CompleteMaintenanceWork {
             work_id: identity.0,
             claim_generation: identity.1,
@@ -388,6 +389,30 @@ fn maintenance_work_commands_round_trip_subject_claim_and_outcomes()
         assert_round_trip(context, command)?;
     }
     Ok(())
+}
+
+fn scrub_pass_command(
+    work_id: WorkId,
+    worker_node_id: NodeId,
+) -> Result<AuthoritativeCommand, meshspan_domain::IdentifierError> {
+    Ok(AuthoritativeCommand::CommitScrubPass(CommitScrubPass {
+        work_id,
+        claim_generation: 3,
+        worker_node_id,
+        worker_incarnation: 4,
+        fence: 5,
+        target_id: TargetId::from_bytes([94; 16])?,
+        target_generation: 6,
+        observation_count: 21,
+        verified_bytes: 8_192,
+        healthy_count: 10,
+        missing_count: 1,
+        corrupt_count: 2,
+        unreadable_count: 3,
+        unexpected_count: 4,
+        deferred_count: 1,
+        evidence_digest: [95; 32],
+    }))
 }
 
 fn repair_receipt(

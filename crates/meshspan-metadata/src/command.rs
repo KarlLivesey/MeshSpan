@@ -194,6 +194,8 @@ pub enum AuthoritativeCommand {
     CompleteMaintenanceWork(CompleteMaintenanceWork),
     /// Advances one protected stripe to a provider-confirmed replacement shard location.
     CommitShardRepair(CommitShardRepair),
+    /// Commits the bounded summary of one complete provider scrub pass.
+    CommitScrubPass(CommitScrubPass),
     /// Publishes one volume or folder through explicitly selected SMB gateways.
     PublishSmbExport(PublishSmbExport),
     /// Withdraws one exact SMB export while retaining its audit history.
@@ -361,6 +363,7 @@ impl AuthoritativeCommand {
             Self::RenewMaintenanceWork(value) => value.update_digest(digest),
             Self::CompleteMaintenanceWork(value) => value.update_digest(digest),
             Self::CommitShardRepair(value) => value.update_digest(digest),
+            Self::CommitScrubPass(value) => value.update_digest(digest),
             Self::PublishSmbExport(value) => value.update_digest(digest),
             Self::WithdrawSmbExport(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
@@ -2030,6 +2033,43 @@ pub struct CommitShardRepair {
     pub replacement_receipt: ShardReceipt,
 }
 
+/// Durable summary of one complete, independently verified storage-target scrub pass.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CommitScrubPass {
+    /// Existing claimed scrub job.
+    pub work_id: WorkId,
+    /// Exact current claim generation.
+    pub claim_generation: u64,
+    /// Worker owning the claim.
+    pub worker_node_id: NodeId,
+    /// Exact current worker incarnation.
+    pub worker_incarnation: u64,
+    /// Unchanged live claim fence.
+    pub fence: u64,
+    /// Storage target bound into the scrub subject.
+    pub target_id: TargetId,
+    /// Exact target generation inspected by the pass.
+    pub target_generation: u64,
+    /// Total observations across every bounded page in the pass.
+    pub observation_count: u64,
+    /// Total bytes read and independently digested by healthy or corrupt observations.
+    pub verified_bytes: u64,
+    /// Observations whose bytes exactly matched committed inventory.
+    pub healthy_count: u64,
+    /// Committed inventory entries whose bytes were absent.
+    pub missing_count: u64,
+    /// Present bytes that contradicted committed length or digest.
+    pub corrupt_count: u64,
+    /// Entries for which local IO could not produce trustworthy evidence.
+    pub unreadable_count: u64,
+    /// Locally discovered bytes with no corresponding committed inventory entry.
+    pub unexpected_count: u64,
+    /// Entries deliberately postponed by a bounded resource decision.
+    pub deferred_count: u64,
+    /// Canonical digest covering target identity and every ordered scrub observation.
+    pub evidence_digest: [u8; 32],
+}
+
 /// Explicit gateway selection for one SMB export.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SmbExportGatewaySelection {
@@ -3285,6 +3325,24 @@ digest_simple_record!(
         digest_shard_receipt(digest, value.replacement_receipt);
     }
 );
+digest_simple_record!(CommitScrubPass, b"commit-scrub-pass", |value, digest| {
+    digest.identifier(value.work_id.as_bytes());
+    digest.unsigned(value.claim_generation);
+    digest.identifier(value.worker_node_id.as_bytes());
+    digest.unsigned(value.worker_incarnation);
+    digest.unsigned(value.fence);
+    digest.identifier(value.target_id.as_bytes());
+    digest.unsigned(value.target_generation);
+    digest.unsigned(value.observation_count);
+    digest.unsigned(value.verified_bytes);
+    digest.unsigned(value.healthy_count);
+    digest.unsigned(value.missing_count);
+    digest.unsigned(value.corrupt_count);
+    digest.unsigned(value.unreadable_count);
+    digest.unsigned(value.unexpected_count);
+    digest.unsigned(value.deferred_count);
+    digest.bytes(&value.evidence_digest);
+});
 digest_simple_record!(PublishSmbExport, b"publish-smb-export", |value, digest| {
     digest.identifier(value.export_id.as_bytes());
     digest.identifier(value.volume_id.as_bytes());

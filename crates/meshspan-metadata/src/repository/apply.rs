@@ -554,6 +554,7 @@ fn is_maintenance_work_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::RenewMaintenanceWork(_)
             | AuthoritativeCommand::CompleteMaintenanceWork(_)
             | AuthoritativeCommand::CommitShardRepair(_)
+            | AuthoritativeCommand::CommitScrubPass(_)
     )
 }
 
@@ -578,6 +579,9 @@ fn execute_maintenance_work_command(
         }
         AuthoritativeCommand::CommitShardRepair(value) => {
             maintenance_work::commit_repair(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::CommitScrubPass(value) => {
+            maintenance_work::commit_scrub(transaction, context, *value, revision)
         }
         _ => Err(RepositoryError::InvalidCommand),
     }
@@ -1208,6 +1212,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::RenewMaintenanceWork(_) => 103,
         AuthoritativeCommand::CompleteMaintenanceWork(_) => 104,
         AuthoritativeCommand::CommitShardRepair(_) => 105,
+        AuthoritativeCommand::CommitScrubPass(_) => 106,
     }
 }
 

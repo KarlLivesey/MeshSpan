@@ -12,10 +12,10 @@ use super::{
     AuthoritativeRepository, EntityKind, LogPosition, MaintenanceWorkState, RepositoryError,
 };
 use crate::{
-    AuthoritativeCommand, BootstrapMesh, ClaimMaintenanceWork, CommandContext, CommitShardRepair,
-    CompleteMaintenanceWork, CreateComponent, MaintenanceWorkCompletion, PartitionDatabase,
-    QueueMaintenanceWork, RecordName, RegisterStorageTarget, RenewMaintenanceWork,
-    StorageUsageLimit,
+    AuthoritativeCommand, BootstrapMesh, ClaimMaintenanceWork, CommandContext, CommitScrubPass,
+    CommitShardRepair, CompleteMaintenanceWork, CreateComponent, MaintenanceWorkCompletion,
+    PartitionDatabase, QueueMaintenanceWork, RecordName, RegisterStorageTarget,
+    RenewMaintenanceWork, StorageUsageLimit,
 };
 
 #[test]
@@ -273,6 +273,86 @@ fn repair_effect_advances_one_cow_route_then_completes_exact_claim()
     Ok(())
 }
 
+#[test]
+fn scrub_effect_requires_exact_classified_summary_then_completes_claim()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    let target_id = TargetId::from_bytes([60; 16])?;
+    fixture.register_target(2, target_id, 61)?;
+    let work_id = WorkId::from_bytes([62; 16])?;
+    fixture.apply(
+        3,
+        70,
+        &AuthoritativeCommand::QueueMaintenanceWork(Fixture::scrub_queue(work_id, target_id)),
+    )?;
+    fixture.apply(
+        4,
+        71,
+        &AuthoritativeCommand::ClaimMaintenanceWork(fixture.claim(work_id, 1, 801, 120)),
+    )?;
+    let scrub = CommitScrubPass {
+        work_id,
+        claim_generation: 1,
+        worker_node_id: fixture.node,
+        worker_incarnation: 1,
+        fence: 801,
+        target_id,
+        target_generation: 1,
+        observation_count: 6,
+        verified_bytes: 12_288,
+        healthy_count: 1,
+        missing_count: 1,
+        corrupt_count: 1,
+        unreadable_count: 1,
+        unexpected_count: 1,
+        deferred_count: 1,
+        evidence_digest: [63; 32],
+    };
+    let malformed = CommitScrubPass {
+        observation_count: 7,
+        ..scrub
+    };
+    assert!(matches!(
+        fixture.apply(5, 72, &AuthoritativeCommand::CommitScrubPass(malformed)),
+        Err(RepositoryError::InvalidCommand)
+    ));
+
+    let effect = fixture.apply(5, 72, &AuthoritativeCommand::CommitScrubPass(scrub))?;
+    let stored = fixture
+        .repository
+        .scrub_pass_effect(effect.operation_id)?
+        .ok_or("scrub effect missing")?;
+    assert_eq!(stored.work_id, work_id);
+    assert_eq!(stored.target_id, target_id);
+    assert_eq!(stored.target_generation, 1);
+    assert_eq!(stored.observation_count, 6);
+    assert_eq!(stored.verified_bytes, 12_288);
+    assert_eq!(stored.outcome_counts, [1; 6]);
+    assert_eq!(stored.evidence_digest, [63; 32]);
+
+    fixture.apply(
+        6,
+        73,
+        &AuthoritativeCommand::CompleteMaintenanceWork(CompleteMaintenanceWork {
+            work_id,
+            claim_generation: 1,
+            worker_node_id: fixture.node,
+            worker_incarnation: 1,
+            fence: 801,
+            outcome: MaintenanceWorkCompletion::Succeeded {
+                effect_operation_id: effect.operation_id,
+                effect_revision: effect.committed_revision,
+                effect_result_digest: effect.result_digest,
+            },
+        }),
+    )?;
+    assert_eq!(
+        fixture.record(work_id)?.state,
+        MaintenanceWorkState::Complete
+    );
+    Ok(())
+}
+
 fn shard_receipt(
     operation: u8,
     target_id: TargetId,
@@ -422,6 +502,31 @@ impl Fixture {
             },
             demand: meshspan_work::WorkDemand { in_flight_bytes },
             next_attempt_at: UnixMicros::new(20),
+        }
+    }
+
+    fn scrub_queue(work_id: WorkId, target_id: TargetId) -> QueueMaintenanceWork {
+        QueueMaintenanceWork {
+            work_id,
+            deduplication_key: [work_id.as_bytes()[0]; 32],
+            subject: WorkSubject::Scrub {
+                target_id,
+                target_generation: 1,
+            },
+            signals: WorkSignals {
+                data_unavailable: false,
+                remaining_recovery_margin: 1,
+                protection_debt: 0,
+                locality_debt: 0,
+                instability: 0,
+                access_heat: 0,
+                created_at: UnixMicros::new(70),
+                due_at: None,
+            },
+            demand: meshspan_work::WorkDemand {
+                in_flight_bytes: 4_096,
+            },
+            next_attempt_at: UnixMicros::new(70),
         }
     }
 
