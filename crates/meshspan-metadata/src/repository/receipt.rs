@@ -124,6 +124,8 @@ pub enum EntityKind {
     AvailabilityCell = 44,
     /// Desired machine or target membership in one availability cell.
     AvailabilityCellMembership = 45,
+    /// Immutable desired-locality policy revision.
+    LocalityPolicy = 46,
 }
 
 impl EntityKind {
@@ -174,6 +176,7 @@ impl EntityKind {
             43 => Ok(Self::ProtectionPolicy),
             44 => Ok(Self::AvailabilityCell),
             45 => Ok(Self::AvailabilityCellMembership),
+            46 => Ok(Self::LocalityPolicy),
             _ => Err(RepositoryError::CorruptState),
         }
     }

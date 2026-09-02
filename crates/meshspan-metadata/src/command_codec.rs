@@ -10,6 +10,7 @@ mod encoder;
 mod enrolment;
 mod fault_group;
 mod identity;
+mod locality_policy;
 mod namespace;
 mod node_wrapping_key;
 mod protection_policy;
@@ -160,6 +161,12 @@ fn encode_command(
         AuthoritativeCommand::SetTargetAvailabilityCellMembership(value) => {
             availability_cell::encode_target_membership(encoder, *value)
         }
+        AuthoritativeCommand::CreateLocalityPolicy(value) => {
+            locality_policy::encode_create(encoder, value)
+        }
+        AuthoritativeCommand::AssignVolumeLocalityPolicy(value) => {
+            locality_policy::encode_assignment(encoder, *value)
+        }
         AuthoritativeCommand::PublishSmbExport(value) => smb_export::encode_publish(encoder, value),
         AuthoritativeCommand::WithdrawSmbExport(value) => {
             smb_export::encode_withdraw(encoder, value)
@@ -236,6 +243,13 @@ fn decode_command(
         availability_cell::SET_TARGET_AVAILABILITY_CELL_MEMBERSHIP => {
             availability_cell::decode_target_membership(decoder)
                 .map(AuthoritativeCommand::SetTargetAvailabilityCellMembership)
+        }
+        locality_policy::CREATE_LOCALITY_POLICY => {
+            locality_policy::decode_create(decoder).map(AuthoritativeCommand::CreateLocalityPolicy)
+        }
+        locality_policy::ASSIGN_VOLUME_LOCALITY_POLICY => {
+            locality_policy::decode_assignment(decoder)
+                .map(AuthoritativeCommand::AssignVolumeLocalityPolicy)
         }
         smb_export::PUBLISH_SMB_EXPORT => {
             smb_export::decode_publish(decoder).map(AuthoritativeCommand::PublishSmbExport)

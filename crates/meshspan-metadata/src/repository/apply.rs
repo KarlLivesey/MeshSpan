@@ -14,8 +14,8 @@ use super::{
     cleanup_permit, cleanup_reclamation, cluster, component, federation_actor_attestation,
     federation_assignment, federation_grant, federation_mutation_admission, federation_quarantine,
     federation_relationship, federation_storage_allocation, federation_succession, identity,
-    namespace, node_wrapping_key, protection_policy, recovery_authority, retention,
-    root_delegation, routing, secret_generation, session, smb_export_configuration,
+    locality_policy, namespace, node_wrapping_key, protection_policy, recovery_authority,
+    retention, root_delegation, routing, secret_generation, session, smb_export_configuration,
     snapshot_schedule, storage_target, tags, topology, user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
@@ -556,6 +556,8 @@ fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::CreateAvailabilityCell(_)
             | AuthoritativeCommand::SetHostAvailabilityCellMembership(_)
             | AuthoritativeCommand::SetTargetAvailabilityCellMembership(_)
+            | AuthoritativeCommand::CreateLocalityPolicy(_)
+            | AuthoritativeCommand::AssignVolumeLocalityPolicy(_)
             | AuthoritativeCommand::PublishSmbExport(_)
             | AuthoritativeCommand::WithdrawSmbExport(_)
             | AuthoritativeCommand::RegisterNodeWrappingKey(_)
@@ -607,6 +609,12 @@ fn execute_infrastructure_command(
         }
         AuthoritativeCommand::SetTargetAvailabilityCellMembership(value) => {
             availability_cell::set_target_membership(transaction, *value, revision)
+        }
+        AuthoritativeCommand::CreateLocalityPolicy(value) => {
+            locality_policy::create(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::AssignVolumeLocalityPolicy(value) => {
+            locality_policy::assign_volume(transaction, context, *value, revision)
         }
         AuthoritativeCommand::PublishSmbExport(value) => {
             smb_export_configuration::publish(transaction, context, value, revision)
@@ -1139,6 +1147,8 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::CreateAvailabilityCell(_) => 94,
         AuthoritativeCommand::SetHostAvailabilityCellMembership(_) => 95,
         AuthoritativeCommand::SetTargetAvailabilityCellMembership(_) => 96,
+        AuthoritativeCommand::CreateLocalityPolicy(_) => 97,
+        AuthoritativeCommand::AssignVolumeLocalityPolicy(_) => 98,
     }
 }
 

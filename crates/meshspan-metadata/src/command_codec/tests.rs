@@ -5,9 +5,9 @@ use meshspan_domain::{
     ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId, AuthenticationMethodId,
     AuthenticationService, AvailabilityCellId, ComponentInstanceId, DurationMicros, EntropyError,
     FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId, GrantId, GroupId, HostId,
-    MeshId, NodeId, ObjectId, OperationId, OwnerSetId, PrincipalId, ProtectionPolicyId,
-    ProtectionScenarioId, RandomSource, RecoveryCodeId, Revision, Rights, RoleId, SessionId,
-    SmbExportId, TargetId, UnixMicros, VolumeId,
+    LocalityPolicyId, LocalityRequirementId, MeshId, NodeId, ObjectId, OperationId, OwnerSetId,
+    PrincipalId, ProtectionPolicyId, ProtectionScenarioId, RandomSource, RecoveryCodeId, Revision,
+    Rights, RoleId, SessionId, SmbExportId, TargetId, UnixMicros, VolumeId,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -16,13 +16,14 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::{
-    AddGroupMember, AssignVolumeProtectionPolicy, BootstrapMesh, BootstrapRecoveryIdentity,
-    CommitSecretGeneration, CreateActivationPolicy, CreateAuthenticationMethod,
-    CreateAvailabilityCell, CreateComponent, CreateFaultGroup, CreateGroup, CreateProtectionPolicy,
-    CreateUser, CreateVolume, GrantInheritance, GrantPermission, GrantPermissionWithActivation,
-    IssueAuthenticationSession, NewAuthenticationCredential, NewRecoveryCode, PermissionScope,
-    ProtectionScenarioConfiguration, PublishSmbExport, RecordName, RegisterNodeWrappingKey,
-    RegisterStorageTarget, RemoveGroupMember, RevokeAuthenticationMethod,
+    AddGroupMember, AssignVolumeLocalityPolicy, AssignVolumeProtectionPolicy, BootstrapMesh,
+    BootstrapRecoveryIdentity, CommitSecretGeneration, CreateActivationPolicy,
+    CreateAuthenticationMethod, CreateAvailabilityCell, CreateComponent, CreateFaultGroup,
+    CreateGroup, CreateLocalityPolicy, CreateProtectionPolicy, CreateUser, CreateVolume,
+    GrantInheritance, GrantPermission, GrantPermissionWithActivation, IssueAuthenticationSession,
+    LocalityRequirementConfiguration, NewAuthenticationCredential, NewRecoveryCode,
+    PermissionScope, ProtectionScenarioConfiguration, PublishSmbExport, RecordName,
+    RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember, RevokeAuthenticationMethod,
     RevokeAuthenticationSession, SessionAuthenticationFactor, SessionClientLabel,
     SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
     SetTargetAvailabilityCellMembership, SmbExportGatewaySelection, StepUpAuthenticationSession,
@@ -182,6 +183,35 @@ fn protection_policy_commands_round_trip_complete_failure_promises()
         }),
         AuthoritativeCommand::AssignVolumeProtectionPolicy(AssignVolumeProtectionPolicy {
             volume_id: VolumeId::from_bytes([102; 16])?,
+            policy_id,
+        }),
+    ] {
+        assert_round_trip(context, command)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn locality_policy_commands_round_trip_complete_local_requirements()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let policy_id = LocalityPolicyId::from_bytes([107; 16])?;
+    for command in [
+        AuthoritativeCommand::CreateLocalityPolicy(CreateLocalityPolicy {
+            policy_id,
+            name: RecordName::new("Both shops locally readable")?,
+            maximum_lag: Some(DurationMicros::new(30_000_000)),
+            requirements: BoundedItems::new(
+                vec![LocalityRequirementConfiguration {
+                    requirement_id: LocalityRequirementId::from_bytes([108; 16])?,
+                    cell_id: AvailabilityCellId::from_bytes([109; 16])?,
+                    local_protection_policy_id: Some(ProtectionPolicyId::from_bytes([110; 16])?),
+                }],
+                64,
+            )?,
+        }),
+        AuthoritativeCommand::AssignVolumeLocalityPolicy(AssignVolumeLocalityPolicy {
+            volume_id: VolumeId::from_bytes([111; 16])?,
             policy_id,
         }),
     ] {

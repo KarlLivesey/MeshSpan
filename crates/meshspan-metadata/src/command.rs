@@ -13,11 +13,11 @@ use meshspan_domain::{
     AuthenticationPolicyId, AuthenticationService, AvailabilityCellId, ComponentInstanceId,
     ContentManifestId, DelegatedMetadataScope, DelegationAdmission, DurationMicros,
     FailureScenario, FaultGroupClassId, FaultGroupId, FileVersionId, GrantId, GroupId,
-    HandoffEvidence, HostId, JoinGrantId, MeshId, MetadataKeyRange, MetadataOperationFamily,
-    NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId,
-    PrincipalId, ProtectionPolicyId, ProtectionScenarioId, RecoveryCodeId, Revision, Rights,
-    RoleId, ScopeId, SessionId, SmbExportId, SnapshotId, SnapshotScheduleId, TagId, TargetId,
-    UnixMicros, VolumeId,
+    HandoffEvidence, HostId, JoinGrantId, LocalityPolicyId, LocalityRequirementId, MeshId,
+    MetadataKeyRange, MetadataOperationFamily, NamespaceCommitId, NodeId, ObjectId,
+    ObjectRevisionId, OperationId, OwnerSetId, PartitionId, PrincipalId, ProtectionPolicyId,
+    ProtectionScenarioId, RecoveryCodeId, Revision, Rights, RoleId, ScopeId, SessionId,
+    SmbExportId, SnapshotId, SnapshotScheduleId, TagId, TargetId, UnixMicros, VolumeId,
 };
 use meshspan_secret_envelope::{EncryptedSecretParts, RecipientEnvelopeParts};
 use sha2::{Digest, Sha256};
@@ -174,6 +174,10 @@ pub enum AuthoritativeCommand {
     SetHostAvailabilityCellMembership(SetHostAvailabilityCellMembership),
     /// Adds or removes one storage target from one availability cell.
     SetTargetAvailabilityCellMembership(SetTargetAvailabilityCellMembership),
+    /// Creates one immutable desired-locality policy.
+    CreateLocalityPolicy(CreateLocalityPolicy),
+    /// Selects one locality policy as the volume-wide inherited default.
+    AssignVolumeLocalityPolicy(AssignVolumeLocalityPolicy),
     /// Publishes one volume or folder through explicitly selected SMB gateways.
     PublishSmbExport(PublishSmbExport),
     /// Withdraws one exact SMB export while retaining its audit history.
@@ -270,6 +274,9 @@ impl AuthoritativeCommand {
         digest.finish()
     }
 
+    // This is deliberately one exhaustive, side-effect-free dispatch table: splitting command
+    // families across fallible routing layers would weaken the closed-command invariant.
+    #[allow(clippy::too_many_lines)]
     fn update_digest(&self, digest: &mut CanonicalDigest) {
         match self {
             Self::BootstrapMesh(value) => value.update_digest(digest),
@@ -329,6 +336,8 @@ impl AuthoritativeCommand {
             Self::CreateAvailabilityCell(value) => value.update_digest(digest),
             Self::SetHostAvailabilityCellMembership(value) => value.update_digest(digest),
             Self::SetTargetAvailabilityCellMembership(value) => value.update_digest(digest),
+            Self::CreateLocalityPolicy(value) => value.update_digest(digest),
+            Self::AssignVolumeLocalityPolicy(value) => value.update_digest(digest),
             Self::PublishSmbExport(value) => value.update_digest(digest),
             Self::WithdrawSmbExport(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
@@ -1770,6 +1779,39 @@ pub struct SetTargetAvailabilityCellMembership {
     pub present: bool,
 }
 
+/// One complete-local placement requirement inside an availability cell.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LocalityRequirementConfiguration {
+    /// Stable requirement identity retained in placement and repair evidence.
+    pub requirement_id: LocalityRequirementId,
+    /// Cell which must independently reconstruct the selected version.
+    pub cell_id: AvailabilityCellId,
+    /// Optional failure-survival promise evaluated using only targets inside the cell.
+    pub local_protection_policy_id: Option<ProtectionPolicyId>,
+}
+
+/// One immutable desired-locality policy revision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateLocalityPolicy {
+    /// Stable policy identity.
+    pub policy_id: LocalityPolicyId,
+    /// Human-readable policy name.
+    pub name: RecordName,
+    /// Optional maximum lag before incomplete locality becomes urgent repair debt.
+    pub maximum_lag: Option<DurationMicros>,
+    /// Non-empty ordered set of cells which each require a complete local copy.
+    pub requirements: BoundedItems<LocalityRequirementConfiguration>,
+}
+
+/// Volume-wide selection of one existing immutable locality policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AssignVolumeLocalityPolicy {
+    /// Existing volume receiving the inherited default.
+    pub volume_id: VolumeId,
+    /// Existing active locality policy.
+    pub policy_id: LocalityPolicyId,
+}
+
 /// Explicit gateway selection for one SMB export.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SmbExportGatewaySelection {
@@ -2870,6 +2912,33 @@ digest_simple_record!(
         digest.identifier(value.cell_id.as_bytes());
         digest.identifier(value.target_id.as_bytes());
         digest.boolean(value.present);
+    }
+);
+digest_simple_record!(
+    CreateLocalityPolicy,
+    b"create-locality-policy",
+    |value, digest| {
+        digest.identifier(value.policy_id.as_bytes());
+        digest.name(&value.name);
+        digest.optional_unsigned(value.maximum_lag.map(DurationMicros::get));
+        digest.unsigned(u64::try_from(value.requirements.len()).unwrap_or(u64::MAX));
+        for requirement in value.requirements.as_slice() {
+            digest.identifier(requirement.requirement_id.as_bytes());
+            digest.identifier(requirement.cell_id.as_bytes());
+            digest.optional_identifier(
+                requirement
+                    .local_protection_policy_id
+                    .map(ProtectionPolicyId::as_bytes),
+            );
+        }
+    }
+);
+digest_simple_record!(
+    AssignVolumeLocalityPolicy,
+    b"assign-volume-locality-policy",
+    |value, digest| {
+        digest.identifier(value.volume_id.as_bytes());
+        digest.identifier(value.policy_id.as_bytes());
     }
 );
 digest_simple_record!(PublishSmbExport, b"publish-smb-export", |value, digest| {

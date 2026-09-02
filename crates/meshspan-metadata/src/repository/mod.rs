@@ -75,6 +75,9 @@ mod federation_succession_trust;
 mod group_closure;
 mod identity;
 mod kernel;
+mod locality_policy;
+#[cfg(test)]
+mod locality_policy_tests;
 mod membership;
 mod mesh_identity;
 mod namespace;
@@ -190,6 +193,9 @@ pub use federation_succession::{FederationSuccessionRecord, FederationSuccession
 pub use kernel::{
     AuthoritativeMetadataKernel, RepositoryConformanceCheck, RepositoryConformanceReport,
     RepositoryConformanceVector, run_repository_conformance,
+};
+pub use locality_policy::{
+    LocalityPolicyCursor, LocalityPolicyRecord, LocalityRequirementRecord, VolumeLocalityPolicy,
 };
 pub use membership::AuthoritativeMembership;
 pub use meshspan_domain::AuthenticationService;
@@ -1407,6 +1413,34 @@ impl AuthoritativeRepository {
         host_id: meshspan_domain::HostId,
     ) -> Result<Vec<meshspan_domain::AvailabilityCellId>, RepositoryError> {
         availability_cell::target_cells(&self.database, target_id, host_id)
+    }
+
+    /// Returns the immutable desired-locality policy selected by one volume.
+    ///
+    /// `None` means no explicit complete-local copy has been requested beyond the built-in local
+    /// placement preference.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when policy, requirement, cell or revision state is malformed.
+    pub fn volume_locality_policy(
+        &self,
+        volume_id: meshspan_domain::VolumeId,
+    ) -> Result<Option<VolumeLocalityPolicy>, RepositoryError> {
+        locality_policy::for_volume(&self.database, volume_id)
+    }
+
+    /// Returns one bounded stable page of immutable desired-locality policies.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored names, identities, requirements or revisions are malformed.
+    pub fn locality_policies(
+        &self,
+        after: Option<&LocalityPolicyCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<LocalityPolicyRecord, LocalityPolicyCursor>, RepositoryError> {
+        locality_policy::policies(&self.database, after, limit)
     }
 
     /// Returns the current public secret-wrapping-key generation for one node.
