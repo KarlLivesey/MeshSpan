@@ -3,7 +3,7 @@
 //! Authoritative durable maintenance jobs and short-lived fenced execution claims.
 
 use meshspan_domain::{NodeId, Revision, UnixMicros, WorkId};
-use meshspan_work::{WorkKind, WorkSignals, WorkSubject};
+use meshspan_work::{WorkBudget, WorkDemand, WorkKind, WorkSignals, WorkSubject, WorkUsage};
 use rusqlite::{OptionalExtension, Row, Transaction, params};
 
 use super::apply::to_i64;
@@ -21,6 +21,7 @@ const CLAIM_SUPERSEDED: i64 = 2;
 const CLAIM_COMPLETE: i64 = 3;
 const ACTIVE_NODE: i64 = 2;
 const MAXIMUM_LEASE_MICROS: i64 = 15 * 60 * 1_000_000;
+const MAXIMUM_READY_PAGE_ITEMS: usize = 1_000;
 
 // Reserved operation-kind values for the Stage 9 domain effects which are allowed to make each
 // job terminal. Until those transitions exist, a worker can safely retry but cannot manufacture
@@ -72,6 +73,8 @@ pub struct MaintenanceWorkRecord {
     pub subject: WorkSubject,
     /// Latest coalesced safety signals.
     pub signals: WorkSignals,
+    /// Maximum bytes retained by one attempt.
+    pub demand: WorkDemand,
     /// Persisted deterministic priority score.
     pub priority: u64,
     /// Current durable lifecycle state.
@@ -103,6 +106,171 @@ impl AuthoritativeRepository {
     ) -> Result<Option<MaintenanceWorkRecord>, RepositoryError> {
         load_record(self.database.connection(), work_id)
     }
+
+    /// Returns the highest-priority ready work that fits the caller's remaining local budget.
+    ///
+    /// Expired claims are eligible for a newly fenced attempt. This read never mutates or
+    /// transfers ownership by itself; the following claim is the authoritative race boundary.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero/excessive bounds, impossible usage, corrupt rows and SQLite failures.
+    pub fn ready_maintenance_work(
+        &self,
+        now: UnixMicros,
+        budget: WorkBudget,
+        usage: WorkUsage,
+        after: Option<MaintenanceWorkCursor>,
+        limit: usize,
+    ) -> Result<ReadyMaintenanceWorkPage, RepositoryError> {
+        ready_page(self.database.connection(), now, budget, usage, after, limit)
+    }
+}
+
+/// Stable keyset position in the deterministic maintenance priority order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MaintenanceWorkCursor {
+    /// Persisted priority score, ordered descending.
+    pub priority: u64,
+    /// Original creation instant, ordered ascending within equal priority.
+    pub created_at: UnixMicros,
+    /// Stable final tie-breaker.
+    pub work_id: WorkId,
+}
+
+/// One ready, budget-admitted maintenance assignment awaiting an authoritative claim.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReadyMaintenanceWork {
+    /// Stable job identity.
+    pub work_id: WorkId,
+    /// Exact generation-bound subject.
+    pub subject: WorkSubject,
+    /// Maximum attempt memory/transfer footprint.
+    pub demand: WorkDemand,
+    /// Persisted deterministic priority.
+    pub priority: u64,
+    /// Revision a claimant observed.
+    pub revision: Revision,
+}
+
+/// One bounded keyset page of ready work.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReadyMaintenanceWorkPage {
+    /// Assignments ordered by safety priority.
+    pub work: Vec<ReadyMaintenanceWork>,
+    /// Cursor for the next page, when more fitting work exists.
+    pub next: Option<MaintenanceWorkCursor>,
+}
+
+fn ready_page(
+    connection: &rusqlite::Connection,
+    now: UnixMicros,
+    budget: WorkBudget,
+    usage: WorkUsage,
+    after: Option<MaintenanceWorkCursor>,
+    limit: usize,
+) -> Result<ReadyMaintenanceWorkPage, RepositoryError> {
+    if limit == 0
+        || limit > MAXIMUM_READY_PAGE_ITEMS
+        || usage.in_flight_bytes > budget.maximum_in_flight_bytes()
+    {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    if usage.active_jobs >= budget.maximum_concurrent_jobs() {
+        return Ok(ReadyMaintenanceWorkPage {
+            work: Vec::new(),
+            next: None,
+        });
+    }
+    let remaining_bytes = budget
+        .maximum_in_flight_bytes()
+        .checked_sub(usage.in_flight_bytes)
+        .ok_or(RepositoryError::InvalidCommand)?;
+    let (has_cursor, cursor_priority, cursor_created_at, cursor_work_id) = match after {
+        Some(cursor) => (
+            1_i64,
+            to_i64(cursor.priority)?,
+            cursor.created_at.get(),
+            cursor.work_id.as_bytes(),
+        ),
+        None => (0_i64, 0_i64, 0_i64, [0_u8; 16]),
+    };
+    let mut statement = connection.prepare(
+        "SELECT j.work_id, j.work_kind, j.subject_payload, j.in_flight_bytes,
+                j.priority, j.revision, j.created_at
+         FROM maintenance_work_jobs j
+         LEFT JOIN maintenance_work_claims c ON c.work_id = j.work_id AND c.state = ?1
+         WHERE j.next_attempt_at <= ?2
+           AND (j.state = ?3 OR (j.state = ?4 AND c.lease_expires_at <= ?2))
+           AND j.in_flight_bytes <= ?5
+           AND (?6 = 0 OR j.priority < ?7
+                OR (j.priority = ?7 AND j.created_at > ?8)
+                OR (j.priority = ?7 AND j.created_at = ?8 AND j.work_id > ?9))
+         ORDER BY j.priority DESC, j.created_at, j.work_id
+         LIMIT ?10",
+    )?;
+    let rows = statement.query_map(
+        params![
+            CLAIM_ACTIVE,
+            now.get(),
+            JOB_QUEUED,
+            JOB_CLAIMED,
+            to_i64(remaining_bytes)?,
+            has_cursor,
+            cursor_priority,
+            cursor_created_at,
+            cursor_work_id.as_slice(),
+            i64::try_from(limit.saturating_add(1))
+                .map_err(|_| RepositoryError::CapacityExceeded)?,
+        ],
+        decode_ready_work,
+    )?;
+    let mut work = rows.collect::<Result<Vec<_>, _>>()?;
+    let next = if work.len() > limit {
+        work.pop();
+        work.last().map(|item| MaintenanceWorkCursor {
+            priority: item.work.priority,
+            created_at: item.created_at,
+            work_id: item.work.work_id,
+        })
+    } else {
+        None
+    };
+    Ok(ReadyMaintenanceWorkPage {
+        work: work.into_iter().map(|item| item.work).collect(),
+        next,
+    })
+}
+
+struct ReadyWorkRow {
+    work: ReadyMaintenanceWork,
+    created_at: UnixMicros,
+}
+
+fn decode_ready_work(row: &Row<'_>) -> rusqlite::Result<ReadyWorkRow> {
+    decode_ready_work_inner(row).map_err(|_| rusqlite::Error::InvalidQuery)
+}
+
+fn decode_ready_work_inner(row: &Row<'_>) -> Result<ReadyWorkRow, RepositoryError> {
+    let stored_kind = row.get::<_, i64>(1)?;
+    let subject = WorkSubject::decode(&row.get::<_, Vec<u8>>(2)?)
+        .map_err(|_| RepositoryError::CorruptState)?;
+    if stored_kind != kind_code(subject.kind()) {
+        return Err(RepositoryError::CorruptState);
+    }
+    Ok(ReadyWorkRow {
+        work: ReadyMaintenanceWork {
+            work_id: WorkId::from_bytes(exact(row.get(0)?)?)
+                .map_err(|_| RepositoryError::CorruptState)?,
+            subject,
+            demand: WorkDemand {
+                in_flight_bytes: positive(row.get(3)?)?,
+            },
+            priority: positive(row.get(4)?)?,
+            revision: revision(row.get(5)?)?,
+        },
+        created_at: UnixMicros::new(row.get(6)?),
+    })
 }
 
 pub(super) fn queue(
@@ -133,10 +301,10 @@ pub(super) fn queue(
         "INSERT INTO maintenance_work_jobs(
             work_id, deduplication_key, work_kind, subject_payload, data_unavailable,
             remaining_recovery_margin, protection_debt, locality_debt, instability, access_heat,
-            due_at, priority, state, next_attempt_at, attempt_count, created_at, completed_at,
-            result_digest, revision
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0,
-                   ?15, NULL, NULL, ?16)",
+            in_flight_bytes, due_at, priority, state, next_attempt_at, attempt_count, created_at,
+            completed_at, result_digest, revision
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0,
+                   ?16, NULL, NULL, ?17)",
         params![
             value.work_id.as_bytes().as_slice(),
             value.deduplication_key.as_slice(),
@@ -148,6 +316,7 @@ pub(super) fn queue(
             i64::from(value.signals.locality_debt),
             i64::from(value.signals.instability),
             i64::from(value.signals.access_heat),
+            to_i64(value.demand.in_flight_bytes)?,
             value.signals.due_at.map(UnixMicros::get),
             to_i64(priority)?,
             JOB_QUEUED,
@@ -434,6 +603,7 @@ fn validate_queue(
     if value.deduplication_key == [0; 32]
         || WorkSubject::decode(&encoded).ok() != Some(value.subject)
         || value.signals.created_at > context.occurred_at
+        || value.demand.in_flight_bytes == 0
         || value.next_attempt_at < value.signals.created_at
         || value
             .signals
@@ -594,14 +764,15 @@ fn merge_signals(
             protection_debt = MAX(protection_debt, ?3),
             locality_debt = MAX(locality_debt, ?4),
             instability = MAX(instability, ?5), access_heat = MAX(access_heat, ?6),
+            in_flight_bytes = MAX(in_flight_bytes, ?7),
             due_at = CASE
-                WHEN due_at IS NULL THEN ?7
-                WHEN ?7 IS NULL THEN due_at
-                ELSE MIN(due_at, ?7)
+                WHEN due_at IS NULL THEN ?8
+                WHEN ?8 IS NULL THEN due_at
+                ELSE MIN(due_at, ?8)
             END,
-            priority = MAX(priority, ?8), next_attempt_at = MIN(next_attempt_at, ?9),
-            revision = ?10
-         WHERE work_id = ?11 AND state <> ?12",
+            priority = MAX(priority, ?9), next_attempt_at = MIN(next_attempt_at, ?10),
+            revision = ?11
+         WHERE work_id = ?12 AND state <> ?13",
         params![
             i64::from(value.signals.data_unavailable),
             i64::from(value.signals.remaining_recovery_margin),
@@ -609,6 +780,7 @@ fn merge_signals(
             i64::from(value.signals.locality_debt),
             i64::from(value.signals.instability),
             i64::from(value.signals.access_heat),
+            to_i64(value.demand.in_flight_bytes)?,
             value.signals.due_at.map(UnixMicros::get),
             to_i64(priority)?,
             value.next_attempt_at.get(),
@@ -816,9 +988,9 @@ fn load_record(
         .query_row(
             "SELECT j.work_id, j.deduplication_key, j.work_kind, j.subject_payload,
                     j.data_unavailable, j.remaining_recovery_margin, j.protection_debt,
-                    j.locality_debt, j.instability, j.access_heat, j.created_at, j.due_at,
-                    j.priority, j.state, j.next_attempt_at, j.attempt_count, j.completed_at,
-                    j.result_digest, j.revision,
+                    j.locality_debt, j.instability, j.access_heat, j.in_flight_bytes,
+                    j.created_at, j.due_at, j.priority, j.state, j.next_attempt_at,
+                    j.attempt_count, j.completed_at, j.result_digest, j.revision,
                     c.claim_generation, c.worker_node_id, c.worker_incarnation, c.fence,
                     c.claimed_at, c.lease_expires_at, c.revision
              FROM maintenance_work_jobs j
@@ -855,29 +1027,32 @@ fn decode_record_inner(row: &Row<'_>) -> Result<MaintenanceWorkRecord, Repositor
         locality_debt: bounded_u16(row.get(7)?)?,
         instability: bounded_u16(row.get(8)?)?,
         access_heat: bounded_u16(row.get(9)?)?,
-        created_at: UnixMicros::new(row.get(10)?),
-        due_at: row.get::<_, Option<i64>>(11)?.map(UnixMicros::new),
+        created_at: UnixMicros::new(row.get(11)?),
+        due_at: row.get::<_, Option<i64>>(12)?.map(UnixMicros::new),
     };
-    let state = job_state(row.get(13)?)?;
-    let completed_at = row.get::<_, Option<i64>>(16)?.map(UnixMicros::new);
-    let result_digest = row.get::<_, Option<Vec<u8>>>(17)?.map(exact).transpose()?;
+    let demand = WorkDemand {
+        in_flight_bytes: positive(row.get(10)?)?,
+    };
+    let state = job_state(row.get(14)?)?;
+    let completed_at = row.get::<_, Option<i64>>(17)?.map(UnixMicros::new);
+    let result_digest = row.get::<_, Option<Vec<u8>>>(18)?.map(exact).transpose()?;
     if (state == MaintenanceWorkState::Complete)
         != (completed_at.is_some() && result_digest.is_some())
     {
         return Err(RepositoryError::CorruptState);
     }
     let claim = row
-        .get::<_, Option<i64>>(19)?
+        .get::<_, Option<i64>>(20)?
         .map(|generation| {
             Ok::<_, RepositoryError>(MaintenanceWorkClaim {
                 generation: positive(generation)?,
-                worker_node_id: NodeId::from_bytes(exact(row.get(20)?)?)
+                worker_node_id: NodeId::from_bytes(exact(row.get(21)?)?)
                     .map_err(|_| RepositoryError::CorruptState)?,
-                worker_incarnation: positive(row.get(21)?)?,
-                fence: positive(row.get(22)?)?,
-                claimed_at: UnixMicros::new(row.get(23)?),
-                lease_expires_at: UnixMicros::new(row.get(24)?),
-                revision: revision(row.get(25)?)?,
+                worker_incarnation: positive(row.get(22)?)?,
+                fence: positive(row.get(23)?)?,
+                claimed_at: UnixMicros::new(row.get(24)?),
+                lease_expires_at: UnixMicros::new(row.get(25)?),
+                revision: revision(row.get(26)?)?,
             })
         })
         .transpose()?;
@@ -889,13 +1064,14 @@ fn decode_record_inner(row: &Row<'_>) -> Result<MaintenanceWorkRecord, Repositor
         deduplication_key,
         subject,
         signals,
-        priority: positive(row.get(12)?)?,
+        demand,
+        priority: positive(row.get(13)?)?,
         state,
-        next_attempt_at: UnixMicros::new(row.get(14)?),
-        attempt_count: nonnegative(row.get(15)?)?,
+        next_attempt_at: UnixMicros::new(row.get(15)?),
+        attempt_count: nonnegative(row.get(16)?)?,
         completed_at,
         result_digest,
-        revision: revision(row.get(18)?)?,
+        revision: revision(row.get(19)?)?,
         claim,
     })
 }

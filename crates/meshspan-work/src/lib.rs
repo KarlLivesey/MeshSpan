@@ -451,6 +451,18 @@ impl WorkBudget {
                 .is_some_and(|bytes| bytes <= self.in_flight_bytes)
     }
 
+    /// Returns the configured maximum number of concurrently claimed jobs.
+    #[must_use]
+    pub const fn maximum_concurrent_jobs(self) -> u16 {
+        self.concurrent_jobs
+    }
+
+    /// Returns the configured maximum bytes retained across concurrent work.
+    #[must_use]
+    pub const fn maximum_in_flight_bytes(self) -> u64 {
+        self.in_flight_bytes
+    }
+
     /// Returns the optional administrator-selected transfer-rate ceiling.
     #[must_use]
     pub const fn maximum_bytes_per_second(self) -> Option<u64> {
@@ -480,6 +492,14 @@ pub enum WorkBudgetError {
     /// A mandatory resource ceiling was zero.
     InvalidLimit,
 }
+
+impl fmt::Display for WorkBudgetError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("invalid maintenance-work resource limit")
+    }
+}
+
+impl std::error::Error for WorkBudgetError {}
 
 /// Calculates the first time a safe repair should become eligible.
 ///

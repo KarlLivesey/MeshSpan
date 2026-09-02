@@ -4,7 +4,7 @@ use meshspan_domain::{
     AuditEventId, HostId, MeshId, NodeId, OperationId, PartitionId, PrincipalId, Revision, RoleId,
     UnixMicros, VolumeId, WorkId,
 };
-use meshspan_work::{WorkSignals, WorkSubject};
+use meshspan_work::{WorkBudget, WorkSignals, WorkSubject, WorkUsage};
 
 use super::{
     AuthoritativeRepository, EntityKind, LogPosition, MaintenanceWorkState, RepositoryError,
@@ -40,6 +40,7 @@ fn work_is_deduplicated_leased_retried_and_fenced() -> Result<(), Box<dyn std::e
     let record = fixture.record(work_id)?;
     assert!(record.signals.data_unavailable);
     assert_eq!(record.signals.remaining_recovery_margin, 0);
+    assert_eq!(record.demand.in_flight_bytes, 4_096);
     assert_eq!(record.state, MaintenanceWorkState::Queued);
 
     fixture.apply(
@@ -104,6 +105,80 @@ fn work_is_deduplicated_leased_retried_and_fenced() -> Result<(), Box<dyn std::e
         return Err(format!("fabricated success returned {fabricated_success:?}").into());
     }
     assert_eq!(fixture.repository.current_revision()?, Revision::new(8));
+    Ok(())
+}
+
+#[test]
+fn ready_work_is_priority_ordered_budgeted_and_keyset_paged()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    let low_id = WorkId::from_bytes([30; 16])?;
+    let urgent_id = WorkId::from_bytes([31; 16])?;
+    let fitting_id = WorkId::from_bytes([32; 16])?;
+
+    let mut low = fixture.queue(low_id, 4, false);
+    low.deduplication_key = [30; 32];
+    low.demand.in_flight_bytes = 100;
+    low.signals.protection_debt = 0;
+    let mut urgent = fixture.queue(urgent_id, 0, true);
+    urgent.deduplication_key = [31; 32];
+    urgent.demand.in_flight_bytes = 4_000;
+    let mut fitting = fixture.queue(fitting_id, 1, false);
+    fitting.deduplication_key = [32; 32];
+    fitting.demand.in_flight_bytes = 1_000;
+    fixture.apply(2, 10, &AuthoritativeCommand::QueueMaintenanceWork(low))?;
+    fixture.apply(3, 11, &AuthoritativeCommand::QueueMaintenanceWork(urgent))?;
+    fixture.apply(4, 12, &AuthoritativeCommand::QueueMaintenanceWork(fitting))?;
+
+    let budget = WorkBudget::new(2, 5_000, None)?;
+    let usage = WorkUsage {
+        active_jobs: 1,
+        in_flight_bytes: 2_000,
+    };
+    let first =
+        fixture
+            .repository
+            .ready_maintenance_work(UnixMicros::new(20), budget, usage, None, 1)?;
+    assert_eq!(first.work.len(), 1);
+    assert_eq!(first.work[0].work_id, fitting_id);
+    let second = fixture.repository.ready_maintenance_work(
+        UnixMicros::new(20),
+        budget,
+        usage,
+        first.next,
+        1,
+    )?;
+    assert_eq!(second.work.len(), 1);
+    assert_eq!(second.work[0].work_id, low_id);
+    assert!(second.next.is_none());
+
+    fixture.apply(
+        5,
+        20,
+        &AuthoritativeCommand::ClaimMaintenanceWork(fixture.claim(fitting_id, 1, 77, 100)),
+    )?;
+    let before_expiry =
+        fixture
+            .repository
+            .ready_maintenance_work(UnixMicros::new(99), budget, usage, None, 10)?;
+    assert_eq!(before_expiry.work[0].work_id, low_id);
+    let after_expiry =
+        fixture
+            .repository
+            .ready_maintenance_work(UnixMicros::new(100), budget, usage, None, 10)?;
+    assert_eq!(after_expiry.work[0].work_id, fitting_id);
+
+    let saturated = fixture.repository.ready_maintenance_work(
+        UnixMicros::new(20),
+        budget,
+        WorkUsage {
+            active_jobs: 2,
+            in_flight_bytes: 0,
+        },
+        None,
+        10,
+    )?;
+    assert!(saturated.work.is_empty());
     Ok(())
 }
 
@@ -198,6 +273,9 @@ impl Fixture {
                 access_heat: 0,
                 created_at: UnixMicros::new(10),
                 due_at: None,
+            },
+            demand: meshspan_work::WorkDemand {
+                in_flight_bytes: 4_096,
             },
             next_attempt_at: UnixMicros::new(10),
         }

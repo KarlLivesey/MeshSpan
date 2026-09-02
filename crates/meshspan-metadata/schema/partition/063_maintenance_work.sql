@@ -14,6 +14,7 @@ CREATE TABLE maintenance_work_jobs (
     locality_debt INTEGER NOT NULL CHECK (locality_debt BETWEEN 0 AND 65535),
     instability INTEGER NOT NULL CHECK (instability BETWEEN 0 AND 65535),
     access_heat INTEGER NOT NULL CHECK (access_heat BETWEEN 0 AND 65535),
+    in_flight_bytes INTEGER NOT NULL CHECK (in_flight_bytes > 0),
     due_at INTEGER,
     priority INTEGER NOT NULL CHECK (priority > 0),
     state INTEGER NOT NULL CHECK (state BETWEEN 1 AND 3),

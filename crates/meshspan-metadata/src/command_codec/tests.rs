@@ -327,6 +327,9 @@ fn maintenance_work_commands_round_trip_subject_claim_and_outcomes()
                 created_at: UnixMicros::new(6),
                 due_at: Some(UnixMicros::new(7)),
             },
+            demand: meshspan_work::WorkDemand {
+                in_flight_bytes: 8_192,
+            },
             next_attempt_at: UnixMicros::new(8),
         }),
         AuthoritativeCommand::ClaimMaintenanceWork(ClaimMaintenanceWork {

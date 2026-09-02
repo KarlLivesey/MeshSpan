@@ -21,7 +21,7 @@ use meshspan_domain::{
     WorkId,
 };
 use meshspan_secret_envelope::{EncryptedSecretParts, RecipientEnvelopeParts};
-use meshspan_work::{WorkSignals, WorkSubject};
+use meshspan_work::{WorkDemand, WorkSignals, WorkSubject};
 use sha2::{Digest, Sha256};
 
 use crate::AdmitFederatedMutation;
@@ -1924,6 +1924,8 @@ pub struct QueueMaintenanceWork {
     pub subject: WorkSubject,
     /// Current safety and demand evidence used to derive queue priority.
     pub signals: WorkSignals,
+    /// Maximum bytes retained while one attempt executes this work.
+    pub demand: WorkDemand,
     /// Earliest authority-agreed instant at which a worker may claim this job.
     pub next_attempt_at: UnixMicros,
 }
@@ -3180,6 +3182,7 @@ digest_simple_record!(
         digest.unsigned(u64::from(value.signals.access_heat));
         digest.signed(value.signals.created_at.get());
         digest.optional_instant(value.signals.due_at);
+        digest.unsigned(value.demand.in_flight_bytes);
         digest.signed(value.next_attempt_at.get());
     }
 );

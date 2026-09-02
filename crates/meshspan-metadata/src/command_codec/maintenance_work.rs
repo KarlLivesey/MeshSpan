@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_domain::{NodeId, UnixMicros, WorkId};
-use meshspan_work::{MAXIMUM_WORK_SUBJECT_BYTES, WorkSignals, WorkSubject};
+use meshspan_work::{MAXIMUM_WORK_SUBJECT_BYTES, WorkDemand, WorkSignals, WorkSubject};
 
 use super::MetadataCommandCodecError;
 use super::decoder::Decoder;
@@ -91,6 +91,7 @@ fn encode_queue(
     encoder.u16(value.signals.access_heat)?;
     encoder.i64(value.signals.created_at.get())?;
     encoder.optional_i64(value.signals.due_at.map(UnixMicros::get))?;
+    encoder.u64(value.demand.in_flight_bytes)?;
     encoder.i64(value.next_attempt_at.get())
 }
 
@@ -111,6 +112,9 @@ fn decode_queue(
             access_heat: decoder.u16()?,
             created_at: UnixMicros::new(decoder.i64()?),
             due_at: decoder.optional_i64()?.map(UnixMicros::new),
+        },
+        demand: WorkDemand {
+            in_flight_bytes: positive(decoder.u64()?)?,
         },
         next_attempt_at: UnixMicros::new(decoder.i64()?),
     };
