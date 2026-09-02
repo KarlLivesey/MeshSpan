@@ -101,6 +101,17 @@ pub struct MaintenanceWorkRecord {
     pub claim: Option<MaintenanceWorkClaim>,
 }
 
+/// Minimal immutable effect reference needed to recover after a lost completion response.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MaintenanceEffectReference {
+    /// Exact committed domain-effect operation.
+    pub operation_id: OperationId,
+    /// Authoritative revision committed by the effect.
+    pub revision: Revision,
+    /// Exact operation-result digest accepted by work completion.
+    pub result_digest: [u8; 32],
+}
+
 impl AuthoritativeRepository {
     /// Returns one exact durable maintenance job and its current claim.
     ///
@@ -158,6 +169,22 @@ impl AuthoritativeRepository {
         scrub::load(self.database.connection(), effect_operation_id)
     }
 
+    /// Returns an already committed effect for one maintenance job, if present.
+    ///
+    /// This is the recovery boundary after the effect commits but its worker crashes before
+    /// completing the fenced job. A later claim links this exact immutable effect instead of
+    /// repeating physical work or inventing another effect.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when job/effect/operation state is malformed or contradictory.
+    pub fn maintenance_effect_reference(
+        &self,
+        work_id: WorkId,
+    ) -> Result<Option<MaintenanceEffectReference>, RepositoryError> {
+        effect_reference(self.database.connection(), work_id)
+    }
+
     /// Returns local active target generations whose last complete scrub is overdue.
     ///
     /// A never-scrubbed generation becomes due relative to its authoritative admission time.
@@ -185,6 +212,50 @@ impl AuthoritativeRepository {
             limit,
         )
     }
+}
+
+fn effect_reference(
+    connection: &rusqlite::Connection,
+    work_id: WorkId,
+) -> Result<Option<MaintenanceEffectReference>, RepositoryError> {
+    let Some(job) = load_record(connection, work_id)? else {
+        return Ok(None);
+    };
+    let (table, expected_kind) = match job.subject.kind() {
+        WorkKind::Repair => ("maintenance_repair_effects", REPAIR_EFFECT_KIND),
+        WorkKind::Scrub => ("maintenance_scrub_effects", SCRUB_EFFECT_KIND),
+        WorkKind::Drain | WorkKind::Rebalance | WorkKind::Reconcile => return Ok(None),
+    };
+    let sql = format!(
+        "SELECT effect.effect_operation_id, operation.revision, operation.result_digest,
+                operation.operation_kind
+         FROM {table} effect
+         JOIN operations operation ON operation.operation_id = effect.effect_operation_id
+         WHERE effect.work_id = ?1"
+    );
+    connection
+        .query_row(&sql, [work_id.as_bytes().as_slice()], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .optional()?
+        .map(|(operation, revision_value, digest, kind)| {
+            let result_digest = exact(digest)?;
+            if kind != expected_kind || result_digest == [0; 32] {
+                return Err(RepositoryError::CorruptState);
+            }
+            Ok(MaintenanceEffectReference {
+                operation_id: OperationId::from_bytes(exact(operation)?)
+                    .map_err(|_| RepositoryError::CorruptState)?,
+                revision: revision(revision_value)?,
+                result_digest,
+            })
+        })
+        .transpose()
 }
 
 /// Stable keyset position in the deterministic maintenance priority order.

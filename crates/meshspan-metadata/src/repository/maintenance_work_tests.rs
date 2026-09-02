@@ -330,6 +330,14 @@ fn scrub_effect_requires_exact_classified_summary_then_completes_claim()
     assert_eq!(stored.verified_bytes, 12_288);
     assert_eq!(stored.outcome_counts, [1; 6]);
     assert_eq!(stored.evidence_digest, [63; 32]);
+    assert_eq!(
+        fixture.repository.maintenance_effect_reference(work_id)?,
+        Some(super::MaintenanceEffectReference {
+            operation_id: effect.operation_id,
+            revision: effect.committed_revision,
+            result_digest: effect.result_digest,
+        })
+    );
 
     fixture.apply(
         6,
