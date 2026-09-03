@@ -36,6 +36,7 @@ mod authentication_root_loading;
 mod authentication_root_loading_tests;
 mod browser_authentication;
 mod browser_session;
+mod certificate_automation_service;
 mod certificate_order_checkpointing;
 #[cfg(test)]
 mod certificate_order_checkpointing_tests;
@@ -371,6 +372,11 @@ pub use browser_authentication::{
 };
 pub use browser_session::{
     BrowserRequestProtection, BrowserSessionError, BrowserSessionEvidence, parse_browser_session,
+};
+pub use certificate_automation_service::{
+    CertificateAutomationComponents, CertificateAutomationError, CertificateAutomationOutcome,
+    CertificateAutomationPolicy, CertificateAutomationService, CertificateExecutionFactory,
+    CertificateExecutionFactoryError, CertificateOrderPreparer,
 };
 pub use certificate_order_checkpointing::{
     CertificateOrderCheckpoint, CertificateOrderCheckpointAuthority,
