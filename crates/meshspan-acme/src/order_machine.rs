@@ -12,6 +12,8 @@ use crate::{
 
 mod action;
 mod checkpoint;
+#[cfg(test)]
+mod checkpoint_tests;
 
 /// Configured challenge family for one immutable order.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
