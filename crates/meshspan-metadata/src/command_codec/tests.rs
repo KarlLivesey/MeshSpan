@@ -32,12 +32,12 @@ use crate::{
     CreateProtectionPolicy, CreateUser, CreateVolume, FenceStorageNodeDrainMembership,
     GrantInheritance, GrantPermission, GrantPermissionWithActivation, IssueAuthenticationSession,
     LocalityRequirementConfiguration, MaintenanceWorkCompletion, NewAuthenticationCredential,
-    NewRecoveryCode, PermissionScope, ProtectionScenarioConfiguration, PublishSmbExport,
-    QueueCertificateOrder, QueueMaintenanceWork, RebalanceScanCursor, RecordName,
-    RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember, RenewCertificateOrder,
-    RenewMaintenanceWork, RevokeAuthenticationMethod, RevokeAuthenticationSession,
-    SecretGenerationReference, SessionAuthenticationFactor, SessionClientLabel,
-    SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
+    NewRecoveryCode, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PermissionScope,
+    ProtectionScenarioConfiguration, PublishSmbExport, QueueCertificateOrder, QueueMaintenanceWork,
+    RebalanceScanCursor, RecordName, RegisterNodeWrappingKey, RegisterStorageTarget,
+    RemoveGroupMember, RenewCertificateOrder, RenewMaintenanceWork, RevokeAuthenticationMethod,
+    RevokeAuthenticationSession, SecretGenerationReference, SessionAuthenticationFactor,
+    SessionClientLabel, SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
     SetTargetAvailabilityCellMembership, SmbExportGatewaySelection, StepUpAuthenticationSession,
     StorageUsageLimit, StrongFallbackMode, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND,
     WithdrawSmbExport,
@@ -652,6 +652,25 @@ fn acme_commands_round_trip_configuration_claims_and_both_outcomes()
         fence: 6,
         lease_expires_at: UnixMicros::new(700),
     };
+    let first = WrappingPrivateKey::from_bytes([106; 32])?.public_key();
+    let second = WrappingPrivateKey::from_bytes([107; 32])?.public_key();
+    let (certificate_secret, certificate_recipients) = encrypt_secret(
+        SecretContext::new(
+            PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+            order_id.as_bytes(),
+            1,
+        )?,
+        b"public certificate bundle",
+        &[first, second],
+        &mut SecretRandom(108),
+    )?;
+    let certificate = Box::new(CommitSecretGeneration {
+        secret: certificate_secret.parts(),
+        recipients: certificate_recipients
+            .iter()
+            .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
+            .collect(),
+    });
     for command in [
         AuthoritativeCommand::ConfigureAcme(ConfigureAcme {
             config_id,
@@ -699,10 +718,7 @@ fn acme_commands_round_trip_configuration_claims_and_both_outcomes()
             worker_incarnation: claim.worker_incarnation,
             fence: claim.fence,
             outcome: CertificateOrderCompletion::Issued {
-                certificate: SecretGenerationReference {
-                    secret_id: [106; 16],
-                    generation: 7,
-                },
+                certificate,
                 not_before: UnixMicros::new(600),
                 not_after: UnixMicros::new(1_000),
                 result_digest: [107; 32],

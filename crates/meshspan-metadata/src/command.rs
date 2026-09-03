@@ -3750,13 +3750,13 @@ digest_simple_record!(
         digest.identifier(value.worker_node_id.as_bytes());
         digest.unsigned(value.worker_incarnation);
         digest.unsigned(value.fence);
-        match value.outcome {
+        match &value.outcome {
             CertificateOrderCompletion::Retry {
                 failure_digest,
                 retry_at,
             } => {
                 digest.byte(1);
-                digest.bytes(&failure_digest);
+                digest.bytes(failure_digest);
                 digest.signed(retry_at.get());
             }
             CertificateOrderCompletion::Issued {
@@ -3766,11 +3766,10 @@ digest_simple_record!(
                 result_digest,
             } => {
                 digest.byte(2);
-                digest.identifier(certificate.secret_id);
-                digest.unsigned(certificate.generation);
+                certificate.update_digest(digest);
                 digest.signed(not_before.get());
                 digest.signed(not_after.get());
-                digest.bytes(&result_digest);
+                digest.bytes(result_digest);
             }
         }
     }

@@ -36,6 +36,9 @@ mod authentication_root_loading;
 mod authentication_root_loading_tests;
 mod browser_authentication;
 mod browser_session;
+mod certificate_order_completion;
+#[cfg(test)]
+mod certificate_order_completion_tests;
 mod claim_file;
 mod claim_service;
 #[cfg(test)]
@@ -338,6 +341,11 @@ pub use browser_authentication::{
 };
 pub use browser_session::{
     BrowserRequestProtection, BrowserSessionError, BrowserSessionEvidence, parse_browser_session,
+};
+pub use certificate_order_completion::{
+    CertificateOrderCompletionAuthority, CertificateOrderCompletionAuthorityError,
+    CertificateOrderCompletionCommit, CertificateOrderCompletionError,
+    CertificateOrderCompletionService, CertificateOrderIssuance,
 };
 pub use claim_file::{ClaimFile, ClaimFileError};
 pub use claim_service::{
