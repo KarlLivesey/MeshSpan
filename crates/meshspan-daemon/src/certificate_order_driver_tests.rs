@@ -85,6 +85,8 @@ fn driver(
         certificate_authority.certificate_der().to_vec(),
     ))?;
     Ok(CertificateOrderDriver::new(
+        authority.clone(),
+        authority.clone(),
         authority,
         SharedRandom::default(),
         FixedClock(UnixMicros::new(20_000_000)),

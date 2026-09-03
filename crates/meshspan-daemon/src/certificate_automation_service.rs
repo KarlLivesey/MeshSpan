@@ -131,7 +131,6 @@ pub enum CertificateAutomationOutcome {
 /// Stateful one-order-at-a-time ACME automation service for one daemon incarnation.
 pub struct CertificateAutomationService<A, P, F, R, C>
 where
-    A: Clone,
     F: CertificateExecutionFactory,
 {
     authority: A,
@@ -150,8 +149,12 @@ where
 pub struct CertificateAutomationComponents<A, P, F, R, C> {
     /// Consensus-backed authority used by renewal and order admission.
     pub authority: A,
-    /// Independently owned consensus reader used by checkpoint, retry and completion driving.
-    pub driver_authority: A,
+    /// Independently owned consensus reader used by checkpoint driving.
+    pub checkpoint_authority: A,
+    /// Independently owned consensus reader used by certificate completion.
+    pub completion_authority: A,
+    /// Independently owned consensus reader used by retry scheduling.
+    pub retry_authority: A,
     /// Protected key and checkpoint preparation capability.
     pub preparation: P,
     /// Concrete transport/challenge selector.
@@ -172,7 +175,6 @@ pub struct CertificateAutomationComponents<A, P, F, R, C> {
 
 impl<A, P, F, R, C> CertificateAutomationService<A, P, F, R, C>
 where
-    A: Clone,
     F: CertificateExecutionFactory,
     R: Clone,
     C: Clone,
@@ -181,7 +183,9 @@ where
     #[must_use]
     pub fn new(components: CertificateAutomationComponents<A, P, F, R, C>) -> Self {
         let driver = CertificateOrderDriver::new(
-            components.driver_authority,
+            components.checkpoint_authority,
+            components.completion_authority,
+            components.retry_authority,
             components.random.clone(),
             components.clock.clone(),
             components.policy.drive,
@@ -204,8 +208,7 @@ where
 
 impl<A, P, F, R, C> CertificateAutomationService<A, P, F, R, C>
 where
-    A: Clone
-        + CertificateOrderWorkerAuthority
+    A: CertificateOrderWorkerAuthority
         + CertificateRenewalAuthority
         + crate::CertificateOrderCheckpointAuthority
         + crate::CertificateOrderCompletionAuthority,

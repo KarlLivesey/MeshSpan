@@ -84,22 +84,26 @@ pub struct CertificateOrderDriver<A, R, C> {
 
 impl<A, R, C> CertificateOrderDriver<A, R, C>
 where
-    A: Clone,
     R: Clone,
 {
     /// Binds one worker identity to durable authority, trusted roots, time and entropy.
     #[must_use]
     pub fn new(
-        authority: A,
+        checkpoint_authority: A,
+        completion_authority: A,
+        retry_authority: A,
         random: R,
         clock: C,
         policy: CertificateOrderDrivePolicy,
         result: CertificateOrderResultService,
     ) -> Self {
         Self {
-            checkpoint: CertificateOrderCheckpointService::new(authority.clone()),
-            completion: CertificateOrderCompletionService::new(authority.clone(), random.clone()),
-            retry: CertificateOrderRetryService::new(authority),
+            checkpoint: CertificateOrderCheckpointService::new(checkpoint_authority),
+            completion: CertificateOrderCompletionService::new(
+                completion_authority,
+                random.clone(),
+            ),
+            retry: CertificateOrderRetryService::new(retry_authority),
             result,
             operation_random: random,
             clock,

@@ -34,6 +34,7 @@ mod authentication_method_revocation_tests;
 mod authentication_root_loading;
 #[cfg(test)]
 mod authentication_root_loading_tests;
+mod authoritative_txt_observer;
 mod browser_authentication;
 mod browser_session;
 mod certificate_administration;
@@ -390,6 +391,7 @@ pub use authentication_root_loading::{
     AuthenticationRuntimeKeys, ProtectedTotpFactorVerifier,
     ProtectedTotpRegistrationSecretProtector,
 };
+pub use authoritative_txt_observer::SystemAuthoritativeTxtObserver;
 pub use browser_authentication::{
     BrowserAuthenticationError, BrowserSessionAuthenticator, BrowserSessionAuthority,
     BrowserSessionAuthorityError, GatewaySessionIdentity,

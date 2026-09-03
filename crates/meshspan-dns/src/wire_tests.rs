@@ -1,6 +1,32 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-use crate::{DnsName, DnsQuery, DnsWireError, TxtValue};
+use crate::{DnsName, DnsNameServerQuery, DnsQuery, DnsWireError, TxtValue};
+
+#[test]
+fn recursive_ns_response_returns_canonical_unique_authorities()
+-> Result<(), Box<dyn std::error::Error>> {
+    let query = DnsNameServerQuery::new(0x4321, DnsName::new("example.test")?)?;
+    let request = query.encode()?;
+    let mut response = Vec::new();
+    response.extend_from_slice(&request[..2]);
+    response.extend_from_slice(&0x8180_u16.to_be_bytes());
+    response.extend_from_slice(&1_u16.to_be_bytes());
+    response.extend_from_slice(&1_u16.to_be_bytes());
+    response.extend_from_slice(&[0; 4]);
+    response.extend_from_slice(&request[12..]);
+    response.extend_from_slice(&[0xc0, 0x0c]);
+    response.extend_from_slice(&2_u16.to_be_bytes());
+    response.extend_from_slice(&1_u16.to_be_bytes());
+    response.extend_from_slice(&60_u32.to_be_bytes());
+    response.extend_from_slice(&6_u16.to_be_bytes());
+    response.extend_from_slice(&[3, b'n', b's', b'1', 0xc0, 0x0c]);
+
+    assert_eq!(
+        query.response_name_servers(&response)?,
+        vec![DnsName::new("ns1.example.test")?]
+    );
+    Ok(())
+}
 
 #[test]
 fn authoritative_compressed_txt_response_matches_exact_value()
