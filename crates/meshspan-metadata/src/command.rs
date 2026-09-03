@@ -46,6 +46,7 @@ use crate::{
     ReplaceFederationGrant, RevokeFederationGrant, RevokeFederationGrantAssignment,
     RevokeFederationGrantAssignmentActivation,
 };
+use crate::{ConfigureBackupDestination, RecordBackupCopy, RecordMetadataBackup, VerifyBackupCopy};
 use crate::{IssueFederationStorageAllocation, RevokeFederationStorageAllocation};
 use crate::{
     ResolveFederatedMutationQuarantine, RetainFederatedMutationQuarantine,
@@ -250,6 +251,14 @@ pub enum AuthoritativeCommand {
     IssueMeshLocalCertificate(Box<IssueMeshLocalCertificate>),
     /// Records one gateway's exact live mesh-local endpoint generation.
     AcknowledgeMeshLocalCertificateInstallation(AcknowledgeMeshLocalCertificateInstallation),
+    /// Creates or replaces one encrypted metadata-backup destination.
+    ConfigureBackupDestination(ConfigureBackupDestination),
+    /// Admits one exact encrypted partition backup generation.
+    RecordMetadataBackup(RecordMetadataBackup),
+    /// Records one provider-confirmed encrypted backup copy.
+    RecordBackupCopy(RecordBackupCopy),
+    /// Records read-after-write verification of one unchanged backup copy.
+    VerifyBackupCopy(VerifyBackupCopy),
     /// Registers one node-local public key for encrypted secret generations.
     RegisterNodeWrappingKey(RegisterNodeWrappingKey),
     /// Commits one encrypted secret generation and every exact recipient envelope atomically.
@@ -439,6 +448,10 @@ impl AuthoritativeCommand {
             Self::AcknowledgeMeshLocalCertificateInstallation(value) => {
                 value.update_digest(digest);
             }
+            Self::ConfigureBackupDestination(value) => value.update_digest(digest),
+            Self::RecordMetadataBackup(value) => value.update_digest(digest),
+            Self::RecordBackupCopy(value) => value.update_digest(digest),
+            Self::VerifyBackupCopy(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
             Self::CommitSecretGeneration(value) => value.update_digest(digest),
             Self::IssueJoinGrant(value) => value.update_digest(digest),
@@ -3306,6 +3319,79 @@ digest_simple_record!(AssignComponent, b"assign-component", |value, digest| {
     digest.byte(value.assignment_kind);
     digest.identifier(value.assignment_id);
     digest.byte(value.desired_state);
+});
+digest_simple_record!(
+    ConfigureBackupDestination,
+    b"configure-backup-destination",
+    |value, digest| {
+        digest.identifier(value.destination_id.as_bytes());
+        digest.name(&value.name);
+        match value.binding {
+            crate::BackupDestinationBinding::RegisteredTarget {
+                target_id,
+                target_generation,
+            } => {
+                digest.byte(1);
+                digest.identifier(target_id.as_bytes());
+                digest.unsigned(target_generation);
+            }
+            crate::BackupDestinationBinding::FederatedMesh {
+                remote_mesh_id,
+                provider_generation,
+            } => {
+                digest.byte(2);
+                digest.identifier(remote_mesh_id.as_bytes());
+                digest.unsigned(provider_generation);
+            }
+            crate::BackupDestinationBinding::ComponentProvider {
+                instance_id,
+                provider_generation,
+            } => {
+                digest.byte(3);
+                digest.identifier(instance_id.as_bytes());
+                digest.unsigned(provider_generation);
+            }
+        }
+        digest.byte(match value.failure_relationship {
+            crate::BackupFailureRelationship::Unknown => 1,
+            crate::BackupFailureRelationship::Overlapping => 2,
+            crate::BackupFailureRelationship::Independent => 3,
+        });
+        digest.bytes(&value.failure_evidence_digest);
+        digest.byte(u8::from(value.enabled));
+    }
+);
+digest_simple_record!(
+    RecordMetadataBackup,
+    b"record-metadata-backup",
+    |value, digest| {
+        digest.identifier(value.backup_id.as_bytes());
+        digest.identifier(value.partition_id.as_bytes());
+        digest.identifier(value.mesh_id.as_bytes());
+        digest.unsigned(value.last_log_index);
+        digest.unsigned(value.last_log_term);
+        digest.unsigned(value.state_revision.get());
+        digest.unsigned(u64::from(value.schema_version));
+        digest.unsigned(value.source_byte_length);
+        digest.bytes(&value.source_digest);
+        digest.bytes(&value.manifest_digest);
+        digest.unsigned(value.encrypted_byte_length);
+        digest.bytes(&value.encrypted_digest);
+    }
+);
+digest_simple_record!(RecordBackupCopy, b"record-backup-copy", |value, digest| {
+    digest.identifier(value.backup_id.as_bytes());
+    digest.identifier(value.destination_id.as_bytes());
+    digest.unsigned(value.provider_generation);
+    digest.bytes(value.object_reference.as_bytes());
+    digest.unsigned(value.byte_length);
+    digest.bytes(&value.copy_digest);
+});
+digest_simple_record!(VerifyBackupCopy, b"verify-backup-copy", |value, digest| {
+    digest.identifier(value.backup_id.as_bytes());
+    digest.identifier(value.destination_id.as_bytes());
+    digest.unsigned(value.provider_generation);
+    digest.bytes(&value.copy_digest);
 });
 digest_simple_record!(
     RegisterStorageTarget,

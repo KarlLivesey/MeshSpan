@@ -10,8 +10,8 @@ use super::receipt::{decode_receipt, encode_result, result_digest, validate_posi
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError,
     acknowledgement_policy, acme, authentication_method, authentication_method_creation,
-    authentication_policy, availability_cell, bootstrap, cleanup_attestation, cleanup_completion,
-    cleanup_inventory, cleanup_permit, cleanup_reclamation, cluster, component,
+    authentication_policy, availability_cell, backup_catalogue, bootstrap, cleanup_attestation,
+    cleanup_completion, cleanup_inventory, cleanup_permit, cleanup_reclamation, cluster, component,
     external_certificate, federation_actor_attestation, federation_assignment, federation_grant,
     federation_mutation_admission, federation_quarantine, federation_relationship,
     federation_storage_allocation, federation_succession, identity, locality_policy,
@@ -637,6 +637,10 @@ fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
                 | AuthoritativeCommand::AssignVolumeAcknowledgementPolicy(_)
                 | AuthoritativeCommand::PublishSmbExport(_)
                 | AuthoritativeCommand::WithdrawSmbExport(_)
+                | AuthoritativeCommand::ConfigureBackupDestination(_)
+                | AuthoritativeCommand::RecordMetadataBackup(_)
+                | AuthoritativeCommand::RecordBackupCopy(_)
+                | AuthoritativeCommand::VerifyBackupCopy(_)
                 | AuthoritativeCommand::RegisterNodeWrappingKey(_)
                 | AuthoritativeCommand::CommitSecretGeneration(_)
                 | AuthoritativeCommand::ConfirmRecoveryBundleSaved(_)
@@ -685,6 +689,23 @@ fn execute_infrastructure_command(
         }
         AuthoritativeCommand::AssignComponent(value) => {
             component::assign(transaction, value, revision)
+        }
+        AuthoritativeCommand::ConfigureBackupDestination(value) => {
+            backup_catalogue::configure_destination(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::RecordMetadataBackup(value) => backup_catalogue::record_backup(
+            transaction,
+            meshspan_domain::PartitionId::from_bytes(partition_id)
+                .map_err(|_| RepositoryError::CorruptState)?,
+            context,
+            *value,
+            revision,
+        ),
+        AuthoritativeCommand::RecordBackupCopy(value) => {
+            backup_catalogue::record_copy(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::VerifyBackupCopy(value) => {
+            backup_catalogue::verify_copy(transaction, context, *value, revision)
         }
         AuthoritativeCommand::RegisterStorageTarget(value) => {
             storage_target::register(transaction, context, value, revision)
@@ -1340,6 +1361,10 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::CreateMeshLocalCertificateAuthority(_) => 125,
         AuthoritativeCommand::IssueMeshLocalCertificate(_) => 126,
         AuthoritativeCommand::AcknowledgeMeshLocalCertificateInstallation(_) => 127,
+        AuthoritativeCommand::ConfigureBackupDestination(_) => 128,
+        AuthoritativeCommand::RecordMetadataBackup(_) => 129,
+        AuthoritativeCommand::RecordBackupCopy(_) => 130,
+        AuthoritativeCommand::VerifyBackupCopy(_) => 131,
     }
 }
 

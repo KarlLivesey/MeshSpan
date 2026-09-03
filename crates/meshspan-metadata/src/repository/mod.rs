@@ -27,6 +27,9 @@ mod availability_cell;
 #[cfg(test)]
 mod availability_cell_tests;
 mod backup;
+mod backup_catalogue;
+#[cfg(test)]
+mod backup_catalogue_tests;
 mod bootstrap;
 #[cfg(test)]
 mod bootstrap_appliance_tests;
@@ -180,6 +183,10 @@ pub use backup::{
     EncryptedBackupPaths, EncryptedPartitionBackupManifest, EncryptedRestorePaths,
     PartitionBackupManifest, create_encrypted_partition_backup, restore_encrypted_partition_backup,
     restore_partition_backup,
+};
+pub use backup_catalogue::{
+    BackupCopyRecord, BackupCopyState, BackupDestinationRecord, BackupDestinationState,
+    MetadataBackupRecord, MetadataBackupState,
 };
 pub use cleanup_attestation::{VersionCleanupAttestationProgress, VersionCleanupParticipant};
 pub use cleanup_completion::{VersionCleanupCompletion, VersionCleanupItemCompletion};
@@ -2129,6 +2136,43 @@ impl AuthoritativeRepository {
             recipients,
             random,
         )
+    }
+
+    /// Returns one exact replicated metadata-backup generation.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored identities, evidence, state or revisions are malformed.
+    pub fn metadata_backup(
+        &self,
+        backup_id: meshspan_domain::BackupId,
+    ) -> Result<Option<MetadataBackupRecord>, RepositoryError> {
+        backup_catalogue::backup(self.database.connection(), backup_id)
+    }
+
+    /// Returns one configured backup destination and its current provider fence.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the binding, state, evidence or revision is malformed.
+    pub fn backup_destination(
+        &self,
+        destination_id: meshspan_domain::BackupDestinationId,
+    ) -> Result<Option<BackupDestinationRecord>, RepositoryError> {
+        backup_catalogue::destination(self.database.connection(), destination_id)
+    }
+
+    /// Returns one exact provider copy and its read-after-write state.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when its provider fence, object evidence or lifecycle is malformed.
+    pub fn backup_copy(
+        &self,
+        backup_id: meshspan_domain::BackupId,
+        destination_id: meshspan_domain::BackupDestinationId,
+    ) -> Result<Option<BackupCopyRecord>, RepositoryError> {
+        backup_catalogue::copy(self.database.connection(), backup_id, destination_id)
     }
 
     /// Creates a complete state-machine snapshot bound to one proved quorum plan.

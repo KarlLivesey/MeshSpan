@@ -4,6 +4,7 @@
 
 mod acme_command;
 mod authentication_integrity;
+mod backup_command;
 mod command;
 mod command_codec;
 mod database;
@@ -50,6 +51,11 @@ pub use acme_command::{
     CompleteCertificateOrder, ConfigureAcme, MAXIMUM_CERTIFICATE_ORDER_CHECKPOINT_BYTES,
     MAXIMUM_MANUAL_DNS_VALUE_BYTES, ManualDnsTaskPhase, ProvisionAcme, QueueCertificateOrder,
     RenewCertificateOrder, SecretGenerationReference,
+};
+pub use backup_command::{
+    BackupDestinationBinding, BackupFailureRelationship, ConfigureBackupDestination,
+    MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES, RecordBackupCopy, RecordMetadataBackup,
+    VerifyBackupCopy,
 };
 pub use command::{
     ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
@@ -193,7 +199,8 @@ pub use repository::{
     AuthenticationSessionReplayCredential, AuthenticationSessionReplayFactor,
     AuthoritativeMembership, AuthoritativeMetadataKernel, AuthoritativeOperationCursor,
     AuthoritativeOperationState, AuthoritativeOperationStatus, AuthoritativeRepository,
-    AvailabilityCellCursor, AvailabilityCellRecord, BrowserSessionAccessRequest,
+    AvailabilityCellCursor, AvailabilityCellRecord, BackupCopyRecord, BackupCopyState,
+    BackupDestinationRecord, BackupDestinationState, BrowserSessionAccessRequest,
     BrowserSessionProtection, CertificateOrderCheckpointRecord, CertificateOrderClaim,
     CertificateOrderRecord, CertificateOrderState, CertificateRenewalCandidate, CommandReceipt,
     ConsensusStoreError, ConvergedVolumeHead, DueCertificateOrderCursor,
@@ -216,25 +223,26 @@ pub use repository::{
     MaintenanceEffectReference, MaintenanceWorkClaim, MaintenanceWorkCursor, MaintenanceWorkRecord,
     MaintenanceWorkState, ManualDnsTaskCursor, ManualDnsTaskRecord, ManualDnsTaskState,
     MeshLocalCertificateAuthorityRecord, MeshLocalCertificateIssuanceRecord, MeshRecoveryAuthority,
-    NamespaceCursor, NamespaceRecord, NodeActivationCandidate, NodeActivationRecord,
-    NodeEnrolmentRecord, NodeWrappingKeyRecord, ObjectOwnerCursor, ObjectOwnerRecord,
-    OnlineCertificateAuthorityRecord, Page, PageLimit, PartitionBackupManifest,
-    PartitionConsensusPersistence, PartitionSnapshotManifest, PasskeyRegistrationProfile,
-    PasskeyRegistrationReplay, PasskeySessionReplay, PasskeyVerificationMaterial,
-    PermissionGrantRecord, PermissionGrantRevocationRecord, PreservedVote, PrincipalCursor,
-    PrincipalKind, PrincipalRecord, ProtectionPolicyCursor, ProtectionPolicyRecord,
-    ProtectionScenarioRecord, ProtectionTermRecord, PublicCertificateInstallationRecord,
-    PublicCertificateRolloutSummary, PublicCertificateSelection, PublicCertificateSource,
-    PublicCertificateStatusRecord, ReadyMaintenanceWork, ReadyMaintenanceWorkPage,
-    RebalanceScanProgress, RecoveryBundleState, RecoveryCodeVerificationMaterial,
-    RepositoryConformanceCheck, RepositoryConformanceReport, RepositoryConformanceVector,
-    RepositoryError, RetainedNamespaceRoot, RetainedNamespaceRootCursor, RetainedNamespaceRootPage,
-    RetainedNamespaceRootSource, ScopeWriteAuthority, ScopedGrantCursor, SecretGenerationRecord,
-    SessionAccessCapability, SessionAccessDecision, SessionAccessDenial, SessionAccessRequest,
-    SessionRevocationReplay, ShardRepairEffectRecord, SmbExportGatewayPolicy, SmbExportRecord,
-    SmbVerificationMaterial, SnapshotCursor, SnapshotExpiryCandidate, SnapshotExpiryCursor,
-    SnapshotSchedule, SnapshotScheduleCursor, StorageDrainCursor, StorageDrainRecord,
-    StorageDrainState, StorageDrainStatusPage, StorageScopeDrainAction, StorageScopeDrainCursor,
+    MetadataBackupRecord, MetadataBackupState, NamespaceCursor, NamespaceRecord,
+    NodeActivationCandidate, NodeActivationRecord, NodeEnrolmentRecord, NodeWrappingKeyRecord,
+    ObjectOwnerCursor, ObjectOwnerRecord, OnlineCertificateAuthorityRecord, Page, PageLimit,
+    PartitionBackupManifest, PartitionConsensusPersistence, PartitionSnapshotManifest,
+    PasskeyRegistrationProfile, PasskeyRegistrationReplay, PasskeySessionReplay,
+    PasskeyVerificationMaterial, PermissionGrantRecord, PermissionGrantRevocationRecord,
+    PreservedVote, PrincipalCursor, PrincipalKind, PrincipalRecord, ProtectionPolicyCursor,
+    ProtectionPolicyRecord, ProtectionScenarioRecord, ProtectionTermRecord,
+    PublicCertificateInstallationRecord, PublicCertificateRolloutSummary,
+    PublicCertificateSelection, PublicCertificateSource, PublicCertificateStatusRecord,
+    ReadyMaintenanceWork, ReadyMaintenanceWorkPage, RebalanceScanProgress, RecoveryBundleState,
+    RecoveryCodeVerificationMaterial, RepositoryConformanceCheck, RepositoryConformanceReport,
+    RepositoryConformanceVector, RepositoryError, RetainedNamespaceRoot,
+    RetainedNamespaceRootCursor, RetainedNamespaceRootPage, RetainedNamespaceRootSource,
+    ScopeWriteAuthority, ScopedGrantCursor, SecretGenerationRecord, SessionAccessCapability,
+    SessionAccessDecision, SessionAccessDenial, SessionAccessRequest, SessionRevocationReplay,
+    ShardRepairEffectRecord, SmbExportGatewayPolicy, SmbExportRecord, SmbVerificationMaterial,
+    SnapshotCursor, SnapshotExpiryCandidate, SnapshotExpiryCursor, SnapshotSchedule,
+    SnapshotScheduleCursor, StorageDrainCursor, StorageDrainRecord, StorageDrainState,
+    StorageDrainStatusPage, StorageScopeDrainAction, StorageScopeDrainCursor,
     StorageScopeDrainRecord, StorageScopeDrainState, StorageTargetProviderContext,
     StorageTargetRegistrationContext, SubjectGrantCursor, TopologyNodeCursor, TopologyNodeRecord,
     TopologyTargetCursor, TopologyTargetRecord, TotpVerificationMaterial,
