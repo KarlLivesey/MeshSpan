@@ -639,6 +639,7 @@ fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::QueueCertificateOrder(_)
             | AuthoritativeCommand::ClaimCertificateOrder(_)
             | AuthoritativeCommand::RenewCertificateOrder(_)
+            | AuthoritativeCommand::CheckpointCertificateOrder(_)
             | AuthoritativeCommand::CompleteCertificateOrder(_)
             | AuthoritativeCommand::AcknowledgePublicCertificateInstallation(_)
             | AuthoritativeCommand::RegisterNodeWrappingKey(_)
@@ -720,6 +721,9 @@ fn execute_infrastructure_command(
         }
         AuthoritativeCommand::RenewCertificateOrder(value) => {
             acme::renew(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::CheckpointCertificateOrder(value) => {
+            acme::checkpoint(transaction, context, value, revision)
         }
         AuthoritativeCommand::CompleteCertificateOrder(value) => {
             acme::complete(transaction, context, value, revision)
@@ -1278,6 +1282,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::RenewCertificateOrder(_) => 117,
         AuthoritativeCommand::CompleteCertificateOrder(_) => 118,
         AuthoritativeCommand::AcknowledgePublicCertificateInstallation(_) => 119,
+        AuthoritativeCommand::CheckpointCertificateOrder(_) => 120,
     }
 }
 

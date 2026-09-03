@@ -271,6 +271,11 @@ recovery workflow.
 
 1. An administrator commits ACME account and HTTP-01 or DNS-01 settings.
 2. One elected worker obtains a fenced certificate-order claim.
+   Before contacting the CA it commits the generated leaf key as an encrypted
+   order-bound secret. After every accepted remote step it commits a bounded,
+   validated order checkpoint under the same live fence. A replacement worker
+   decrypts that same key, re-fences the checkpoint and resumes the existing
+   order; an unfinished challenge is re-published under the replacement fence.
 3. It fulfils the selected challenge. A manual DNS-01 publisher creates a
    durable task with the exact record and deadline; authoritative-DNS probing
    resumes the order without relying on an administrator button. Replacement

@@ -244,6 +244,7 @@ the target's local durable store; `cleanup_completions` records the authoritativ
 ```text
 acme_configurations
 certificate_orders
+certificate_order_checkpoints
 dns_challenge_tasks
 external_certificate_publications
 certificates

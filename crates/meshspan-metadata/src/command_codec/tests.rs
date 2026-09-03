@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+use meshspan_acme::{AcmeChallengePreference, AcmeOrderMachine, AcmeOrderRequest};
 use meshspan_contracts::{BoundedItems, ShardIdentity, ShardReceipt};
 use meshspan_domain::{
     AcknowledgementPolicyId, AcmeConfigurationId, ActivationPolicyId, ApiKeyId, AssuranceLevel,
@@ -23,14 +24,14 @@ use crate::{
     AcknowledgementCellRole, AcknowledgementConsistencyClass, AcmeChallengeKind, AddGroupMember,
     AssignVolumeAcknowledgementPolicy, AssignVolumeLocalityPolicy, AssignVolumeProtectionPolicy,
     AttestStorageTargetDrain, BeginStorageScopeDrain, BeginStorageTargetDrain, BootstrapMesh,
-    BootstrapRecoveryIdentity, CertificateOrderCompletion, ClaimCertificateOrder,
-    ClaimMaintenanceWork, CommitConvergedVolumeHead, CommitRebalanceScanPage, CommitScrubPass,
-    CommitSecretGeneration, CommitShardRepair, CommitTargetReconciliation,
-    CompleteCertificateOrder, CompleteMaintenanceWork, CompleteStorageScopeDrain, ConfigureAcme,
-    ConvergedHeadEvidence, CreateAcknowledgementPolicy, CreateActivationPolicy,
-    CreateAuthenticationMethod, CreateAvailabilityCell, CreateComponent, CreateFaultGroup,
-    CreateGroup, CreateLocalityPolicy, CreateProtectionPolicy, CreateUser, CreateVolume,
-    FenceStorageNodeDrainMembership, GrantInheritance, GrantPermission,
+    BootstrapRecoveryIdentity, CertificateOrderCompletion, CheckpointCertificateOrder,
+    ClaimCertificateOrder, ClaimMaintenanceWork, CommitConvergedVolumeHead,
+    CommitRebalanceScanPage, CommitScrubPass, CommitSecretGeneration, CommitShardRepair,
+    CommitTargetReconciliation, CompleteCertificateOrder, CompleteMaintenanceWork,
+    CompleteStorageScopeDrain, ConfigureAcme, ConvergedHeadEvidence, CreateAcknowledgementPolicy,
+    CreateActivationPolicy, CreateAuthenticationMethod, CreateAvailabilityCell, CreateComponent,
+    CreateFaultGroup, CreateGroup, CreateLocalityPolicy, CreateProtectionPolicy, CreateUser,
+    CreateVolume, FenceStorageNodeDrainMembership, GrantInheritance, GrantPermission,
     GrantPermissionWithActivation, IssueAuthenticationSession, LocalityRequirementConfiguration,
     MaintenanceWorkCompletion, NewAuthenticationCredential, NewRecoveryCode,
     PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PermissionScope, ProtectionScenarioConfiguration,
@@ -701,6 +702,7 @@ fn acme_commands_round_trip_configuration_claims_and_both_outcomes()
             fence: claim.fence,
             lease_expires_at: UnixMicros::new(800),
         }),
+        acme_checkpoint_command(order_id, claim)?,
         AuthoritativeCommand::CompleteCertificateOrder(CompleteCertificateOrder {
             order_id,
             claim_generation: claim.claim_generation,
@@ -729,6 +731,35 @@ fn acme_commands_round_trip_configuration_claims_and_both_outcomes()
         assert_round_trip(context, command)?;
     }
     Ok(())
+}
+
+fn acme_checkpoint_command(
+    order_id: CertificateOrderId,
+    claim: ClaimCertificateOrder,
+) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
+    let machine = AcmeOrderMachine::new(
+        "https://acme.example.test/directory".to_owned(),
+        AcmeOrderRequest::new(vec![
+            "files.example.test".to_owned(),
+            "www.example.test".to_owned(),
+        ])?,
+        AcmeChallengePreference::Dns01,
+        claim.fence,
+    )?;
+    Ok(AuthoritativeCommand::CheckpointCertificateOrder(
+        CheckpointCertificateOrder {
+            order_id,
+            claim_generation: claim.claim_generation,
+            worker_node_id: claim.worker_node_id,
+            worker_incarnation: claim.worker_incarnation,
+            fence: claim.fence,
+            certificate_key: SecretGenerationReference {
+                secret_id: order_id.as_bytes(),
+                generation: 1,
+            },
+            checkpoint: machine.encode_checkpoint()?,
+        },
+    ))
 }
 
 #[test]

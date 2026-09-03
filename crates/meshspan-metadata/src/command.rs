@@ -35,8 +35,8 @@ use crate::{
 };
 use crate::{
     AcknowledgePublicCertificateInstallation, AcmeChallengeKind, CertificateOrderCompletion,
-    ClaimCertificateOrder, CompleteCertificateOrder, ConfigureAcme, QueueCertificateOrder,
-    RenewCertificateOrder,
+    CheckpointCertificateOrder, ClaimCertificateOrder, CompleteCertificateOrder, ConfigureAcme,
+    QueueCertificateOrder, RenewCertificateOrder,
 };
 use crate::{
     ActivateFederationGrantAssignment, CreateFederationGrantAssignment, IssueFederationGrant,
@@ -227,6 +227,8 @@ pub enum AuthoritativeCommand {
     ClaimCertificateOrder(ClaimCertificateOrder),
     /// Extends one still-current ACME order claim.
     RenewCertificateOrder(RenewCertificateOrder),
+    /// Persists one validated ACME restart point under the current order fence.
+    CheckpointCertificateOrder(CheckpointCertificateOrder),
     /// Commits an issued certificate generation or schedules a bounded retry.
     CompleteCertificateOrder(CompleteCertificateOrder),
     /// Records one gateway's exact live public-certificate generation.
@@ -408,6 +410,7 @@ impl AuthoritativeCommand {
             Self::QueueCertificateOrder(value) => value.update_digest(digest),
             Self::ClaimCertificateOrder(value) => value.update_digest(digest),
             Self::RenewCertificateOrder(value) => value.update_digest(digest),
+            Self::CheckpointCertificateOrder(value) => value.update_digest(digest),
             Self::CompleteCertificateOrder(value) => value.update_digest(digest),
             Self::AcknowledgePublicCertificateInstallation(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
@@ -665,6 +668,9 @@ pub const ACME_CHALLENGE_SETTINGS_SECRET_KIND: u16 = 6;
 
 /// Secret-envelope kind reserved for validated public certificate/private-key bundles.
 pub const PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND: u16 = 7;
+
+/// Encrypted private key for one in-flight externally issued certificate request.
+pub const PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND: u16 = 8;
 
 /// Exact durable local outcome accepted as the source of a converged-head transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3743,6 +3749,20 @@ digest_simple_record!(
         digest.unsigned(value.worker_incarnation);
         digest.unsigned(value.fence);
         digest.signed(value.lease_expires_at.get());
+    }
+);
+digest_simple_record!(
+    CheckpointCertificateOrder,
+    b"checkpoint-certificate-order",
+    |value, digest| {
+        digest.identifier(value.order_id.as_bytes());
+        digest.unsigned(value.claim_generation);
+        digest.identifier(value.worker_node_id.as_bytes());
+        digest.unsigned(value.worker_incarnation);
+        digest.unsigned(value.fence);
+        digest.identifier(value.certificate_key.secret_id);
+        digest.unsigned(value.certificate_key.generation);
+        digest.bytes(&value.checkpoint);
     }
 );
 digest_simple_record!(
