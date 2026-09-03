@@ -4,6 +4,9 @@
 
 mod account_key;
 mod challenge_payload;
+mod cloudflare_provider;
+#[cfg(test)]
+mod cloudflare_provider_tests;
 mod component;
 mod dns01;
 mod dns_provider_settings;
@@ -24,6 +27,9 @@ mod wire;
 
 pub use account_key::{AcmeAccountKey, AcmeAccountKeyError};
 pub use challenge_payload::{Dns01Payload, Http01Payload, PayloadError};
+pub use cloudflare_provider::{
+    AuthoritativeTxtObserver, CloudflareDnsApi, CloudflareDnsProvider, CloudflareTxtRecord,
+};
 pub use dns_provider_settings::{
     CloudflareDnsSettings, DnsProviderSettings, DnsProviderSettingsError, Rfc2136DnsSettings,
     Rfc2136TsigAlgorithm, WebhookDnsSettings,
