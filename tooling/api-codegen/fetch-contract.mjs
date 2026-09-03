@@ -122,10 +122,7 @@ function readAdministrationRoutes(operations) {
     listUsers: requireOperation(operations, "listUsers"),
     listVolumes: requireOperation(operations, "listVolumes"),
     publishSmbExport: requireOperation(operations, "publishSmbExport"),
-    provisionCertificate: requireOperation(
-      operations,
-      "provisionCertificate",
-    ),
+    provisionCertificate: requireOperation(operations, "provisionCertificate"),
     removeGroupMember: requireOperation(operations, "removeGroupMember"),
     setFaultGroupMembership: requireOperation(
       operations,
