@@ -163,6 +163,9 @@ mod mesh_local_certificate_provisioning_tests;
 mod metadata_backup_completion;
 #[cfg(test)]
 mod metadata_backup_completion_tests;
+mod metadata_backup_coordinator;
+#[cfg(test)]
+mod metadata_backup_coordinator_tests;
 mod metadata_backup_dispatcher;
 #[cfg(test)]
 mod metadata_backup_dispatcher_tests;
@@ -557,6 +560,11 @@ pub use mesh_local_certificate_provisioning::{
 pub use metadata_backup_completion::{
     MetadataBackupCompletionAuthority, MetadataBackupCompletionError,
     MetadataBackupCompletionOutcome, MetadataBackupCompletionService,
+};
+pub use metadata_backup_coordinator::{
+    ComposedMetadataBackupCycle, MetadataBackupCycle, MetadataBackupCycleError,
+    MetadataBackupCyclePlacement, MetadataBackupWorker, MetadataBackupWorkerError,
+    MetadataBackupWorkerLimits, MetadataBackupWorkerOutcome,
 };
 pub use metadata_backup_dispatcher::{
     MetadataBackupDispatchAuthority, MetadataBackupDispatchError, MetadataBackupDispatchOutcome,
