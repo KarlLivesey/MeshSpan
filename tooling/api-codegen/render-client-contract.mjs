@@ -2,6 +2,10 @@
 
 import { renderAuthenticationClientInterface } from "./render-authentication-client.mjs";
 import {
+  renderCertificateClientInterface,
+  renderCertificateRequestTypes,
+} from "./render-certificate-client.mjs";
+import {
   renderDirectoryClientInterface,
   renderDirectoryRequestTypes,
 } from "./render-directory-client.mjs";
@@ -50,6 +54,8 @@ function renderClientRequestTypes() {
 }>;
 
 ${renderDirectoryRequestTypes()}
+
+${renderCertificateRequestTypes()}
 
 export type GetObjectRequest = Readonly<{
   volumeId: string;
@@ -111,6 +117,7 @@ export type CreateSessionResult = Readonly<{
 function renderClientInterface() {
   return `export interface MeshSpanFetchClient {
   ${renderAuthenticationClientInterface()}
+  ${renderCertificateClientInterface()}
   ${renderIdentityAdministrationClientInterface()}
   ${renderNamespaceMutationClientInterface()}
   ${renderUploadClientInterface()}
