@@ -10,8 +10,8 @@ use super::decoder::Decoder;
 use super::encoder::Encoder;
 use crate::{
     BackupDestinationBinding, BackupFailureRelationship, ConfigureBackupDestination,
-    ConfigureMetadataBackupSchedule, MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES, QueueMetadataBackupRun,
-    RecordBackupCopy, RecordMetadataBackup, RecordName, VerifyBackupCopy,
+    ConfigureMetadataBackupSchedule, InitialBackupCopy, MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES,
+    QueueMetadataBackupRun, RecordBackupCopy, RecordMetadataBackup, RecordName, VerifyBackupCopy,
 };
 
 pub(super) const CONFIGURE_BACKUP_DESTINATION: u16 = 63;
@@ -49,7 +49,7 @@ pub(super) fn encode_command(
             encode_run(encoder, *value)?;
         }
         crate::AuthoritativeCommand::RecordMetadataBackup(value) => {
-            encode_backup(encoder, *value)?;
+            encode_backup(encoder, value)?;
         }
         crate::AuthoritativeCommand::RecordBackupCopy(value) => encode_copy(encoder, value)?,
         crate::AuthoritativeCommand::VerifyBackupCopy(value) => {
@@ -216,7 +216,7 @@ fn decode_destination(
 
 fn encode_backup(
     encoder: &mut Encoder,
-    value: RecordMetadataBackup,
+    value: &RecordMetadataBackup,
 ) -> Result<(), MetadataCommandCodecError> {
     validate_backup(value)?;
     encoder.u16(RECORD_METADATA_BACKUP)?;
@@ -231,7 +231,8 @@ fn encode_backup(
     encoder.fixed(&value.source_digest)?;
     encoder.fixed(&value.manifest_digest)?;
     encoder.u64(value.encrypted_byte_length)?;
-    encoder.fixed(&value.encrypted_digest)
+    encoder.fixed(&value.encrypted_digest)?;
+    encode_initial_copy(encoder, &value.initial_copy)
 }
 
 fn decode_backup(
@@ -251,8 +252,38 @@ fn decode_backup(
         manifest_digest: decoder.fixed()?,
         encrypted_byte_length: decoder.u64()?,
         encrypted_digest: decoder.fixed()?,
+        initial_copy: decode_initial_copy(decoder)?,
     };
-    validate_backup(value)?;
+    validate_backup(&value)?;
+    Ok(value)
+}
+
+fn encode_initial_copy(
+    encoder: &mut Encoder,
+    value: &InitialBackupCopy,
+) -> Result<(), MetadataCommandCodecError> {
+    validate_initial_copy(value)?;
+    encoder.identifier(value.destination_id.as_bytes())?;
+    encoder.u64(value.provider_generation)?;
+    encoder.text(
+        &value.object_reference,
+        MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES,
+    )?;
+    encoder.u64(value.byte_length)?;
+    encoder.fixed(&value.copy_digest)
+}
+
+fn decode_initial_copy(
+    decoder: &mut Decoder<'_>,
+) -> Result<InitialBackupCopy, MetadataCommandCodecError> {
+    let value = InitialBackupCopy {
+        destination_id: BackupDestinationId::from_bytes(decoder.identifier()?)?,
+        provider_generation: decoder.u64()?,
+        object_reference: decoder.text(MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES)?,
+        byte_length: decoder.u64()?,
+        copy_digest: decoder.fixed()?,
+    };
+    validate_initial_copy(&value)?;
     Ok(value)
 }
 
@@ -330,13 +361,28 @@ fn decode_failure_relationship(
     }
 }
 
-fn validate_backup(value: RecordMetadataBackup) -> Result<(), MetadataCommandCodecError> {
+fn validate_backup(value: &RecordMetadataBackup) -> Result<(), MetadataCommandCodecError> {
     if value.last_log_index == 0
         || value.last_log_term == 0
         || value.state_revision.get() == 0
         || value.schema_version == 0
         || value.source_byte_length == 0
         || value.encrypted_byte_length == 0
+        || value.initial_copy.byte_length != value.encrypted_byte_length
+        || value.initial_copy.copy_digest != value.encrypted_digest
+    {
+        Err(MetadataCommandCodecError::Invalid)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_initial_copy(value: &InitialBackupCopy) -> Result<(), MetadataCommandCodecError> {
+    validate_generation(value.provider_generation)?;
+    if value.byte_length == 0
+        || value.object_reference.is_empty()
+        || value.object_reference.len() > MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES
+        || value.object_reference.chars().any(char::is_control)
     {
         Err(MetadataCommandCodecError::Invalid)
     } else {

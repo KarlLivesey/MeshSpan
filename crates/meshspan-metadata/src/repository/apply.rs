@@ -789,7 +789,7 @@ fn execute_backup_command(
             backup_schedule::queue(transaction, partition_id, context, *value, revision)
         }
         AuthoritativeCommand::RecordMetadataBackup(value) => {
-            backup_catalogue::record_backup(transaction, partition_id, context, *value, revision)
+            backup_catalogue::record_backup(transaction, partition_id, context, value, revision)
         }
         AuthoritativeCommand::RecordBackupCopy(value) => {
             backup_catalogue::record_copy(transaction, context, value, revision)

@@ -67,7 +67,7 @@ fn publication_records_stores_verifies_and_replays_exact_copy()
     assert_eq!(replay, first);
     assert_eq!(provider.stores, 1);
     assert_eq!(provider.verifications.get(), 2);
-    assert_eq!(authority.commit_count(), 3);
+    assert_eq!(authority.commit_count(), 2);
     Ok(())
 }
 
@@ -116,7 +116,7 @@ fn publication_uses_real_restartable_directory_provider() -> Result<(), Box<dyn 
         },
     )?;
     assert_eq!(replay, first);
-    assert_eq!(authority.commit_count(), 3);
+    assert_eq!(authority.commit_count(), 2);
     Ok(())
 }
 
@@ -154,7 +154,55 @@ fn corrupt_encrypted_source_never_records_a_copy() -> Result<(), Box<dyn std::er
         ))
     ));
     assert!(authority.copy.borrow().is_none());
-    assert_eq!(authority.commit_count(), 1);
+    assert_eq!(authority.commit_count(), 0);
+    Ok(())
+}
+
+#[test]
+fn provider_success_before_authority_failure_replays_without_false_catalogue_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new()?;
+    let directory = tempdir()?;
+    let encrypted = directory.path().join("backup.msb");
+    std::fs::write(&encrypted, fixture.bytes)?;
+    let destination_id = fixture.destination.destination_id;
+    let authority = MemoryAuthority::new(fixture.destination);
+    authority.reject_commits.set(true);
+    let publisher = MetadataBackupPublisher::new(&authority);
+    let request = BackupPublicationRequest {
+        encrypted_source: &encrypted,
+        evidence: fixture.evidence,
+        destination_id,
+        actor_principal_id: fixture.actor,
+        now: UnixMicros::new(20),
+        deadline: UnixMicros::new(100),
+    };
+    let mut provider = DirectoryBackupProvider::open(
+        directory.path(),
+        destination_id,
+        1,
+        1_024,
+        UnixMicros::new(1),
+    )?;
+    assert!(matches!(
+        publisher.publish(&mut provider, request),
+        Err(crate::BackupPublicationError::Authority(_))
+    ));
+    assert!(authority.backup.borrow().is_none());
+    assert!(authority.copy.borrow().is_none());
+
+    authority.reject_commits.set(false);
+    let completed = publisher.publish(
+        &mut provider,
+        BackupPublicationRequest {
+            now: UnixMicros::new(21),
+            deadline: UnixMicros::new(101),
+            ..request
+        },
+    )?;
+    assert_eq!(completed.backup.state, MetadataBackupState::Verified);
+    assert_eq!(completed.copy.state, BackupCopyState::Verified);
+    assert_eq!(authority.commit_count(), 3);
     Ok(())
 }
 
@@ -213,6 +261,7 @@ struct MemoryAuthority {
     backup: RefCell<Option<MetadataBackupRecord>>,
     copy: RefCell<Option<BackupCopyRecord>>,
     commits: RefCell<usize>,
+    reject_commits: Cell<bool>,
 }
 
 impl MemoryAuthority {
@@ -222,6 +271,7 @@ impl MemoryAuthority {
             backup: RefCell::new(None),
             copy: RefCell::new(None),
             commits: RefCell::new(0),
+            reject_commits: Cell::new(false),
         }
     }
 
@@ -264,6 +314,9 @@ impl BackupPublicationAuthority for MemoryAuthority {
         command: &AuthoritativeCommand,
     ) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
         *self.commits.borrow_mut() += 1;
+        if self.reject_commits.get() {
+            return Err(MetadataAuthorityRequestError::Unavailable);
+        }
         let (kind, id, revision) = match command {
             AuthoritativeCommand::RecordMetadataBackup(value) => {
                 *self.backup.borrow_mut() = Some(MetadataBackupRecord {
@@ -281,6 +334,18 @@ impl BackupPublicationAuthority for MemoryAuthority {
                     encrypted_digest: value.encrypted_digest,
                     state: MetadataBackupState::Recorded,
                     created_at: context.occurred_at,
+                    verified_at: None,
+                    revision: Revision::new(10),
+                });
+                *self.copy.borrow_mut() = Some(BackupCopyRecord {
+                    backup_id: value.backup_id,
+                    destination_id: value.initial_copy.destination_id,
+                    provider_generation: value.initial_copy.provider_generation,
+                    object_reference: value.initial_copy.object_reference.clone(),
+                    byte_length: value.initial_copy.byte_length,
+                    copy_digest: value.initial_copy.copy_digest,
+                    state: BackupCopyState::Stored,
+                    stored_at: context.occurred_at,
                     verified_at: None,
                     revision: Revision::new(10),
                 });

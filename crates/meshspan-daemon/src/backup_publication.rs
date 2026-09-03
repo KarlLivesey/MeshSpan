@@ -21,8 +21,7 @@ use meshspan_contracts::{
 use meshspan_domain::{BackupDestinationId, PrincipalId, Revision, UnixMicros};
 use meshspan_metadata::{
     AuthoritativeCommand, BackupCopyRecord, BackupCopyState, BackupDestinationRecord,
-    BackupDestinationState, EntityKind, MetadataBackupRecord, RecordBackupCopy, RepositoryError,
-    VerifyBackupCopy,
+    BackupDestinationState, EntityKind, MetadataBackupRecord, RepositoryError, VerifyBackupCopy,
 };
 use thiserror::Error;
 
@@ -88,19 +87,17 @@ where
     ) -> Result<BackupPublicationOutcome, BackupPublicationError> {
         validate_request(request)?;
         let destination = self.load_active_destination(request.destination_id)?;
-        self.ensure_backup(request)?;
-        let backup = self.load_backup(request.evidence)?;
         let object = object_identity(
             request.evidence,
             request.destination_id,
             destination.binding.provider_generation(),
         );
-        let copy = match self
-            .authority
-            .backup_copy(request.evidence.source.backup_id, request.destination_id)?
-        {
-            Some(copy) => validate_copy(copy, object)?,
-            None => self.store_and_record(provider, request, object, backup.revision)?,
+        let copy = match self.authority.metadata_backup(object.backup_id)? {
+            Some(backup) => {
+                validate_backup(backup, request.evidence)?;
+                self.load_copy(object)?
+            }
+            None => self.store_and_admit(provider, request, object, destination.revision)?,
         };
         let copy_revision = copy.revision;
         let verified = self.verify_and_record(provider, request, object, copy, copy_revision)?;
@@ -143,47 +140,12 @@ where
         )
     }
 
-    fn ensure_backup(
-        &self,
-        request: BackupPublicationRequest<'_>,
-    ) -> Result<MetadataBackupRecord, BackupPublicationError> {
-        if let Some(existing) = self
-            .authority
-            .metadata_backup(request.evidence.source.backup_id)?
-        {
-            return validate_backup(existing, request.evidence);
-        }
-        let context = command_context(
-            PublicationStep::RecordBackup,
-            request.evidence,
-            request.destination_id,
-            request.actor_principal_id,
-            request.now,
-        )?;
-        let command = AuthoritativeCommand::RecordMetadataBackup(record_backup(request.evidence));
-        let committed = self.authority.commit_backup_publication(context, &command);
-        if let Ok(receipt) = committed {
-            validate_receipt(
-                receipt,
-                context,
-                &command,
-                EntityKind::MetadataBackup,
-                request.evidence.source.backup_id.as_bytes(),
-            )?;
-        }
-        let existing = self
-            .authority
-            .metadata_backup(request.evidence.source.backup_id)?
-            .ok_or_else(|| publication_failure(committed))?;
-        validate_backup(existing, request.evidence)
-    }
-
-    fn store_and_record<P: BackupProvider>(
+    fn store_and_admit<P: BackupProvider>(
         &self,
         provider: &mut P,
         request: BackupPublicationRequest<'_>,
         object: BackupObjectIdentity,
-        backup_revision: Revision,
+        destination_revision: Revision,
     ) -> Result<BackupCopyRecord, BackupPublicationError> {
         let mut source = File::open(request.encrypted_source)?;
         let store_context = provider_context(
@@ -192,7 +154,7 @@ where
             object.destination_id,
             request.now,
             request.deadline,
-            backup_revision,
+            destination_revision,
         )?;
         let receipt = provider.store_exact(
             BackupStoreRequest {
@@ -206,34 +168,39 @@ where
             return Err(BackupPublicationError::InvalidReceipt);
         }
         let context = command_context(
-            PublicationStep::RecordCopy,
+            PublicationStep::RecordBackup,
             request.evidence,
             object.destination_id,
             request.actor_principal_id,
             request.now,
         )?;
-        let command = AuthoritativeCommand::RecordBackupCopy(RecordBackupCopy {
-            backup_id: object.backup_id,
-            destination_id: object.destination_id,
-            provider_generation: object.provider_generation,
-            object_reference: receipt.object_reference.into_string(),
-            byte_length: object.byte_length,
-            copy_digest: object.digest,
-        });
+        let command =
+            AuthoritativeCommand::RecordMetadataBackup(record_backup(request.evidence, &receipt));
         let committed = self.authority.commit_backup_publication(context, &command);
         if let Ok(receipt) = committed {
             validate_receipt(
                 receipt,
                 context,
                 &command,
-                EntityKind::BackupCopy,
+                EntityKind::MetadataBackup,
                 object.backup_id.as_bytes(),
             )?;
         }
+        self.authority
+            .metadata_backup(object.backup_id)?
+            .ok_or_else(|| publication_failure(committed))
+            .and_then(|backup| validate_backup(backup, request.evidence))?;
+        self.load_copy(object)
+    }
+
+    fn load_copy(
+        &self,
+        object: BackupObjectIdentity,
+    ) -> Result<BackupCopyRecord, BackupPublicationError> {
         let copy = self
             .authority
             .backup_copy(object.backup_id, object.destination_id)?
-            .ok_or_else(|| publication_failure(committed))?;
+            .ok_or(BackupPublicationError::InvalidProjection)?;
         validate_copy(copy, object)
     }
 

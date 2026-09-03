@@ -10,12 +10,12 @@ use tempfile::{TempDir, tempdir};
 use super::tests::{mark_test_recovery_verified, protected_bootstrap};
 use super::{
     AuthoritativeRepository, BackupCopyState, BackupDestinationState, EntityKind, LogPosition,
-    MetadataBackupState, RepositoryError,
+    MetadataBackupState,
 };
 use crate::{
     AuthoritativeCommand, BackupDestinationBinding, BackupFailureRelationship, BootstrapMesh,
-    CommandContext, ConfigureBackupDestination, CreateComponent, PartitionDatabase,
-    RecordBackupCopy, RecordMetadataBackup, RecordName, RegisterStorageTarget, StorageUsageLimit,
+    CommandContext, ConfigureBackupDestination, CreateComponent, InitialBackupCopy,
+    PartitionDatabase, RecordMetadataBackup, RecordName, RegisterStorageTarget, StorageUsageLimit,
     VerifyBackupCopy,
 };
 
@@ -72,25 +72,16 @@ fn exact_backup_copy_is_catalogued_and_verified_after_read_back()
             manifest_digest: [39; 32],
             encrypted_byte_length: 4_512,
             encrypted_digest,
+            initial_copy: InitialBackupCopy {
+                destination_id: destination,
+                provider_generation: 1,
+                object_reference: "backup/31".to_owned(),
+                byte_length: 4_512,
+                copy_digest: encrypted_digest,
+            },
         }),
     )?;
     assert_eq!(backup_receipt.entity.kind, EntityKind::MetadataBackup);
-
-    assert_inexact_copy_is_rejected(&mut fixture, backup, destination, encrypted_digest)?;
-
-    let copy_receipt = fixture.repository.apply_committed(
-        LogPosition { index: 5, term: 1 },
-        context(42, fixture.administrator, 43, 50, 4)?,
-        &AuthoritativeCommand::RecordBackupCopy(RecordBackupCopy {
-            backup_id: backup,
-            destination_id: destination,
-            provider_generation: 1,
-            object_reference: "backup/31".to_owned(),
-            byte_length: 4_512,
-            copy_digest: encrypted_digest,
-        }),
-    )?;
-    assert_eq!(copy_receipt.entity.kind, EntityKind::BackupCopy);
     assert_eq!(
         fixture
             .repository
@@ -101,8 +92,8 @@ fn exact_backup_copy_is_catalogued_and_verified_after_read_back()
     );
 
     fixture.repository.apply_committed(
-        LogPosition { index: 6, term: 1 },
-        context(44, fixture.administrator, 45, 60, 5)?,
+        LogPosition { index: 5, term: 1 },
+        context(44, fixture.administrator, 45, 60, 4)?,
         &AuthoritativeCommand::VerifyBackupCopy(VerifyBackupCopy {
             backup_id: backup,
             destination_id: destination,
@@ -130,32 +121,6 @@ fn exact_backup_copy_is_catalogued_and_verified_after_read_back()
     assert_eq!(stored_copy.state, BackupCopyState::Verified);
     assert_eq!(stored_copy.verified_at, Some(UnixMicros::new(60)));
     assert_eq!(stored_copy.copy_digest, encrypted_digest);
-    Ok(())
-}
-
-fn assert_inexact_copy_is_rejected(
-    fixture: &mut Fixture,
-    backup: BackupId,
-    destination: BackupDestinationId,
-    encrypted_digest: [u8; 32],
-) -> Result<(), Box<dyn std::error::Error>> {
-    let invalid_copy = AuthoritativeCommand::RecordBackupCopy(RecordBackupCopy {
-        backup_id: backup,
-        destination_id: destination,
-        provider_generation: 1,
-        object_reference: "backup/31".to_owned(),
-        byte_length: 4_511,
-        copy_digest: encrypted_digest,
-    });
-    assert!(matches!(
-        fixture.repository.apply_committed(
-            LogPosition { index: 5, term: 1 },
-            context(40, fixture.administrator, 41, 50, 4)?,
-            &invalid_copy,
-        ),
-        Err(RepositoryError::InvalidCommand)
-    ));
-    assert_eq!(fixture.repository.backup_copy(backup, destination)?, None);
     Ok(())
 }
 

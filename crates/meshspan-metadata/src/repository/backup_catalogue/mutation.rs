@@ -89,10 +89,11 @@ pub(in crate::repository) fn record_backup(
     transaction: &Transaction<'_>,
     partition_id: PartitionId,
     context: CommandContext,
-    command: RecordMetadataBackup,
+    command: &RecordMetadataBackup,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
     validate_backup_source(transaction, partition_id, command)?;
+    validate_initial_copy(transaction, command)?;
     transaction.execute(
         "INSERT INTO metadata_backups(
             backup_id, partition_id, mesh_id, last_log_index, last_log_term, state_revision,
@@ -112,6 +113,22 @@ pub(in crate::repository) fn record_backup(
             command.manifest_digest.as_slice(),
             to_i64(command.encrypted_byte_length)?,
             command.encrypted_digest.as_slice(),
+            context.occurred_at.get(),
+            to_i64(revision.get())?,
+        ],
+    )?;
+    transaction.execute(
+        "INSERT INTO backup_copies(
+            backup_id, destination_id, provider_generation, object_reference, byte_length,
+            copy_digest, state, stored_at, verified_at, revision
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, NULL, ?8)",
+        params![
+            command.backup_id.as_bytes().as_slice(),
+            command.initial_copy.destination_id.as_bytes().as_slice(),
+            to_i64(command.initial_copy.provider_generation)?,
+            command.initial_copy.object_reference,
+            to_i64(command.initial_copy.byte_length)?,
+            command.initial_copy.copy_digest.as_slice(),
             context.occurred_at.get(),
             to_i64(revision.get())?,
         ],
@@ -246,7 +263,7 @@ fn validate_destination_binding(
 fn validate_backup_source(
     transaction: &Transaction<'_>,
     partition_id: PartitionId,
-    command: RecordMetadataBackup,
+    command: &RecordMetadataBackup,
 ) -> Result<(), RepositoryError> {
     if command.partition_id != partition_id
         || command.last_log_index == 0
@@ -277,6 +294,31 @@ fn validate_backup_source(
         |row| row.get(0),
     )?;
     if valid == 1 {
+        Ok(())
+    } else {
+        Err(RepositoryError::InvalidCommand)
+    }
+}
+
+fn validate_initial_copy(
+    transaction: &Transaction<'_>,
+    command: &RecordMetadataBackup,
+) -> Result<(), RepositoryError> {
+    validate_object_reference(&command.initial_copy.object_reference)?;
+    if command.initial_copy.byte_length != command.encrypted_byte_length
+        || command.initial_copy.copy_digest != command.encrypted_digest
+    {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    let generation: Option<i64> = transaction
+        .query_row(
+            "SELECT provider_generation FROM backup_destinations
+             WHERE destination_id = ?1 AND state = 1",
+            [command.initial_copy.destination_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if generation.map(parse_u64).transpose()? == Some(command.initial_copy.provider_generation) {
         Ok(())
     } else {
         Err(RepositoryError::InvalidCommand)

@@ -119,8 +119,23 @@ pub struct QueueMetadataBackupRun {
     pub scheduled_for: UnixMicros,
 }
 
+/// First provider receipt admitted atomically with one backup generation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InitialBackupCopy {
+    /// Configured destination that already accepted the encrypted bytes.
+    pub destination_id: BackupDestinationId,
+    /// Exact provider generation used for the write.
+    pub provider_generation: u64,
+    /// Bounded opaque lookup reference returned by the provider.
+    pub object_reference: String,
+    /// Exact stored encrypted-object length.
+    pub byte_length: u64,
+    /// Digest of the stored encrypted object.
+    pub copy_digest: [u8; 32],
+}
+
 /// Exact encrypted partition backup admitted to the replicated catalogue.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecordMetadataBackup {
     /// Stable backup identity.
     pub backup_id: BackupId,
@@ -146,6 +161,8 @@ pub struct RecordMetadataBackup {
     pub encrypted_byte_length: u64,
     /// Digest of the complete encrypted container.
     pub encrypted_digest: [u8; 32],
+    /// Provider receipt which makes this generation recoverable at admission.
+    pub initial_copy: InitialBackupCopy,
 }
 
 /// Provider-confirmed placement of one exact encrypted backup container.
