@@ -7,9 +7,10 @@ use super::MetadataCommandCodecError;
 use super::decoder::Decoder;
 use super::encoder::Encoder;
 use crate::{
-    AcmeChallengeKind, CertificateOrderCompletion, ClaimCertificateOrder, CompleteCertificateOrder,
-    ConfigureAcme, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, QueueCertificateOrder,
-    RenewCertificateOrder, SecretGenerationReference,
+    AcknowledgePublicCertificateInstallation, AcmeChallengeKind, CertificateOrderCompletion,
+    ClaimCertificateOrder, CompleteCertificateOrder, ConfigureAcme,
+    PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, QueueCertificateOrder, RenewCertificateOrder,
+    SecretGenerationReference,
 };
 
 pub(super) const CONFIGURE_ACME: u16 = 49;
@@ -17,6 +18,7 @@ pub(super) const QUEUE_CERTIFICATE_ORDER: u16 = 50;
 pub(super) const CLAIM_CERTIFICATE_ORDER: u16 = 51;
 pub(super) const RENEW_CERTIFICATE_ORDER: u16 = 52;
 pub(super) const COMPLETE_CERTIFICATE_ORDER: u16 = 53;
+pub(super) const ACKNOWLEDGE_PUBLIC_CERTIFICATE_INSTALLATION: u16 = 54;
 
 const MAXIMUM_DIRECTORY_URL_BYTES: usize = 2_048;
 const MAXIMUM_CERTIFICATE_NAMES: usize = 256;
@@ -34,6 +36,9 @@ pub(super) fn encode_command(
         crate::AuthoritativeCommand::CompleteCertificateOrder(value) => {
             encode_complete(encoder, value)?;
         }
+        crate::AuthoritativeCommand::AcknowledgePublicCertificateInstallation(value) => {
+            encode_installation(encoder, *value)?;
+        }
         _ => return Ok(false),
     }
     Ok(true)
@@ -47,6 +52,7 @@ pub(super) const fn is_command_kind(kind: u16) -> bool {
             | CLAIM_CERTIFICATE_ORDER
             | RENEW_CERTIFICATE_ORDER
             | COMPLETE_CERTIFICATE_ORDER
+            | ACKNOWLEDGE_PUBLIC_CERTIFICATE_INSTALLATION
     )
 }
 
@@ -68,7 +74,53 @@ pub(super) fn decode_command(
         COMPLETE_CERTIFICATE_ORDER => {
             decode_complete(decoder).map(crate::AuthoritativeCommand::CompleteCertificateOrder)
         }
+        ACKNOWLEDGE_PUBLIC_CERTIFICATE_INSTALLATION => decode_installation(decoder)
+            .map(crate::AuthoritativeCommand::AcknowledgePublicCertificateInstallation),
         _ => Err(MetadataCommandCodecError::Unsupported),
+    }
+}
+
+fn encode_installation(
+    encoder: &mut Encoder,
+    value: AcknowledgePublicCertificateInstallation,
+) -> Result<(), MetadataCommandCodecError> {
+    validate_installation(value)?;
+    encoder.u16(ACKNOWLEDGE_PUBLIC_CERTIFICATE_INSTALLATION)?;
+    encoder.identifier(value.order_id.as_bytes())?;
+    encoder.identifier(value.gateway_node_id.as_bytes())?;
+    encoder.u64(value.gateway_incarnation)?;
+    encode_secret(encoder, value.certificate)?;
+    encoder.fixed(&value.bundle_digest)?;
+    encoder.u64(value.observed_order_revision.get())
+}
+
+fn decode_installation(
+    decoder: &mut Decoder<'_>,
+) -> Result<AcknowledgePublicCertificateInstallation, MetadataCommandCodecError> {
+    let value = AcknowledgePublicCertificateInstallation {
+        order_id: CertificateOrderId::from_bytes(decoder.identifier()?)?,
+        gateway_node_id: NodeId::from_bytes(decoder.identifier()?)?,
+        gateway_incarnation: decoder.u64()?,
+        certificate: decode_secret(decoder)?,
+        bundle_digest: decoder.fixed()?,
+        observed_order_revision: meshspan_domain::Revision::new(decoder.u64()?),
+    };
+    validate_installation(value)?;
+    Ok(value)
+}
+
+fn validate_installation(
+    value: AcknowledgePublicCertificateInstallation,
+) -> Result<(), MetadataCommandCodecError> {
+    if value.gateway_incarnation == 0
+        || value.certificate.secret_id != value.order_id.as_bytes()
+        || value.certificate.generation == 0
+        || value.bundle_digest == [0; 32]
+        || value.observed_order_revision == meshspan_domain::Revision::ZERO
+    {
+        Err(MetadataCommandCodecError::Invalid)
+    } else {
+        Ok(())
     }
 }
 

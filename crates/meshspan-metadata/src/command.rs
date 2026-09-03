@@ -34,8 +34,9 @@ use crate::{
     RevokeFederationSuccessorDesignation, RotateFederationTrustIdentity,
 };
 use crate::{
-    AcmeChallengeKind, CertificateOrderCompletion, ClaimCertificateOrder, CompleteCertificateOrder,
-    ConfigureAcme, QueueCertificateOrder, RenewCertificateOrder,
+    AcknowledgePublicCertificateInstallation, AcmeChallengeKind, CertificateOrderCompletion,
+    ClaimCertificateOrder, CompleteCertificateOrder, ConfigureAcme, QueueCertificateOrder,
+    RenewCertificateOrder,
 };
 use crate::{
     ActivateFederationGrantAssignment, CreateFederationGrantAssignment, IssueFederationGrant,
@@ -228,6 +229,8 @@ pub enum AuthoritativeCommand {
     RenewCertificateOrder(RenewCertificateOrder),
     /// Commits an issued certificate generation or schedules a bounded retry.
     CompleteCertificateOrder(CompleteCertificateOrder),
+    /// Records one gateway's exact live public-certificate generation.
+    AcknowledgePublicCertificateInstallation(AcknowledgePublicCertificateInstallation),
     /// Registers one node-local public key for encrypted secret generations.
     RegisterNodeWrappingKey(RegisterNodeWrappingKey),
     /// Commits one encrypted secret generation and every exact recipient envelope atomically.
@@ -406,6 +409,7 @@ impl AuthoritativeCommand {
             Self::ClaimCertificateOrder(value) => value.update_digest(digest),
             Self::RenewCertificateOrder(value) => value.update_digest(digest),
             Self::CompleteCertificateOrder(value) => value.update_digest(digest),
+            Self::AcknowledgePublicCertificateInstallation(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
             Self::CommitSecretGeneration(value) => value.update_digest(digest),
             Self::IssueJoinGrant(value) => value.update_digest(digest),
@@ -3772,6 +3776,19 @@ digest_simple_record!(
                 digest.bytes(result_digest);
             }
         }
+    }
+);
+digest_simple_record!(
+    AcknowledgePublicCertificateInstallation,
+    b"acknowledge-public-certificate-installation",
+    |value, digest| {
+        digest.identifier(value.order_id.as_bytes());
+        digest.identifier(value.gateway_node_id.as_bytes());
+        digest.unsigned(value.gateway_incarnation);
+        digest.identifier(value.certificate.secret_id);
+        digest.unsigned(value.certificate.generation);
+        digest.bytes(&value.bundle_digest);
+        digest.unsigned(value.observed_order_revision.get());
     }
 );
 digest_simple_record!(

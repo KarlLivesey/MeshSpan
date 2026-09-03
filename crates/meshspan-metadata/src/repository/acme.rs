@@ -9,10 +9,11 @@ use sha2::{Digest, Sha256};
 use super::apply::to_i64;
 use super::{AuthoritativeRepository, EntityKind, EntityReference, RepositoryError};
 use crate::{
-    ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND, AcmeChallengeKind,
-    CertificateOrderCompletion, ClaimCertificateOrder, CommandContext, CompleteCertificateOrder,
-    ConfigureAcme, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, QueueCertificateOrder,
-    RenewCertificateOrder, SecretGenerationReference,
+    ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
+    AcknowledgePublicCertificateInstallation, AcmeChallengeKind, CertificateOrderCompletion,
+    ClaimCertificateOrder, CommandContext, CompleteCertificateOrder, ConfigureAcme,
+    PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, QueueCertificateOrder, RenewCertificateOrder,
+    SecretGenerationReference,
 };
 
 const ORDER_QUEUED: i64 = 1;
@@ -72,6 +73,44 @@ pub struct CertificateOrderRecord {
     pub claim: Option<CertificateOrderClaim>,
     /// Latest authoritative revision.
     pub revision: Revision,
+}
+
+/// Durable proof that one gateway selected an exact certificate for new TLS handshakes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PublicCertificateInstallationRecord {
+    /// Issued order whose bundle was installed.
+    pub order_id: CertificateOrderId,
+    /// Gateway which loaded and selected the bundle.
+    pub gateway_node_id: NodeId,
+    /// Gateway process incarnation which performed the installation.
+    pub gateway_incarnation: u64,
+    /// Exact encrypted certificate generation installed.
+    pub certificate: SecretGenerationReference,
+    /// Digest of the decrypted canonical bundle.
+    pub bundle_digest: [u8; 32],
+    /// Authority-agreed acknowledgement instant.
+    pub installed_at: UnixMicros,
+    /// Revision which committed the acknowledgement.
+    pub revision: Revision,
+}
+
+/// Exact progress across all gateways encrypted into one issued generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PublicCertificateRolloutSummary {
+    /// Completed certificate order.
+    pub order_id: CertificateOrderId,
+    /// Exact encrypted generation selected by the order.
+    pub certificate: SecretGenerationReference,
+    /// Canonical bundle digest every acknowledgement must match.
+    pub bundle_digest: [u8; 32],
+    /// Gateway recipients included in the immutable encrypted generation.
+    pub required_gateway_count: u64,
+    /// Required gateways which have durably acknowledged live selection.
+    pub installed_gateway_count: u64,
+    /// Whether every required gateway has acknowledged this exact generation.
+    pub complete: bool,
+    /// Authoritative order revision the rollout is based on.
+    pub order_revision: Revision,
 }
 
 pub(super) fn configure(
@@ -318,6 +357,50 @@ pub(super) fn complete(
     Ok(order_entity(value.order_id))
 }
 
+pub(super) fn acknowledge_installation(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    value: AcknowledgePublicCertificateInstallation,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    validate_worker(
+        transaction,
+        value.gateway_node_id,
+        value.gateway_incarnation,
+    )?;
+    validate_installation_order(transaction, value)?;
+    if let Some(existing) =
+        existing_installation(transaction, value.order_id, value.gateway_node_id)?
+    {
+        if existing.gateway_incarnation == value.gateway_incarnation
+            && existing.certificate == value.certificate
+            && existing.bundle_digest == value.bundle_digest
+        {
+            return Ok(order_entity(value.order_id));
+        }
+        return Err(RepositoryError::InvalidCommand);
+    }
+    transaction.execute(
+        "INSERT INTO public_certificate_installations(
+            order_id, gateway_node_id, gateway_incarnation, certificate_secret_kind,
+            certificate_secret_id, certificate_secret_generation, bundle_digest, installed_at,
+            revision
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            value.order_id.as_bytes().as_slice(),
+            value.gateway_node_id.as_bytes().as_slice(),
+            to_i64(value.gateway_incarnation)?,
+            i64::from(PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND),
+            value.certificate.secret_id.as_slice(),
+            to_i64(value.certificate.generation)?,
+            value.bundle_digest.as_slice(),
+            context.occurred_at.get(),
+            to_i64(revision.get())?,
+        ],
+    )?;
+    Ok(order_entity(value.order_id))
+}
+
 impl AuthoritativeRepository {
     /// Returns one exact ACME order and its current live claim.
     ///
@@ -345,6 +428,195 @@ impl AuthoritativeRepository {
             .optional()
             .map_err(RepositoryError::from)
     }
+
+    /// Returns one gateway's exact certificate-installation proof.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when persisted identity, generation or digest fields are malformed.
+    pub fn public_certificate_installation(
+        &self,
+        order_id: CertificateOrderId,
+        gateway_node_id: NodeId,
+    ) -> Result<Option<PublicCertificateInstallationRecord>, RepositoryError> {
+        self.database
+            .connection()
+            .query_row(
+                "SELECT order_id, gateway_node_id, gateway_incarnation,
+                        certificate_secret_id, certificate_secret_generation, bundle_digest,
+                        installed_at, revision
+                 FROM public_certificate_installations
+                 WHERE order_id = ?1 AND gateway_node_id = ?2",
+                params![
+                    order_id.as_bytes().as_slice(),
+                    gateway_node_id.as_bytes().as_slice()
+                ],
+                decode_installation,
+            )
+            .optional()
+            .map_err(RepositoryError::from)
+    }
+
+    /// Counts exact installation proofs against the immutable gateway-recipient set.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing, incomplete or malformed certificate orders and corrupt counts.
+    pub fn public_certificate_rollout_summary(
+        &self,
+        order_id: CertificateOrderId,
+    ) -> Result<PublicCertificateRolloutSummary, RepositoryError> {
+        let connection = self.database.connection();
+        let (secret_id, generation, digest, order_revision): (Vec<u8>, i64, Vec<u8>, i64) =
+            connection
+                .query_row(
+                    "SELECT certificate_secret_id, certificate_secret_generation,
+                            result_digest, revision
+                     FROM certificate_orders WHERE order_id = ?1 AND state = ?2",
+                    params![order_id.as_bytes().as_slice(), ORDER_COMPLETE],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .optional()?
+                .ok_or(RepositoryError::InvalidCommand)?;
+        let certificate = SecretGenerationReference {
+            secret_id: exact(secret_id)?,
+            generation: positive(generation)?,
+        };
+        let bundle_digest = exact(digest)?;
+        let required: i64 = connection.query_row(
+            "SELECT count(DISTINCT r.owner_id) FROM secret_recipient_envelopes e
+             JOIN secret_wrapping_recipients r
+               ON r.key_fingerprint = e.recipient_key_fingerprint
+             WHERE e.secret_kind = ?1 AND e.secret_id = ?2 AND e.secret_generation = ?3
+               AND r.recipient_kind = 1",
+            params![
+                i64::from(PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND),
+                certificate.secret_id.as_slice(),
+                to_i64(certificate.generation)?,
+            ],
+            |row| row.get(0),
+        )?;
+        let installed: i64 = connection.query_row(
+            "SELECT count(*) FROM public_certificate_installations
+             WHERE order_id = ?1 AND certificate_secret_id = ?2
+               AND certificate_secret_generation = ?3 AND bundle_digest = ?4",
+            params![
+                order_id.as_bytes().as_slice(),
+                certificate.secret_id.as_slice(),
+                to_i64(certificate.generation)?,
+                bundle_digest.as_slice(),
+            ],
+            |row| row.get(0),
+        )?;
+        let required_gateway_count = parse_count(required)?;
+        let installed_gateway_count = parse_count(installed)?;
+        if required_gateway_count == 0 || installed_gateway_count > required_gateway_count {
+            return Err(RepositoryError::CorruptState);
+        }
+        Ok(PublicCertificateRolloutSummary {
+            order_id,
+            certificate,
+            bundle_digest,
+            required_gateway_count,
+            installed_gateway_count,
+            complete: installed_gateway_count == required_gateway_count,
+            order_revision: Revision::new(positive(order_revision)?),
+        })
+    }
+}
+
+fn validate_installation_order(
+    transaction: &Transaction<'_>,
+    value: AcknowledgePublicCertificateInstallation,
+) -> Result<(), RepositoryError> {
+    if value.gateway_incarnation == 0
+        || value.certificate.secret_id != value.order_id.as_bytes()
+        || value.certificate.generation == 0
+        || value.bundle_digest == [0; 32]
+        || value.observed_order_revision == Revision::ZERO
+    {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    let matches = transaction.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM certificate_orders o
+            JOIN secret_recipient_envelopes e
+              ON e.secret_kind = ?1
+             AND e.secret_id = o.certificate_secret_id
+             AND e.secret_generation = o.certificate_secret_generation
+            JOIN secret_wrapping_recipients r
+              ON r.key_fingerprint = e.recipient_key_fingerprint
+            WHERE o.order_id = ?2 AND o.state = ?3
+              AND o.certificate_secret_id = ?4 AND o.certificate_secret_generation = ?5
+              AND o.result_digest = ?6 AND o.revision = ?7
+              AND r.recipient_kind = 1 AND r.owner_id = ?8
+         )",
+        params![
+            i64::from(PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND),
+            value.order_id.as_bytes().as_slice(),
+            ORDER_COMPLETE,
+            value.certificate.secret_id.as_slice(),
+            to_i64(value.certificate.generation)?,
+            value.bundle_digest.as_slice(),
+            to_i64(value.observed_order_revision.get())?,
+            value.gateway_node_id.as_bytes().as_slice(),
+        ],
+        |row| row.get::<_, i64>(0),
+    )?;
+    if matches == 1 {
+        Ok(())
+    } else {
+        Err(RepositoryError::InvalidCommand)
+    }
+}
+
+fn existing_installation(
+    transaction: &Transaction<'_>,
+    order_id: CertificateOrderId,
+    gateway_node_id: NodeId,
+) -> Result<Option<PublicCertificateInstallationRecord>, RepositoryError> {
+    transaction
+        .query_row(
+            "SELECT order_id, gateway_node_id, gateway_incarnation,
+                    certificate_secret_id, certificate_secret_generation, bundle_digest,
+                    installed_at, revision
+             FROM public_certificate_installations
+             WHERE order_id = ?1 AND gateway_node_id = ?2",
+            params![
+                order_id.as_bytes().as_slice(),
+                gateway_node_id.as_bytes().as_slice()
+            ],
+            decode_installation,
+        )
+        .optional()
+        .map_err(RepositoryError::from)
+}
+
+fn decode_installation(row: &Row<'_>) -> rusqlite::Result<PublicCertificateInstallationRecord> {
+    decode_installation_inner(row).map_err(|_| rusqlite::Error::InvalidQuery)
+}
+
+fn decode_installation_inner(
+    row: &Row<'_>,
+) -> Result<PublicCertificateInstallationRecord, RepositoryError> {
+    Ok(PublicCertificateInstallationRecord {
+        order_id: CertificateOrderId::from_bytes(exact(row.get(0)?)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        gateway_node_id: NodeId::from_bytes(exact(row.get(1)?)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        gateway_incarnation: positive(row.get(2)?)?,
+        certificate: SecretGenerationReference {
+            secret_id: exact(row.get(3)?)?,
+            generation: positive(row.get(4)?)?,
+        },
+        bundle_digest: exact(row.get(5)?)?,
+        installed_at: UnixMicros::new(row.get(6)?),
+        revision: Revision::new(positive(row.get(7)?)?),
+    })
+}
+
+fn parse_count(value: i64) -> Result<u64, RepositoryError> {
+    u64::try_from(value).map_err(|_| RepositoryError::CorruptState)
 }
 
 struct CompletionValues {
