@@ -27,6 +27,7 @@ use tempfile::tempdir;
 use crate::{
     BackupPublicationAuthority, BackupPublicationRequest, MetadataBackupDestinationWriter,
     MetadataBackupProviderResolutionError, MetadataBackupProviderResolver, MetadataBackupPublisher,
+    RegisteredBackupTarget, RegisteredTargetBackupProviderResolver,
     ResolvingMetadataBackupDestinationWriter,
 };
 
@@ -106,6 +107,45 @@ fn resolving_writer_selects_provider_before_publication() -> Result<(), Box<dyn 
         )?;
     assert_eq!(outcome.copy.state, BackupCopyState::Verified);
     assert_eq!(resolver.resolutions, 1);
+    Ok(())
+}
+
+#[test]
+fn registered_target_resolver_opens_only_the_exact_generation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new()?;
+    let directory = tempdir()?;
+    let target_id = meshspan_domain::TargetId::from_bytes([9; 16])?;
+    let mut destination = fixture.destination;
+    destination.binding = BackupDestinationBinding::RegisteredTarget {
+        target_id,
+        target_generation: 1,
+    };
+    let mut resolver = RegisteredTargetBackupProviderResolver::new(
+        [RegisteredBackupTarget {
+            target_id,
+            target_generation: 1,
+            storage_path: std::fs::canonicalize(directory.path())?,
+            maximum_backup_bytes: 1_024,
+        }],
+        UnixMicros::new(1),
+    )?;
+    let provider = resolver.resolve(&destination)?;
+    assert_eq!(
+        provider.describe().implementation_id,
+        "meshspan-directory-backup"
+    );
+    drop(provider);
+
+    let mut stale = destination;
+    stale.binding = BackupDestinationBinding::RegisteredTarget {
+        target_id,
+        target_generation: 2,
+    };
+    assert!(matches!(
+        resolver.resolve(&stale),
+        Err(MetadataBackupProviderResolutionError::Stale)
+    ));
     Ok(())
 }
 

@@ -2,8 +2,13 @@
 
 //! Replaceable destination resolution for metadata-backup placement.
 
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use meshspan_backup::{DirectoryBackupProvider, DirectoryBackupProviderError};
 use meshspan_contracts::BackupProvider;
-use meshspan_metadata::BackupDestinationRecord;
+use meshspan_domain::{TargetId, UnixMicros};
+use meshspan_metadata::{BackupDestinationBinding, BackupDestinationRecord};
 use thiserror::Error;
 
 use crate::{
@@ -22,6 +27,85 @@ pub trait MetadataBackupProviderResolver {
         &mut self,
         destination: &BackupDestinationRecord,
     ) -> Result<Box<dyn BackupProvider>, MetadataBackupProviderResolutionError>;
+}
+
+/// One active local target made eligible for metadata-backup placement.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegisteredBackupTarget {
+    /// Exact replicated target identity.
+    pub target_id: TargetId,
+    /// Current marker-fenced generation.
+    pub target_generation: u64,
+    /// Canonical administrator-selected folder path.
+    pub storage_path: PathBuf,
+    /// Explicit maximum bytes available to this backup-provider catalogue.
+    pub maximum_backup_bytes: u64,
+}
+
+/// In-process resolver for exact registered-folder backup destinations.
+pub struct RegisteredTargetBackupProviderResolver {
+    targets: BTreeMap<TargetId, RegisteredBackupTarget>,
+    opened_at: UnixMicros,
+}
+
+impl RegisteredTargetBackupProviderResolver {
+    /// Validates one finite active-target inventory before any destination is resolved.
+    ///
+    /// # Errors
+    ///
+    /// Rejects duplicate identities, zero generations/capacity, relative paths or negative time.
+    pub fn new(
+        targets: impl IntoIterator<Item = RegisteredBackupTarget>,
+        opened_at: UnixMicros,
+    ) -> Result<Self, MetadataBackupProviderResolutionError> {
+        if opened_at.get() < 0 {
+            return Err(MetadataBackupProviderResolutionError::Invalid);
+        }
+        let mut indexed = BTreeMap::new();
+        for target in targets {
+            if target.target_generation == 0
+                || target.maximum_backup_bytes == 0
+                || !target.storage_path.is_absolute()
+                || indexed.insert(target.target_id, target).is_some()
+            {
+                return Err(MetadataBackupProviderResolutionError::Invalid);
+            }
+        }
+        Ok(Self {
+            targets: indexed,
+            opened_at,
+        })
+    }
+}
+
+impl MetadataBackupProviderResolver for RegisteredTargetBackupProviderResolver {
+    fn resolve(
+        &mut self,
+        destination: &BackupDestinationRecord,
+    ) -> Result<Box<dyn BackupProvider>, MetadataBackupProviderResolutionError> {
+        let BackupDestinationBinding::RegisteredTarget {
+            target_id,
+            target_generation,
+        } = destination.binding
+        else {
+            return Err(MetadataBackupProviderResolutionError::Unsupported);
+        };
+        let target = self
+            .targets
+            .get(&target_id)
+            .ok_or(MetadataBackupProviderResolutionError::Unavailable)?;
+        if target.target_generation != target_generation {
+            return Err(MetadataBackupProviderResolutionError::Stale);
+        }
+        let provider = DirectoryBackupProvider::open(
+            &target.storage_path,
+            destination.destination_id,
+            target_generation,
+            target.maximum_backup_bytes,
+            self.opened_at,
+        )?;
+        Ok(Box::new(provider))
+    }
 }
 
 /// Destination writer which composes generic placement with generic provider resolution.
@@ -63,7 +147,7 @@ where
 }
 
 /// Closed provider-resolution failure before any backup bytes are sent.
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[derive(Debug, Error)]
 pub enum MetadataBackupProviderResolutionError {
     /// This build has no implementation for the configured binding kind.
     #[error("metadata backup destination provider is unsupported")]
@@ -77,4 +161,7 @@ pub enum MetadataBackupProviderResolutionError {
     /// Replicated or local provider configuration is malformed.
     #[error("metadata backup destination provider configuration is invalid")]
     Invalid,
+    /// The local directory provider failed to open safely.
+    #[error("metadata backup directory provider failed")]
+    Directory(#[from] DirectoryBackupProviderError),
 }
