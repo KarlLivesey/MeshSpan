@@ -1083,7 +1083,10 @@ version = "0.1.0"
 dependencies = [
  "meshspan-contracts",
  "meshspan-domain",
+ "serde",
+ "serde_json",
  "sha2",
+ "thiserror",
 ]
 
 [[package]]
