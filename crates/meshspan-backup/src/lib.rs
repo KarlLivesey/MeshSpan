@@ -7,11 +7,15 @@
 //! overwrites an existing destination and authenticates every bounded chunk
 //! before writing it.
 
+mod directory_provider;
+#[cfg(test)]
+mod directory_provider_tests;
 mod error;
 mod format;
 mod reader;
 mod writer;
 
+pub use directory_provider::{DirectoryBackupProvider, DirectoryBackupProviderError};
 pub use error::BackupError;
 pub use format::{BackupFileEvidence, BackupSourceManifest};
 pub use reader::restore_backup;
