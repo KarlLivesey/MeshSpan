@@ -7,9 +7,10 @@ use super::MetadataCommandCodecError;
 use super::decoder::Decoder;
 use super::encoder::Encoder;
 use crate::{
-    AcknowledgePublicCertificateInstallation, AcmeChallengeKind, CertificateOrderCompletion,
-    CheckpointCertificateOrder, ClaimCertificateOrder, CompleteCertificateOrder, ConfigureAcme,
-    MAXIMUM_CERTIFICATE_ORDER_CHECKPOINT_BYTES, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+    AcknowledgePublicCertificateInstallation, AcmeChallengeKind, AdvanceManualDnsTask,
+    CertificateOrderCompletion, CheckpointCertificateOrder, ClaimCertificateOrder,
+    CompleteCertificateOrder, ConfigureAcme, MAXIMUM_CERTIFICATE_ORDER_CHECKPOINT_BYTES,
+    MAXIMUM_MANUAL_DNS_VALUE_BYTES, ManualDnsTaskPhase, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
     QueueCertificateOrder, RenewCertificateOrder, SecretGenerationReference,
 };
 
@@ -20,6 +21,7 @@ pub(super) const RENEW_CERTIFICATE_ORDER: u16 = 52;
 pub(super) const COMPLETE_CERTIFICATE_ORDER: u16 = 53;
 pub(super) const ACKNOWLEDGE_PUBLIC_CERTIFICATE_INSTALLATION: u16 = 54;
 pub(super) const CHECKPOINT_CERTIFICATE_ORDER: u16 = 55;
+pub(super) const ADVANCE_MANUAL_DNS_TASK: u16 = 56;
 
 const MAXIMUM_DIRECTORY_URL_BYTES: usize = 2_048;
 const MAXIMUM_CERTIFICATE_NAMES: usize = 256;
@@ -36,6 +38,9 @@ pub(super) fn encode_command(
         crate::AuthoritativeCommand::RenewCertificateOrder(value) => encode_renew(encoder, *value)?,
         crate::AuthoritativeCommand::CheckpointCertificateOrder(value) => {
             encode_checkpoint(encoder, value)?;
+        }
+        crate::AuthoritativeCommand::AdvanceManualDnsTask(value) => {
+            encode_manual_dns_task(encoder, value)?;
         }
         crate::AuthoritativeCommand::CompleteCertificateOrder(value) => {
             encode_complete(encoder, value)?;
@@ -58,6 +63,7 @@ pub(super) const fn is_command_kind(kind: u16) -> bool {
             | COMPLETE_CERTIFICATE_ORDER
             | ACKNOWLEDGE_PUBLIC_CERTIFICATE_INSTALLATION
             | CHECKPOINT_CERTIFICATE_ORDER
+            | ADVANCE_MANUAL_DNS_TASK
     )
 }
 
@@ -79,12 +85,85 @@ pub(super) fn decode_command(
         CHECKPOINT_CERTIFICATE_ORDER => {
             decode_checkpoint(decoder).map(crate::AuthoritativeCommand::CheckpointCertificateOrder)
         }
+        ADVANCE_MANUAL_DNS_TASK => {
+            decode_manual_dns_task(decoder).map(crate::AuthoritativeCommand::AdvanceManualDnsTask)
+        }
         COMPLETE_CERTIFICATE_ORDER => {
             decode_complete(decoder).map(crate::AuthoritativeCommand::CompleteCertificateOrder)
         }
         ACKNOWLEDGE_PUBLIC_CERTIFICATE_INSTALLATION => decode_installation(decoder)
             .map(crate::AuthoritativeCommand::AcknowledgePublicCertificateInstallation),
         _ => Err(MetadataCommandCodecError::Unsupported),
+    }
+}
+
+fn encode_manual_dns_task(
+    encoder: &mut Encoder,
+    value: &AdvanceManualDnsTask,
+) -> Result<(), MetadataCommandCodecError> {
+    validate_manual_dns_task(value)?;
+    encoder.u16(ADVANCE_MANUAL_DNS_TASK)?;
+    encoder.fixed(&value.task_digest)?;
+    encode_claim_identity(
+        encoder,
+        value.order_id,
+        value.claim_generation,
+        value.worker_node_id,
+        value.worker_incarnation,
+        value.fence,
+    )?;
+    encoder.text(&value.record_name, MAXIMUM_DNS_NAME_BYTES)?;
+    encoder.bytes(&value.record_value, MAXIMUM_MANUAL_DNS_VALUE_BYTES)?;
+    encoder.i64(value.expires_at.get())?;
+    encoder.u8(manual_dns_phase_code(value.phase))
+}
+
+fn decode_manual_dns_task(
+    decoder: &mut Decoder<'_>,
+) -> Result<AdvanceManualDnsTask, MetadataCommandCodecError> {
+    let task_digest = decoder.fixed()?;
+    let identity = decode_claim_identity(decoder)?;
+    let value = AdvanceManualDnsTask {
+        task_digest,
+        order_id: identity.order_id,
+        claim_generation: identity.claim_generation,
+        worker_node_id: identity.worker_node_id,
+        worker_incarnation: identity.worker_incarnation,
+        fence: identity.fence,
+        record_name: decoder.text(MAXIMUM_DNS_NAME_BYTES)?,
+        record_value: decoder.bytes(MAXIMUM_MANUAL_DNS_VALUE_BYTES)?,
+        expires_at: UnixMicros::new(decoder.i64()?),
+        phase: match decoder.u8()? {
+            1 => ManualDnsTaskPhase::AwaitingPublication,
+            2 => ManualDnsTaskPhase::PublicationObserved,
+            3 => ManualDnsTaskPhase::AwaitingRemoval,
+            4 => ManualDnsTaskPhase::Complete,
+            _ => return Err(MetadataCommandCodecError::Invalid),
+        },
+    };
+    validate_manual_dns_task(&value)?;
+    Ok(value)
+}
+
+fn validate_manual_dns_task(value: &AdvanceManualDnsTask) -> Result<(), MetadataCommandCodecError> {
+    if value.task_digest == [0; 32]
+        || value.claim_generation == 0
+        || value.worker_incarnation == 0
+        || value.fence == 0
+        || value.expires_at.get() <= 0
+        || meshspan_acme::Dns01Payload::new(&value.record_name, &value.record_value).is_err()
+    {
+        return Err(MetadataCommandCodecError::Invalid);
+    }
+    Ok(())
+}
+
+const fn manual_dns_phase_code(value: ManualDnsTaskPhase) -> u8 {
+    match value {
+        ManualDnsTaskPhase::AwaitingPublication => 1,
+        ManualDnsTaskPhase::PublicationObserved => 2,
+        ManualDnsTaskPhase::AwaitingRemoval => 3,
+        ManualDnsTaskPhase::Complete => 4,
     }
 }
 

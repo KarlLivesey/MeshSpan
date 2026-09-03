@@ -9,6 +9,8 @@ use crate::CommitSecretGeneration;
 
 /// Maximum encoded ACME checkpoint accepted into one authoritative command.
 pub const MAXIMUM_CERTIFICATE_ORDER_CHECKPOINT_BYTES: usize = 900 * 1_024;
+/// Maximum exact manual DNS TXT value accepted into authoritative metadata.
+pub const MAXIMUM_MANUAL_DNS_VALUE_BYTES: usize = 512;
 
 /// Encrypted secret generation referenced without exposing its plaintext through metadata.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,6 +28,44 @@ pub enum AcmeChallengeKind {
     Http01,
     /// Publish and independently probe the required authoritative DNS TXT record.
     Dns01,
+}
+
+/// Monotonic operator-facing state of one manual DNS challenge task.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ManualDnsTaskPhase {
+    /// The exact TXT value must be published.
+    AwaitingPublication,
+    /// Authoritative DNS returned the exact value.
+    PublicationObserved,
+    /// The exact value should now be removed.
+    AwaitingRemoval,
+    /// Authoritative DNS proved the value absent.
+    Complete,
+}
+
+/// Creates or monotonically advances one manual DNS task under the live order fence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdvanceManualDnsTask {
+    /// Deterministic identity of the exact task.
+    pub task_digest: [u8; 32],
+    /// Claimed order which owns the task.
+    pub order_id: CertificateOrderId,
+    /// Exact live claim generation.
+    pub claim_generation: u64,
+    /// Current worker node.
+    pub worker_node_id: NodeId,
+    /// Exact current process incarnation.
+    pub worker_incarnation: u64,
+    /// Unchanged live fence and task order epoch.
+    pub fence: u64,
+    /// Canonical TXT owner name.
+    pub record_name: String,
+    /// Exact unquoted TXT value.
+    pub record_value: Vec<u8>,
+    /// Authoritative challenge deadline.
+    pub expires_at: UnixMicros,
+    /// Requested monotonic task phase.
+    pub phase: ManualDnsTaskPhase,
 }
 
 /// Immutable ACME account, challenge and requested-name configuration.

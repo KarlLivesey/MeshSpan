@@ -87,6 +87,7 @@ mod locality_policy_tests;
 mod maintenance_work;
 #[cfg(test)]
 mod maintenance_work_tests;
+mod manual_dns_task;
 mod membership;
 mod mesh_identity;
 mod namespace;
@@ -223,6 +224,7 @@ pub use maintenance_work::{
     StorageScopeDrainAction, StorageScopeDrainCursor, StorageScopeDrainRecord,
     StorageScopeDrainState, empty_target_drain_catalogue_digest,
 };
+pub use manual_dns_task::{ManualDnsTaskCursor, ManualDnsTaskRecord, ManualDnsTaskState};
 pub use membership::AuthoritativeMembership;
 pub use meshspan_domain::AuthenticationService;
 pub use node_wrapping_key::NodeWrappingKeyRecord;

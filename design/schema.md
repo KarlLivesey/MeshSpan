@@ -1299,10 +1299,11 @@ certificate_order_checkpoints(
   checkpoint, checkpoint_digest, revision
 )
 
-dns_challenge_tasks(
-  task_id PK, order_id -> certificate_orders,
-  record_name, record_type, record_value_secret_id,
-  state, deadline, last_probe_at NULL, verified_at NULL, revision
+manual_dns_tasks(
+  task_digest PK, order_id -> certificate_orders,
+  claim_generation, worker_node_id -> nodes, worker_incarnation, fence,
+  record_name, record_value, expires_at,
+  phase, created_at, transitioned_at, revision
 )
 
 external_certificate_publications(
