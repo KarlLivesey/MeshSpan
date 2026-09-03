@@ -100,6 +100,34 @@ fn recorded_run_without_exact_local_staging_requires_recovery()
     Ok(())
 }
 
+#[test]
+fn protected_staging_release_deletes_bytes_before_journal() -> Result<(), Box<dyn std::error::Error>>
+{
+    let directory = tempdir()?;
+    let state_directory = directory.path().join("state");
+    fs::create_dir(&state_directory)?;
+    set_private_permissions(&state_directory)?;
+    let mut local = LocalDatabase::open(
+        &state_directory.join("local.sqlite3"),
+        NodeId::from_bytes([1; 16])?,
+        UnixMicros::new(1),
+    )?;
+    let authority = MemoryAuthority::new();
+    let run = run(MetadataBackupRunState::Claimed)?;
+    let mut random = FixedRandom;
+    let mut service = MetadataBackupPreparationService::open(
+        &authority,
+        &mut local,
+        &mut random,
+        &state_directory,
+    )?;
+    let prepared = service.prepare(run, UnixMicros::new(20))?;
+    service.release(&prepared)?;
+    assert!(!prepared.encrypted_path.exists());
+    assert_eq!(local.metadata_backup_staging(run.backup_id)?, None);
+    Ok(())
+}
+
 struct MemoryAuthority {
     calls: Cell<usize>,
 }

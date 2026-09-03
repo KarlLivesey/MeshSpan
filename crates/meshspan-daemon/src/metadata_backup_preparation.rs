@@ -88,6 +88,37 @@ impl<'a, Authority, Random> MetadataBackupPreparationService<'a, Authority, Rand
             directory,
         })
     }
+
+    /// Deletes one exact protected staging file, then forgets its durable local evidence.
+    ///
+    /// File removal precedes journal removal so a crash cannot leave an untracked encrypted
+    /// orphan. A missing file is accepted only when the unchanged journal proves prior ownership.
+    ///
+    /// # Errors
+    ///
+    /// Rejects changed paths/evidence, unsafe file kinds and local durability failures.
+    pub fn release(
+        &mut self,
+        prepared: &PreparedMetadataBackup,
+    ) -> Result<(), MetadataBackupPreparationError> {
+        let expected_name = encrypted_file_name(prepared.staging.evidence.source.backup_id);
+        let expected_path = self.directory.join(&expected_name);
+        if prepared.staging.relative_file_name != expected_name
+            || prepared.encrypted_path != expected_path
+            || self
+                .local
+                .metadata_backup_staging(prepared.staging.evidence.source.backup_id)?
+                .as_ref()
+                != Some(&prepared.staging)
+        {
+            return Err(MetadataBackupPreparationError::InvalidProjection);
+        }
+        remove_orphan(&expected_path)?;
+        sync_directory(&self.directory)?;
+        self.local
+            .remove_metadata_backup_staging(&prepared.staging)?;
+        Ok(())
+    }
 }
 
 impl<Authority, Random> MetadataBackupPreparationService<'_, Authority, Random>
