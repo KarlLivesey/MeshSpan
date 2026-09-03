@@ -222,6 +222,7 @@ fn map_repository_error(error: &RepositoryError) -> FederationAuthorityPageSourc
         | RepositoryError::Io(_)
         | RepositoryError::BackupDestinationExists
         | RepositoryError::BackupMismatch
+        | RepositoryError::EncryptedBackup(_)
         | RepositoryError::SnapshotMismatch
         | RepositoryError::InjectedFault => FederationAuthorityPageSourceError::Corrupt,
     }

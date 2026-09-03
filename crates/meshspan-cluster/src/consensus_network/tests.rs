@@ -143,6 +143,7 @@ async fn real_quinn_mtls_transfers_and_confirms_one_verified_snapshot()
         backup: PartitionBackupManifest {
             backup_id: BackupId::from_bytes(snapshot_id.as_bytes())?,
             partition_id,
+            mesh_id,
             applied_position: MetadataLogPosition { term: 1, index: 1 },
             state_revision: Revision::new(1),
             schema_version: 1,

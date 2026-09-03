@@ -200,6 +200,7 @@ pub(crate) async fn activate_and_install_node(
     let local_node_id = local_state.node_id();
     let prepared = prepare_join_network(local_state, private_listen, admission).await?;
     let partition_id = prepared.partition_id;
+    let mesh_id = prepared.config.mesh_id;
     let (peer_messages, received_peer_messages) = tokio::sync::mpsc::channel(256);
     let (control_requests, received_control_requests) = tokio::sync::mpsc::channel(64);
     let (snapshots, mut received_snapshots) = tokio::sync::mpsc::channel(1);
@@ -221,7 +222,7 @@ pub(crate) async fn activate_and_install_node(
     .await
     .map_err(|_| HeadlessNodeJoinError::PrivateNetwork)?
     .ok_or(HeadlessNodeJoinError::PrivateNetwork)?;
-    install_join_snapshot(local_state, partition_id, received, now)?;
+    install_join_snapshot(local_state, mesh_id, partition_id, received, now)?;
     complete_join_setup(local_state, now)?;
     Ok(HeadlessJoinNetwork {
         network,
@@ -351,6 +352,7 @@ fn validate_activation_result(
 
 fn install_join_snapshot(
     local_state: &DaemonLocalState,
+    mesh_id: meshspan_domain::MeshId,
     partition_id: PartitionId,
     received: meshspan_cluster::ReceivedConsensusSnapshot,
     now: UnixMicros,
@@ -376,6 +378,7 @@ fn install_join_snapshot(
             backup_id: BackupId::from_bytes(snapshot_id.as_bytes())
                 .map_err(|_| HeadlessNodeJoinError::InvalidSnapshot)?,
             partition_id,
+            mesh_id,
             applied_position: MetadataLogPosition {
                 term: included.term,
                 index: included.index,

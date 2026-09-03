@@ -503,6 +503,10 @@ pub(super) fn partition_id() -> Result<PartitionId, NodeRuntimeError> {
     PartitionId::from_bytes([8; 16]).map_err(Into::into)
 }
 
+pub(super) fn mesh_id() -> Result<meshspan_domain::MeshId, NodeRuntimeError> {
+    meshspan_domain::MeshId::from_bytes([9; 16]).map_err(Into::into)
+}
+
 pub(super) fn now() -> UnixMicros {
     let micros = SystemTime::now()
         .duration_since(UNIX_EPOCH)

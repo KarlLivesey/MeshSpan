@@ -506,15 +506,24 @@ async fn three_headless_daemons_commit_after_original_node_loss() -> Result<(), 
 
         processes[0].kill()?;
         processes[0].wait()?;
+        let elected_candidate =
+            wait_for_survivor_vote_convergence([&second, &third], &root.identity_path).await?;
+        let second_node = fixture_node_id(&second)?;
+        let (write_address, write_client, visibility_address, visibility_client) =
+            if elected_candidate == second_node {
+                (third.address, &third_client, second.address, &second_client)
+            } else {
+                (second.address, &second_client, third.address, &third_client)
+            };
         let user_id = wait_for_user_creation(
-            second.address,
-            &second_client,
+            write_address,
+            write_client,
             api_key,
             [&second, &third],
             &root.identity_path,
         )
         .await?;
-        wait_for_user_visibility(third.address, &third_client, api_key).await?;
+        wait_for_user_visibility(visibility_address, visibility_client, api_key).await?;
         add_group_member(third.address, &third_client, api_key, &group_id, &user_id).await?;
         wait_for_group_membership(second.address, &second_client, api_key, &group_id, &user_id)
             .await?;
@@ -544,6 +553,45 @@ async fn three_headless_daemons_commit_after_original_node_loss() -> Result<(), 
     .await;
     stop_processes(&mut processes);
     proof
+}
+
+async fn wait_for_survivor_vote_convergence(
+    survivors: [&ProcessFixture; 2],
+    root_identity_path: &Path,
+) -> Result<meshspan_domain::NodeId, Box<dyn Error>> {
+    let root_identity = LocalNodeIdentity::open(root_identity_path, CERTIFICATE_NAME)?;
+    let root_node = InitialBootstrapMaterial::node_id(root_identity.public_key_fingerprint())?;
+    let partition_id = InitialBootstrapMaterial::root_partition_id(root_node)?;
+    let survivor_ids = survivors
+        .map(fixture_node_id)
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let votes = survivors
+            .map(|fixture| durable_vote(&fixture.state_path, partition_id))
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        if let [(left_term, Some(left)), (right_term, Some(right))] = votes.as_slice()
+            && left_term == right_term
+            && left == right
+            && survivor_ids.contains(left)
+        {
+            return Ok(*left);
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "survivors did not converge on one surviving candidate; votes: {votes:?}"
+            )
+            .into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+fn fixture_node_id(fixture: &ProcessFixture) -> Result<meshspan_domain::NodeId, Box<dyn Error>> {
+    let identity = LocalNodeIdentity::open(&fixture.identity_path, CERTIFICATE_NAME)?;
+    InitialBootstrapMaterial::node_id(identity.public_key_fingerprint()).map_err(Into::into)
 }
 
 #[tokio::test]
@@ -706,16 +754,46 @@ async fn wait_for_user_creation(
             Err(error) => error,
         };
         if Instant::now() >= deadline {
-            let durable_votes = survivors.map(|fixture| {
-                durable_vote(&fixture.state_path, partition_id).map_err(|error| error.to_string())
+            let durable_states = survivors.map(|fixture| {
+                durable_state_summary(fixture, partition_id)
+                    .unwrap_or_else(|error| error.to_string())
             });
             return Err(format!(
-                "surviving daemon never accepted a committed metadata write; durable votes: {durable_votes:?}; last response: {error}"
+                "surviving daemon never accepted a committed metadata write; durable states: {durable_states:?}; last response: {error}"
             )
             .into());
         }
         sleep(RETRY_INTERVAL).await;
     }
+}
+
+fn durable_state_summary(
+    fixture: &ProcessFixture,
+    partition_id: PartitionId,
+) -> Result<String, Box<dyn Error>> {
+    let identity = LocalNodeIdentity::open(&fixture.identity_path, CERTIFICATE_NAME)?;
+    let node_id = InitialBootstrapMaterial::node_id(identity.public_key_fingerprint())?;
+    let database = PartitionDatabase::open(
+        &fixture.state_path.join("root-authority.sqlite3"),
+        partition_id,
+        UnixMicros::new(1),
+    )?;
+    let repository = AuthoritativeRepository::new(database);
+    let plan = repository
+        .load_active_consensus_quorum_plan()?
+        .ok_or("active quorum plan missing")?;
+    let state = repository.load_consensus_state(plan.membership_epoch())?;
+    let operation_id =
+        OperationId::from_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 3])?;
+    let operation_committed = repository.resolve_operation(operation_id)?.is_some();
+    Ok(format!(
+        "node={node_id:?}, term={}, voted_for={:?}, log_length={}, last_log={:?}, applied_index={}, operation_committed={operation_committed}",
+        state.current_term,
+        state.voted_for,
+        state.log.len(),
+        state.log.last().map(|entry| entry.position),
+        state.applied_index,
+    ))
 }
 
 async fn wait_for_user_visibility(

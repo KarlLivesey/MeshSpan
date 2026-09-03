@@ -176,7 +176,11 @@ pub use authentication_method_query::{
 };
 pub use authentication_policy::AuthenticationPolicy;
 pub use availability_cell::{AvailabilityCellCursor, AvailabilityCellRecord};
-pub use backup::{PartitionBackupManifest, restore_partition_backup};
+pub use backup::{
+    EncryptedBackupPaths, EncryptedPartitionBackupManifest, EncryptedRestorePaths,
+    PartitionBackupManifest, create_encrypted_partition_backup, restore_encrypted_partition_backup,
+    restore_partition_backup,
+};
 pub use cleanup_attestation::{VersionCleanupAttestationProgress, VersionCleanupParticipant};
 pub use cleanup_completion::{VersionCleanupCompletion, VersionCleanupItemCompletion};
 pub use cleanup_inventory::{
@@ -2103,6 +2107,30 @@ impl AuthoritativeRepository {
         backup::create_partition_backup(&self.database, backup_id, destination, created_at)
     }
 
+    /// Creates a consistent backup encrypted independently for each exact recovery recipient.
+    ///
+    /// # Errors
+    ///
+    /// Refuses overlapping or existing paths and reports snapshot, encryption or plaintext
+    /// staging-cleanup failures.
+    pub fn create_encrypted_backup(
+        &self,
+        paths: EncryptedBackupPaths<'_>,
+        backup_id: meshspan_domain::BackupId,
+        created_at: meshspan_domain::UnixMicros,
+        recipients: &[meshspan_secret_envelope::WrappingPublicKey],
+        random: &mut impl meshspan_domain::RandomSource,
+    ) -> Result<EncryptedPartitionBackupManifest, RepositoryError> {
+        backup::create_encrypted_partition_backup(
+            &self.database,
+            paths,
+            backup_id,
+            created_at,
+            recipients,
+            random,
+        )
+    }
+
     /// Creates a complete state-machine snapshot bound to one proved quorum plan.
     ///
     /// # Errors
@@ -2212,6 +2240,9 @@ pub enum RepositoryError {
     /// Backup bytes or their embedded state do not match the supplied manifest.
     #[error("metadata backup does not match its manifest")]
     BackupMismatch,
+    /// Authenticated encrypted-backup creation or recovery failed closed.
+    #[error("encrypted metadata backup failed")]
+    EncryptedBackup(#[from] meshspan_backup::BackupError),
     /// Snapshot bytes, consensus position, vote or quorum-plan proof do not agree.
     #[error("metadata snapshot does not match its consensus manifest")]
     SnapshotMismatch,

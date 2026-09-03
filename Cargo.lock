@@ -1201,6 +1201,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "meshspan-backup"
+version = "0.1.0"
+dependencies = [
+ "chacha20poly1305",
+ "meshspan-domain",
+ "meshspan-secret-envelope",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "meshspan-certificates"
 version = "0.1.0"
 dependencies = [
@@ -1385,6 +1398,7 @@ dependencies = [
  "blake3",
  "ed25519-dalek",
  "meshspan-acme",
+ "meshspan-backup",
  "meshspan-consensus",
  "meshspan-contracts",
  "meshspan-domain",

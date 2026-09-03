@@ -4,6 +4,7 @@
 members = [
     "crates/meshspan-api-contract",
     "crates/meshspan-acme",
+    "crates/meshspan-backup",
     "crates/meshspan-certificates",
     "crates/meshspan-cluster",
     "crates/meshspan-coding",

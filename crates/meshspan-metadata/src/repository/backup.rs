@@ -6,7 +6,9 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use meshspan_domain::{BackupId, PartitionId, Revision, UnixMicros};
+use meshspan_backup::{BackupFileEvidence, BackupSourceManifest, encrypt_backup, restore_backup};
+use meshspan_domain::{BackupId, MeshId, PartitionId, RandomSource, Revision, UnixMicros};
+use meshspan_secret_envelope::{WrappingPrivateKey, WrappingPublicKey};
 use rusqlite::{Connection, MAIN_DB, OpenFlags, OptionalExtension};
 use sha2::{Digest, Sha256};
 
@@ -22,6 +24,8 @@ pub struct PartitionBackupManifest {
     pub backup_id: BackupId,
     /// Partition whose complete state was copied.
     pub partition_id: PartitionId,
+    /// Mesh whose recovery authority owns the partition.
+    pub mesh_id: MeshId,
     /// Last applied committed log position in the copy.
     pub applied_position: LogPosition,
     /// Exact authoritative state revision in the copy.
@@ -36,6 +40,15 @@ pub struct PartitionBackupManifest {
     pub created_at: UnixMicros,
 }
 
+/// Exact database state and encrypted-container evidence for one recoverable backup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EncryptedPartitionBackupManifest {
+    /// Verified SQLite backup state contained in the encrypted bytes.
+    pub partition: PartitionBackupManifest,
+    /// Exact authenticated encrypted-container length and digest.
+    pub encrypted: BackupFileEvidence,
+}
+
 pub(super) fn create_partition_backup(
     database: &PartitionDatabase,
     backup_id: BackupId,
@@ -44,11 +57,13 @@ pub(super) fn create_partition_backup(
 ) -> Result<PartitionBackupManifest, RepositoryError> {
     require_absent(destination)?;
     let state = read_state(database.connection())?;
+    let mesh_id = read_mesh_id(database.connection())?;
     database.connection().backup(MAIN_DB, destination, None)?;
     let (byte_length, digest) = hash_file(destination)?;
     let manifest = PartitionBackupManifest {
         backup_id,
         partition_id: database.partition_id(),
+        mesh_id,
         applied_position: state.0,
         state_revision: state.1,
         schema_version: database.schema_version(),
@@ -58,6 +73,95 @@ pub(super) fn create_partition_backup(
     };
     verify_source(destination, manifest)?;
     Ok(manifest)
+}
+
+/// Creates a consistent SQLite backup, encrypts it for exact recovery recipients and removes the
+/// temporary plaintext copy before returning.
+///
+/// # Errors
+///
+/// Refuses overlapping or existing paths and fails closed for snapshot, encryption or cleanup
+/// errors. A failed encrypted destination remains staged and must never be published.
+pub fn create_encrypted_partition_backup(
+    database: &PartitionDatabase,
+    paths: EncryptedBackupPaths<'_>,
+    backup_id: BackupId,
+    created_at: UnixMicros,
+    recipients: &[WrappingPublicKey],
+    random: &mut impl RandomSource,
+) -> Result<EncryptedPartitionBackupManifest, RepositoryError> {
+    validate_create_paths(paths)?;
+    let partition =
+        create_partition_backup(database, backup_id, paths.plaintext_staging, created_at)?;
+    let encrypted = encrypt_backup(
+        paths.plaintext_staging,
+        paths.encrypted_destination,
+        source_manifest(partition),
+        recipients,
+        random,
+    );
+    remove_plaintext_staging(paths.plaintext_staging)?;
+    Ok(EncryptedPartitionBackupManifest {
+        partition,
+        encrypted: encrypted?,
+    })
+}
+
+/// Decrypts an exact backup into a temporary plaintext file, applies the existing SQLite restore
+/// verification and removes the plaintext staging copy before returning.
+///
+/// # Errors
+///
+/// Refuses overlapping or existing paths and rejects changed evidence, wrong recipients, invalid
+/// SQLite state, unavailable membership or cleanup failures.
+pub fn restore_encrypted_partition_backup(
+    paths: EncryptedRestorePaths<'_>,
+    manifest: EncryptedPartitionBackupManifest,
+    recipient: &WrappingPrivateKey,
+    migration_time: UnixMicros,
+) -> Result<PartitionDatabase, RepositoryError> {
+    validate_restore_paths(paths)?;
+    if manifest.encrypted.source != source_manifest(manifest.partition) {
+        return Err(RepositoryError::BackupMismatch);
+    }
+    let decrypted = restore_backup(
+        paths.encrypted_source,
+        paths.plaintext_staging,
+        manifest.encrypted,
+        recipient,
+    );
+    if let Err(error) = decrypted {
+        remove_staging_if_present(paths.plaintext_staging)?;
+        return Err(error.into());
+    }
+    let restored = restore_partition_backup(
+        paths.plaintext_staging,
+        paths.restored_destination,
+        manifest.partition,
+        migration_time,
+    );
+    remove_plaintext_staging(paths.plaintext_staging)?;
+    restored
+}
+
+/// Non-overlapping paths used while creating one encrypted backup.
+#[derive(Clone, Copy, Debug)]
+pub struct EncryptedBackupPaths<'a> {
+    /// New temporary path for the consistent plaintext SQLite copy.
+    pub plaintext_staging: &'a Path,
+    /// New durable path for the authenticated encrypted container.
+    pub encrypted_destination: &'a Path,
+}
+
+/// Non-overlapping paths used while restoring one encrypted backup.
+#[derive(Clone, Copy, Debug)]
+pub struct EncryptedRestorePaths<'a> {
+    /// Existing authenticated encrypted container.
+    pub encrypted_source: &'a Path,
+    /// New temporary path for decrypted SQLite bytes.
+    pub plaintext_staging: &'a Path,
+    /// New path which becomes eligible for admission only after SQLite verification.
+    pub restored_destination: &'a Path,
 }
 
 /// Verifies a closed backup and restores it into a new, never-overwritten database path.
@@ -103,6 +207,7 @@ fn verify_source(
         [],
         |row| row.get(0),
     )?;
+    let stored_mesh_id = read_mesh_id(&connection)?;
     let schema_version: u32 =
         connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     let quick_check: String =
@@ -121,6 +226,7 @@ fn verify_source(
         |row| row.get(0),
     )?;
     if stored_partition.as_slice() != manifest.partition_id.as_bytes()
+        || stored_mesh_id != manifest.mesh_id
         || schema_version != manifest.schema_version
         || state != (manifest.applied_position, manifest.state_revision)
         || quick_check != "ok"
@@ -154,6 +260,24 @@ fn read_state(connection: &Connection) -> Result<(LogPosition, Revision), Reposi
     ))
 }
 
+fn read_mesh_id(connection: &Connection) -> Result<MeshId, RepositoryError> {
+    let mut statement =
+        connection.prepare("SELECT mesh_id FROM meshes ORDER BY mesh_id LIMIT 2")?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, Vec<u8>>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let [mesh_id] = rows.as_slice() else {
+        return Err(RepositoryError::BackupMismatch);
+    };
+    MeshId::from_bytes(
+        mesh_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| RepositoryError::BackupMismatch)?,
+    )
+    .map_err(|_| RepositoryError::BackupMismatch)
+}
+
 fn require_absent(file_path: &Path) -> Result<(), RepositoryError> {
     match file_path.try_exists() {
         Ok(false) => Ok(()),
@@ -182,4 +306,50 @@ fn hash_file(file_path: &Path) -> Result<(u64, [u8; 32]), RepositoryError> {
 
 fn parse_u64(value: i64) -> Result<u64, RepositoryError> {
     u64::try_from(value).map_err(|_| RepositoryError::BackupMismatch)
+}
+
+fn source_manifest(manifest: PartitionBackupManifest) -> BackupSourceManifest {
+    BackupSourceManifest {
+        backup_id: manifest.backup_id,
+        partition_id: manifest.partition_id,
+        mesh_id: manifest.mesh_id,
+        last_log_index: manifest.applied_position.index,
+        last_log_term: manifest.applied_position.term,
+        state_revision: manifest.state_revision.get(),
+        schema_version: manifest.schema_version,
+        byte_length: manifest.byte_length,
+        digest: manifest.digest,
+        created_at: manifest.created_at,
+    }
+}
+
+fn validate_create_paths(paths: EncryptedBackupPaths<'_>) -> Result<(), RepositoryError> {
+    if paths.plaintext_staging == paths.encrypted_destination {
+        Err(RepositoryError::InvalidCommand)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_restore_paths(paths: EncryptedRestorePaths<'_>) -> Result<(), RepositoryError> {
+    if paths.encrypted_source == paths.plaintext_staging
+        || paths.encrypted_source == paths.restored_destination
+        || paths.plaintext_staging == paths.restored_destination
+    {
+        Err(RepositoryError::InvalidCommand)
+    } else {
+        Ok(())
+    }
+}
+
+fn remove_plaintext_staging(staging: &Path) -> Result<(), RepositoryError> {
+    std::fs::remove_file(staging).map_err(RepositoryError::Io)
+}
+
+fn remove_staging_if_present(staging: &Path) -> Result<(), RepositoryError> {
+    match staging.try_exists() {
+        Ok(true) => remove_plaintext_staging(staging),
+        Ok(false) => Ok(()),
+        Err(error) => Err(RepositoryError::Io(error)),
+    }
 }
