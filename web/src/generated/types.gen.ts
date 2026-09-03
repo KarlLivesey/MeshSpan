@@ -3651,6 +3651,109 @@ export type OperationStatusResponse = {
 };
 
 /**
+ * ProvisionCertificateRequest
+ *
+ * Idempotent request to provision automatic public certificates.
+ */
+export type ProvisionCertificateRequest = {
+  /**
+   * Sorted, unique lower-case DNS names requested on the certificate.
+   */
+  certificate_names: Array<string>;
+  /**
+   * HTTP-01 or one DNS-01 publication method.
+   */
+  challenge:
+    | {
+        kind: "http01";
+      }
+    | {
+        kind: "dns01_manual";
+      }
+    | {
+        /**
+         * TSIG HMAC family.
+         */
+        algorithm: "hmac_sha256" | "hmac_sha512";
+        /**
+         * Canonical lower-case TSIG key name.
+         */
+        key_name: string;
+        kind: "dns01_rfc2136";
+        /**
+         * Raw printable TSIG secret supplied by the administrator.
+         */
+        secret: string;
+        /**
+         * Literal DNS server socket address, including port.
+         */
+        server: string;
+        /**
+         * Canonical lower-case zone apex.
+         */
+        zone: string;
+      }
+    | {
+        /**
+         * Scoped Cloudflare API token.
+         */
+        api_token: string;
+        kind: "dns01_cloudflare";
+        /**
+         * Exact 32-character lower-case hexadecimal Cloudflare zone identity.
+         */
+        zone_id: string;
+      }
+    | {
+        /**
+         * Bearer token sent only to the configured endpoint.
+         */
+        bearer_token: string;
+        /**
+         * HTTPS webhook endpoint.
+         */
+        endpoint: string;
+        kind: "dns01_webhook";
+      };
+  /**
+   * HTTPS ACME directory endpoint.
+   */
+  directory_url: string;
+  /**
+   * Client-generated exact-retry identity.
+   */
+  operation_id: string;
+};
+
+/**
+ * ProvisionCertificateResponse
+ *
+ * Durable result of one public-certificate provisioning operation.
+ */
+export type ProvisionCertificateResponse = {
+  /**
+   * Canonical certificate names retained by the authority.
+   */
+  certificate_names: Array<string>;
+  /**
+   * Immutable configuration created by the operation.
+   */
+  configuration_id: string;
+  /**
+   * Exact idempotency identity whose result was resolved.
+   */
+  operation_id: string;
+  /**
+   * Initial durable order created by the operation.
+   */
+  order_id: string;
+  /**
+   * Authoritative revision created by the operation.
+   */
+  revision: number;
+};
+
+/**
  * PublishSmbExportRequest
  *
  * Exact-retry request to publish one existing volume or folder explicitly.
@@ -4920,6 +5023,66 @@ export type ListManualDnsTasksResponses = {
 
 export type ListManualDnsTasksResponse2 =
   ListManualDnsTasksResponses[keyof ListManualDnsTasksResponses];
+
+export type ProvisionCertificateData = {
+  /**
+   * Public-certificate provisioning
+   */
+  body: ProvisionCertificateRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/admin/certificates/acme";
+};
+
+export type ProvisionCertificateErrors = {
+  /**
+   * Invalid certificate request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Operation conflicts with committed state
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Certificate authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ProvisionCertificateError =
+  ProvisionCertificateErrors[keyof ProvisionCertificateErrors];
+
+export type ProvisionCertificateResponses = {
+  /**
+   * Configuration and initial order durably committed or exactly replayed
+   */
+  201: ProvisionCertificateResponse;
+};
+
+export type ProvisionCertificateResponse2 =
+  ProvisionCertificateResponses[keyof ProvisionCertificateResponses];
 
 export type ListGroupsData = {
   body?: never;
