@@ -66,7 +66,8 @@ use crate::{
     ConsensusAuthenticationAuthority, ConsensusBootstrapAuthority, CreateMeshSetupConfiguration,
     CreateMeshSetupController, CreateMeshSetupError, CreateMeshSetupService, CreateSessionService,
     CurrentNodeBootstrapPeerSource, CurrentSessionApiError, DaemonLocalState,
-    DaemonLocalStateError, DirectoryListingApiError, DirectoryListingService, FileApiRoutes,
+    DaemonLocalStateError, DirectoryListingApiError, DirectoryListingService,
+    ExternalCertificatePublisherApiError, ExternalCertificatePublisherService, FileApiRoutes,
     FileReadApiError, FileReadService, GatewaySessionIdentity, HeadlessDaemonConfig,
     HeadlessDaemonConfigError, Http01Server, Http01ServerError, HttpsServer, HttpsServerError,
     IdentityAdministrationApiError, IdentityAdministrationService, JoinMeshSetupService,
@@ -103,17 +104,18 @@ use crate::{
     classify_native_filesystem_error, current_session_api_router, directory_listing_api_router,
     execute_rebalance_step, execute_resumable_storage_scrub,
     execute_resumable_target_reconciliation, execute_scope_drain_action, execute_shard_repair,
-    execute_target_drain_step, file_read_api_router, identity_administration_api_router,
-    manual_dns_task_administration_api_router, native_namespace_mutation_api_router,
-    native_upload_api_router, node_enrolment_api_router, node_join_grant_api_router,
-    object_stat_api_router, operation_status_api_router, passkey_challenge_api_router,
-    passkey_registration_api_router, permission_administration_api_router,
-    public_contract_api_router, recovery_bundle_verification_api_router,
-    recovery_code_issuance_api_router, revoke_current_session_api_router, session_api_router,
-    setup_api_router_with_mutations, smb_export_administration_api_router,
-    step_up_current_session_api_router, storage_drain_administration_api_router,
-    storage_folder_administration_api_router, topology_administration_api_router,
-    totp_registration_api_router, volume_administration_api_router, volume_inventory_api_router,
+    execute_target_drain_step, external_certificate_publisher_api_router, file_read_api_router,
+    identity_administration_api_router, manual_dns_task_administration_api_router,
+    native_namespace_mutation_api_router, native_upload_api_router, node_enrolment_api_router,
+    node_join_grant_api_router, object_stat_api_router, operation_status_api_router,
+    passkey_challenge_api_router, passkey_registration_api_router,
+    permission_administration_api_router, public_contract_api_router,
+    recovery_bundle_verification_api_router, recovery_code_issuance_api_router,
+    revoke_current_session_api_router, session_api_router, setup_api_router_with_mutations,
+    smb_export_administration_api_router, step_up_current_session_api_router,
+    storage_drain_administration_api_router, storage_folder_administration_api_router,
+    topology_administration_api_router, totp_registration_api_router,
+    volume_administration_api_router, volume_inventory_api_router,
 };
 
 mod storage_folder_backend;
@@ -1373,6 +1375,18 @@ fn resource_administration_routes(
     Ok(Router::new()
         .merge(certificate_provisioning_api_router(
             CertificateProvisioningService::new(
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                gateway,
+                OperatingSystemRandom,
+            ),
+        )?)
+        .merge(external_certificate_publisher_api_router(
+            ExternalCertificatePublisherService::new(
                 open_authentication_authority(
                     local_state,
                     authority,
@@ -3295,6 +3309,9 @@ pub enum DaemonProcessError {
     /// Manager-only certificate-provisioning API construction failed.
     #[error("daemon certificate-provisioning API failed")]
     CertificateProvisioningApi(#[from] CertificateProvisioningApiError),
+    /// API-key-only external certificate publisher API construction failed.
+    #[error("daemon external certificate publisher API failed")]
+    ExternalCertificatePublisherApi(#[from] ExternalCertificatePublisherApiError),
     /// Explicit SMB-export administration API construction failed.
     #[error("daemon SMB-export administration API failed")]
     SmbExportAdministrationApi(#[from] SmbExportAdministrationApiError),

@@ -5,12 +5,12 @@ use meshspan_contracts::{BoundedItems, ShardIdentity, ShardReceipt};
 use meshspan_domain::{
     AcknowledgementPolicyId, AcmeConfigurationId, ActivationPolicyId, ApiKeyId, AssuranceLevel,
     AuditEventId, AuthenticationMethodId, AuthenticationService, AvailabilityCellId,
-    CertificateOrderId, ComponentInstanceId, DurationMicros, EntropyError, FailureScenario,
-    FailureTerm, FaultGroupClassId, FaultGroupId, GrantId, GroupId, HostId, LocalityPolicyId,
-    LocalityRequirementId, MeshId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId,
-    OperationId, OwnerSetId, PrincipalId, ProtectionPolicyId, ProtectionScenarioId, RandomSource,
-    RecoveryCodeId, Revision, Rights, RoleId, SessionId, SmbExportId, TargetId, UnixMicros,
-    VolumeId, WorkId,
+    CertificateOrderId, ComponentInstanceId, DurationMicros, EntropyError,
+    ExternalCertificatePublicationId, FailureScenario, FailureTerm, FaultGroupClassId,
+    FaultGroupId, GrantId, GroupId, HostId, LocalityPolicyId, LocalityRequirementId, MeshId,
+    NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PrincipalId,
+    ProtectionPolicyId, ProtectionScenarioId, PublicCertificateId, RandomSource, RecoveryCodeId,
+    Revision, Rights, RoleId, SessionId, SmbExportId, TargetId, UnixMicros, VolumeId, WorkId,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -21,30 +21,30 @@ use sha2::{Digest, Sha256};
 use super::*;
 use crate::{
     ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
-    AcknowledgePublicCertificateInstallation, AcknowledgementCellRequirement,
-    AcknowledgementCellRole, AcknowledgementConsistencyClass, AcmeChallengeKind, AddGroupMember,
-    AdvanceManualDnsTask, AssignVolumeAcknowledgementPolicy, AssignVolumeLocalityPolicy,
-    AssignVolumeProtectionPolicy, AttestStorageTargetDrain, BeginStorageScopeDrain,
-    BeginStorageTargetDrain, BootstrapMesh, BootstrapRecoveryIdentity, CertificateOrderCompletion,
-    CheckpointCertificateOrder, ClaimCertificateOrder, ClaimMaintenanceWork,
-    CommitConvergedVolumeHead, CommitRebalanceScanPage, CommitScrubPass, CommitSecretGeneration,
-    CommitShardRepair, CommitTargetReconciliation, CompleteCertificateOrder,
-    CompleteMaintenanceWork, CompleteStorageScopeDrain, ConfigureAcme, ConvergedHeadEvidence,
-    CreateAcknowledgementPolicy, CreateActivationPolicy, CreateAuthenticationMethod,
-    CreateAvailabilityCell, CreateComponent, CreateFaultGroup, CreateGroup, CreateLocalityPolicy,
-    CreateProtectionPolicy, CreateUser, CreateVolume, FenceStorageNodeDrainMembership,
-    GrantInheritance, GrantPermission, GrantPermissionWithActivation, IssueAuthenticationSession,
-    LocalityRequirementConfiguration, MaintenanceWorkCompletion, ManualDnsTaskPhase,
-    NewAuthenticationCredential, NewRecoveryCode, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
-    PermissionScope, ProtectionScenarioConfiguration, ProvisionAcme, PublishSmbExport,
-    QueueCertificateOrder, QueueMaintenanceWork, RebalanceScanCursor, RecordName,
-    RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember, RenewCertificateOrder,
-    RenewMaintenanceWork, RevokeAuthenticationMethod, RevokeAuthenticationSession,
-    SecretGenerationReference, SessionAuthenticationFactor, SessionClientLabel,
-    SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
-    SetTargetAvailabilityCellMembership, SmbExportGatewaySelection, StepUpAuthenticationSession,
-    StorageUsageLimit, StrongFallbackMode, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND,
-    WithdrawSmbExport,
+    AcknowledgeExternalCertificateInstallation, AcknowledgePublicCertificateInstallation,
+    AcknowledgementCellRequirement, AcknowledgementCellRole, AcknowledgementConsistencyClass,
+    AcmeChallengeKind, AddGroupMember, AdvanceManualDnsTask, AssignVolumeAcknowledgementPolicy,
+    AssignVolumeLocalityPolicy, AssignVolumeProtectionPolicy, AttestStorageTargetDrain,
+    BeginStorageScopeDrain, BeginStorageTargetDrain, BootstrapMesh, BootstrapRecoveryIdentity,
+    CertificateOrderCompletion, CheckpointCertificateOrder, ClaimCertificateOrder,
+    ClaimMaintenanceWork, CommitConvergedVolumeHead, CommitRebalanceScanPage, CommitScrubPass,
+    CommitSecretGeneration, CommitShardRepair, CommitTargetReconciliation,
+    CompleteCertificateOrder, CompleteMaintenanceWork, CompleteStorageScopeDrain, ConfigureAcme,
+    ConvergedHeadEvidence, CreateAcknowledgementPolicy, CreateActivationPolicy,
+    CreateAuthenticationMethod, CreateAvailabilityCell, CreateComponent, CreateFaultGroup,
+    CreateGroup, CreateLocalityPolicy, CreateProtectionPolicy, CreateUser, CreateVolume,
+    FenceStorageNodeDrainMembership, GrantInheritance, GrantPermission,
+    GrantPermissionWithActivation, IssueAuthenticationSession, LocalityRequirementConfiguration,
+    MaintenanceWorkCompletion, ManualDnsTaskPhase, NewAuthenticationCredential, NewRecoveryCode,
+    PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PermissionScope, ProtectionScenarioConfiguration,
+    ProvisionAcme, PublishExternalCertificate, PublishSmbExport, QueueCertificateOrder,
+    QueueMaintenanceWork, RebalanceScanCursor, RecordName, RegisterNodeWrappingKey,
+    RegisterStorageTarget, RemoveGroupMember, RenewCertificateOrder, RenewMaintenanceWork,
+    RevokeAuthenticationMethod, RevokeAuthenticationSession, SecretGenerationReference,
+    SessionAuthenticationFactor, SessionClientLabel, SetHostAvailabilityCellMembership,
+    SetHostFaultGroupMembership, SetTargetAvailabilityCellMembership, SmbExportGatewaySelection,
+    StepUpAuthenticationSession, StorageUsageLimit, StrongFallbackMode, TotpAlgorithm,
+    VOLUME_CONTENT_KEY_SECRET_KIND, WithdrawSmbExport,
 };
 
 #[test]
@@ -854,6 +854,70 @@ fn public_certificate_installation_round_trips_exact_gateway_evidence()
                 },
                 bundle_digest: [109; 32],
                 observed_order_revision: Revision::new(12),
+            },
+        ),
+    )?;
+    Ok(())
+}
+
+#[test]
+fn external_certificate_publication_round_trips_bundle_and_installation_evidence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let publication_id = ExternalCertificatePublicationId::from_bytes([110; 16])?;
+    let certificate_id = PublicCertificateId::from_bytes([111; 16])?;
+    let first = WrappingPrivateKey::from_bytes([112; 32])?.public_key();
+    let second = WrappingPrivateKey::from_bytes([113; 32])?.public_key();
+    let (secret, recipients) = encrypt_secret(
+        SecretContext::new(
+            PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+            certificate_id.as_bytes(),
+            7,
+        )?,
+        b"externally issued public certificate bundle",
+        &[first, second],
+        &mut SecretRandom(114),
+    )?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::PublishExternalCertificate(Box::new(PublishExternalCertificate {
+            publication_id,
+            certificate_id,
+            generation: 7,
+            certificate_names: BoundedItems::new(
+                vec![
+                    "files.example.test".to_owned(),
+                    "www.example.test".to_owned(),
+                ],
+                256,
+            )?,
+            certificate: Box::new(CommitSecretGeneration {
+                secret: secret.parts(),
+                recipients: recipients
+                    .iter()
+                    .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
+                    .collect(),
+            }),
+            bundle_digest: [115; 32],
+            chain_digest: [116; 32],
+            public_key_fingerprint: [117; 32],
+            not_before: UnixMicros::new(600),
+            not_after: UnixMicros::new(1_000),
+        })),
+    )?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::AcknowledgeExternalCertificateInstallation(
+            AcknowledgeExternalCertificateInstallation {
+                publication_id,
+                gateway_node_id: NodeId::from_bytes([118; 16])?,
+                gateway_incarnation: 9,
+                certificate: SecretGenerationReference {
+                    secret_id: certificate_id.as_bytes(),
+                    generation: 7,
+                },
+                bundle_digest: [115; 32],
+                observed_publication_revision: Revision::new(14),
             },
         ),
     )?;

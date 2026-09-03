@@ -38,6 +38,7 @@ mod cleanup_reclamation;
 mod cluster;
 mod component;
 mod consensus;
+mod external_certificate;
 mod federation_actor_attestation;
 #[cfg(test)]
 mod federation_actor_attestation_tests;
@@ -161,7 +162,7 @@ pub use acme::{
     AcmeConfigurationRecord, CertificateOrderCheckpointRecord, CertificateOrderClaim,
     CertificateOrderRecord, CertificateOrderState, CertificateRenewalCandidate,
     DueCertificateOrderCursor, DueCertificateRenewalCursor, PublicCertificateInstallationRecord,
-    PublicCertificateRolloutSummary, PublicCertificateSelection,
+    PublicCertificateRolloutSummary, PublicCertificateSelection, PublicCertificateSource,
 };
 pub use authentication_method::{
     ApiKeyAuthentication, AuthenticationMethodRevocationReplay, PasskeyVerificationMaterial,
@@ -189,6 +190,9 @@ pub use cluster::{
     NodeEnrolmentRecord,
 };
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
+pub use external_certificate::{
+    ExternalCertificateInstallationRecord, ExternalCertificatePublicationRecord,
+};
 pub use federation_actor_attestation::FederatedActorAttestationRecord;
 pub use federation_assignment::FederationGrantAssignmentAuthority;
 pub use federation_authority_snapshot::FederationAuthoritySnapshotError;

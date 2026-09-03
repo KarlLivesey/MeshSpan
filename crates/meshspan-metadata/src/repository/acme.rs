@@ -23,7 +23,7 @@ pub use order_checkpoint::CertificateOrderCheckpointRecord;
 pub(super) use order_checkpoint::checkpoint;
 pub use query::{
     AcmeConfigurationRecord, CertificateRenewalCandidate, DueCertificateOrderCursor,
-    DueCertificateRenewalCursor, PublicCertificateSelection,
+    DueCertificateRenewalCursor, PublicCertificateSelection, PublicCertificateSource,
 };
 
 const ORDER_QUEUED: i64 = 1;
@@ -569,7 +569,11 @@ impl AuthoritativeRepository {
     pub fn latest_public_certificate(
         &self,
     ) -> Result<Option<PublicCertificateSelection>, RepositoryError> {
-        query::latest_public_certificate(&self.database)
+        let acme = query::latest_public_certificate(&self.database)?;
+        let external = super::external_certificate::latest_public_certificate(&self.database)?;
+        Ok(super::external_certificate::newest_selection(
+            acme, external,
+        ))
     }
 
     /// Returns one gateway's exact certificate-installation proof.
@@ -914,7 +918,7 @@ fn require_secret(
     }
 }
 
-fn validate_worker(
+pub(super) fn validate_worker(
     transaction: &Transaction<'_>,
     node_id: NodeId,
     incarnation: u64,

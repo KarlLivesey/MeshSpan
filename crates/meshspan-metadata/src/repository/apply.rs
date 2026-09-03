@@ -12,7 +12,7 @@ use super::{
     acknowledgement_policy, acme, authentication_method, authentication_method_creation,
     authentication_policy, availability_cell, bootstrap, cleanup_attestation, cleanup_completion,
     cleanup_inventory, cleanup_permit, cleanup_reclamation, cluster, component,
-    federation_actor_attestation, federation_assignment, federation_grant,
+    external_certificate, federation_actor_attestation, federation_assignment, federation_grant,
     federation_mutation_admission, federation_quarantine, federation_relationship,
     federation_storage_allocation, federation_succession, identity, locality_policy,
     maintenance_work, manual_dns_task, namespace, node_wrapping_key, protection_policy,
@@ -658,6 +658,8 @@ fn is_certificate_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::AdvanceManualDnsTask(_)
             | AuthoritativeCommand::CompleteCertificateOrder(_)
             | AuthoritativeCommand::AcknowledgePublicCertificateInstallation(_)
+            | AuthoritativeCommand::PublishExternalCertificate(_)
+            | AuthoritativeCommand::AcknowledgeExternalCertificateInstallation(_)
     )
 }
 
@@ -781,6 +783,12 @@ fn execute_certificate_command(
         }
         AuthoritativeCommand::AcknowledgePublicCertificateInstallation(value) => {
             acme::acknowledge_installation(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::PublishExternalCertificate(value) => {
+            external_certificate::publish(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::AcknowledgeExternalCertificateInstallation(value) => {
+            external_certificate::acknowledge_installation(transaction, context, *value, revision)
         }
         _ => Err(RepositoryError::InvalidCommand),
     }
@@ -1315,6 +1323,8 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::CheckpointCertificateOrder(_) => 120,
         AuthoritativeCommand::AdvanceManualDnsTask(_) => 121,
         AuthoritativeCommand::ProvisionAcme(_) => 122,
+        AuthoritativeCommand::PublishExternalCertificate(_) => 123,
+        AuthoritativeCommand::AcknowledgeExternalCertificateInstallation(_) => 124,
     }
 }
 

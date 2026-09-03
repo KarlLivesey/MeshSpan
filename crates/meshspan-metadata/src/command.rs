@@ -34,10 +34,10 @@ use crate::{
     RevokeFederationSuccessorDesignation, RotateFederationTrustIdentity,
 };
 use crate::{
-    AcknowledgePublicCertificateInstallation, AcmeChallengeKind, AdvanceManualDnsTask,
-    CertificateOrderCompletion, CheckpointCertificateOrder, ClaimCertificateOrder,
-    CompleteCertificateOrder, ConfigureAcme, ProvisionAcme, QueueCertificateOrder,
-    RenewCertificateOrder,
+    AcknowledgeExternalCertificateInstallation, AcknowledgePublicCertificateInstallation,
+    AcmeChallengeKind, AdvanceManualDnsTask, CertificateOrderCompletion,
+    CheckpointCertificateOrder, ClaimCertificateOrder, CompleteCertificateOrder, ConfigureAcme,
+    ProvisionAcme, PublishExternalCertificate, QueueCertificateOrder, RenewCertificateOrder,
 };
 use crate::{
     ActivateFederationGrantAssignment, CreateFederationGrantAssignment, IssueFederationGrant,
@@ -238,6 +238,10 @@ pub enum AuthoritativeCommand {
     CompleteCertificateOrder(CompleteCertificateOrder),
     /// Records one gateway's exact live public-certificate generation.
     AcknowledgePublicCertificateInstallation(AcknowledgePublicCertificateInstallation),
+    /// Atomically publishes one externally issued, validated and encrypted certificate generation.
+    PublishExternalCertificate(Box<PublishExternalCertificate>),
+    /// Records one gateway's exact live externally issued certificate generation.
+    AcknowledgeExternalCertificateInstallation(AcknowledgeExternalCertificateInstallation),
     /// Registers one node-local public key for encrypted secret generations.
     RegisterNodeWrappingKey(RegisterNodeWrappingKey),
     /// Commits one encrypted secret generation and every exact recipient envelope atomically.
@@ -420,6 +424,8 @@ impl AuthoritativeCommand {
             Self::AdvanceManualDnsTask(value) => value.update_digest(digest),
             Self::CompleteCertificateOrder(value) => value.update_digest(digest),
             Self::AcknowledgePublicCertificateInstallation(value) => value.update_digest(digest),
+            Self::PublishExternalCertificate(value) => value.update_digest(digest),
+            Self::AcknowledgeExternalCertificateInstallation(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
             Self::CommitSecretGeneration(value) => value.update_digest(digest),
             Self::IssueJoinGrant(value) => value.update_digest(digest),
@@ -3849,6 +3855,38 @@ digest_simple_record!(
         digest.unsigned(value.certificate.generation);
         digest.bytes(&value.bundle_digest);
         digest.unsigned(value.observed_order_revision.get());
+    }
+);
+digest_simple_record!(
+    PublishExternalCertificate,
+    b"publish-external-certificate",
+    |value, digest| {
+        digest.identifier(value.publication_id.as_bytes());
+        digest.identifier(value.certificate_id.as_bytes());
+        digest.unsigned(value.generation);
+        digest.unsigned(value.certificate_names.len() as u64);
+        for name in value.certificate_names.as_slice() {
+            digest.bytes(name.as_bytes());
+        }
+        value.certificate.update_digest(digest);
+        digest.bytes(&value.bundle_digest);
+        digest.bytes(&value.chain_digest);
+        digest.bytes(&value.public_key_fingerprint);
+        digest.signed(value.not_before.get());
+        digest.signed(value.not_after.get());
+    }
+);
+digest_simple_record!(
+    AcknowledgeExternalCertificateInstallation,
+    b"acknowledge-external-certificate-installation",
+    |value, digest| {
+        digest.identifier(value.publication_id.as_bytes());
+        digest.identifier(value.gateway_node_id.as_bytes());
+        digest.unsigned(value.gateway_incarnation);
+        digest.identifier(value.certificate.secret_id);
+        digest.unsigned(value.certificate.generation);
+        digest.bytes(&value.bundle_digest);
+        digest.unsigned(value.observed_publication_revision.get());
     }
 );
 digest_simple_record!(

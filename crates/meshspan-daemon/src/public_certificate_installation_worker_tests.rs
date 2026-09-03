@@ -10,7 +10,8 @@ use meshspan_domain::{
 use meshspan_metadata::{
     ApplyDisposition, AuthoritativeCommand, CommandContext, CommandReceipt, EntityKind,
     EntityReference, LogPosition, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
-    PublicCertificateSelection, SecretGenerationRecord, SecretGenerationReference,
+    PublicCertificateSelection, PublicCertificateSource, SecretGenerationRecord,
+    SecretGenerationReference,
 };
 use meshspan_secret_envelope::{SecretContext, WrappingPublicKey, encrypt_secret};
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
@@ -54,7 +55,7 @@ fn completed_generation_replaces_bootstrap_and_acknowledges_exact_selection()
             .current()?
             .ok_or("installed identity missing")?
             .revision,
-        fixture.selection.order_revision
+        fixture.selection.source_revision
     );
     assert_eq!(acknowledgements.commit_count(), 1);
     assert_eq!(acknowledgements.actor()?, configured_by);
@@ -123,12 +124,12 @@ impl Fixture {
         Ok(Self {
             node_id: NodeId::from_bytes([12; 16])?,
             selection: PublicCertificateSelection {
-                order_id,
+                source: PublicCertificateSource::AcmeOrder(order_id),
                 certificate: reference,
                 bundle_digest: selection_digest.unwrap_or(bundle_digest),
                 configured_by: PrincipalId::from_bytes([13; 16])?,
                 completed_at: UnixMicros::new(400),
-                order_revision: Revision::new(20),
+                source_revision: Revision::new(20),
             },
             generation,
             wrapping_key,

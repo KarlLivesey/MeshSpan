@@ -10,6 +10,7 @@ mod bootstrap;
 mod decoder;
 mod encoder;
 mod enrolment;
+mod external_certificate;
 mod fault_group;
 mod identity;
 mod locality_policy;
@@ -105,6 +106,9 @@ fn encode_command(
     command: &AuthoritativeCommand,
 ) -> Result<(), MetadataCommandCodecError> {
     if acme::encode_command(encoder, command)? {
+        return Ok(());
+    }
+    if external_certificate::encode_command(encoder, command)? {
         return Ok(());
     }
     if maintenance_work::encode_command(encoder, command)? {
@@ -209,6 +213,9 @@ fn decode_command(
     let kind = decoder.u16()?;
     if acme::is_command_kind(kind) {
         return acme::decode_command(kind, decoder);
+    }
+    if external_certificate::is_command_kind(kind) {
+        return external_certificate::decode_command(kind, decoder);
     }
     if maintenance_work::is_command_kind(kind) {
         return maintenance_work::decode_command(kind, decoder);

@@ -3,12 +3,12 @@
 //! Live HTTPS rotation followed by a durable, exact gateway installation acknowledgement.
 
 use meshspan_domain::{
-    AuditEventId, CertificateOrderId, NodeId, OperationId, PrincipalId, Revision, UnixMicros,
-    uuid_v8,
+    AuditEventId, NodeId, OperationId, PrincipalId, Revision, UnixMicros, uuid_v8,
 };
 use meshspan_metadata::{
-    AcknowledgePublicCertificateInstallation, AuthoritativeCommand, CommandContext, CommandReceipt,
-    EntityKind, SecretGenerationReference,
+    AcknowledgeExternalCertificateInstallation, AcknowledgePublicCertificateInstallation,
+    AuthoritativeCommand, CommandContext, CommandReceipt, EntityKind, PublicCertificateSource,
+    SecretGenerationReference,
 };
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -21,10 +21,10 @@ const AUDIT_ID_DOMAIN: &[u8] = b"meshspan.public-certificate-installation.audit.
 /// Authoritative identity and timing for one gateway's live certificate installation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PublicCertificateInstallationRequest {
-    /// Completed issuance order being installed.
-    pub order_id: CertificateOrderId,
-    /// Exact order revision observed before loading its encrypted generation.
-    pub order_revision: Revision,
+    /// Durable issuance source being installed.
+    pub source: PublicCertificateSource,
+    /// Exact source revision observed before loading its encrypted generation.
+    pub source_revision: Revision,
     /// Local gateway node.
     pub gateway_node_id: NodeId,
     /// Current local gateway process incarnation.
@@ -104,18 +104,34 @@ where
     ) -> Result<PublicCertificateInstallationCommit, PublicCertificateInstallationError> {
         validate_request(certificate, request)?;
         identity
-            .install(request.order_revision, certificate)
+            .install(request.source_revision, certificate)
             .map_err(map_rotation_error)?;
-        let command = AuthoritativeCommand::AcknowledgePublicCertificateInstallation(
-            AcknowledgePublicCertificateInstallation {
-                order_id: request.order_id,
-                gateway_node_id: request.gateway_node_id,
-                gateway_incarnation: request.gateway_incarnation,
-                certificate: certificate.generation(),
-                bundle_digest: certificate.bundle_digest(),
-                observed_order_revision: request.order_revision,
-            },
-        );
+        let command = match request.source {
+            PublicCertificateSource::AcmeOrder(order_id) => {
+                AuthoritativeCommand::AcknowledgePublicCertificateInstallation(
+                    AcknowledgePublicCertificateInstallation {
+                        order_id,
+                        gateway_node_id: request.gateway_node_id,
+                        gateway_incarnation: request.gateway_incarnation,
+                        certificate: certificate.generation(),
+                        bundle_digest: certificate.bundle_digest(),
+                        observed_order_revision: request.source_revision,
+                    },
+                )
+            }
+            PublicCertificateSource::ExternalPublication(publication_id) => {
+                AuthoritativeCommand::AcknowledgeExternalCertificateInstallation(
+                    AcknowledgeExternalCertificateInstallation {
+                        publication_id,
+                        gateway_node_id: request.gateway_node_id,
+                        gateway_incarnation: request.gateway_incarnation,
+                        certificate: certificate.generation(),
+                        bundle_digest: certificate.bundle_digest(),
+                        observed_publication_revision: request.source_revision,
+                    },
+                )
+            }
+        };
         let operation_id = derived_id(OPERATION_ID_DOMAIN, certificate, request)?;
         let context = CommandContext {
             operation_id,
@@ -138,7 +154,7 @@ where
                 .authority
                 .acknowledge_public_certificate_installation(context, &command)?,
         };
-        validate_receipt(receipt, operation_id, expected_digest, request.order_id)?;
+        validate_receipt(receipt, operation_id, expected_digest, request.source)?;
         Ok(PublicCertificateInstallationCommit {
             certificate: certificate.generation(),
             bundle_digest: certificate.bundle_digest(),
@@ -151,9 +167,10 @@ fn validate_request(
     certificate: &LoadedPublicCertificate,
     request: PublicCertificateInstallationRequest,
 ) -> Result<(), PublicCertificateInstallationError> {
-    if request.order_revision == Revision::ZERO
+    if request.source_revision == Revision::ZERO
         || request.gateway_incarnation == 0
-        || certificate.generation().secret_id != request.order_id.as_bytes()
+        || matches!(request.source, PublicCertificateSource::AcmeOrder(order_id)
+            if certificate.generation().secret_id != order_id.as_bytes())
         || certificate.generation().generation == 0
         || certificate.bundle_digest() == [0; 32]
     {
@@ -179,8 +196,10 @@ fn derived_bytes(
 ) -> Result<[u8; 16], PublicCertificateInstallationError> {
     let mut digest = Sha256::new();
     digest.update(domain);
-    digest.update(request.order_id.as_bytes());
-    digest.update(request.order_revision.get().to_be_bytes());
+    let (source_kind, source_id) = source_identity(request.source);
+    digest.update([source_kind]);
+    digest.update(source_id);
+    digest.update(request.source_revision.get().to_be_bytes());
     digest.update(request.gateway_node_id.as_bytes());
     digest.update(request.gateway_incarnation.to_be_bytes());
     digest.update(certificate.generation().secret_id);
@@ -196,18 +215,40 @@ fn validate_receipt(
     receipt: CommandReceipt,
     operation_id: OperationId,
     expected_digest: [u8; 32],
-    order_id: CertificateOrderId,
+    source: PublicCertificateSource,
 ) -> Result<(), PublicCertificateInstallationError> {
+    let (expected_kind, expected_id) = source_entity(source);
     if receipt.operation_id != operation_id
         || receipt.request_digest != expected_digest
         || receipt.result_digest == [0; 32]
         || receipt.committed_revision == Revision::ZERO
-        || receipt.entity.kind != EntityKind::CertificateOrder
-        || receipt.entity.id != order_id.as_bytes()
+        || receipt.entity.kind != expected_kind
+        || receipt.entity.id != expected_id
     {
         Err(PublicCertificateInstallationError::Conflict)
     } else {
         Ok(())
+    }
+}
+
+const fn source_identity(source: PublicCertificateSource) -> (u8, [u8; 16]) {
+    match source {
+        PublicCertificateSource::AcmeOrder(order_id) => (1, order_id.as_bytes()),
+        PublicCertificateSource::ExternalPublication(publication_id) => {
+            (2, publication_id.as_bytes())
+        }
+    }
+}
+
+const fn source_entity(source: PublicCertificateSource) -> (EntityKind, [u8; 16]) {
+    match source {
+        PublicCertificateSource::AcmeOrder(order_id) => {
+            (EntityKind::CertificateOrder, order_id.as_bytes())
+        }
+        PublicCertificateSource::ExternalPublication(publication_id) => (
+            EntityKind::ExternalCertificatePublication,
+            publication_id.as_bytes(),
+        ),
     }
 }
 

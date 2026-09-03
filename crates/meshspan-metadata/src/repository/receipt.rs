@@ -134,6 +134,8 @@ pub enum EntityKind {
     AcmeConfiguration = 49,
     /// Durable single-worker-fenced public certificate order.
     CertificateOrder = 50,
+    /// Immutable automated external-certificate publication.
+    ExternalCertificatePublication = 51,
 }
 
 impl EntityKind {
@@ -189,6 +191,7 @@ impl EntityKind {
             48 => Ok(Self::MaintenanceWork),
             49 => Ok(Self::AcmeConfiguration),
             50 => Ok(Self::CertificateOrder),
+            51 => Ok(Self::ExternalCertificatePublication),
             _ => Err(RepositoryError::CorruptState),
         }
     }

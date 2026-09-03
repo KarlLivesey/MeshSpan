@@ -9,8 +9,8 @@ use meshspan_domain::{
 };
 use meshspan_metadata::{
     ApplyDisposition, AuthoritativeCommand, CommandContext, CommandReceipt, EntityKind,
-    EntityReference, LogPosition, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, SecretGenerationRecord,
-    SecretGenerationReference,
+    EntityReference, LogPosition, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PublicCertificateSource,
+    SecretGenerationRecord, SecretGenerationReference,
 };
 use meshspan_secret_envelope::{SecretContext, encrypt_secret};
 
@@ -59,8 +59,8 @@ fn live_installation_is_acknowledged_once_and_ambiguous_retry_resolves_exactly()
     let acknowledgements = AcknowledgementAuthority::default();
     let service = PublicCertificateInstallationService::new(&acknowledgements);
     let request = PublicCertificateInstallationRequest {
-        order_id,
-        order_revision: Revision::new(10),
+        source: PublicCertificateSource::AcmeOrder(order_id),
+        source_revision: Revision::new(10),
         gateway_node_id: NodeId::from_bytes([2; 16])?,
         gateway_incarnation: 3,
         actor_principal_id: PrincipalId::from_bytes([4; 16])?,

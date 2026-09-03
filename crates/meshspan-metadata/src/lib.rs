@@ -7,6 +7,7 @@ mod authentication_integrity;
 mod command;
 mod command_codec;
 mod database;
+mod external_certificate_command;
 mod federation_actor_attestation_command;
 mod federation_command;
 mod federation_grant_command;
@@ -94,6 +95,10 @@ pub use command_codec::{
     decode_authoritative_command, encode_authoritative_command,
 };
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
+pub use external_certificate_command::{
+    AcknowledgeExternalCertificateInstallation, MAXIMUM_EXTERNAL_CERTIFICATE_NAMES,
+    PublishExternalCertificate,
+};
 pub use federation_actor_attestation_command::{
     FederatedActorKind, FederatedActorState, RecordFederatedActorAttestation,
 };
@@ -187,7 +192,8 @@ pub use repository::{
     CertificateOrderRecord, CertificateOrderState, CertificateRenewalCandidate, CommandReceipt,
     ConsensusStoreError, ConvergedVolumeHead, DueCertificateOrderCursor,
     DueCertificateRenewalCursor, DueStorageScrub, DueStorageScrubCursor, DueStorageScrubPage,
-    EntityKind, EntityReference, FaultGroupCursor, FaultGroupMembershipCursor,
+    EntityKind, EntityReference, ExternalCertificateInstallationRecord,
+    ExternalCertificatePublicationRecord, FaultGroupCursor, FaultGroupMembershipCursor,
     FaultGroupMembershipRecord, FaultGroupRecord, FederatedActorAttestationRecord,
     FederatedMutationAdmissionReceipt, FederationAuthoritySnapshotError,
     FederationGrantAssignmentAuthority, FederationGrantCursor, FederationGrantCursorError,
@@ -211,8 +217,8 @@ pub use repository::{
     PermissionGrantRecord, PermissionGrantRevocationRecord, PreservedVote, PrincipalCursor,
     PrincipalKind, PrincipalRecord, ProtectionPolicyCursor, ProtectionPolicyRecord,
     ProtectionScenarioRecord, ProtectionTermRecord, PublicCertificateInstallationRecord,
-    PublicCertificateRolloutSummary, PublicCertificateSelection, ReadyMaintenanceWork,
-    ReadyMaintenanceWorkPage, RebalanceScanProgress, RecoveryBundleState,
+    PublicCertificateRolloutSummary, PublicCertificateSelection, PublicCertificateSource,
+    ReadyMaintenanceWork, ReadyMaintenanceWorkPage, RebalanceScanProgress, RecoveryBundleState,
     RecoveryCodeVerificationMaterial, RepositoryConformanceCheck, RepositoryConformanceReport,
     RepositoryConformanceVector, RepositoryError, RetainedNamespaceRoot,
     RetainedNamespaceRootCursor, RetainedNamespaceRootPage, RetainedNamespaceRootSource,
