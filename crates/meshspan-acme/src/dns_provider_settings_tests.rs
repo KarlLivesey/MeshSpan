@@ -49,6 +49,17 @@ fn malformed_unknown_trailing_and_unsafe_values_fail_closed()
         Err(DnsProviderSettingsError::InvalidInput)
     ));
     assert!(matches!(
+        WebhookDnsSettings::new("https://?missing-host".to_owned(), vec![b'a'; 32]),
+        Err(DnsProviderSettingsError::InvalidInput)
+    ));
+    assert!(matches!(
+        WebhookDnsSettings::new(
+            "https://valid.example.test/hook".to_owned(),
+            b"invalid bearer token with spaces".to_vec(),
+        ),
+        Err(DnsProviderSettingsError::InvalidInput)
+    ));
+    assert!(matches!(
         Rfc2136DnsSettings::new(
             "127.0.0.1:53".parse()?,
             "-invalid.example".to_owned(),

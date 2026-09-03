@@ -15,8 +15,6 @@ use crate::{
 
 const API_PREFIX: &str = "https://api.cloudflare.com/client/v4/";
 const CONTENT_TYPE_JSON: &str = "application/json";
-const MAXIMUM_TOKEN_BYTES: usize = 2_048;
-const MINIMUM_TOKEN_BYTES: usize = 16;
 const USER_AGENT_VALUE: &str = "MeshSpan/0.1 Cloudflare-DNS";
 
 /// Direct userspace Cloudflare API transport with an immutable API origin.
@@ -84,10 +82,7 @@ fn validate_request(
     request: &CloudflareHttpRequest,
     bearer_token: &[u8],
 ) -> Result<(), ContractError> {
-    if !request.url.starts_with(API_PREFIX)
-        || !(MINIMUM_TOKEN_BYTES..=MAXIMUM_TOKEN_BYTES).contains(&bearer_token.len())
-        || !bearer_token.is_ascii()
-        || bearer_token.iter().any(u8::is_ascii_control)
+    if !request.url.starts_with(API_PREFIX) || !crate::rustls_http::valid_bearer_token(bearer_token)
     {
         return Err(ContractError::InvalidInput);
     }

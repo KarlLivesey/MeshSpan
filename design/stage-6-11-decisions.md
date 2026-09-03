@@ -185,7 +185,7 @@ retrofit is complete and recorded in
 ## 7. Certificates, backup, updates and operations
 
 - ACME supports HTTP-01 and DNS-01. Initial DNS publishers are RFC 2136,
-  Cloudflare and a generic external command/webhook contract.
+  Cloudflare and a generic authenticated HTTPS webhook contract.
 - Manual DNS-01 is a durable `awaiting_dns_record` task showing the exact record
   and deadline. MeshSpan probes authoritative DNS and continues automatically;
   renewal creates and notifies the task well before expiry.

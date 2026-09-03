@@ -17,7 +17,24 @@ use tokio_rustls::TlsConnector;
 use zeroize::Zeroizing;
 
 const MAXIMUM_RESPONSE_BODY_BYTES: usize = 1024 * 1024;
+const MAXIMUM_BEARER_TOKEN_BYTES: usize = 2_048;
+const MINIMUM_BEARER_TOKEN_BYTES: usize = 16;
 const MAXIMUM_TIMEOUT: Duration = Duration::from_mins(5);
+
+pub(crate) fn valid_bearer_token(token: &[u8]) -> bool {
+    if !(MINIMUM_BEARER_TOKEN_BYTES..=MAXIMUM_BEARER_TOKEN_BYTES).contains(&token.len()) {
+        return false;
+    }
+    let payload_end = token
+        .iter()
+        .position(|byte| *byte == b'=')
+        .unwrap_or(token.len());
+    payload_end > 0
+        && token[..payload_end].iter().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'+' | b'/')
+        })
+        && token[payload_end..].iter().all(|byte| *byte == b'=')
+}
 
 pub(crate) struct RustlsHttpClient {
     tls: Arc<ClientConfig>,

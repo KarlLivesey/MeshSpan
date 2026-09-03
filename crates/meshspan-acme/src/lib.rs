@@ -28,6 +28,13 @@ mod rfc2136_test_server;
 mod rustls_http;
 mod strict_json;
 mod transport;
+mod webhook_provider;
+#[cfg(test)]
+mod webhook_provider_tests;
+mod webhook_transport;
+mod webhook_v1;
+#[cfg(test)]
+mod webhook_v1_tests;
 mod wire;
 
 pub use account_key::{AcmeAccountKey, AcmeAccountKeyError};
@@ -57,6 +64,9 @@ pub use order_machine::{
 };
 pub use rfc2136_provider::{Rfc2136DnsProvider, Rfc2136ProviderPolicy};
 pub use transport::RustlsAcmeTransport;
+pub use webhook_provider::{WebhookDnsAction, WebhookDnsApi, WebhookDnsProvider, WebhookDnsRecord};
+pub use webhook_transport::RustlsWebhookHttpTransport;
+pub use webhook_v1::{WebhookHttpRequest, WebhookHttpResponse, WebhookHttpTransport, WebhookV1Api};
 pub use wire::{
     AcmeAuthorization, AcmeBadNonceRetry, AcmeChallengeRecord, AcmeDirectory, AcmeHttpResponse,
     AcmeOrder, AcmeOrderRequest, AcmeProblem, AcmeProtocolError, AcmeResourceStatus,

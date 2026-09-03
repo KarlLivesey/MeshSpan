@@ -41,6 +41,7 @@ not a locked decision until it is moved to the accepted section of [decisions.md
 32. [stage-0-review.md](stage-0-review.md) — concrete recommendations for the remaining lock decisions.
 33. [dependencies.md](dependencies.md) — planned direct runtime, build and verification dependencies.
 34. [stage-6-11-decisions.md](stage-6-11-decisions.md) — accepted HTTPS, SMB, protection, operations and MUP decisions.
+35. [dns-webhook-v1.md](dns-webhook-v1.md) — authenticated DNS automation webhook wire contract.
 
 ## Document rules
 
