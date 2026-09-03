@@ -160,6 +160,9 @@ mod mesh_local_certificate_api_tests;
 mod mesh_local_certificate_provisioning;
 #[cfg(test)]
 mod mesh_local_certificate_provisioning_tests;
+mod metadata_backup_completion;
+#[cfg(test)]
+mod metadata_backup_completion_tests;
 mod metadata_backup_dispatcher;
 #[cfg(test)]
 mod metadata_backup_dispatcher_tests;
@@ -543,6 +546,10 @@ pub use mesh_local_certificate_provisioning::{
     MeshLocalAuthorityCommit, MeshLocalCertificateAuthorityError, MeshLocalCertificateCommit,
     MeshLocalCertificateProvisioningAuthority, MeshLocalCertificateProvisioningController,
     MeshLocalCertificateProvisioningError, MeshLocalCertificateProvisioningService,
+};
+pub use metadata_backup_completion::{
+    MetadataBackupCompletionAuthority, MetadataBackupCompletionError,
+    MetadataBackupCompletionOutcome, MetadataBackupCompletionService,
 };
 pub use metadata_backup_dispatcher::{
     MetadataBackupDispatchAuthority, MetadataBackupDispatchError, MetadataBackupDispatchOutcome,
