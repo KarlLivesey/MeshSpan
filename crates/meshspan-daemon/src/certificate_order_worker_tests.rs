@@ -117,6 +117,7 @@ fn queued_order() -> Result<CertificateOrderRecord, Box<dyn std::error::Error>> 
 
 fn configuration(config_id: AcmeConfigurationId) -> AcmeConfigurationRecord {
     AcmeConfigurationRecord {
+        provisioning_intent_digest: None,
         config_id,
         directory_url: "https://acme.example.test/directory".to_owned(),
         account_key: SecretGenerationReference {

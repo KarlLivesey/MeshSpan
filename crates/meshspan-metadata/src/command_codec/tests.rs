@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::{
+    ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
     AcknowledgePublicCertificateInstallation, AcknowledgementCellRequirement,
     AcknowledgementCellRole, AcknowledgementConsistencyClass, AcmeChallengeKind, AddGroupMember,
     AdvanceManualDnsTask, AssignVolumeAcknowledgementPolicy, AssignVolumeLocalityPolicy,
@@ -35,14 +36,15 @@ use crate::{
     GrantInheritance, GrantPermission, GrantPermissionWithActivation, IssueAuthenticationSession,
     LocalityRequirementConfiguration, MaintenanceWorkCompletion, ManualDnsTaskPhase,
     NewAuthenticationCredential, NewRecoveryCode, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
-    PermissionScope, ProtectionScenarioConfiguration, PublishSmbExport, QueueCertificateOrder,
-    QueueMaintenanceWork, RebalanceScanCursor, RecordName, RegisterNodeWrappingKey,
-    RegisterStorageTarget, RemoveGroupMember, RenewCertificateOrder, RenewMaintenanceWork,
-    RevokeAuthenticationMethod, RevokeAuthenticationSession, SecretGenerationReference,
-    SessionAuthenticationFactor, SessionClientLabel, SetHostAvailabilityCellMembership,
-    SetHostFaultGroupMembership, SetTargetAvailabilityCellMembership, SmbExportGatewaySelection,
-    StepUpAuthenticationSession, StorageUsageLimit, StrongFallbackMode, TotpAlgorithm,
-    VOLUME_CONTENT_KEY_SECRET_KIND, WithdrawSmbExport,
+    PermissionScope, ProtectionScenarioConfiguration, ProvisionAcme, PublishSmbExport,
+    QueueCertificateOrder, QueueMaintenanceWork, RebalanceScanCursor, RecordName,
+    RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember, RenewCertificateOrder,
+    RenewMaintenanceWork, RevokeAuthenticationMethod, RevokeAuthenticationSession,
+    SecretGenerationReference, SessionAuthenticationFactor, SessionClientLabel,
+    SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
+    SetTargetAvailabilityCellMembership, SmbExportGatewaySelection, StepUpAuthenticationSession,
+    StorageUsageLimit, StrongFallbackMode, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND,
+    WithdrawSmbExport,
 };
 
 #[test]
@@ -673,21 +675,22 @@ fn acme_commands_round_trip_configuration_claims_and_both_outcomes()
             .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
             .collect(),
     });
+    let configuration = ConfigureAcme {
+        config_id,
+        directory_url: "https://acme.example.test/directory".to_owned(),
+        account_key,
+        challenge_kind: AcmeChallengeKind::Dns01,
+        challenge_settings: Some(settings),
+        certificate_names: BoundedItems::new(
+            vec![
+                "files.example.test".to_owned(),
+                "www.example.test".to_owned(),
+            ],
+            256,
+        )?,
+    };
     for command in [
-        AuthoritativeCommand::ConfigureAcme(ConfigureAcme {
-            config_id,
-            directory_url: "https://acme.example.test/directory".to_owned(),
-            account_key,
-            challenge_kind: AcmeChallengeKind::Dns01,
-            challenge_settings: Some(settings),
-            certificate_names: BoundedItems::new(
-                vec![
-                    "files.example.test".to_owned(),
-                    "www.example.test".to_owned(),
-                ],
-                256,
-            )?,
-        }),
+        AuthoritativeCommand::ConfigureAcme(configuration),
         AuthoritativeCommand::QueueCertificateOrder(QueueCertificateOrder {
             order_id,
             config_id,
@@ -730,6 +733,57 @@ fn acme_commands_round_trip_configuration_claims_and_both_outcomes()
     ] {
         assert_round_trip(context, command)?;
     }
+    Ok(())
+}
+
+#[test]
+fn provision_acme_round_trips_as_one_command() -> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let config_id = AcmeConfigurationId::from_bytes([100; 16])?;
+    let order_id = CertificateOrderId::from_bytes([101; 16])?;
+    let account_key = SecretGenerationReference {
+        secret_id: [102; 16],
+        generation: 2,
+    };
+    let settings = SecretGenerationReference {
+        secret_id: [103; 16],
+        generation: 3,
+    };
+    let recipients = [
+        WrappingPrivateKey::from_bytes([106; 32])?.public_key(),
+        WrappingPrivateKey::from_bytes([107; 32])?.public_key(),
+    ];
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::ProvisionAcme(Box::new(ProvisionAcme {
+            intent_digest: [111; 32],
+            configuration: ConfigureAcme {
+                config_id,
+                directory_url: "https://acme.example.test/directory".to_owned(),
+                account_key,
+                challenge_kind: AcmeChallengeKind::Dns01,
+                challenge_settings: Some(settings),
+                certificate_names: BoundedItems::new(vec!["files.example.test".to_owned()], 256)?,
+            },
+            account_key_generation: codec_secret_generation(
+                ACME_ACCOUNT_KEY_SECRET_KIND,
+                account_key,
+                &recipients,
+                109,
+            )?,
+            challenge_settings_generation: Some(codec_secret_generation(
+                ACME_CHALLENGE_SETTINGS_SECRET_KIND,
+                settings,
+                &recipients,
+                110,
+            )?),
+            initial_order: QueueCertificateOrder {
+                order_id,
+                config_id,
+                next_attempt_at: UnixMicros::new(100),
+            },
+        })),
+    )?;
     Ok(())
 }
 
@@ -1254,6 +1308,24 @@ fn codec_volume_key(
             .into_iter()
             .map(|recipient| recipient.parts())
             .collect(),
+    }))
+}
+
+fn codec_secret_generation(
+    kind: u16,
+    reference: SecretGenerationReference,
+    recipients: &[WrappingPublicKey],
+    seed: u8,
+) -> Result<Box<CommitSecretGeneration>, Box<dyn std::error::Error>> {
+    let (secret, envelopes) = encrypt_secret(
+        SecretContext::new(kind, reference.secret_id, reference.generation)?,
+        b"protected ACME input",
+        recipients,
+        &mut SecretRandom(seed),
+    )?;
+    Ok(Box::new(CommitSecretGeneration {
+        secret: secret.parts(),
+        recipients: envelopes.into_iter().map(|value| value.parts()).collect(),
     }))
 }
 

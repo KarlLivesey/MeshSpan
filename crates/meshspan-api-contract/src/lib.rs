@@ -6,6 +6,8 @@ mod api_key_management;
 mod api_key_validation;
 mod authentication_method_listing;
 mod authentication_method_listing_validation;
+mod certificate_administration;
+mod certificate_administration_validation;
 mod directory_listing;
 mod directory_listing_validation;
 mod file_read;
@@ -58,6 +60,8 @@ mod volume_inventory_validation;
 #[cfg(test)]
 mod authentication_method_listing_tests;
 #[cfg(test)]
+mod certificate_administration_tests;
+#[cfg(test)]
 mod file_upload_tests;
 #[cfg(test)]
 mod group_membership_administration_tests;
@@ -95,6 +99,14 @@ pub use authentication_method_listing::{
 pub use authentication_method_listing_validation::{
     encode_list_authentication_methods_response, validate_list_authentication_methods_query,
     validate_list_authentication_methods_query_value,
+};
+pub use certificate_administration::{
+    AcmeConfigurationId, CertificateChallenge, CertificateOrderId, ProtectedText,
+    ProvisionCertificateRequest, ProvisionCertificateResponse, Rfc2136TsigAlgorithm,
+};
+pub use certificate_administration_validation::{
+    MAX_PROVISION_CERTIFICATE_BYTES, decode_provision_certificate_request,
+    encode_provision_certificate_response, validate_provision_certificate_request_value,
 };
 pub use directory_listing::{
     DirectoryCursor, DirectoryEntryKind, FileVersionId, ListDirectoryQuery, ListDirectoryResponse,

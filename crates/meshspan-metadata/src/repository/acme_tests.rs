@@ -23,7 +23,7 @@ use crate::{
     CompleteCertificateOrder, ConfigureAcme, ConfirmRecoveryBundleSaved,
     CreateAuthenticationMethod, ManualDnsTaskPhase, NewAuthenticationCredential,
     PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND,
-    PartitionDatabase, QueueCertificateOrder, RecordName, RenewCertificateOrder,
+    PartitionDatabase, ProvisionAcme, QueueCertificateOrder, RecordName, RenewCertificateOrder,
     SecretGenerationReference,
 };
 
@@ -154,6 +154,161 @@ fn complete_acme_configuration_round_trips_from_authoritative_state()
     );
     assert_eq!(actual.revision, Revision::new(3));
     Ok(())
+}
+
+#[test]
+fn provisioning_atomically_commits_secrets_configuration_and_initial_order()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    let config_id = AcmeConfigurationId::from_bytes([111; 16])?;
+    let order_id = CertificateOrderId::from_bytes([112; 16])?;
+    let account = SecretGenerationReference {
+        secret_id: [113; 16],
+        generation: 1,
+    };
+    let settings = SecretGenerationReference {
+        secret_id: [114; 16],
+        generation: 1,
+    };
+    let command = provision_command(&fixture, config_id, order_id, account, settings)?;
+    fixture.apply(
+        3,
+        10,
+        &AuthoritativeCommand::ProvisionAcme(Box::new(command)),
+    )?;
+
+    assert!(
+        fixture
+            .repository
+            .secret_generation(SecretContext::new(
+                ACME_ACCOUNT_KEY_SECRET_KIND,
+                account.secret_id,
+                account.generation
+            )?,)?
+            .is_some()
+    );
+    assert!(
+        fixture
+            .repository
+            .secret_generation(SecretContext::new(
+                ACME_CHALLENGE_SETTINGS_SECRET_KIND,
+                settings.secret_id,
+                settings.generation,
+            )?,)?
+            .is_some()
+    );
+    let stored_configuration = fixture
+        .repository
+        .acme_configuration(config_id)?
+        .ok_or("configuration missing")?;
+    assert_eq!(stored_configuration.config_id, config_id);
+    assert_eq!(
+        stored_configuration.provisioning_intent_digest,
+        Some([126; 32])
+    );
+    assert_eq!(
+        fixture
+            .repository
+            .certificate_order(order_id)?
+            .map(|value| value.order_id),
+        Some(order_id),
+    );
+    Ok(())
+}
+
+#[test]
+fn rejected_provisioning_rolls_back_every_secret_and_configuration_row()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    let config_id = AcmeConfigurationId::from_bytes([121; 16])?;
+    let order_id = CertificateOrderId::from_bytes([122; 16])?;
+    let account = SecretGenerationReference {
+        secret_id: [123; 16],
+        generation: 1,
+    };
+    let settings = SecretGenerationReference {
+        secret_id: [124; 16],
+        generation: 1,
+    };
+    let mut command = provision_command(&fixture, config_id, order_id, account, settings)?;
+    command.initial_order.config_id = AcmeConfigurationId::from_bytes([125; 16])?;
+    assert!(matches!(
+        fixture.apply(
+            3,
+            10,
+            &AuthoritativeCommand::ProvisionAcme(Box::new(command)),
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    assert_eq!(fixture.repository.acme_configuration(config_id)?, None);
+    assert_eq!(fixture.repository.certificate_order(order_id)?, None);
+    assert_eq!(
+        fixture.repository.secret_generation(SecretContext::new(
+            ACME_ACCOUNT_KEY_SECRET_KIND,
+            account.secret_id,
+            account.generation,
+        )?)?,
+        None,
+    );
+    Ok(())
+}
+
+fn provision_command(
+    fixture: &Fixture,
+    config_id: AcmeConfigurationId,
+    order_id: CertificateOrderId,
+    account: SecretGenerationReference,
+    settings: SecretGenerationReference,
+) -> Result<ProvisionAcme, Box<dyn std::error::Error>> {
+    let recipients = [
+        crate::test_support::node_wrapping_private_key()?.public_key(),
+        fixture.recovery_key.public_key(),
+    ];
+    let account_generation =
+        protected_generation(ACME_ACCOUNT_KEY_SECRET_KIND, account, &recipients, 115)?;
+    let settings_generation = protected_generation(
+        ACME_CHALLENGE_SETTINGS_SECRET_KIND,
+        settings,
+        &recipients,
+        116,
+    )?;
+    let configuration = ConfigureAcme {
+        config_id,
+        directory_url: "https://acme.example.test/directory".to_owned(),
+        account_key: account,
+        challenge_kind: AcmeChallengeKind::Dns01,
+        challenge_settings: Some(settings),
+        certificate_names: BoundedItems::new(vec!["files.example.test".to_owned()], 256)?,
+    };
+    Ok(ProvisionAcme {
+        intent_digest: [126; 32],
+        configuration: configuration.clone(),
+        account_key_generation: account_generation,
+        challenge_settings_generation: Some(settings_generation),
+        initial_order: QueueCertificateOrder {
+            order_id,
+            config_id,
+            next_attempt_at: UnixMicros::new(10),
+        },
+    })
+}
+
+fn protected_generation(
+    kind: u16,
+    reference: SecretGenerationReference,
+    recipients: &[meshspan_secret_envelope::WrappingPublicKey],
+    seed: u8,
+) -> Result<Box<CommitSecretGeneration>, Box<dyn std::error::Error>> {
+    let (secret, envelopes) = encrypt_secret(
+        SecretContext::new(kind, reference.secret_id, reference.generation)?,
+        b"protected ACME input",
+        recipients,
+        &mut SecretRandom(seed),
+    )?;
+    Ok(Box::new(CommitSecretGeneration {
+        secret: secret.parts(),
+        recipients: envelopes.into_iter().map(|value| value.parts()).collect(),
+    }))
 }
 
 #[test]

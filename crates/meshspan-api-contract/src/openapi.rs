@@ -34,15 +34,15 @@ use crate::{
     ListProtectionPoliciesResponse, ListStorageDrainsResponse, ListStorageFoldersResponse,
     ListTopologyNodesResponse, ListTopologyTargetsResponse, ListUploadRangesResponse,
     ListVolumePermissionGrantsResponse, ListVolumesResponse, OperationStatusResponse,
-    PublishSmbExportRequest, PublishSmbExportResponse, RegisterStorageFolderRequest,
-    RegisterStorageFolderResponse, RemoveGroupMemberRequest, RemoveGroupMemberResponse,
-    RenameObjectRequest, RenameObjectResponse, RevokeAuthenticationMethodRequest,
-    RevokeAuthenticationMethodResponse, RevokeCurrentSessionRequest, RevokeCurrentSessionResponse,
-    RevokePermissionGrantRequest, RevokePermissionGrantResponse,
-    SetAvailabilityCellMembershipResponse, SetFaultGroupMembershipRequest,
-    SetFaultGroupMembershipResponse, SetupStatusResponse, StepUpCurrentSessionRequest,
-    StorageDrainSummary, UploadStatusResponse, WithdrawSmbExportRequest, WithdrawSmbExportResponse,
-    WriteUploadRangeResponse, schema,
+    ProvisionCertificateRequest, ProvisionCertificateResponse, PublishSmbExportRequest,
+    PublishSmbExportResponse, RegisterStorageFolderRequest, RegisterStorageFolderResponse,
+    RemoveGroupMemberRequest, RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
+    RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
+    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, RevokePermissionGrantRequest,
+    RevokePermissionGrantResponse, SetAvailabilityCellMembershipResponse,
+    SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse, SetupStatusResponse,
+    StepUpCurrentSessionRequest, StorageDrainSummary, UploadStatusResponse,
+    WithdrawSmbExportRequest, WithdrawSmbExportResponse, WriteUploadRangeResponse, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -168,6 +168,8 @@ fn components() -> Value {
                 "CreatePasskeyRegistrationResponse",
             ),
             schema_response::<CreatePrincipalResponse>("CreatePrincipalResponse"),
+            schema_request::<ProvisionCertificateRequest>("ProvisionCertificateRequest"),
+            schema_response::<ProvisionCertificateResponse>("ProvisionCertificateResponse"),
             schema_request::<CreateLocalityPolicyRequest>("CreateLocalityPolicyRequest"),
             schema_response::<CreateLocalityPolicyResponse>("CreateLocalityPolicyResponse"),
             schema_request::<CreateProtectionPolicyRequest>("CreateProtectionPolicyRequest"),
@@ -473,6 +475,10 @@ fn administration_paths() -> Vec<(String, Value)> {
         .chain(administration_topology_paths())
         .chain([
             (
+                "/admin/certificates/acme".to_owned(),
+                provision_certificate_path(),
+            ),
+            (
                 "/admin/certificate-tasks/manual-dns".to_owned(),
                 manual_dns_tasks_path(),
             ),
@@ -483,6 +489,29 @@ fn administration_paths() -> Vec<(String, Value)> {
             ),
         ])
         .collect()
+}
+
+fn provision_certificate_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "provisionCertificate",
+            "summary": "Provision automatic public certificates and queue the initial order",
+            "x-meshspan-access": "system-manager-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "parameters": [optional_csrf_parameter()],
+            "requestBody": json_request("Public-certificate provisioning", "#/components/schemas/ProvisionCertificateRequest"),
+            "responses": {
+                "201": json_response("Configuration and initial order durably committed or exactly replayed", "#/components/schemas/ProvisionCertificateResponse"),
+                "400": json_response("Invalid certificate request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "409": json_response("Operation conflicts with committed state", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Certificate authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn manual_dns_tasks_path() -> Value {

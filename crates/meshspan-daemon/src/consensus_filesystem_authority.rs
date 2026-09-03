@@ -15,16 +15,67 @@ use meshspan_metadata::{
 
 use crate::{
     AuthenticationRootAuthority, CertificateOrderCompletionAuthority,
-    CertificateOrderCompletionAuthorityError, ConsensusAuthenticationAuthority,
-    NodeWrappingKeyRegistrationAuthority, NodeWrappingKeyRegistrationAuthorityError,
-    OnlineAuthorityLoadingAuthority, PublicCertificateInstallationAuthority,
-    PublicCertificateInstallationAuthorityError, RecoveryBundleVerificationAuthority,
-    RecoveryBundleVerificationAuthorityError, RecoveryBundleVerificationCommit,
-    SecretGenerationAuthority, SecretGenerationAuthorityError, StoragePermitAuthority,
-    StorageTargetRegistrationAuthority, StorageTargetRegistrationAuthorityError,
-    VolumeAdministrationAuthority, VolumeAdministrationAuthorityError, VolumeAdministrationCommit,
-    VolumeInventoryAuthority, VolumeInventoryAuthorityError, VolumeKeyAuthority,
+    CertificateOrderCompletionAuthorityError, CertificateProvisioningAuthority,
+    CertificateProvisioningAuthorityError, CertificateProvisioningCommit,
+    ConsensusAuthenticationAuthority, NodeWrappingKeyRegistrationAuthority,
+    NodeWrappingKeyRegistrationAuthorityError, OnlineAuthorityLoadingAuthority,
+    PublicCertificateInstallationAuthority, PublicCertificateInstallationAuthorityError,
+    RecoveryBundleVerificationAuthority, RecoveryBundleVerificationAuthorityError,
+    RecoveryBundleVerificationCommit, SecretGenerationAuthority, SecretGenerationAuthorityError,
+    StoragePermitAuthority, StorageTargetRegistrationAuthority,
+    StorageTargetRegistrationAuthorityError, VolumeAdministrationAuthority,
+    VolumeAdministrationAuthorityError, VolumeAdministrationCommit, VolumeInventoryAuthority,
+    VolumeInventoryAuthorityError, VolumeKeyAuthority,
 };
+
+impl CertificateProvisioningAuthority for ConsensusAuthenticationAuthority {
+    fn is_system_manager(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+        now: meshspan_domain::UnixMicros,
+    ) -> Result<bool, CertificateProvisioningAuthorityError> {
+        self.reader()
+            .principal_is_system_manager(principal_id, now)
+            .map_err(|error| map_provisioning_repository_error(&error))
+    }
+
+    fn resolve_certificate_provisioning(
+        &self,
+        operation_id: meshspan_domain::OperationId,
+    ) -> Result<Option<CertificateProvisioningCommit>, CertificateProvisioningAuthorityError> {
+        self.reader()
+            .resolve_operation(operation_id)
+            .map_err(|error| map_provisioning_repository_error(&error))?
+            .map(|receipt| certificate_commit(self.reader(), receipt))
+            .transpose()
+    }
+
+    fn certificate_secret_recipients(
+        &self,
+    ) -> Result<
+        Vec<meshspan_secret_envelope::WrappingPublicKey>,
+        CertificateProvisioningAuthorityError,
+    > {
+        self.reader()
+            .volume_key_recipients()
+            .map_err(|error| map_provisioning_repository_error(&error))
+    }
+
+    fn commit_or_resolve_certificate_provisioning(
+        &mut self,
+        context: CommandContext,
+        command: &AuthoritativeCommand,
+    ) -> Result<CertificateProvisioningCommit, CertificateProvisioningAuthorityError> {
+        let expected_digest = command.request_digest(context);
+        let receipt = self
+            .commit_authoritative(context, command)
+            .map_err(map_provisioning_authority_error)?;
+        if receipt.request_digest != expected_digest {
+            return Err(CertificateProvisioningAuthorityError::Conflict);
+        }
+        certificate_commit(self.reader(), receipt)
+    }
+}
 
 impl PublicCertificateInstallationAuthority for ConsensusAuthenticationAuthority {
     fn resolve_public_certificate_installation(
@@ -464,6 +515,37 @@ fn volume_commit(
     })
 }
 
+fn certificate_commit(
+    repository: &meshspan_metadata::AuthoritativeRepository,
+    receipt: meshspan_metadata::CommandReceipt,
+) -> Result<CertificateProvisioningCommit, CertificateProvisioningAuthorityError> {
+    if receipt.entity.kind != EntityKind::CertificateOrder {
+        return Err(CertificateProvisioningAuthorityError::Conflict);
+    }
+    let order_id = meshspan_domain::CertificateOrderId::from_bytes(receipt.entity.id)
+        .map_err(|_| CertificateProvisioningAuthorityError::Failed)?;
+    let order = repository
+        .certificate_order(order_id)
+        .map_err(|error| map_provisioning_repository_error(&error))?
+        .ok_or(CertificateProvisioningAuthorityError::Failed)?;
+    let configuration = repository
+        .acme_configuration(order.config_id)
+        .map_err(|error| map_provisioning_repository_error(&error))?
+        .ok_or(CertificateProvisioningAuthorityError::Failed)?;
+    if configuration.revision != receipt.committed_revision
+        || order.revision < receipt.committed_revision
+    {
+        return Err(CertificateProvisioningAuthorityError::Failed);
+    }
+    Ok(CertificateProvisioningCommit {
+        request_digest: receipt.request_digest,
+        result_digest: receipt.result_digest,
+        committed_revision: receipt.committed_revision,
+        configuration,
+        order,
+    })
+}
+
 fn volume_owners(
     repository: &meshspan_metadata::AuthoritativeRepository,
     root_object_id: meshspan_domain::ObjectId,
@@ -533,6 +615,23 @@ fn map_volume_authority_error(
     }
 }
 
+fn map_provisioning_authority_error(
+    error: MetadataAuthorityRequestError,
+) -> CertificateProvisioningAuthorityError {
+    match error {
+        MetadataAuthorityRequestError::NotLeader { .. }
+        | MetadataAuthorityRequestError::Unavailable => {
+            CertificateProvisioningAuthorityError::Unavailable
+        }
+        MetadataAuthorityRequestError::Conflict | MetadataAuthorityRequestError::Rejected => {
+            CertificateProvisioningAuthorityError::Conflict
+        }
+        MetadataAuthorityRequestError::Unsupported | MetadataAuthorityRequestError::Failed => {
+            CertificateProvisioningAuthorityError::Failed
+        }
+    }
+}
+
 fn map_recovery_authority_error(
     error: MetadataAuthorityRequestError,
 ) -> RecoveryBundleVerificationAuthorityError {
@@ -593,6 +692,20 @@ fn map_volume_repository_error(error: &RepositoryError) -> VolumeAdministrationA
             VolumeAdministrationAuthorityError::Unavailable
         }
         _ => VolumeAdministrationAuthorityError::Failed,
+    }
+}
+
+fn map_provisioning_repository_error(
+    error: &RepositoryError,
+) -> CertificateProvisioningAuthorityError {
+    match error {
+        RepositoryError::OperationConflict
+        | RepositoryError::StaleRevision
+        | RepositoryError::InvalidCommand => CertificateProvisioningAuthorityError::Conflict,
+        RepositoryError::Store(_) | RepositoryError::Sqlite(_) | RepositoryError::Io(_) => {
+            CertificateProvisioningAuthorityError::Unavailable
+        }
+        _ => CertificateProvisioningAuthorityError::Failed,
     }
 }
 

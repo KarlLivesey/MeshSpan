@@ -3973,6 +3973,116 @@ export const zOperationStatusResponse = z
   .strict();
 
 /**
+ * ProvisionCertificateRequest
+ *
+ * Idempotent request to provision automatic public certificates.
+ */
+export const zProvisionCertificateRequest = z
+  .strictObject({
+    certificate_names: z.array(z.string()).min(1).max(256),
+    challenge: z.union([
+      z
+        .strictObject({
+          kind: z.literal("http01"),
+        })
+        .strict(),
+      z
+        .strictObject({
+          kind: z.literal("dns01_manual"),
+        })
+        .strict(),
+      z
+        .strictObject({
+          algorithm: z.union([
+            z.literal("hmac_sha256"),
+            z.literal("hmac_sha512"),
+          ]),
+          key_name: z.string().min(1).max(253),
+          kind: z.literal("dns01_rfc2136"),
+          secret: z
+            .string()
+            .min(16)
+            .max(2048)
+            .regex(/^[\x21-\x7e]+$/),
+          server: z.string().min(3).max(128),
+          zone: z.string().min(1).max(253),
+        })
+        .strict(),
+      z
+        .strictObject({
+          api_token: z
+            .string()
+            .min(16)
+            .max(2048)
+            .regex(/^[\x21-\x7e]+$/),
+          kind: z.literal("dns01_cloudflare"),
+          zone_id: z
+            .string()
+            .length(32)
+            .regex(/^[0-9a-f]{32}$/),
+        })
+        .strict(),
+      z
+        .strictObject({
+          bearer_token: z
+            .string()
+            .min(16)
+            .max(2048)
+            .regex(/^[\x21-\x7e]+$/),
+          endpoint: z
+            .string()
+            .min(9)
+            .max(2048)
+            .regex(/^https:\/\//),
+          kind: z.literal("dns01_webhook"),
+        })
+        .strict(),
+    ]),
+    directory_url: z
+      .string()
+      .min(9)
+      .max(2048)
+      .regex(/^https:\/\//),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * ProvisionCertificateResponse
+ *
+ * Durable result of one public-certificate provisioning operation.
+ */
+export const zProvisionCertificateResponse = z
+  .strictObject({
+    certificate_names: z.array(z.string()).min(1).max(256),
+    configuration_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    order_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    revision: z.int().gte(1).lte(9007199254740991),
+  })
+  .strict();
+
+/**
  * PublishSmbExportRequest
  *
  * Exact-retry request to publish one existing volume or folder explicitly.
@@ -5261,6 +5371,25 @@ export const zListManualDnsTasksQuery = z
  * One deadline-ordered manual DNS task page
  */
 export const zListManualDnsTasksResponse2 = zListManualDnsTasksResponse;
+
+/**
+ * Public-certificate provisioning
+ */
+export const zProvisionCertificateBody = zProvisionCertificateRequest;
+
+export const zProvisionCertificateHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Configuration and initial order durably committed or exactly replayed
+ */
+export const zProvisionCertificateResponse2 = zProvisionCertificateResponse;
 
 export const zListGroupsQuery = z
   .object({

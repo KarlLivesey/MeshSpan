@@ -85,6 +85,21 @@ pub struct ConfigureAcme {
     pub certificate_names: BoundedItems<String>,
 }
 
+/// Atomically commits protected ACME credentials, one immutable configuration and its first order.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProvisionAcme {
+    /// Non-secret digest of the complete canonical administrator intent, including credentials.
+    pub intent_digest: [u8; 32],
+    /// Immutable public-certificate configuration.
+    pub configuration: ConfigureAcme,
+    /// Encrypted account private key referenced by `configuration`.
+    pub account_key_generation: Box<CommitSecretGeneration>,
+    /// Optional encrypted DNS publisher settings referenced by `configuration`.
+    pub challenge_settings_generation: Option<Box<CommitSecretGeneration>>,
+    /// Initial order created in the same authoritative transaction.
+    pub initial_order: QueueCertificateOrder,
+}
+
 /// Creates one durable order for an immutable configuration revision.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct QueueCertificateOrder {

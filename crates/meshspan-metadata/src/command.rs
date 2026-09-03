@@ -36,7 +36,8 @@ use crate::{
 use crate::{
     AcknowledgePublicCertificateInstallation, AcmeChallengeKind, AdvanceManualDnsTask,
     CertificateOrderCompletion, CheckpointCertificateOrder, ClaimCertificateOrder,
-    CompleteCertificateOrder, ConfigureAcme, QueueCertificateOrder, RenewCertificateOrder,
+    CompleteCertificateOrder, ConfigureAcme, ProvisionAcme, QueueCertificateOrder,
+    RenewCertificateOrder,
 };
 use crate::{
     ActivateFederationGrantAssignment, CreateFederationGrantAssignment, IssueFederationGrant,
@@ -221,6 +222,8 @@ pub enum AuthoritativeCommand {
     WithdrawSmbExport(WithdrawSmbExport),
     /// Commits one immutable public-certificate configuration revision.
     ConfigureAcme(ConfigureAcme),
+    /// Atomically commits protected ACME inputs, one configuration and its initial order.
+    ProvisionAcme(Box<ProvisionAcme>),
     /// Creates one durable ACME order for an exact configuration revision.
     QueueCertificateOrder(QueueCertificateOrder),
     /// Fences one node as the sole executor of an actionable ACME order.
@@ -409,6 +412,7 @@ impl AuthoritativeCommand {
             Self::PublishSmbExport(value) => value.update_digest(digest),
             Self::WithdrawSmbExport(value) => value.update_digest(digest),
             Self::ConfigureAcme(value) => value.update_digest(digest),
+            Self::ProvisionAcme(value) => value.update_digest(digest),
             Self::QueueCertificateOrder(value) => value.update_digest(digest),
             Self::ClaimCertificateOrder(value) => value.update_digest(digest),
             Self::RenewCertificateOrder(value) => value.update_digest(digest),
@@ -3720,6 +3724,18 @@ digest_simple_record!(ConfigureAcme, b"configure-acme", |value, digest| {
     for name in value.certificate_names.as_slice() {
         digest.bytes(name.as_bytes());
     }
+});
+digest_simple_record!(ProvisionAcme, b"provision-acme", |value, digest| {
+    digest.bytes(&value.intent_digest);
+    value.configuration.update_digest(digest);
+    value.account_key_generation.update_digest(digest);
+    if let Some(settings) = &value.challenge_settings_generation {
+        digest.byte(1);
+        settings.update_digest(digest);
+    } else {
+        digest.byte(0);
+    }
+    value.initial_order.update_digest(digest);
 });
 digest_simple_record!(
     QueueCertificateOrder,
