@@ -140,6 +140,12 @@ pub enum EntityKind {
     MeshLocalCertificateAuthority = 52,
     /// Immutable mesh-local HTTPS endpoint issuance.
     MeshLocalCertificateIssuance = 53,
+    /// Configured encrypted metadata-backup destination.
+    BackupDestination = 54,
+    /// Exact encrypted metadata-backup generation.
+    MetadataBackup = 55,
+    /// Provider-confirmed or verified copy of one backup generation.
+    BackupCopy = 56,
 }
 
 impl EntityKind {
@@ -198,6 +204,9 @@ impl EntityKind {
             51 => Ok(Self::ExternalCertificatePublication),
             52 => Ok(Self::MeshLocalCertificateAuthority),
             53 => Ok(Self::MeshLocalCertificateIssuance),
+            54 => Ok(Self::BackupDestination),
+            55 => Ok(Self::MetadataBackup),
+            56 => Ok(Self::BackupCopy),
             _ => Err(RepositoryError::CorruptState),
         }
     }

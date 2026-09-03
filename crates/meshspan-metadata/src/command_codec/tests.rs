@@ -5,13 +5,13 @@ use meshspan_contracts::{BoundedItems, ShardIdentity, ShardReceipt};
 use meshspan_domain::{
     AcknowledgementPolicyId, AcmeConfigurationId, ActivationPolicyId, ApiKeyId, AssuranceLevel,
     AuditEventId, AuthenticationMethodId, AuthenticationService, AvailabilityCellId,
-    CertificateOrderId, ComponentInstanceId, DurationMicros, EntropyError,
-    ExternalCertificatePublicationId, FailureScenario, FailureTerm, FaultGroupClassId,
-    FaultGroupId, GrantId, GroupId, HostId, LocalityPolicyId, LocalityRequirementId, MeshId,
-    MeshLocalCertificateAuthorityId, MeshLocalCertificateIssuanceId, NamespaceCommitId, NodeId,
-    ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PrincipalId, ProtectionPolicyId,
-    ProtectionScenarioId, PublicCertificateId, RandomSource, RecoveryCodeId, Revision, Rights,
-    RoleId, SessionId, SmbExportId, TargetId, UnixMicros, VolumeId, WorkId,
+    BackupDestinationId, BackupId, CertificateOrderId, ComponentInstanceId, DurationMicros,
+    EntropyError, ExternalCertificatePublicationId, FailureScenario, FailureTerm,
+    FaultGroupClassId, FaultGroupId, GrantId, GroupId, HostId, LocalityPolicyId,
+    LocalityRequirementId, MeshId, MeshLocalCertificateAuthorityId, MeshLocalCertificateIssuanceId,
+    NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PrincipalId,
+    ProtectionPolicyId, ProtectionScenarioId, PublicCertificateId, RandomSource, RecoveryCodeId,
+    Revision, Rights, RoleId, SessionId, SmbExportId, TargetId, UnixMicros, VolumeId, WorkId,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -96,6 +96,77 @@ fn unsupported_command_never_produces_partial_wire_bytes() -> Result<(), Box<dyn
         encode_authoritative_command(context, &command),
         Err(MetadataCommandCodecError::Unsupported)
     );
+    Ok(())
+}
+
+#[test]
+fn backup_catalogue_commands_round_trip_canonically() -> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let destination_id = BackupDestinationId::from_bytes([81; 16])?;
+    let backup_id = BackupId::from_bytes([82; 16])?;
+    for binding in [
+        crate::BackupDestinationBinding::RegisteredTarget {
+            target_id: TargetId::from_bytes([83; 16])?,
+            target_generation: 4,
+        },
+        crate::BackupDestinationBinding::FederatedMesh {
+            remote_mesh_id: MeshId::from_bytes([84; 16])?,
+            provider_generation: 5,
+        },
+        crate::BackupDestinationBinding::ComponentProvider {
+            instance_id: ComponentInstanceId::from_bytes([85; 16])?,
+            provider_generation: 6,
+        },
+    ] {
+        assert_round_trip(
+            context,
+            AuthoritativeCommand::ConfigureBackupDestination(crate::ConfigureBackupDestination {
+                destination_id,
+                name: RecordName::new("Encrypted recovery copies")?,
+                binding,
+                failure_relationship: crate::BackupFailureRelationship::Unknown,
+                failure_evidence_digest: [86; 32],
+                enabled: true,
+            }),
+        )?;
+    }
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::RecordMetadataBackup(crate::RecordMetadataBackup {
+            backup_id,
+            partition_id: meshspan_domain::PartitionId::from_bytes([87; 16])?,
+            mesh_id: MeshId::from_bytes([88; 16])?,
+            last_log_index: 20,
+            last_log_term: 3,
+            state_revision: Revision::new(19),
+            schema_version: 81,
+            source_byte_length: 4_096,
+            source_digest: [89; 32],
+            manifest_digest: [90; 32],
+            encrypted_byte_length: 4_512,
+            encrypted_digest: [91; 32],
+        }),
+    )?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::RecordBackupCopy(crate::RecordBackupCopy {
+            backup_id,
+            destination_id,
+            provider_generation: 4,
+            object_reference: "backups/root/82.msbackup".to_owned(),
+            byte_length: 4_512,
+            copy_digest: [91; 32],
+        }),
+    )?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::VerifyBackupCopy(crate::VerifyBackupCopy {
+            backup_id,
+            destination_id,
+            provider_generation: 4,
+            copy_digest: [91; 32],
+        }),
+    )?;
     Ok(())
 }
 
