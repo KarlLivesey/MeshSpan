@@ -75,6 +75,58 @@ fn publication_records_stores_verifies_and_replays_exact_copy()
 }
 
 #[test]
+fn existing_generation_publishes_and_verifies_an_additional_destination()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = Fixture::new()?;
+    let directory = tempdir()?;
+    let encrypted = directory.path().join("backup.msb");
+    std::fs::write(&encrypted, fixture.bytes)?;
+    let first_destination = fixture.destination.destination_id;
+    let authority = MemoryAuthority::new(fixture.destination.clone());
+    let publisher = MetadataBackupPublisher::new(&authority);
+    let mut first_provider = MemoryProvider::default();
+    publisher.publish(
+        &mut first_provider,
+        &BackupPublicationRequest {
+            encrypted_source: &encrypted,
+            evidence: fixture.evidence,
+            destination_id: first_destination,
+            claim: fixture.claim,
+            actor_principal_id: fixture.actor,
+            now: UnixMicros::new(20),
+            deadline: UnixMicros::new(100),
+        },
+    )?;
+
+    let second_destination = BackupDestinationId::from_bytes([10; 16])?;
+    let mut second_record = fixture.destination;
+    second_record.destination_id = second_destination;
+    second_record.display_name = "independent backup".to_owned();
+    second_record.canonical_name = "independent backup".to_owned();
+    second_record.failure_relationship = BackupFailureRelationship::Independent;
+    second_record.revision = Revision::new(13);
+    *authority.destination.borrow_mut() = second_record;
+    let mut second_provider = MemoryProvider::default();
+    let outcome = publisher.publish(
+        &mut second_provider,
+        &BackupPublicationRequest {
+            encrypted_source: &encrypted,
+            evidence: fixture.evidence,
+            destination_id: second_destination,
+            claim: fixture.claim,
+            actor_principal_id: fixture.actor,
+            now: UnixMicros::new(21),
+            deadline: UnixMicros::new(101),
+        },
+    )?;
+    assert_eq!(outcome.copy.destination_id, second_destination);
+    assert_eq!(outcome.copy.state, BackupCopyState::Verified);
+    assert_eq!(second_provider.stores, 1);
+    assert_eq!(authority.commit_count(), 4);
+    Ok(())
+}
+
+#[test]
 fn publication_uses_real_restartable_directory_provider() -> Result<(), Box<dyn std::error::Error>>
 {
     let fixture = Fixture::new()?;
@@ -266,7 +318,7 @@ impl Fixture {
 }
 
 struct MemoryAuthority {
-    destination: BackupDestinationRecord,
+    destination: RefCell<BackupDestinationRecord>,
     backup: RefCell<Option<MetadataBackupRecord>>,
     copy: RefCell<Option<BackupCopyRecord>>,
     commits: RefCell<usize>,
@@ -276,7 +328,7 @@ struct MemoryAuthority {
 impl MemoryAuthority {
     fn new(destination: BackupDestinationRecord) -> Self {
         Self {
-            destination,
+            destination: RefCell::new(destination),
             backup: RefCell::new(None),
             copy: RefCell::new(None),
             commits: RefCell::new(0),
@@ -304,7 +356,8 @@ impl BackupPublicationAuthority for MemoryAuthority {
         &self,
         destination_id: BackupDestinationId,
     ) -> Result<Option<BackupDestinationRecord>, RepositoryError> {
-        Ok((destination_id == self.destination.destination_id).then(|| self.destination.clone()))
+        let destination = self.destination.borrow();
+        Ok((destination_id == destination.destination_id).then(|| destination.clone()))
     }
 
     fn backup_copy(

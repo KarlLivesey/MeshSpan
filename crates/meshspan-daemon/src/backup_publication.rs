@@ -10,7 +10,7 @@ use std::path::Path;
 
 use evidence::{
     PublicationStep, command_context, object_identity, provider_context, record_backup,
-    validate_backup, validate_copy, validate_receipt,
+    record_copy, validate_backup, validate_copy, validate_receipt,
 };
 use meshspan_backup::{BackupError, BackupFileEvidence};
 use meshspan_cluster::MetadataAuthorityRequestError;
@@ -98,7 +98,15 @@ where
         let copy = match self.authority.metadata_backup(object.backup_id)? {
             Some(backup) => {
                 validate_backup(backup, request.evidence)?;
-                self.load_copy(object)?
+                match self
+                    .authority
+                    .backup_copy(object.backup_id, object.destination_id)?
+                {
+                    Some(copy) => validate_copy(copy, object)?,
+                    None => {
+                        self.store_and_record_copy(provider, request, object, destination.revision)?
+                    }
+                }
             }
             None => self.store_and_admit(provider, request, object, destination.revision)?,
         };
@@ -147,26 +155,7 @@ where
         object: BackupObjectIdentity,
         destination_revision: Revision,
     ) -> Result<BackupCopyRecord, BackupPublicationError> {
-        let mut source = File::open(request.encrypted_source)?;
-        let store_context = provider_context(
-            PublicationStep::StoreProvider,
-            request.evidence,
-            object.destination_id,
-            request.now,
-            request.deadline,
-            destination_revision,
-        )?;
-        let receipt = provider.store_exact(
-            BackupStoreRequest {
-                context: store_context,
-                object,
-            },
-            &mut source,
-            request.now,
-        )?;
-        if receipt.operation_id != store_context.operation_id || receipt.object != object {
-            return Err(BackupPublicationError::InvalidReceipt);
-        }
+        let receipt = Self::store(provider, request, object, destination_revision)?;
         let context = command_context(
             PublicationStep::RecordBackup,
             request.evidence,
@@ -194,6 +183,67 @@ where
             .ok_or_else(|| publication_failure(committed))
             .and_then(|backup| validate_backup(backup, request.evidence))?;
         self.load_copy(object)
+    }
+
+    fn store_and_record_copy<P: BackupProvider>(
+        &self,
+        provider: &mut P,
+        request: &BackupPublicationRequest<'_>,
+        object: BackupObjectIdentity,
+        destination_revision: Revision,
+    ) -> Result<BackupCopyRecord, BackupPublicationError> {
+        let receipt = Self::store(provider, request, object, destination_revision)?;
+        let context = command_context(
+            PublicationStep::RecordCopy,
+            request.evidence,
+            object.destination_id,
+            request.actor_principal_id,
+            request.now,
+        )?;
+        let command = AuthoritativeCommand::RecordBackupCopy(record_copy(&receipt));
+        let committed = self.authority.commit_backup_publication(context, &command);
+        if let Ok(receipt) = committed {
+            validate_receipt(
+                receipt,
+                context,
+                &command,
+                EntityKind::BackupCopy,
+                object.backup_id.as_bytes(),
+            )?;
+        }
+        self.authority
+            .backup_copy(object.backup_id, object.destination_id)?
+            .ok_or_else(|| publication_failure(committed))
+            .and_then(|copy| validate_copy(copy, object))
+    }
+
+    fn store<P: BackupProvider>(
+        provider: &mut P,
+        request: &BackupPublicationRequest<'_>,
+        object: BackupObjectIdentity,
+        destination_revision: Revision,
+    ) -> Result<meshspan_contracts::BackupObjectReceipt, BackupPublicationError> {
+        let mut source = File::open(request.encrypted_source)?;
+        let store_context = provider_context(
+            PublicationStep::StoreProvider,
+            request.evidence,
+            object.destination_id,
+            request.now,
+            request.deadline,
+            destination_revision,
+        )?;
+        let receipt = provider.store_exact(
+            BackupStoreRequest {
+                context: store_context,
+                object,
+            },
+            &mut source,
+            request.now,
+        )?;
+        if receipt.operation_id != store_context.operation_id || receipt.object != object {
+            return Err(BackupPublicationError::InvalidReceipt);
+        }
+        Ok(receipt)
     }
 
     fn load_copy(
