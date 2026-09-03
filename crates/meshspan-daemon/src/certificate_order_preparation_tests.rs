@@ -7,10 +7,11 @@ use meshspan_domain::{
     Revision, UnixMicros,
 };
 use meshspan_metadata::{
-    ACME_ACCOUNT_KEY_SECRET_KIND, AcmeChallengeKind, AcmeConfigurationRecord, ApplyDisposition,
-    AuthoritativeCommand, CertificateOrderCheckpointRecord, CertificateOrderClaim,
-    CertificateOrderRecord, CertificateOrderState, CommandContext, CommandReceipt, EntityKind,
-    EntityReference, LogPosition, SecretGenerationRecord, SecretGenerationReference,
+    ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND, AcmeChallengeKind,
+    AcmeConfigurationRecord, ApplyDisposition, AuthoritativeCommand,
+    CertificateOrderCheckpointRecord, CertificateOrderClaim, CertificateOrderRecord,
+    CertificateOrderState, CommandContext, CommandReceipt, EntityKind, EntityReference,
+    LogPosition, SecretGenerationRecord, SecretGenerationReference,
 };
 use meshspan_secret_envelope::{
     EncryptedSecret, RecipientKeyEnvelope, SecretContext, SecretPlaintext, WrappingPrivateKey,
@@ -92,6 +93,68 @@ fn preparation_creates_one_encrypted_leaf_key_then_reuses_it_after_worker_replac
     );
     assert_eq!(authority.commit_count(), 1);
     assert!(replacement.csr_der.starts_with(&[0x30]));
+    Ok(())
+}
+
+#[test]
+fn preparation_decrypts_automatic_dns_settings_into_zeroising_runtime_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_key = WrappingPrivateKey::from_bytes([1; 32])?;
+    let recipients = sorted_recipients(&[&local_key]);
+    let account_reference = SecretGenerationReference {
+        secret_id: [3; 16],
+        generation: 1,
+    };
+    let account_context = SecretContext::new(
+        ACME_ACCOUNT_KEY_SECRET_KIND,
+        account_reference.secret_id,
+        account_reference.generation,
+    )?;
+    let mut account_scalar = [0_u8; 32];
+    account_scalar[31] = 1;
+    let account_record = encrypted_record(
+        account_context,
+        &account_scalar,
+        &recipients,
+        &mut IncrementingRandom(10),
+    )?;
+    let settings_reference = SecretGenerationReference {
+        secret_id: [8; 16],
+        generation: 2,
+    };
+    let settings_context = SecretContext::new(
+        ACME_CHALLENGE_SETTINGS_SECRET_KIND,
+        settings_reference.secret_id,
+        settings_reference.generation,
+    )?;
+    let settings = b"canonical-encrypted-provider-settings";
+    let settings_record = encrypted_record(
+        settings_context,
+        settings,
+        &recipients,
+        &mut IncrementingRandom(20),
+    )?;
+    let authority = FakeAuthority::new(recipients, account_context, account_record);
+    authority.add_record(settings_context, settings_record)?;
+    let decryptor = TestDecryptor(local_key);
+    let order_id = CertificateOrderId::from_bytes([4; 16])?;
+    let mut assigned = assignment(order_id, account_reference, 55, None)?;
+    assigned.configuration.challenge_kind = AcmeChallengeKind::Dns01;
+    assigned.configuration.challenge_settings = Some(settings_reference);
+    let prepared =
+        CertificateOrderPreparationService::new(&authority, &decryptor, IncrementingRandom(30))
+            .prepare(
+                PrincipalId::from_bytes([5; 16])?,
+                UnixMicros::new(20),
+                assigned,
+            )?;
+    assert_eq!(
+        prepared
+            .challenge_settings
+            .as_ref()
+            .map(SecretPlaintext::expose),
+        Some(settings.as_slice())
+    );
     Ok(())
 }
 
@@ -181,6 +244,19 @@ impl FakeAuthority {
 
     fn commit_count(&self) -> usize {
         self.state.lock().map_or(0, |state| state.commits)
+    }
+
+    fn add_record(
+        &self,
+        context: SecretContext,
+        record: SecretGenerationRecord,
+    ) -> Result<(), &'static str> {
+        self.state
+            .lock()
+            .map_err(|_| "authority state poisoned")?
+            .records
+            .push((context, record));
+        Ok(())
     }
 }
 

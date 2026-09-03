@@ -135,6 +135,7 @@ fn execution(
         },
         machine,
         account_key: account_key()?,
+        challenge_settings: None,
         certificate_key,
         csr_der,
         certificate_key_reference: SecretGenerationReference {
