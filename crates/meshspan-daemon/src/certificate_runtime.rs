@@ -11,16 +11,17 @@ use rustls::{ClientConfig, RootCertStore};
 use thiserror::Error;
 
 use crate::{
-    CertificateAutomationComponents, CertificateAutomationError, CertificateAutomationPolicy,
-    CertificateAutomationService, CertificateExecutionFactoryError, CertificateOrderDrivePolicy,
-    CertificateOrderDriverError, CertificateOrderPreparationService, CertificateOrderResultError,
-    CertificateOrderResultService, ConsensusAuthenticationAuthority,
+    CertificateAutomationComponents, CertificateAutomationError, CertificateAutomationOutcome,
+    CertificateAutomationPolicy, CertificateAutomationService, CertificateExecutionFactoryError,
+    CertificateOrderDrivePolicy, CertificateOrderDriverError, CertificateOrderPreparationService,
+    CertificateOrderResultError, CertificateOrderResultService, ConsensusAuthenticationAuthority,
     InProcessCertificateExecutionFactory, InProcessCertificateRuntimeComponents,
     InProcessCertificateRuntimePolicy, LocalWrappingKey, OperatingSystemClock,
     OperatingSystemRandom, SharedManualDnsTaskAuthority, SystemAuthoritativeTxtObserver,
 };
 
-const WORKER_TICK: Duration = Duration::from_secs(1);
+const IDLE_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const ACTIVE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CLAIM_LEASE_MICROS: u64 = 5 * 60 * 1_000_000;
 const RENEWAL_LEAD_MICROS: u64 = 30 * 24 * 60 * 60 * 1_000_000;
 const ADMISSION_PAGE_ITEMS: usize = 32;
@@ -161,10 +162,13 @@ impl CertificateRuntime {
             .await
             .map_err(|_| CertificateRuntimeError::WorkerStopped)?;
             self.service = returned;
-            outcome?;
+            let interval = match outcome? {
+                CertificateAutomationOutcome::Idle { .. } => IDLE_POLL_INTERVAL,
+                CertificateAutomationOutcome::Order { .. } => ACTIVE_POLL_INTERVAL,
+            };
             tokio::select! {
                 () = &mut shutdown => return Ok(()),
-                () = tokio::time::sleep(WORKER_TICK) => {}
+                () = tokio::time::sleep(interval) => {}
             }
         }
     }
