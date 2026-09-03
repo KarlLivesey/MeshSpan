@@ -1163,6 +1163,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-rustls",
+ "zeroize",
 ]
 
 [[package]]
