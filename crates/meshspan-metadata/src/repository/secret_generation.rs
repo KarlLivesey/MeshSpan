@@ -12,9 +12,11 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use super::apply::to_i64;
 use super::{EntityKind, EntityReference, RepositoryError, recovery_authority};
 use crate::{
+    ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
     AUTHENTICATION_ROOT_KEY_SECRET_KIND, CommandContext, CommitSecretGeneration,
-    ONLINE_AUTHORITY_KEY_SECRET_KIND, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PartitionDatabase,
-    STORAGE_PERMIT_KEY_SECRET_KIND, VOLUME_CONTENT_KEY_SECRET_KIND,
+    ONLINE_AUTHORITY_KEY_SECRET_KIND, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+    PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND, PartitionDatabase, STORAGE_PERMIT_KEY_SECRET_KIND,
+    VOLUME_CONTENT_KEY_SECRET_KIND,
 };
 
 const VOLUME_CONTENT_KEY_BYTES: usize = 32;
@@ -67,7 +69,13 @@ pub(super) fn commit(
     }) {
         return Err(RepositoryError::InvalidCommand);
     }
-    if secret.context().kind() == PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND {
+    if matches!(
+        secret.context().kind(),
+        ACME_ACCOUNT_KEY_SECRET_KIND
+            | ACME_CHALLENGE_SETTINGS_SECRET_KIND
+            | PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND
+            | PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND
+    ) {
         require_exact_gateway_recipients(transaction, &recipients)?;
     }
     persist(
