@@ -51,6 +51,7 @@ use thiserror::Error;
 use tokio::task::JoinHandle;
 use zeroize::Zeroizing;
 
+use crate::certificate_runtime::{CertificateAuthoritySet, CertificateRuntime};
 use crate::headless_node_join::{activate_and_install_node, admit_headless_node, admit_node};
 use crate::join_mesh_setup::{load_pending_join, remove_pending_join};
 use crate::private_consensus_runtime::{
@@ -67,10 +68,11 @@ use crate::{
     CurrentNodeBootstrapPeerSource, CurrentSessionApiError, DaemonLocalState,
     DaemonLocalStateError, DirectoryListingApiError, DirectoryListingService, FileApiRoutes,
     FileReadApiError, FileReadService, GatewaySessionIdentity, HeadlessDaemonConfig,
-    HeadlessDaemonConfigError, HttpsServer, HttpsServerError, IdentityAdministrationApiError,
-    IdentityAdministrationService, JoinMeshSetupService, ManualDnsTaskAdministrationApiError,
-    ManualDnsTaskAdministrationService, NativeApiAuthenticator, NativeApiKeyAuthenticator,
-    NativeFilesystemRuntime, NativeFilesystemRuntimeConfiguration, NativeNamespaceMutationApiError,
+    HeadlessDaemonConfigError, Http01Server, Http01ServerError, HttpsServer, HttpsServerError,
+    IdentityAdministrationApiError, IdentityAdministrationService, JoinMeshSetupService,
+    ManualDnsTaskAdministrationApiError, ManualDnsTaskAdministrationService,
+    NativeApiAuthenticator, NativeApiKeyAuthenticator, NativeFilesystemRuntime,
+    NativeFilesystemRuntimeConfiguration, NativeNamespaceMutationApiError,
     NativeNamespaceMutationService, NativeStorageTarget, NativeUploadApiError, NativeUploadService,
     NativeUploadServicePolicy, NodeActivationError, NodeActivationRequest, NodeActivationService,
     NodeEnrolmentApiError, NodeEnrolmentService, NodeJoinGrantIssuanceApiError,
@@ -156,6 +158,7 @@ struct StorageRuntimeComposition {
 struct ApplianceServiceComposition {
     router: Router,
     smb_connections: SmbConnectionFactory,
+    certificates: CertificateRuntime,
 }
 
 struct DaemonNodeRuntime {
@@ -609,6 +612,12 @@ fn compose_appliance_services(
         tokio::runtime::Handle::current(),
         native_filesystem.clone(),
     );
+    let certificates = compose_certificate_runtime(
+        &node.local_state,
+        &private_authority.authority,
+        &node.private_network,
+        started_at,
+    )?;
     let router = Router::new()
         .merge(public_contract_api_router(readiness)?)
         .merge(setup_and_enrolment_routes(
@@ -637,7 +646,32 @@ fn compose_appliance_services(
     Ok(ApplianceServiceComposition {
         router,
         smb_connections,
+        certificates,
     })
+}
+
+fn compose_certificate_runtime(
+    local_state: &DaemonLocalState,
+    authority: &MetadataAuthorityHandle,
+    private_network: &Arc<PrivateConsensusRuntime>,
+    now: UnixMicros,
+) -> Result<CertificateRuntime, DaemonProcessError> {
+    let open_authority =
+        || open_authentication_authority(local_state, authority, Arc::clone(private_network), now);
+    CertificateRuntime::new(
+        CertificateAuthoritySet {
+            scheduler: open_authority()?,
+            checkpoint: open_authority()?,
+            completion: open_authority()?,
+            retry: open_authority()?,
+            preparation: open_authority()?,
+            manual_dns: open_authority()?,
+        },
+        local_state.open_wrapping_key()?,
+        local_state.node_id(),
+        1,
+    )
+    .map_err(|_| DaemonProcessError::Certificate)
 }
 
 fn setup_and_enrolment_routes(
@@ -725,17 +759,6 @@ async fn serve_daemon_cycle<F>(
 where
     F: Future<Output = ()> + Send,
 {
-    let https_server = HttpsServer::bind(
-        config.https_listen(),
-        local_state.bootstrap_server_config()?,
-        services.router,
-    )
-    .await?;
-    let smb_server = SmbServer::bind(
-        config.smb_listen(),
-        SmbServerLimits::new(SMB_PACKET_BYTES, SMB_INACTIVITY_TIMEOUT)?,
-    )
-    .await?;
     let restart_requested = Arc::new(AtomicBool::new(false));
     let restart_observer = Arc::clone(&restart_requested);
     let lifecycle = async move {
@@ -747,44 +770,7 @@ where
             }
         }
     };
-    let (listener_shutdown, _) = tokio::sync::watch::channel(false);
-    let https_shutdown = listener_shutdown.subscribe();
-    let smb_shutdown = listener_shutdown.subscribe();
-    let mut https_task = tokio::spawn(https_server.run_until(wait_for_shutdown(https_shutdown)));
-    let connection_factory = services.smb_connections;
-    let mut smb_task = tokio::spawn(smb_server.run_until(
-        move || connection_factory.open(),
-        wait_for_shutdown(smb_shutdown),
-    ));
-    let first_completion = tokio::select! {
-        biased;
-        () = lifecycle => ListenerCompletion::Lifecycle,
-        result = &mut https_task => ListenerCompletion::Https(result),
-        result = &mut smb_task => ListenerCompletion::Smb(result),
-    };
-    let _ = listener_shutdown.send(true);
-    match first_completion {
-        ListenerCompletion::Lifecycle => {
-            https_task
-                .await
-                .map_err(|_| DaemonProcessError::ListenerTaskStopped)??;
-            smb_task
-                .await
-                .map_err(|_| DaemonProcessError::ListenerTaskStopped)??;
-        }
-        ListenerCompletion::Https(result) => {
-            result.map_err(|_| DaemonProcessError::ListenerTaskStopped)??;
-            smb_task
-                .await
-                .map_err(|_| DaemonProcessError::ListenerTaskStopped)??;
-        }
-        ListenerCompletion::Smb(result) => {
-            result.map_err(|_| DaemonProcessError::ListenerTaskStopped)??;
-            https_task
-                .await
-                .map_err(|_| DaemonProcessError::ListenerTaskStopped)??;
-        }
-    }
+    serve_public_services(config, local_state, services, lifecycle).await?;
     let shutdown_result = authority.shutdown().await;
     let authority_result = authority_task.await;
     shutdown_result?;
@@ -796,10 +782,77 @@ where
     })
 }
 
-enum ListenerCompletion {
-    Lifecycle,
-    Https(Result<Result<(), HttpsServerError>, tokio::task::JoinError>),
-    Smb(Result<Result<(), SmbServerError>, tokio::task::JoinError>),
+async fn serve_public_services<F>(
+    config: &HeadlessDaemonConfig,
+    local_state: &DaemonLocalState,
+    services: ApplianceServiceComposition,
+    lifecycle: F,
+) -> Result<(), DaemonProcessError>
+where
+    F: Future<Output = ()> + Send,
+{
+    let http01 = Http01Server::bind(config.http01_listen(), services.certificates.http01()).await?;
+    let https = HttpsServer::bind(
+        config.https_listen(),
+        local_state.bootstrap_server_config()?,
+        services.router,
+    )
+    .await?;
+    let smb = SmbServer::bind(
+        config.smb_listen(),
+        SmbServerLimits::new(SMB_PACKET_BYTES, SMB_INACTIVITY_TIMEOUT)?,
+    )
+    .await?;
+    let (stop, _) = tokio::sync::watch::channel(false);
+    let mut tasks = tokio::task::JoinSet::new();
+    let https_stop = stop.subscribe();
+    tasks.spawn(async move {
+        https
+            .run_until(wait_for_shutdown(https_stop))
+            .await
+            .map_err(DaemonProcessError::from)
+    });
+    let http01_stop = stop.subscribe();
+    tasks.spawn(async move {
+        http01
+            .run_until(wait_for_shutdown(http01_stop))
+            .await
+            .map_err(DaemonProcessError::from)
+    });
+    let smb_stop = stop.subscribe();
+    let connections = services.smb_connections;
+    tasks.spawn(async move {
+        smb.run_until(move || connections.open(), wait_for_shutdown(smb_stop))
+            .await
+            .map_err(DaemonProcessError::from)
+    });
+    let certificate_stop = stop.subscribe();
+    tasks.spawn(async move {
+        services
+            .certificates
+            .run_until(wait_for_shutdown(certificate_stop))
+            .await
+            .map_err(|_| DaemonProcessError::Certificate)
+    });
+    tokio::pin!(lifecycle);
+    let first = tokio::select! {
+        biased;
+        () = &mut lifecycle => None,
+        result = tasks.join_next() => result,
+    };
+    let _ = stop.send(true);
+    let ended_early = first.is_some();
+    if let Some(result) = first {
+        resolve_public_task(result)?;
+    }
+    while let Some(result) = tasks.join_next().await {
+        resolve_public_task(result)?;
+    }
+    if ended_early {
+        Err(DaemonProcessError::ListenerTaskStopped)
+    } else {
+        Ok(())
+    }
 }
 
 async fn wait_for_shutdown(mut receiver: tokio::sync::watch::Receiver<bool>) {
@@ -811,6 +864,12 @@ async fn wait_for_shutdown(mut receiver: tokio::sync::watch::Receiver<bool>) {
             return;
         }
     }
+}
+
+fn resolve_public_task(
+    result: Result<Result<(), DaemonProcessError>, tokio::task::JoinError>,
+) -> Result<(), DaemonProcessError> {
+    result.map_err(|_| DaemonProcessError::ListenerTaskStopped)?
 }
 
 fn compose_storage_runtime(
@@ -3253,6 +3312,12 @@ pub enum DaemonProcessError {
     /// The HTTPS listener failed.
     #[error("daemon HTTPS listener failed")]
     Https(#[from] HttpsServerError),
+    /// The isolated HTTP-01 listener failed.
+    #[error("daemon HTTP-01 listener failed")]
+    Http01(#[from] Http01ServerError),
+    /// Certificate automation could not be composed or failed closed while running.
+    #[error("daemon certificate runtime failed")]
+    Certificate,
     /// The embedded SMB listener failed.
     #[error("daemon SMB listener failed")]
     Smb(#[from] SmbServerError),

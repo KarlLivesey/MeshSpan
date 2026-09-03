@@ -27,6 +27,8 @@ fn complete_configuration_preserves_native_paths_and_typed_join_secret()
         OsString::from("/state/instance"),
         OsString::from("--https-listen"),
         OsString::from("127.0.0.1:9443"),
+        OsString::from("--http01-listen"),
+        OsString::from("127.0.0.1:9080"),
         OsString::from("--smb-listen"),
         OsString::from("127.0.0.1:1445"),
         OsString::from("--claim-output"),
@@ -44,6 +46,7 @@ fn complete_configuration_preserves_native_paths_and_typed_join_secret()
         [Path::new("/data/one"), Path::new("/data/two")]
     );
     assert_eq!(config.https_listen(), "127.0.0.1:9443".parse()?);
+    assert_eq!(config.http01_listen(), "127.0.0.1:9080".parse()?);
     assert_eq!(config.smb_listen(), "127.0.0.1:1445".parse()?);
     assert_eq!(
         config.claim_output(),
@@ -68,6 +71,10 @@ fn defaults_to_all_interfaces_public_listeners() -> Result<(), HeadlessDaemonCon
     assert_eq!(
         config.https_listen(),
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8_443)
+    );
+    assert_eq!(
+        config.http01_listen(),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 80)
     );
     assert_eq!(
         config.smb_listen(),

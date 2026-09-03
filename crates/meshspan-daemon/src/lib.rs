@@ -71,6 +71,7 @@ mod certificate_order_worker_tests;
 mod certificate_renewal_scheduler;
 #[cfg(test)]
 mod certificate_renewal_scheduler_tests;
+mod certificate_runtime;
 mod claim_file;
 mod claim_service;
 #[cfg(test)]
@@ -264,7 +265,7 @@ pub use manual_dns_task_administration_api::{
     ManualDnsTaskAdministrationApiError, manual_dns_task_administration_api_router,
 };
 pub use manual_dns_task_authority::{
-    ConsensusManualDnsTaskAuthority, ManualDnsTaskCommitAuthority,
+    ConsensusManualDnsTaskAuthority, ManualDnsTaskCommitAuthority, SharedManualDnsTaskAuthority,
 };
 pub use periodic_scrub_scheduler::{
     PeriodicScrubAdmissionPage, PeriodicScrubAuthority, PeriodicScrubScheduler,
@@ -720,7 +721,24 @@ pub use volume_key_loading::{
     VolumeKeyLoadingError, VolumeKeyLoadingService,
 };
 
-use meshspan_domain::{EntropyError, RandomSource};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use meshspan_domain::{Clock, EntropyError, RandomSource, UnixMicros};
+
+/// Operating-system time exposed through the injectable domain clock boundary.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OperatingSystemClock;
+
+impl Clock for OperatingSystemClock {
+    fn now(&self) -> UnixMicros {
+        let micros = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|duration| i64::try_from(duration.as_micros()).ok())
+            .unwrap_or(i64::MIN);
+        UnixMicros::new(micros)
+    }
+}
 
 /// Operating-system cryptographic entropy used by daemon-owned secret material.
 #[derive(Clone, Copy, Debug, Default)]

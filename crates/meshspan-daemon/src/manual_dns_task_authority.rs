@@ -3,6 +3,7 @@
 //! Consensus-backed adapter for durable manual DNS challenge tasks.
 
 use std::future::{self, Future};
+use std::sync::{Arc, Mutex};
 
 use meshspan_acme::{ManualDnsTask, ManualDnsTaskAuthority, ManualDnsTaskPhase};
 use meshspan_cluster::MetadataAuthorityRequestError;
@@ -62,6 +63,49 @@ impl ManualDnsTaskCommitAuthority for ConsensusAuthenticationAuthority {
     ) -> Result<CommandReceipt, ContractError> {
         self.commit_authoritative(context, command)
             .map_err(map_authority_error)
+    }
+}
+
+/// Cloneable single-worker handle for manual DNS transitions over one SQLite reader.
+///
+/// The certificate loop runs on a blocking worker, so this lock never encloses an asynchronous
+/// suspension. It exists only because a resumable challenge must own its authority independently
+/// from the factory that creates later orders.
+#[derive(Clone)]
+pub struct SharedManualDnsTaskAuthority {
+    inner: Arc<Mutex<ConsensusAuthenticationAuthority>>,
+}
+
+impl SharedManualDnsTaskAuthority {
+    /// Wraps one independently opened consensus reader for serial certificate work.
+    #[must_use]
+    pub fn new(authority: ConsensusAuthenticationAuthority) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(authority)),
+        }
+    }
+}
+
+impl ManualDnsTaskCommitAuthority for SharedManualDnsTaskAuthority {
+    fn resolve_manual_dns_task(
+        &self,
+        operation_id: OperationId,
+    ) -> Result<Option<CommandReceipt>, ContractError> {
+        self.inner
+            .lock()
+            .map_err(|_| ContractError::Unavailable)?
+            .resolve_manual_dns_task(operation_id)
+    }
+
+    fn commit_manual_dns_task(
+        &self,
+        context: CommandContext,
+        command: &AuthoritativeCommand,
+    ) -> Result<CommandReceipt, ContractError> {
+        self.inner
+            .lock()
+            .map_err(|_| ContractError::Unavailable)?
+            .commit_manual_dns_task(context, command)
     }
 }
 

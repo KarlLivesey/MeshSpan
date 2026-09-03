@@ -11,10 +11,11 @@ use meshspan_storage::{HeadlessStorageConfig, StorageConfigError};
 use thiserror::Error;
 
 const DEFAULT_HTTPS_PORT: u16 = 8_443;
+const DEFAULT_HTTP01_PORT: u16 = 80;
 const DEFAULT_SMB_PORT: u16 = 445;
 const DEFAULT_PRIVATE_PORT: u16 = 7_443;
 const MAXIMUM_STORAGE_PATHS: usize = 1_024;
-const SINGLETON_FLAGS: usize = 7;
+const SINGLETON_FLAGS: usize = 8;
 const MAXIMUM_ARGUMENTS: usize = (MAXIMUM_STORAGE_PATHS + SINGLETON_FLAGS) * 2;
 
 /// Validated local process settings which never include replicated mesh configuration.
@@ -23,6 +24,7 @@ const MAXIMUM_ARGUMENTS: usize = (MAXIMUM_STORAGE_PATHS + SINGLETON_FLAGS) * 2;
 pub struct HeadlessDaemonConfig {
     storage: HeadlessStorageConfig,
     https_listen: SocketAddr,
+    http01_listen: SocketAddr,
     smb_listen: SocketAddr,
     private_listen: SocketAddr,
     private_endpoint: Option<String>,
@@ -51,6 +53,7 @@ impl HeadlessDaemonConfig {
         let mut state_directory = None;
         let mut storage_paths = Vec::new();
         let mut https_listen = None;
+        let mut http01_listen = None;
         let mut smb_listen = None;
         let mut private_listen = None;
         let mut private_endpoint = None;
@@ -71,6 +74,9 @@ impl HeadlessDaemonConfig {
                 }
                 value if value == OsStr::new("--https-listen") => {
                     set_once(&mut https_listen, parse_https_address(&pair[1])?)?;
+                }
+                value if value == OsStr::new("--http01-listen") => {
+                    set_once(&mut http01_listen, parse_http01_address(&pair[1])?)?;
                 }
                 value if value == OsStr::new("--smb-listen") => {
                     set_once(&mut smb_listen, parse_smb_address(&pair[1])?)?;
@@ -97,6 +103,7 @@ impl HeadlessDaemonConfig {
         Ok(Self {
             storage,
             https_listen: https_listen.unwrap_or_else(default_https_address),
+            http01_listen: http01_listen.unwrap_or_else(default_http01_address),
             smb_listen: smb_listen.unwrap_or_else(default_smb_address),
             private_listen: private_listen.unwrap_or_else(default_private_address),
             private_endpoint,
@@ -115,6 +122,12 @@ impl HeadlessDaemonConfig {
     #[must_use]
     pub const fn https_listen(&self) -> SocketAddr {
         self.https_listen
+    }
+
+    /// Returns the isolated plain-HTTP ACME challenge listener address.
+    #[must_use]
+    pub const fn http01_listen(&self) -> SocketAddr {
+        self.http01_listen
     }
 
     /// Returns the embedded SMB Direct TCP listener address.
@@ -152,6 +165,10 @@ fn default_https_address() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), DEFAULT_HTTPS_PORT)
 }
 
+fn default_http01_address() -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), DEFAULT_HTTP01_PORT)
+}
+
 fn default_smb_address() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), DEFAULT_SMB_PORT)
 }
@@ -165,6 +182,13 @@ fn parse_https_address(value: &OsStr) -> Result<SocketAddr, HeadlessDaemonConfig
         .to_str()
         .and_then(|text| text.parse().ok())
         .ok_or(HeadlessDaemonConfigError::InvalidHttpsAddress)
+}
+
+fn parse_http01_address(value: &OsStr) -> Result<SocketAddr, HeadlessDaemonConfigError> {
+    value
+        .to_str()
+        .and_then(|text| text.parse().ok())
+        .ok_or(HeadlessDaemonConfigError::InvalidHttp01Address)
 }
 
 fn parse_smb_address(value: &OsStr) -> Result<SocketAddr, HeadlessDaemonConfigError> {
@@ -223,6 +247,9 @@ pub enum HeadlessDaemonConfigError {
     /// The HTTPS listen address is not one exact socket address.
     #[error("HTTPS listen address is invalid")]
     InvalidHttpsAddress,
+    /// The HTTP-01 listener was not a numeric socket address.
+    #[error("HTTP-01 listener address is invalid")]
+    InvalidHttp01Address,
     /// The embedded SMB listener is not one exact socket address.
     #[error("SMB listen address is invalid")]
     InvalidSmbAddress,
