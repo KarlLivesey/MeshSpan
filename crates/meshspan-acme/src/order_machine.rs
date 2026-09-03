@@ -2,6 +2,7 @@
 
 //! Pure resumable ACME order transitions, separate from transport and durable authority I/O.
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
@@ -10,9 +11,11 @@ use crate::{
 };
 
 mod action;
+mod checkpoint;
 
 /// Configured challenge family for one immutable order.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AcmeChallengePreference {
     /// Publish an HTTP token on every eligible gateway.
     Http01,
@@ -203,7 +206,8 @@ pub enum AcmeMachineEvent {
     CertificateDownloaded(Vec<u8>),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 enum Phase {
     DiscoverDirectory,
     AcquireNonce,
@@ -221,7 +225,7 @@ enum Phase {
 }
 
 /// Validated, cloneable ACME checkpoint. The complete value is the resumable machine state.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AcmeOrderMachine {
     directory_url: String,
     request: AcmeOrderRequest,
@@ -284,6 +288,24 @@ impl AcmeOrderMachine {
     /// Fails closed if an incomplete or contradictory checkpoint is observed.
     pub fn action(&self) -> Result<AcmeMachineAction, AcmeMachineError> {
         self.action_for_phase()
+    }
+
+    /// Encodes the complete validated state needed to resume this exact order.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if the in-memory state is contradictory or exceeds the checkpoint bound.
+    pub fn encode_checkpoint(&self) -> Result<Vec<u8>, AcmeMachineError> {
+        self.encode_validated_checkpoint()
+    }
+
+    /// Restores one complete versioned order checkpoint from hostile bytes.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed, excessive, unknown-version or internally contradictory state.
+    pub fn decode_checkpoint(bytes: &[u8]) -> Result<Self, AcmeMachineError> {
+        Self::decode_validated_checkpoint(bytes)
     }
 
     /// Applies one exact result only when it matches the current action.

@@ -5,12 +5,13 @@
 use std::collections::BTreeSet;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
 use crate::{AcmeAccountBinding, AcmeJwsSigner, AcmeSignedRequest};
 
-const MAXIMUM_BODY_BYTES: usize = 1024 * 1024;
+pub(crate) const MAXIMUM_BODY_BYTES: usize = 1024 * 1024;
 const MAXIMUM_HEADER_COUNT: usize = 64;
 const MAXIMUM_HEADER_NAME_BYTES: usize = 64;
 const MAXIMUM_HEADER_VALUE_BYTES: usize = 8 * 1024;
@@ -111,7 +112,8 @@ impl AcmeHttpResponse {
 }
 
 /// Required endpoints discovered from one ACME directory.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AcmeDirectory {
     /// Fresh nonce endpoint.
     pub new_nonce: String,
@@ -122,9 +124,25 @@ pub struct AcmeDirectory {
 }
 
 /// Requested DNS identifiers for a new order.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AcmeOrderRequest {
     dns_names: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AcmeOrderRequestFields {
+    dns_names: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for AcmeOrderRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let fields = AcmeOrderRequestFields::deserialize(deserializer)?;
+        Self::new(fields.dns_names).map_err(serde::de::Error::custom)
+    }
 }
 
 impl AcmeOrderRequest {
@@ -155,7 +173,8 @@ impl AcmeOrderRequest {
 }
 
 /// ACME resource lifecycle values used by orders, authorizations and challenges.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AcmeResourceStatus {
     /// Awaiting further work.
     Pending,
@@ -176,7 +195,8 @@ pub enum AcmeResourceStatus {
 }
 
 /// One parsed ACME order resource.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AcmeOrder {
     /// Current order status.
     pub status: AcmeResourceStatus,
@@ -191,7 +211,8 @@ pub struct AcmeOrder {
 }
 
 /// One parsed challenge offered for an authorization.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AcmeChallengeRecord {
     /// Exact challenge type such as `http-01` or `dns-01`.
     pub kind: String,
@@ -204,7 +225,8 @@ pub struct AcmeChallengeRecord {
 }
 
 /// One DNS identifier authorization and its bounded challenge choices.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AcmeAuthorization {
     /// Canonical DNS identifier.
     pub dns_name: String,
