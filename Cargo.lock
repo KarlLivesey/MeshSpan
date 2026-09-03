@@ -1299,6 +1299,7 @@ dependencies = [
  "hyper-util",
  "meshspan-acme",
  "meshspan-api-contract",
+ "meshspan-backup",
  "meshspan-certificates",
  "meshspan-cluster",
  "meshspan-coding",
