@@ -60,6 +60,23 @@ pub struct CertificateRenewalCandidate {
     pub revision: Revision,
 }
 
+/// Latest completed public-certificate generation selected for gateway installation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PublicCertificateSelection {
+    /// Completed order which owns the encrypted bundle.
+    pub order_id: CertificateOrderId,
+    /// Exact encrypted bundle generation.
+    pub certificate: SecretGenerationReference,
+    /// Canonical digest of the decrypted certificate bundle.
+    pub bundle_digest: [u8; 32],
+    /// Administrator whose committed configuration authorises installation.
+    pub configured_by: PrincipalId,
+    /// Completion instant used only for deterministic newest-generation selection.
+    pub completed_at: UnixMicros,
+    /// Authoritative order revision observed by an installing gateway.
+    pub order_revision: Revision,
+}
+
 /// Stable seek position in the automatic certificate-renewal index.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DueCertificateRenewalCursor {
@@ -329,6 +346,63 @@ pub(super) fn due_renewals(
         items: records.into_iter().map(|(record, _)| record).collect(),
         next,
     })
+}
+
+pub(super) fn latest_public_certificate(
+    database: &PartitionDatabase,
+) -> Result<Option<PublicCertificateSelection>, RepositoryError> {
+    let stored = database
+        .connection()
+        .query_row(
+            "SELECT o.order_id, o.certificate_secret_id, o.certificate_secret_generation,
+                    o.result_digest, c.created_by, o.completed_at, o.revision
+             FROM certificate_orders o
+             JOIN acme_configurations c ON c.config_id = o.config_id
+             WHERE o.state = 3
+             ORDER BY o.completed_at DESC, o.order_id DESC
+             LIMIT 1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some(stored) = stored else {
+        return Ok(None);
+    };
+    let order_id = CertificateOrderId::from_bytes(exact(stored.0)?)
+        .map_err(|_| RepositoryError::CorruptState)?;
+    let certificate = SecretGenerationReference {
+        secret_id: exact(stored.1)?,
+        generation: positive(stored.2)?,
+    };
+    let bundle_digest = exact(stored.3)?;
+    let configured_by =
+        PrincipalId::from_bytes(exact(stored.4)?).map_err(|_| RepositoryError::CorruptState)?;
+    let completed_at = UnixMicros::new(stored.5);
+    let order_revision = Revision::new(positive(stored.6)?);
+    if certificate.secret_id != order_id.as_bytes()
+        || bundle_digest == [0; 32]
+        || completed_at.get() < 0
+    {
+        return Err(RepositoryError::CorruptState);
+    }
+    Ok(Some(PublicCertificateSelection {
+        order_id,
+        certificate,
+        bundle_digest,
+        configured_by,
+        completed_at,
+        order_revision,
+    }))
 }
 
 fn configuration_names(

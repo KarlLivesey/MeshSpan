@@ -87,17 +87,18 @@ use crate::{
     ReadinessSource, RebalanceExecution, RebalanceScheduler, RecoveryBundleVerificationApiError,
     RecoveryBundleVerificationService, RecoveryCodeIssuanceApiError,
     ResumableStorageScrubExecution, RevokeCurrentSessionApiError, RevokeCurrentSessionService,
-    SessionApiError, SetupApiError, SetupLifecycleError, SetupStateSnapshot, SetupStatusSource,
-    ShardRepairExecution, SmbExportAdministrationApiError, SmbExportAdministrationService,
-    SmbServer, SmbServerConfigurationError, SmbServerError, SmbServerLimits,
-    StepUpCurrentSessionApiError, StepUpCurrentSessionService, StorageDrainAdministrationApiError,
-    StorageDrainAdministrationService, StorageFolderAdministrationApiError,
-    StorageFolderAdministrationService, StoragePermitLoadingService, StorageProviderOpeningError,
-    StorageProviderOpeningService, StorageTargetRegistrationService, TargetDrainExecution,
-    TopologyAdministrationApiError, TopologyAdministrationService, TotpRegistrationApiError,
-    TotpRegistrationConfiguration, TotpRegistrationConfigurationError, TotpRegistrationService,
-    VolumeAdministrationApiError, VolumeAdministrationService, VolumeInventoryApiError,
-    VolumeInventoryService, api_key_issuance_api_router, authentication_method_listing_api_router,
+    RotatingHttpsIdentity, SessionApiError, SetupApiError, SetupLifecycleError, SetupStateSnapshot,
+    SetupStatusSource, ShardRepairExecution, SmbExportAdministrationApiError,
+    SmbExportAdministrationService, SmbServer, SmbServerConfigurationError, SmbServerError,
+    SmbServerLimits, StepUpCurrentSessionApiError, StepUpCurrentSessionService,
+    StorageDrainAdministrationApiError, StorageDrainAdministrationService,
+    StorageFolderAdministrationApiError, StorageFolderAdministrationService,
+    StoragePermitLoadingService, StorageProviderOpeningError, StorageProviderOpeningService,
+    StorageTargetRegistrationService, TargetDrainExecution, TopologyAdministrationApiError,
+    TopologyAdministrationService, TotpRegistrationApiError, TotpRegistrationConfiguration,
+    TotpRegistrationConfigurationError, TotpRegistrationService, VolumeAdministrationApiError,
+    VolumeAdministrationService, VolumeInventoryApiError, VolumeInventoryService,
+    api_key_issuance_api_router, authentication_method_listing_api_router,
     authentication_method_revocation_api_router, certificate_provisioning_api_router,
     classify_native_filesystem_error, current_session_api_router, directory_listing_api_router,
     execute_rebalance_step, execute_resumable_storage_scrub,
@@ -159,6 +160,7 @@ struct ApplianceServiceComposition {
     router: Router,
     smb_connections: SmbConnectionFactory,
     certificates: CertificateRuntime,
+    https_identity: RotatingHttpsIdentity,
 }
 
 struct DaemonNodeRuntime {
@@ -432,7 +434,6 @@ where
         compose_appliance_services(&mut node, &private_authority, config, restart, started_at)?;
     serve_daemon_cycle(
         config,
-        &node.local_state,
         services,
         private_authority.authority,
         private_authority.authority_task,
@@ -612,10 +613,14 @@ fn compose_appliance_services(
         tokio::runtime::Handle::current(),
         native_filesystem.clone(),
     );
+    let https_identity =
+        RotatingHttpsIdentity::new_bootstrap(node.local_state.bootstrap_certified_key()?)
+            .map_err(|_| DaemonProcessError::Certificate)?;
     let certificates = compose_certificate_runtime(
         &node.local_state,
         &private_authority.authority,
         &node.private_network,
+        https_identity.clone(),
         started_at,
     )?;
     let router = Router::new()
@@ -647,6 +652,7 @@ fn compose_appliance_services(
         router,
         smb_connections,
         certificates,
+        https_identity,
     })
 }
 
@@ -654,6 +660,7 @@ fn compose_certificate_runtime(
     local_state: &DaemonLocalState,
     authority: &MetadataAuthorityHandle,
     private_network: &Arc<PrivateConsensusRuntime>,
+    https_identity: RotatingHttpsIdentity,
     now: UnixMicros,
 ) -> Result<CertificateRuntime, DaemonProcessError> {
     let open_authority =
@@ -666,8 +673,13 @@ fn compose_certificate_runtime(
             retry: open_authority()?,
             preparation: open_authority()?,
             manual_dns: open_authority()?,
+            installation_selection: open_authority()?,
+            installation_generation: open_authority()?,
+            installation_acknowledgement: open_authority()?,
         },
         local_state.open_wrapping_key()?,
+        local_state.open_wrapping_key()?,
+        https_identity,
         local_state.node_id(),
         1,
     )
@@ -749,7 +761,6 @@ fn setup_and_enrolment_routes(
 
 async fn serve_daemon_cycle<F>(
     config: &HeadlessDaemonConfig,
-    local_state: &DaemonLocalState,
     services: ApplianceServiceComposition,
     authority: MetadataAuthorityHandle,
     authority_task: JoinHandle<Result<(), MetadataAuthorityRuntimeError>>,
@@ -770,7 +781,7 @@ where
             }
         }
     };
-    serve_public_services(config, local_state, services, lifecycle).await?;
+    serve_public_services(config, services, lifecycle).await?;
     let shutdown_result = authority.shutdown().await;
     let authority_result = authority_task.await;
     shutdown_result?;
@@ -784,7 +795,6 @@ where
 
 async fn serve_public_services<F>(
     config: &HeadlessDaemonConfig,
-    local_state: &DaemonLocalState,
     services: ApplianceServiceComposition,
     lifecycle: F,
 ) -> Result<(), DaemonProcessError>
@@ -794,7 +804,7 @@ where
     let http01 = Http01Server::bind(config.http01_listen(), services.certificates.http01()).await?;
     let https = HttpsServer::bind(
         config.https_listen(),
-        local_state.bootstrap_server_config()?,
+        services.https_identity.server_config(),
         services.router,
     )
     .await?;

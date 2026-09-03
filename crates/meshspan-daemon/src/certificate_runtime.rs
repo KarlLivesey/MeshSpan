@@ -6,7 +6,7 @@ use std::{future::Future, sync::Arc, time::Duration};
 
 use meshspan_acme::{Http01Challenge, Rfc2136ProviderPolicy};
 use meshspan_dns::AuthoritativeTxtResolver;
-use meshspan_domain::{DurationMicros, NodeId};
+use meshspan_domain::{Clock, DurationMicros, NodeId};
 use rustls::{ClientConfig, RootCertStore};
 use thiserror::Error;
 
@@ -17,7 +17,10 @@ use crate::{
     CertificateOrderResultError, CertificateOrderResultService, ConsensusAuthenticationAuthority,
     InProcessCertificateExecutionFactory, InProcessCertificateRuntimeComponents,
     InProcessCertificateRuntimePolicy, LocalWrappingKey, OperatingSystemClock,
-    OperatingSystemRandom, SharedManualDnsTaskAuthority, SystemAuthoritativeTxtObserver,
+    OperatingSystemRandom, PublicCertificateInstallationWorker,
+    PublicCertificateInstallationWorkerComponents, PublicCertificateInstallationWorkerError,
+    PublicCertificateInstallationWorkerOutcome, RotatingHttpsIdentity,
+    SharedManualDnsTaskAuthority, SystemAuthoritativeTxtObserver,
 };
 
 const IDLE_POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -50,6 +53,13 @@ type CertificateService = CertificateAutomationService<
     OperatingSystemClock,
 >;
 
+type CertificateInstallation = PublicCertificateInstallationWorker<
+    ConsensusAuthenticationAuthority,
+    ConsensusAuthenticationAuthority,
+    ConsensusAuthenticationAuthority,
+    LocalWrappingKey,
+>;
+
 /// Independently owned consensus readers required by one certificate runtime.
 pub(crate) struct CertificateAuthoritySet {
     pub scheduler: ConsensusAuthenticationAuthority,
@@ -58,11 +68,15 @@ pub(crate) struct CertificateAuthoritySet {
     pub retry: ConsensusAuthenticationAuthority,
     pub preparation: ConsensusAuthenticationAuthority,
     pub manual_dns: ConsensusAuthenticationAuthority,
+    pub installation_selection: ConsensusAuthenticationAuthority,
+    pub installation_generation: ConsensusAuthenticationAuthority,
+    pub installation_acknowledgement: ConsensusAuthenticationAuthority,
 }
 
 /// One restart-scoped certificate worker and its shared HTTP-01 challenge catalogue.
 pub(crate) struct CertificateRuntime {
     service: CertificateService,
+    installation: CertificateInstallation,
     http01: Http01Challenge,
 }
 
@@ -75,6 +89,8 @@ impl CertificateRuntime {
     pub fn new(
         authorities: CertificateAuthoritySet,
         wrapping_key: LocalWrappingKey,
+        installation_wrapping_key: LocalWrappingKey,
+        https_identity: RotatingHttpsIdentity,
         node_id: NodeId,
         worker_incarnation: u64,
     ) -> Result<Self, CertificateRuntimeError> {
@@ -131,7 +147,22 @@ impl CertificateRuntime {
             policy,
             result: CertificateOrderResultService::new(trust_roots)?,
         });
-        Ok(Self { service, http01 })
+        let installation = PublicCertificateInstallationWorker::new(
+            PublicCertificateInstallationWorkerComponents {
+                selection: authorities.installation_selection,
+                generation: authorities.installation_generation,
+                decryptor: installation_wrapping_key,
+                acknowledgement: authorities.installation_acknowledgement,
+                identity: https_identity,
+                gateway_node_id: node_id,
+                gateway_incarnation: worker_incarnation,
+            },
+        )?;
+        Ok(Self {
+            service,
+            installation,
+            http01,
+        })
     }
 
     /// Returns the catalogue served by the isolated plain-HTTP listener.
@@ -154,17 +185,33 @@ impl CertificateRuntime {
         tokio::pin!(shutdown);
         loop {
             let mut service = self.service;
+            let mut installation = self.installation;
             let runtime = tokio::runtime::Handle::current();
-            let (returned, outcome) = tokio::task::spawn_blocking(move || {
-                let outcome = runtime.block_on(service.run_once());
-                (service, outcome)
-            })
-            .await
-            .map_err(|_| CertificateRuntimeError::WorkerStopped)?;
-            self.service = returned;
-            let interval = match outcome? {
-                CertificateAutomationOutcome::Idle { .. } => IDLE_POLL_INTERVAL,
-                CertificateAutomationOutcome::Order { .. } => ACTIVE_POLL_INTERVAL,
+            let (returned_service, returned_installation, outcome) =
+                tokio::task::spawn_blocking(move || {
+                    let automation = runtime.block_on(service.run_once());
+                    let outcome =
+                        automation
+                            .map_err(CertificateRuntimeError::from)
+                            .and_then(|automation| {
+                                installation
+                                    .run_once(OperatingSystemClock.now())
+                                    .map(|installed| (automation, installed))
+                                    .map_err(CertificateRuntimeError::from)
+                            });
+                    (service, installation, outcome)
+                })
+                .await
+                .map_err(|_| CertificateRuntimeError::WorkerStopped)?;
+            self.service = returned_service;
+            self.installation = returned_installation;
+            let (automation, installation) = outcome?;
+            let interval = match (automation, installation) {
+                (CertificateAutomationOutcome::Order { .. }, _)
+                | (_, PublicCertificateInstallationWorkerOutcome::Installed(_)) => {
+                    ACTIVE_POLL_INTERVAL
+                }
+                _ => IDLE_POLL_INTERVAL,
             };
             tokio::select! {
                 () = &mut shutdown => return Ok(()),
@@ -222,6 +269,9 @@ pub(crate) enum CertificateRuntimeError {
     /// Certificate result trust validation could not be constructed.
     #[error("certificate result validation is unavailable")]
     Result(#[from] CertificateOrderResultError),
+    /// Gateway certificate selection, decryption or acknowledgement failed closed.
+    #[error("public certificate installation failed")]
+    Installation(#[from] PublicCertificateInstallationWorkerError),
     /// The blocking certificate task stopped without returning its service state.
     #[error("certificate worker stopped unexpectedly")]
     WorkerStopped,
