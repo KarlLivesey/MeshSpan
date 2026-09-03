@@ -620,6 +620,7 @@ fn compose_appliance_services(
         &node.local_state,
         &private_authority.authority,
         &node.private_network,
+        https_identity.clone(),
         started_at,
     )?;
     let router = Router::new()
@@ -659,6 +660,7 @@ fn compose_certificate_runtime(
     local_state: &DaemonLocalState,
     authority: &MetadataAuthorityHandle,
     private_network: &Arc<PrivateConsensusRuntime>,
+    https_identity: RotatingHttpsIdentity,
     now: UnixMicros,
 ) -> Result<CertificateRuntime, DaemonProcessError> {
     let open_authority =
@@ -671,8 +673,13 @@ fn compose_certificate_runtime(
             retry: open_authority()?,
             preparation: open_authority()?,
             manual_dns: open_authority()?,
+            installation_selection: open_authority()?,
+            installation_generation: open_authority()?,
+            installation_acknowledgement: open_authority()?,
         },
         local_state.open_wrapping_key()?,
+        local_state.open_wrapping_key()?,
+        https_identity,
         local_state.node_id(),
         1,
     )

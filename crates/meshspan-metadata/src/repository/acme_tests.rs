@@ -745,6 +745,16 @@ fn gateway_installation_requires_exact_issued_recipient_and_is_idempotent()
         .certificate_order(order_id)?
         .ok_or("completed order missing")?;
     let certificate = complete.certificate.ok_or("certificate missing")?;
+    let selected = fixture
+        .repository
+        .latest_public_certificate()?
+        .ok_or("public certificate selection missing")?;
+    assert_eq!(selected.order_id, order_id);
+    assert_eq!(selected.certificate, certificate);
+    assert_eq!(selected.bundle_digest, [52; 32]);
+    assert_eq!(selected.configured_by, fixture.administrator);
+    assert_eq!(selected.completed_at, UnixMicros::new(12));
+    assert_eq!(selected.order_revision, complete.revision);
     let acknowledgement = AcknowledgePublicCertificateInstallation {
         order_id,
         gateway_node_id: fixture.node,

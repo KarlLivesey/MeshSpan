@@ -23,7 +23,7 @@ pub use order_checkpoint::CertificateOrderCheckpointRecord;
 pub(super) use order_checkpoint::checkpoint;
 pub use query::{
     AcmeConfigurationRecord, CertificateRenewalCandidate, DueCertificateOrderCursor,
-    DueCertificateRenewalCursor,
+    DueCertificateRenewalCursor, PublicCertificateSelection,
 };
 
 const ORDER_QUEUED: i64 = 1;
@@ -559,6 +559,17 @@ impl AuthoritativeRepository {
             )
             .optional()
             .map_err(RepositoryError::from)
+    }
+
+    /// Returns the globally selected newest completed public-certificate generation.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when persisted completion or configuration evidence is malformed.
+    pub fn latest_public_certificate(
+        &self,
+    ) -> Result<Option<PublicCertificateSelection>, RepositoryError> {
+        query::latest_public_certificate(&self.database)
     }
 
     /// Returns one gateway's exact certificate-installation proof.

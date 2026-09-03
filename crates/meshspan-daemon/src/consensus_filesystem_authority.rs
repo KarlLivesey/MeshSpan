@@ -20,6 +20,7 @@ use crate::{
     ConsensusAuthenticationAuthority, NodeWrappingKeyRegistrationAuthority,
     NodeWrappingKeyRegistrationAuthorityError, OnlineAuthorityLoadingAuthority,
     PublicCertificateInstallationAuthority, PublicCertificateInstallationAuthorityError,
+    PublicCertificateSelectionAuthority, PublicCertificateSelectionAuthorityError,
     RecoveryBundleVerificationAuthority, RecoveryBundleVerificationAuthorityError,
     RecoveryBundleVerificationCommit, SecretGenerationAuthority, SecretGenerationAuthorityError,
     StoragePermitAuthority, StorageTargetRegistrationAuthority,
@@ -98,6 +99,24 @@ impl PublicCertificateInstallationAuthority for ConsensusAuthenticationAuthority
     {
         self.commit_authoritative(context, command)
             .map_err(map_installation_authority_error)
+    }
+}
+
+impl PublicCertificateSelectionAuthority for ConsensusAuthenticationAuthority {
+    fn latest_public_certificate(
+        &self,
+    ) -> Result<
+        Option<meshspan_metadata::PublicCertificateSelection>,
+        PublicCertificateSelectionAuthorityError,
+    > {
+        self.reader()
+            .latest_public_certificate()
+            .map_err(|error| match error {
+                RepositoryError::Store(_) | RepositoryError::Sqlite(_) | RepositoryError::Io(_) => {
+                    PublicCertificateSelectionAuthorityError::Unavailable
+                }
+                _ => PublicCertificateSelectionAuthorityError::Failed,
+            })
     }
 }
 

@@ -161,7 +161,7 @@ pub use acme::{
     AcmeConfigurationRecord, CertificateOrderCheckpointRecord, CertificateOrderClaim,
     CertificateOrderRecord, CertificateOrderState, CertificateRenewalCandidate,
     DueCertificateOrderCursor, DueCertificateRenewalCursor, PublicCertificateInstallationRecord,
-    PublicCertificateRolloutSummary,
+    PublicCertificateRolloutSummary, PublicCertificateSelection,
 };
 pub use authentication_method::{
     ApiKeyAuthentication, AuthenticationMethodRevocationReplay, PasskeyVerificationMaterial,

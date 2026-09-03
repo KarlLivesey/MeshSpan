@@ -211,6 +211,9 @@ mod protected_recovery_code_issuance;
 mod public_certificate_installation;
 #[cfg(test)]
 mod public_certificate_installation_tests;
+mod public_certificate_installation_worker;
+#[cfg(test)]
+mod public_certificate_installation_worker_tests;
 mod public_certificate_loading;
 #[cfg(test)]
 mod public_certificate_loading_tests;
@@ -589,6 +592,11 @@ pub use public_certificate_installation::{
     PublicCertificateInstallationAuthority, PublicCertificateInstallationAuthorityError,
     PublicCertificateInstallationCommit, PublicCertificateInstallationError,
     PublicCertificateInstallationRequest, PublicCertificateInstallationService,
+};
+pub use public_certificate_installation_worker::{
+    PublicCertificateInstallationWorker, PublicCertificateInstallationWorkerComponents,
+    PublicCertificateInstallationWorkerError, PublicCertificateInstallationWorkerOutcome,
+    PublicCertificateSelectionAuthority, PublicCertificateSelectionAuthorityError,
 };
 pub use public_certificate_loading::{
     LoadedPublicCertificate, PublicCertificateLoadingError, PublicCertificateLoadingService,
