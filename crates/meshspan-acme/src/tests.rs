@@ -56,6 +56,8 @@ async fn dns_publication_uses_exact_provider_receipt_for_probe_and_cleanup()
         9,
     )?;
     let receipt = challenge.publish(&request).await?;
+    let provider = challenge.into_provider();
+    let mut challenge = Dns01Challenge::new(provider);
     assert!(challenge.is_visible(&request, receipt).await?);
     let mut stale = receipt;
     stale.publication_digest[0] ^= 1;
@@ -64,10 +66,7 @@ async fn dns_publication_uses_exact_provider_receipt_for_probe_and_cleanup()
         Err(ContractError::Stale)
     );
     challenge.cleanup(&request, receipt).await?;
-    assert_eq!(
-        challenge.is_visible(&request, receipt).await,
-        Err(ContractError::Stale)
-    );
+    assert!(!challenge.is_visible(&request, receipt).await?);
     Ok(())
 }
 
@@ -110,19 +109,17 @@ struct MemoryDns {
 }
 
 impl DnsTxtProvider for MemoryDns {
+    fn receipt(&self, name: &str, value: &[u8], order_epoch: u64) -> DnsTxtReceipt {
+        dns_receipt(name, value, order_epoch)
+    }
+
     fn publish_txt(
         &mut self,
         name: &str,
         value: &[u8],
         order_epoch: u64,
     ) -> impl Future<Output = Result<DnsTxtReceipt, ContractError>> + Send {
-        let mut digest = Sha256::new();
-        digest.update(name.as_bytes());
-        digest.update(value);
-        digest.update(order_epoch.to_be_bytes());
-        let receipt = DnsTxtReceipt {
-            provider_digest: digest.finalize().into(),
-        };
+        let receipt = dns_receipt(name, value, order_epoch);
         self.records
             .insert(name.to_owned(), (value.to_vec(), receipt));
         std::future::ready(Ok(receipt))
@@ -155,5 +152,15 @@ impl DnsTxtProvider for MemoryDns {
         }
         self.records.remove(name);
         std::future::ready(Ok(()))
+    }
+}
+
+fn dns_receipt(name: &str, value: &[u8], order_epoch: u64) -> DnsTxtReceipt {
+    let mut digest = Sha256::new();
+    digest.update(name.as_bytes());
+    digest.update(value);
+    digest.update(order_epoch.to_be_bytes());
+    DnsTxtReceipt {
+        provider_digest: digest.finalize().into(),
     }
 }

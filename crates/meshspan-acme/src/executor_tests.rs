@@ -276,19 +276,17 @@ struct RecordingDns {
 }
 
 impl DnsTxtProvider for RecordingDns {
+    fn receipt(&self, name: &str, value: &[u8], order_epoch: u64) -> DnsTxtReceipt {
+        dns_receipt(name, value, order_epoch)
+    }
+
     fn publish_txt(
         &mut self,
         name: &str,
         value: &[u8],
         order_epoch: u64,
     ) -> impl Future<Output = Result<DnsTxtReceipt, ContractError>> + Send {
-        let mut digest = Sha256::new();
-        digest.update(name.as_bytes());
-        digest.update(value);
-        digest.update(order_epoch.to_be_bytes());
-        let receipt = DnsTxtReceipt {
-            provider_digest: digest.finalize().into(),
-        };
+        let receipt = dns_receipt(name, value, order_epoch);
         self.name = Some(name.to_owned());
         self.value = Some(value.to_vec());
         self.receipt = Some(receipt);
@@ -323,5 +321,15 @@ impl DnsTxtProvider for RecordingDns {
         } else {
             std::future::ready(Err(ContractError::Stale))
         }
+    }
+}
+
+fn dns_receipt(name: &str, value: &[u8], order_epoch: u64) -> DnsTxtReceipt {
+    let mut digest = Sha256::new();
+    digest.update(name.as_bytes());
+    digest.update(value);
+    digest.update(order_epoch.to_be_bytes());
+    DnsTxtReceipt {
+        provider_digest: digest.finalize().into(),
     }
 }
