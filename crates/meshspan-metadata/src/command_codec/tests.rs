@@ -20,13 +20,14 @@ use super::*;
 use crate::{
     AcknowledgementCellRequirement, AcknowledgementCellRole, AcknowledgementConsistencyClass,
     AddGroupMember, AssignVolumeAcknowledgementPolicy, AssignVolumeLocalityPolicy,
-    AssignVolumeProtectionPolicy, AttestStorageTargetDrain, BeginStorageTargetDrain, BootstrapMesh,
-    BootstrapRecoveryIdentity, ClaimMaintenanceWork, CommitConvergedVolumeHead,
-    CommitRebalanceScanPage, CommitScrubPass, CommitSecretGeneration, CommitShardRepair,
-    CommitTargetReconciliation, CompleteMaintenanceWork, ConvergedHeadEvidence,
-    CreateAcknowledgementPolicy, CreateActivationPolicy, CreateAuthenticationMethod,
-    CreateAvailabilityCell, CreateComponent, CreateFaultGroup, CreateGroup, CreateLocalityPolicy,
-    CreateProtectionPolicy, CreateUser, CreateVolume, GrantInheritance, GrantPermission,
+    AssignVolumeProtectionPolicy, AttestStorageTargetDrain, BeginStorageScopeDrain,
+    BeginStorageTargetDrain, BootstrapMesh, BootstrapRecoveryIdentity, ClaimMaintenanceWork,
+    CommitConvergedVolumeHead, CommitRebalanceScanPage, CommitScrubPass, CommitSecretGeneration,
+    CommitShardRepair, CommitTargetReconciliation, CompleteMaintenanceWork,
+    CompleteStorageScopeDrain, ConvergedHeadEvidence, CreateAcknowledgementPolicy,
+    CreateActivationPolicy, CreateAuthenticationMethod, CreateAvailabilityCell, CreateComponent,
+    CreateFaultGroup, CreateGroup, CreateLocalityPolicy, CreateProtectionPolicy, CreateUser,
+    CreateVolume, FenceStorageNodeDrainMembership, GrantInheritance, GrantPermission,
     GrantPermissionWithActivation, IssueAuthenticationSession, LocalityRequirementConfiguration,
     MaintenanceWorkCompletion, NewAuthenticationCredential, NewRecoveryCode, PermissionScope,
     ProtectionScenarioConfiguration, PublishSmbExport, QueueMaintenanceWork, RebalanceScanCursor,
@@ -477,6 +478,53 @@ fn storage_target_drain_command_round_trips_its_policy_and_work()
             target_generation: 2,
             observed_authority_revision: Revision::new(7),
             empty_catalogue_digest: [97; 32],
+        }),
+    )?;
+    Ok(())
+}
+
+#[test]
+fn storage_scope_drain_commands_round_trip_exact_scope_and_evidence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let drain_id = WorkId::from_bytes([101; 16])?;
+    let node_id = NodeId::from_bytes([102; 16])?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::BeginStorageScopeDrain(BeginStorageScopeDrain {
+            drain_id,
+            scope: DrainScope::Node {
+                node_id,
+                node_incarnation: 7,
+            },
+            allow_temporary_degraded: true,
+            cleanup_requested: false,
+        }),
+    )?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::FenceStorageNodeDrainMembership(FenceStorageNodeDrainMembership {
+            drain_id,
+            node_id,
+            node_incarnation: 7,
+        }),
+    )?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::CompleteStorageScopeDrain(CompleteStorageScopeDrain {
+            drain_id,
+            safety_evidence_digest: [103; 32],
+        }),
+    )?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::BeginStorageScopeDrain(BeginStorageScopeDrain {
+            drain_id: WorkId::from_bytes([104; 16])?,
+            scope: DrainScope::FaultGroup {
+                fault_group_id: FaultGroupId::from_bytes([105; 16])?,
+            },
+            allow_temporary_degraded: false,
+            cleanup_requested: true,
         }),
     )?;
     Ok(())

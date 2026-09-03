@@ -181,6 +181,19 @@ impl ConsensusCore {
         self.leader_id
     }
 
+    /// Returns this core's permanent local member identity.
+    #[must_use]
+    pub const fn local_node_id(&self) -> NodeId {
+        self.config.local_node_id
+    }
+
+    /// Returns whether the active quorum phase permits this member to campaign.
+    #[must_use]
+    pub fn local_is_eligible_leader(&self) -> bool {
+        self.active_eligible_leaders()
+            .contains(&self.config.local_node_id)
+    }
+
     /// Returns the exact membership epoch accepted by this core.
     #[must_use]
     pub fn membership_epoch(&self) -> u64 {

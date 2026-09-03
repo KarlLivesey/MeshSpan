@@ -53,6 +53,7 @@ mod consensus_node_enrolment;
 mod consensus_operation_status;
 mod consensus_permission_administration;
 mod consensus_smb_export_administration;
+mod consensus_storage_drain_administration;
 mod consensus_topology_administration;
 mod create_mesh_setup;
 #[cfg(test)]
@@ -182,11 +183,15 @@ mod recovery_code_session_creation;
 mod recovery_code_session_creation_tests;
 mod revoke_session;
 mod revoke_session_api;
+mod scope_drain_worker;
 mod scrub_finding_scheduler;
 mod setup_api;
 #[cfg(test)]
 mod setup_api_tests;
 mod shard_repair_worker;
+mod storage_drain_administration;
+#[cfg(test)]
+mod storage_drain_administration_api_tests;
 mod storage_scrub_worker;
 mod target_drain_worker;
 
@@ -207,6 +212,7 @@ pub use rebalance_worker::{
     RebalanceCatalogue, RebalanceExecution, RebalanceExecutionError, RebalanceMaintenanceAuthority,
     RebalanceStepReceipt, execute_rebalance_step,
 };
+pub use scope_drain_worker::{ScopeDrainCoordinatorError, execute_scope_drain_action};
 pub use scrub_finding_scheduler::{
     AutomaticScrubFindingScheduler, RepairCandidateResolver, ScrubFindingSchedulingError,
     ScrubFindingSink,
@@ -517,6 +523,12 @@ pub use step_up_session::{
 pub use step_up_session_api::{
     StepUpCurrentSessionApiError, StepUpCurrentSessionController,
     step_up_current_session_api_router,
+};
+pub use storage_drain_administration::{
+    StorageDrainAdministrationApiError, StorageDrainAdministrationAuthority,
+    StorageDrainAdministrationAuthorityError, StorageDrainAdministrationController,
+    StorageDrainAdministrationError, StorageDrainAdministrationService,
+    storage_drain_administration_api_router,
 };
 pub use storage_folder_administration::{
     StorageFolderAdministrationBackend, StorageFolderAdministrationBackendError,

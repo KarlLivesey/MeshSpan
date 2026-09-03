@@ -249,7 +249,7 @@ struct MetadataAuthorityRuntime {
     pending: BTreeMap<OperationId, PendingOperation>,
     queued: VecDeque<QueuedOperation>,
     next_proposal_id: u64,
-    last_leader_contact: Instant,
+    election_deadline: Instant,
     coordinates_membership: bool,
 }
 
@@ -261,6 +261,7 @@ impl MetadataAuthorityRuntime {
         events: mpsc::Receiver<AuthorityEvent>,
         coordinates_membership: bool,
     ) -> Self {
+        let election_deadline = next_election_deadline(&driver, config.election_timeout);
         Self {
             driver,
             transport,
@@ -269,7 +270,7 @@ impl MetadataAuthorityRuntime {
             pending: BTreeMap::new(),
             queued: VecDeque::new(),
             next_proposal_id: 1,
-            last_leader_contact: Instant::now(),
+            election_deadline,
             coordinates_membership,
         }
     }
@@ -467,7 +468,12 @@ impl MetadataAuthorityRuntime {
         &mut self,
         peer: PeerConsensusMessage,
     ) -> Result<(), MetadataAuthorityRuntimeError> {
-        let is_leader_contact = matches!(peer.message, CoreMessage::AppendRequest(_));
+        let previous_term = self.driver.current_term();
+        let is_current_leader_contact = matches!(
+            &peer.message,
+            CoreMessage::AppendRequest(request) if request.term >= previous_term
+        );
+        let peer_id = peer.from;
         let effects = match self.driver.step(
             CoreInput::Message {
                 from: peer.from,
@@ -482,18 +488,32 @@ impl MetadataAuthorityRuntime {
             }
             Err(error) => return Err(error.into()),
         };
-        if is_leader_contact {
-            self.last_leader_contact = Instant::now();
+        let granted_vote = effects.iter().any(|effect| {
+            matches!(
+                effect,
+                DriverEffect::Send {
+                    to,
+                    message: CoreMessage::VoteResponse(response),
+                } if *to == peer_id && response.granted
+            )
+        });
+        let term_advanced = self.driver.current_term() > previous_term;
+        if is_current_leader_contact || granted_vote || term_advanced {
+            self.reset_election_deadline();
         }
         self.process_effects(effects, None)
     }
 
     fn check_election_timeout(&mut self) -> Result<(), MetadataAuthorityRuntimeError> {
-        if self.last_leader_contact.elapsed() < self.config.election_timeout {
+        if Instant::now() < self.election_deadline || !self.driver.local_is_eligible_leader() {
             return Ok(());
         }
-        self.last_leader_contact = Instant::now();
+        self.reset_election_deadline();
         self.process_input(CoreInput::ElectionTimeout)
+    }
+
+    fn reset_election_deadline(&mut self) {
+        self.election_deadline = next_election_deadline(&self.driver, self.config.election_timeout);
     }
 
     fn process_input(&mut self, input: CoreInput) -> Result<(), MetadataAuthorityRuntimeError> {
@@ -588,6 +608,7 @@ impl MetadataAuthorityRuntime {
             self.driver.member_incarnations(),
             membership.active_voters(),
             membership.admitted_learners(),
+            membership.retiring_members(),
             committed.as_ref(),
             |node| self.driver.peer_matched_index(node),
         )
@@ -625,6 +646,7 @@ impl MetadataAuthorityRuntime {
                 .log_entry(evidence.committed_position.index)
                 .cloned(),
             MembershipTransitionCommand::AdmitLearner { .. }
+            | MembershipTransitionCommand::RemoveMember { .. }
             | MembershipTransitionCommand::FinaliseStable { .. } => None,
         };
         let membership = self
@@ -637,6 +659,7 @@ impl MetadataAuthorityRuntime {
             self.driver.member_incarnations(),
             membership.active_voters(),
             membership.admitted_learners(),
+            membership.retiring_members(),
             &command,
             evidence_entry.as_ref(),
         )
@@ -649,7 +672,8 @@ impl MetadataAuthorityRuntime {
         }
         let activation = match command {
             MembershipTransitionCommand::AdmitLearner { joint_plan, .. }
-            | MembershipTransitionCommand::PromoteLearner { joint_plan, .. } => {
+            | MembershipTransitionCommand::PromoteLearner { joint_plan, .. }
+            | MembershipTransitionCommand::RemoveMember { joint_plan, .. } => {
                 CoreInput::ActivateJointPlan {
                     joint_plan,
                     member_incarnations: incarnations,
@@ -693,6 +717,28 @@ impl MetadataAuthorityRuntime {
             );
         }
     }
+}
+
+fn next_election_deadline<P: meshspan_metadata::PartitionConsensusPersistence>(
+    driver: &PartitionConsensusDriver<P>,
+    base: Duration,
+) -> Instant {
+    Instant::now() + election_delay(driver, base)
+}
+
+fn election_delay<P: meshspan_metadata::PartitionConsensusPersistence>(
+    driver: &PartitionConsensusDriver<P>,
+    base: Duration,
+) -> Duration {
+    let voters = driver.active_plan().voters();
+    let rank = voters
+        .iter()
+        .position(|node| *node == driver.local_node_id())
+        .and_then(|position| u32::try_from(position + 1).ok())
+        .unwrap_or_else(|| u32::try_from(voters.len() + 1).unwrap_or(u32::MAX));
+    let slots = u32::try_from(voters.len() + 1).unwrap_or(u32::MAX);
+    let jitter = base.checked_div(slots).unwrap_or(base).saturating_mul(rank);
+    base.saturating_add(jitter)
 }
 
 fn respond_to_waiters(

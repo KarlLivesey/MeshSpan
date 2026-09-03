@@ -13,8 +13,8 @@ mod quorum;
 
 pub use membership::{
     CatchUpEvidence, JointQuorumPlan, MembershipChangeError, PlannedLearnerAdmission,
-    PlannedPromotion, plan_next_flat_learner_admission, plan_next_flat_promotion,
-    recommended_voter_count,
+    PlannedMemberRemoval, PlannedPromotion, plan_flat_member_removal,
+    plan_next_flat_learner_admission, plan_next_flat_promotion, recommended_voter_count,
 };
 pub use membership_command::{
     MEMBERSHIP_COMMAND_VERSION, MembershipCommandError, MembershipTransitionCommand,

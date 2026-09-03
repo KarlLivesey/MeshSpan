@@ -39,6 +39,10 @@ import {
 import { renderSetupClientMethods } from "./render-setup-client.mjs";
 import { renderSmbExportClientMethods } from "./render-smb-export-client.mjs";
 import {
+  renderStorageDrainClientMethods,
+  renderStorageDrainRuntime,
+} from "./render-storage-drain-client.mjs";
+import {
   renderStorageFolderClientMethods,
   renderStorageFolderRuntime,
 } from "./render-storage-folder-client.mjs";
@@ -70,6 +74,8 @@ import type {
   AddGroupMemberRequest,
   AddGroupMemberResponse,
   ApiError,
+  BeginStorageDrainRequest,
+  BeginStorageDrainResponse,
   BeginUploadRequest,
   BeginUploadResponse,
   CommitUploadRequest,
@@ -118,6 +124,7 @@ import type {
   ListAuthenticationMethodsResponse,
   ListPrincipalsResponse,
   ListStorageFoldersResponse,
+  ListStorageDrainsResponse,
   ListTopologyNodesResponse,
   ListTopologyTargetsResponse,
   ListUploadRangesResponse,
@@ -139,6 +146,7 @@ import type {
   RegisterStorageFolderRequest,
   RegisterStorageFolderResponse,
   SetupStatusResponse,
+  StorageDrainSummary,
   SetFaultGroupMembershipRequest,
   SetFaultGroupMembershipResponse,
   StepUpCurrentSessionRequestWritable,
@@ -158,6 +166,8 @@ import {
   zBeginUploadBody,
   zBeginUploadPath,
   zBeginUploadResponse2,
+  zBeginStorageDrainBody,
+  zBeginStorageDrainResponse2,
   zCommitUploadBody,
   zCommitUploadPath,
   zCommitUploadResponse2,
@@ -203,6 +213,8 @@ import {
   zGetObjectResponse2,
   zGetOperationStatusPath,
   zGetOperationStatusResponse,
+  zGetStorageDrainPath,
+  zGetStorageDrainResponse,
   zGetOpenApiResponse,
   zGetSetupStatusResponse,
   zGetUploadPath,
@@ -222,6 +234,8 @@ import {
   zListOperationsResponse,
   zListStorageFoldersQuery,
   zListStorageFoldersResponse2,
+  zListStorageDrainsQuery,
+  zListStorageDrainsResponse2,
   zListTopologyNodesQuery,
   zListTopologyNodesResponse2,
   zListTopologyTargetsQuery,
@@ -341,6 +355,7 @@ export function createMeshSpanFetchClient(
     ${renderSmbExportClientMethods(routes)}
     ${renderPermissionAdministrationClientMethods(routes)}
     ${renderOperationStatusClientMethods(routes)}
+    ${renderStorageDrainClientMethods(routes)}
     ${renderStorageFolderClientMethods(routes)}
     ${renderTopologyClientMethods(routes)}
     ${renderDirectoryClientMethods(routes)}
@@ -472,6 +487,8 @@ ${renderVolumeClientRuntime(routes)}
 ${renderPermissionAdministrationRuntime()}
 
 ${renderOperationStatusRuntime()}
+
+${renderStorageDrainRuntime(routes)}
 
 ${renderStorageFolderRuntime(routes)}
 

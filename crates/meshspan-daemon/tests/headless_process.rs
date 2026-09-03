@@ -505,7 +505,14 @@ async fn three_headless_daemons_commit_after_original_node_loss() -> Result<(), 
 
         processes[0].kill()?;
         processes[0].wait()?;
-        let user_id = wait_for_user_creation(second.address, &second_client, api_key).await?;
+        let user_id = wait_for_user_creation(
+            second.address,
+            &second_client,
+            api_key,
+            [&second, &third],
+            &root.identity_path,
+        )
+        .await?;
         wait_for_user_visibility(third.address, &third_client, api_key).await?;
         add_group_member(third.address, &third_client, api_key, &group_id, &user_id).await?;
         wait_for_group_membership(second.address, &second_client, api_key, &group_id, &user_id)
@@ -685,7 +692,12 @@ async fn wait_for_user_creation(
     address: SocketAddr,
     client: &ClientConfig,
     api_key: &str,
+    survivors: [&ProcessFixture; 2],
+    root_identity_path: &Path,
 ) -> Result<String, Box<dyn Error>> {
+    let root_identity = LocalNodeIdentity::open(root_identity_path, CERTIFICATE_NAME)?;
+    let root_node = InitialBootstrapMaterial::node_id(root_identity.public_key_fingerprint())?;
+    let partition_id = InitialBootstrapMaterial::root_partition_id(root_node)?;
     let deadline = Instant::now() + WAIT_LIMIT;
     loop {
         let error = match create_user(address, client, api_key).await {
@@ -693,8 +705,11 @@ async fn wait_for_user_creation(
             Err(error) => error,
         };
         if Instant::now() >= deadline {
+            let durable_votes = survivors.map(|fixture| {
+                durable_vote(&fixture.state_path, partition_id).map_err(|error| error.to_string())
+            });
             return Err(format!(
-                "surviving daemon never accepted a committed metadata write: {error}"
+                "surviving daemon never accepted a committed metadata write; durable votes: {durable_votes:?}; last response: {error}"
             )
             .into());
         }
@@ -2539,14 +2554,25 @@ async fn wait_for_status(
     let deadline = Instant::now() + WAIT_LIMIT;
     loop {
         let response = request(address, client, "GET", "/api/latest/setup/status", None).await;
-        if response
-            .as_ref()
-            .is_ok_and(|response| response.contains(&format!("\"state\":\"{expected}\"")))
-        {
-            return Ok(());
-        }
+        let last_observation = match response {
+            Ok(response) => {
+                if response.contains(&format!("\"state\":\"{expected}\"")) {
+                    return Ok(());
+                }
+                response
+                    .split_once("\r\n\r\n")
+                    .map_or(response.as_str(), |(_, body)| body)
+                    .chars()
+                    .take(512)
+                    .collect()
+            }
+            Err(error) => error.to_string(),
+        };
         if Instant::now() >= deadline {
-            return Err("headless process did not reach the expected setup state".into());
+            return Err(format!(
+                "headless process at {address} did not reach setup state {expected:?}; last observation: {last_observation}"
+            )
+            .into());
         }
         sleep(RETRY_INTERVAL).await;
     }

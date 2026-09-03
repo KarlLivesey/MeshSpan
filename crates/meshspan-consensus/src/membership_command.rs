@@ -18,6 +18,7 @@ const FORMAT_VERSION: u16 = 1;
 const ADMIT_LEARNER: u8 = 1;
 const PROMOTE_LEARNER: u8 = 2;
 const FINALISE_STABLE: u8 = 3;
+const REMOVE_MEMBER: u8 = 4;
 const MAXIMUM_COMMAND_BYTES: usize = 96 * 1_024;
 
 /// One independently validated membership transition carried by a committed log entry.
@@ -38,6 +39,15 @@ pub enum MembershipTransitionCommand {
         joint_plan: Box<JointQuorumPlan>,
         /// Current-incarnation catch-up evidence bound to an exact committed entry.
         evidence: CatchUpEvidence,
+    },
+    /// Removes one exact current-incarnation voter or learner through a safe joint phase.
+    RemoveMember {
+        /// Safe old+new phase whose successor excludes exactly this member.
+        joint_plan: Box<JointQuorumPlan>,
+        /// Exact authoritative member identity being removed.
+        node_id: NodeId,
+        /// Current positive incarnation fenced by authoritative membership.
+        incarnation: u64,
     },
     /// Leaves the active joint phase for its exact stable successor.
     FinaliseStable {
@@ -64,6 +74,11 @@ impl MembershipTransitionCommand {
                 joint_plan,
                 evidence,
             } => validate_promotion(joint_plan, evidence),
+            Self::RemoveMember {
+                joint_plan,
+                node_id,
+                incarnation,
+            } => validate_removal(joint_plan, *node_id, *incarnation),
             Self::FinaliseStable { .. } => Ok(()),
         }
     }
@@ -82,6 +97,9 @@ impl MembershipTransitionCommand {
             }
             Self::PromoteLearner { joint_plan, .. } => {
                 (PROMOTE_LEARNER, ActiveQuorumPlan::Joint(joint_plan.clone()))
+            }
+            Self::RemoveMember { joint_plan, .. } => {
+                (REMOVE_MEMBER, ActiveQuorumPlan::Joint(joint_plan.clone()))
             }
             Self::FinaliseStable { plan } => {
                 (FINALISE_STABLE, ActiveQuorumPlan::Stable(plan.clone()))
@@ -141,6 +159,11 @@ fn encode_evidence(command: &MembershipTransitionCommand, output: &mut Vec<u8>) 
             node_id,
             incarnation,
             ..
+        }
+        | MembershipTransitionCommand::RemoveMember {
+            node_id,
+            incarnation,
+            ..
         } => {
             output.extend_from_slice(&node_id.as_bytes());
             output.extend_from_slice(&incarnation.to_be_bytes());
@@ -182,6 +205,13 @@ fn decode_evidence(
                     committed_entry_digest: cursor.read_array::<32>()?,
                     promotion_eligible: true,
                 },
+            })
+        }
+        (REMOVE_MEMBER, ActiveQuorumPlan::Joint(joint_plan)) => {
+            Ok(MembershipTransitionCommand::RemoveMember {
+                joint_plan,
+                node_id: cursor.read_node_id()?,
+                incarnation: cursor.read_u64()?,
             })
         }
         (FINALISE_STABLE, ActiveQuorumPlan::Stable(plan)) => {
@@ -226,6 +256,28 @@ fn validate_promotion(
         || evidence.committed_position == LogPosition::GENESIS
         || !was_learner
         || !became_voter
+        || expected_voters != new.voters
+        || expected_learners != new.learners
+    {
+        Err(MembershipCommandError::InvalidTransition)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_removal(
+    joint: &JointQuorumPlan,
+    node_id: NodeId,
+    incarnation: u64,
+) -> Result<(), MembershipCommandError> {
+    let old = joint.old_plan().spec();
+    let new = joint.new_plan().spec();
+    let mut expected_voters = old.voters.clone();
+    let mut expected_learners = old.learners.clone();
+    let removed = expected_voters.remove(&node_id) || expected_learners.remove(&node_id);
+    if incarnation == 0
+        || !removed
+        || expected_voters.is_empty()
         || expected_voters != new.voters
         || expected_learners != new.learners
     {
@@ -351,8 +403,19 @@ mod tests {
             },
         };
         assert_round_trip(&promotion)?;
+        let removed = compile_plan(flat_plan(
+            QuorumPlanId::from_bytes([7; 16])?,
+            4,
+            BTreeSet::from([first]),
+            BTreeSet::new(),
+        )?)?;
+        assert_round_trip(&MembershipTransitionCommand::RemoveMember {
+            joint_plan: Box::new(JointQuorumPlan::new(promoted.clone(), removed.clone())?),
+            node_id: learner,
+            incarnation: 7,
+        })?;
         assert_round_trip(&MembershipTransitionCommand::FinaliseStable {
-            plan: Box::new(promoted),
+            plan: Box::new(removed),
         })?;
 
         let mut corrupt = promotion.encode()?;

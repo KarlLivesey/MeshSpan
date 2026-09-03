@@ -8,8 +8,9 @@ use sha2::{Digest, Sha256};
 use crate::{
     AbortUploadRequest, AbortUploadResponse, AddGroupMemberRequest, AddGroupMemberResponse,
     ApiError, AssignVolumePlacementPolicyRequest, AssignVolumePlacementPolicyResponse,
-    AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse, BeginUploadRequest,
-    BeginUploadResponse, CommitUploadRequest, CommitUploadResponse, ConfirmRecoveryBundleRequest,
+    AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
+    BeginStorageDrainRequest, BeginStorageDrainResponse, BeginUploadRequest, BeginUploadResponse,
+    CommitUploadRequest, CommitUploadResponse, ConfirmRecoveryBundleRequest,
     ConfirmRecoveryBundleResponse, CreateAcknowledgementPolicyRequest,
     CreateAcknowledgementPolicyResponse, CreateApiKeyRequest, CreateApiKeyResponse,
     CreateAvailabilityCellRequest, CreateAvailabilityCellResponse, CreateDirectoryRequest,
@@ -30,17 +31,17 @@ use crate::{
     ListAvailabilityCellsResponse, ListDirectoryResponse, ListFaultGroupMembershipsResponse,
     ListFaultGroupsResponse, ListGroupMembershipsResponse, ListLocalityPoliciesResponse,
     ListOperationsResponse, ListPrincipalsResponse, ListProtectionPoliciesResponse,
-    ListStorageFoldersResponse, ListTopologyNodesResponse, ListTopologyTargetsResponse,
-    ListUploadRangesResponse, ListVolumePermissionGrantsResponse, ListVolumesResponse,
-    OperationStatusResponse, PublishSmbExportRequest, PublishSmbExportResponse,
-    RegisterStorageFolderRequest, RegisterStorageFolderResponse, RemoveGroupMemberRequest,
-    RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
+    ListStorageDrainsResponse, ListStorageFoldersResponse, ListTopologyNodesResponse,
+    ListTopologyTargetsResponse, ListUploadRangesResponse, ListVolumePermissionGrantsResponse,
+    ListVolumesResponse, OperationStatusResponse, PublishSmbExportRequest,
+    PublishSmbExportResponse, RegisterStorageFolderRequest, RegisterStorageFolderResponse,
+    RemoveGroupMemberRequest, RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
     RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
     RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, RevokePermissionGrantRequest,
     RevokePermissionGrantResponse, SetAvailabilityCellMembershipResponse,
     SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse, SetupStatusResponse,
-    StepUpCurrentSessionRequest, UploadStatusResponse, WithdrawSmbExportRequest,
-    WithdrawSmbExportResponse, WriteUploadRangeResponse, schema,
+    StepUpCurrentSessionRequest, StorageDrainSummary, UploadStatusResponse,
+    WithdrawSmbExportRequest, WithdrawSmbExportResponse, WriteUploadRangeResponse, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -128,6 +129,8 @@ fn components() -> Value {
             ),
             schema_request::<BeginUploadRequest>("BeginUploadRequest"),
             schema_response::<BeginUploadResponse>("BeginUploadResponse"),
+            schema_request::<BeginStorageDrainRequest>("BeginStorageDrainRequest"),
+            schema_response::<BeginStorageDrainResponse>("BeginStorageDrainResponse"),
             schema_request::<CommitUploadRequest>("CommitUploadRequest"),
             schema_response::<CommitUploadResponse>("CommitUploadResponse"),
             schema_request::<ConfirmRecoveryBundleRequest>("ConfirmRecoveryBundleRequest"),
@@ -216,6 +219,7 @@ fn components() -> Value {
             schema_response::<ListPrincipalsResponse>("ListPrincipalsResponse"),
             schema_response::<ListProtectionPoliciesResponse>("ListProtectionPoliciesResponse"),
             schema_response::<ListStorageFoldersResponse>("ListStorageFoldersResponse"),
+            schema_response::<ListStorageDrainsResponse>("ListStorageDrainsResponse"),
             schema_response::<ListTopologyNodesResponse>("ListTopologyNodesResponse"),
             schema_response::<ListTopologyTargetsResponse>("ListTopologyTargetsResponse"),
             schema_response::<ListUploadRangesResponse>("ListUploadRangesResponse"),
@@ -247,6 +251,7 @@ fn components() -> Value {
                 "SetAvailabilityCellMembershipResponse",
             ),
             schema_request::<StepUpCurrentSessionRequest>("StepUpCurrentSessionRequest"),
+            schema_response::<StorageDrainSummary>("StorageDrainSummary"),
             schema_response::<UploadStatusResponse>("UploadStatusResponse"),
             schema_response::<WriteUploadRangeResponse>("WriteUploadRangeResponse"),
         ]
@@ -464,6 +469,13 @@ fn administration_paths() -> Vec<(String, Value)> {
         .into_iter()
         .chain(administration_placement_paths())
         .chain(administration_topology_paths())
+        .chain([
+            ("/admin/storage-drains".to_owned(), storage_drains_path()),
+            (
+                "/admin/storage-drains/{drain_id}".to_owned(),
+                storage_drain_status_path(),
+            ),
+        ])
         .collect()
 }
 
@@ -984,6 +996,63 @@ fn list_operations_path() -> Value {
                 "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
                 "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
                 "503": json_response("Operation authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn storage_drains_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "listStorageDrains",
+            "summary": "List safe-removal work for storage folders, nodes and fault groups",
+            "x-meshspan-access": "system-manager",
+            "parameters": [cursor_parameter(), operation_limit_parameter()],
+            "responses": {
+                "200": json_response("One newest-first storage-drain page", "#/components/schemas/ListStorageDrainsResponse"),
+                "400": json_response("Invalid query", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Storage-drain authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        },
+        "post": {
+            "operationId": "beginStorageDrain",
+            "summary": "Fence and safely evacuate one exact storage scope",
+            "x-meshspan-access": "system-manager-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "parameters": [optional_csrf_parameter()],
+            "requestBody": json_request("Exact storage scope and safe-removal policy", "#/components/schemas/BeginStorageDrainRequest"),
+            "responses": {
+                "202": json_response("Storage drain durably admitted", "#/components/schemas/BeginStorageDrainResponse"),
+                "400": json_response("Invalid drain request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "409": json_response("Scope, lifecycle or operation conflict", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Storage-drain authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn storage_drain_status_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "getStorageDrain",
+            "summary": "Resolve one current safe-removal state",
+            "x-meshspan-access": "system-manager",
+            "parameters": [principal_parameter("drain_id", "Storage-drain identity")],
+            "responses": {
+                "200": json_response("Current authoritative drain state", "#/components/schemas/StorageDrainSummary"),
+                "400": json_response("Invalid drain identity", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "404": json_response("Storage drain not found", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Storage-drain authority temporarily unavailable", "#/components/schemas/ApiError")
             }
         }
     })

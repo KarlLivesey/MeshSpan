@@ -14,8 +14,10 @@ const ACTIVE_VOTER_ROLE: i64 = 1;
 const STAGED_LEARNER_ROLE: i64 = 2;
 const ACTIVE_MEMBER_STATE: i64 = 1;
 const STAGED_MEMBER_STATE: i64 = 2;
+const RETIRING_MEMBER_STATE: i64 = 3;
 const ADMITTED_NODE_STATE: i64 = 1;
 const ACTIVE_NODE_STATE: i64 = 2;
+const DRAINING_NODE_STATE: i64 = 3;
 
 /// Exact current-incarnation membership accepted by one authoritative metadata partition.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -23,6 +25,7 @@ pub struct AuthoritativeMembership {
     revision: Revision,
     active_voters: BTreeMap<NodeId, u64>,
     admitted_learners: BTreeMap<NodeId, u64>,
+    retiring_members: BTreeMap<NodeId, u64>,
 }
 
 impl AuthoritativeMembership {
@@ -42,6 +45,12 @@ impl AuthoritativeMembership {
     #[must_use]
     pub const fn admitted_learners(&self) -> &BTreeMap<NodeId, u64> {
         &self.admitted_learners
+    }
+
+    /// Returns members authoritatively fenced from new work and awaiting joint removal.
+    #[must_use]
+    pub const fn retiring_members(&self) -> &BTreeMap<NodeId, u64> {
+        &self.retiring_members
     }
 }
 
@@ -73,6 +82,7 @@ pub(super) fn load(
     let mut rows = statement.query(params![partition_id.as_slice()])?;
     let mut active_voters = BTreeMap::new();
     let mut admitted_learners = BTreeMap::new();
+    let mut retiring_members = BTreeMap::new();
     while let Some(row) = rows.next()? {
         let node_id = node_id(&row.get::<_, Vec<u8>>(0)?)?;
         let incarnation = positive_u64(row.get(1)?)?;
@@ -86,6 +96,11 @@ pub(super) fn load(
             (STAGED_LEARNER_ROLE, STAGED_MEMBER_STATE, ADMITTED_NODE_STATE | ACTIVE_NODE_STATE) => {
                 admitted_learners.insert(node_id, incarnation)
             }
+            (
+                ACTIVE_VOTER_ROLE | STAGED_LEARNER_ROLE,
+                RETIRING_MEMBER_STATE,
+                DRAINING_NODE_STATE,
+            ) => retiring_members.insert(node_id, incarnation),
             _ => return Err(RepositoryError::CorruptState),
         };
         if inserted.is_some() {
@@ -95,7 +110,10 @@ pub(super) fn load(
     if active_voters.is_empty()
         || active_voters
             .keys()
-            .any(|node| admitted_learners.contains_key(node))
+            .any(|node| admitted_learners.contains_key(node) || retiring_members.contains_key(node))
+        || admitted_learners
+            .keys()
+            .any(|node| retiring_members.contains_key(node))
     {
         return Err(RepositoryError::CorruptState);
     }
@@ -103,6 +121,7 @@ pub(super) fn load(
         revision: Revision::new(revision),
         active_voters,
         admitted_learners,
+        retiring_members,
     }))
 }
 

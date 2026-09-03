@@ -25,6 +25,8 @@ const PAGE_ITEMS: usize = 1_000;
 const MAXIMUM_CELLS_PER_TARGET: usize = 256;
 const MAXIMUM_CELL_SCENARIOS: usize = 16;
 const PERCENT_CAPACITY_PLANNING_CEILING: u64 = 1_u64 << 50;
+const LOCAL_TARGET_PERFORMANCE_WEIGHT: u16 = 200;
+const REMOTE_TARGET_PERFORMANCE_WEIGHT: u16 = 100;
 
 /// Live authoritative protection resolver used once for each new content publication.
 pub(crate) struct NativeProtectionPolicySource {
@@ -127,7 +129,11 @@ fn protection_configuration(
                 host_id: *host_id,
                 target_generation: context.generation,
                 writable_bytes: planning_ceiling(context.usage_limit),
-                performance_weight: 100,
+                // Foreground eventual writes must acknowledge a gateway-local shard first. A
+                // failed remote target then becomes repair debt instead of making a healthy
+                // gateway reject the write merely because committed topology has not yet caught
+                // up with abrupt node loss.
+                performance_weight: target_performance_weight(*context, local_targets),
                 availability_cells: BoundedItems::new(cells, MAXIMUM_CELLS_PER_TARGET)
                     .map_err(|_| ContentPublicationError::InvalidInput)?,
             })
@@ -353,6 +359,20 @@ fn same_target_generation(
         && current.policy_revision == opened.policy_revision
 }
 
+fn target_performance_weight(
+    candidate: StorageTargetProviderContext,
+    local_targets: &[StorageTargetProviderContext],
+) -> u16 {
+    if local_targets
+        .iter()
+        .any(|local| same_target_generation(candidate, *local))
+    {
+        LOCAL_TARGET_PERFORMANCE_WEIGHT
+    } else {
+        REMOTE_TARGET_PERFORMANCE_WEIGHT
+    }
+}
+
 fn active_targets(
     authority: &AuthoritativeRepository,
 ) -> Result<Vec<(StorageTargetProviderContext, HostId)>, ContentPublicationError> {
@@ -480,4 +500,46 @@ fn derived_identifier(domain: &[u8], input: &[u8]) -> [u8; 16] {
     let mut identifier = [0; 16];
     identifier.copy_from_slice(&digest.finalize().as_bytes()[..16]);
     uuid_v8(identifier)
+}
+
+#[cfg(test)]
+mod tests {
+    use meshspan_domain::{MeshId, NodeId, Revision, TargetId};
+    use meshspan_metadata::{StorageTargetProviderContext, StorageUsageLimit};
+
+    use super::{
+        LOCAL_TARGET_PERFORMANCE_WEIGHT, REMOTE_TARGET_PERFORMANCE_WEIGHT,
+        target_performance_weight,
+    };
+
+    #[test]
+    fn gateway_local_target_precedes_remote_repair_debt() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let local = target(1, 2)?;
+        let remote = target(3, 4)?;
+        assert_eq!(
+            target_performance_weight(local, &[local]),
+            LOCAL_TARGET_PERFORMANCE_WEIGHT
+        );
+        assert_eq!(
+            target_performance_weight(remote, &[local]),
+            REMOTE_TARGET_PERFORMANCE_WEIGHT
+        );
+        Ok(())
+    }
+
+    fn target(
+        node: u8,
+        target: u8,
+    ) -> Result<StorageTargetProviderContext, meshspan_domain::IdentifierError> {
+        Ok(StorageTargetProviderContext {
+            mesh_id: MeshId::from_bytes([1; 16])?,
+            node_id: NodeId::from_bytes([node; 16])?,
+            target_id: TargetId::from_bytes([target; 16])?,
+            generation: 1,
+            usage_limit: StorageUsageLimit::Percent(95),
+            policy_revision: Revision::new(1),
+            catalogue_revision: Revision::new(1),
+        })
+    }
 }

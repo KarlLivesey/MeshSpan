@@ -15,8 +15,11 @@ import { createPagedResource } from "./paged-resource";
 export type TopologyAdministrationClient = Pick<
   MeshSpanFetchClient,
   | "createFaultGroup"
+  | "beginStorageDrain"
   | "listFaultGroupMemberships"
   | "listFaultGroups"
+  | "listStorageDrains"
+  | "listNextStorageDrains"
   | "listNextFaultGroupMemberships"
   | "listNextFaultGroups"
   | "listNextTopologyNodes"

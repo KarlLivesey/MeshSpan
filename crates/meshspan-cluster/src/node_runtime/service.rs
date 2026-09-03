@@ -423,6 +423,7 @@ fn apply_committed_entry(
             driver.log_entry(evidence.committed_position.index).cloned()
         }
         MembershipTransitionCommand::AdmitLearner { .. }
+        | MembershipTransitionCommand::RemoveMember { .. }
         | MembershipTransitionCommand::FinaliseStable { .. } => None,
     };
     let membership = driver
@@ -434,6 +435,7 @@ fn apply_committed_entry(
         driver.member_incarnations(),
         membership.active_voters(),
         membership.admitted_learners(),
+        membership.retiring_members(),
         &command,
         evidence_entry.as_ref(),
     )?;
@@ -443,7 +445,8 @@ fn apply_committed_entry(
     }
     let activation = match command {
         MembershipTransitionCommand::AdmitLearner { joint_plan, .. }
-        | MembershipTransitionCommand::PromoteLearner { joint_plan, .. } => {
+        | MembershipTransitionCommand::PromoteLearner { joint_plan, .. }
+        | MembershipTransitionCommand::RemoveMember { joint_plan, .. } => {
             CoreInput::ActivateJointPlan {
                 joint_plan,
                 member_incarnations: incarnations,

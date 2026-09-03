@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_domain::{
-    AuditEventId, ComponentInstanceId, HostId, MeshId, NodeId, OperationId, PartitionId,
-    PrincipalId, Revision, RoleId, TargetId, UnixMicros, WorkId,
+    AuditEventId, ComponentInstanceId, FaultGroupClassId, FaultGroupId, HostId, MeshId, NodeId,
+    OperationId, PartitionId, PrincipalId, Revision, RoleId, TargetId, UnixMicros, WorkId,
 };
 use meshspan_work::{DrainScope, WorkDemand, WorkSignals, WorkSubject};
 use sha2::{Digest, Sha256};
@@ -12,10 +12,12 @@ use tempfile::tempdir;
 use super::tests::{mark_test_recovery_verified, protected_bootstrap};
 use super::{ApplyDisposition, AuthoritativeRepository, EntityKind, LogPosition, RepositoryError};
 use crate::{
-    ActivateNode, AttestStorageTargetDrain, AuthoritativeCommand, BeginStorageTargetDrain,
-    BootstrapMesh, ClaimMaintenanceWork, CommandContext, CompleteMaintenanceWork, CreateComponent,
+    ActivateNode, AttestStorageTargetDrain, AuthoritativeCommand, BeginStorageScopeDrain,
+    BeginStorageTargetDrain, BootstrapMesh, ClaimMaintenanceWork, CommandContext,
+    CompleteMaintenanceWork, CompleteStorageScopeDrain, CreateComponent, CreateFaultGroup,
     MaintenanceWorkCompletion, PartitionDatabase, QueueMaintenanceWork, RecordName,
-    RegisterStorageTarget, StorageUsageLimit, empty_target_drain_catalogue_digest,
+    RegisterStorageTarget, SetHostFaultGroupMembership, StorageDrainState, StorageScopeDrainAction,
+    StorageScopeDrainState, StorageUsageLimit, empty_target_drain_catalogue_digest,
 };
 
 struct Fixture {
@@ -34,6 +36,13 @@ struct ActiveTwoGatewayDrain {
     work_id: WorkId,
 }
 
+struct ActiveFaultGroupScopeDrain {
+    fixture: Fixture,
+    drain_id: WorkId,
+    group_id: FaultGroupId,
+    target_id: TargetId,
+}
+
 struct StoredTarget {
     node_id: Vec<u8>,
     host_id: Vec<u8>,
@@ -48,6 +57,230 @@ struct StoredTargetGeneration {
     backing_device_fingerprint: Option<Vec<u8>>,
     filesystem_fingerprint: Option<Vec<u8>>,
     state: i64,
+}
+
+#[test]
+fn fault_group_drain_fences_writes_and_composes_a_real_target_drain()
+-> Result<(), Box<dyn std::error::Error>> {
+    let ActiveFaultGroupScopeDrain {
+        mut fixture,
+        drain_id,
+        group_id,
+        target_id,
+    } = prepare_fault_group_scope_drain()?;
+    assert_eq!(
+        fixture
+            .repository
+            .storage_target_provider_context(fixture.node, target_id)?,
+        None
+    );
+    assert!(
+        fixture
+            .repository
+            .readable_storage_target_provider_context(fixture.node, target_id)?
+            .is_some()
+    );
+    assert!(matches!(
+        fixture.repository.storage_scope_drain_action(drain_id)?,
+        Some(StorageScopeDrainAction::BeginTarget {
+            target_id: found,
+            target_generation: 1,
+            ..
+        }) if found == target_id
+    ));
+    let child_work = WorkId::from_bytes([55; 16])?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 6, term: 1 },
+        context(56, fixture.administrator, 57, 60, Some(5))?,
+        &drain_command(target_id, child_work),
+    )?;
+    let effect = attest_gateway(
+        &mut fixture.repository,
+        fixture.administrator,
+        target_id,
+        child_work,
+        fixture.node,
+        1,
+        58,
+        7,
+        70,
+    )?;
+    assert!(effect.is_some());
+    let Some(StorageScopeDrainAction::Complete {
+        safety_evidence_digest,
+        ..
+    }) = fixture.repository.storage_scope_drain_action(drain_id)?
+    else {
+        return Err("completed child did not make the fault-group drain actionable".into());
+    };
+    fixture.repository.apply_committed(
+        LogPosition { index: 9, term: 1 },
+        context(61, fixture.administrator, 62, 90, Some(8))?,
+        &AuthoritativeCommand::CompleteStorageScopeDrain(CompleteStorageScopeDrain {
+            drain_id,
+            safety_evidence_digest,
+        }),
+    )?;
+    assert_completed_scope_remains_fenced(&mut fixture, drain_id, group_id)?;
+    Ok(())
+}
+
+fn assert_completed_scope_remains_fenced(
+    fixture: &mut Fixture,
+    drain_id: WorkId,
+    group_id: FaultGroupId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert_eq!(
+        fixture
+            .repository
+            .storage_scope_drain(drain_id)?
+            .ok_or("scope drain disappeared")?
+            .state,
+        StorageScopeDrainState::SafeToDetach
+    );
+    let public_drain = fixture
+        .repository
+        .storage_drain(drain_id)?
+        .ok_or("unified drain record disappeared")?;
+    assert_eq!(public_drain.state, StorageDrainState::SafeToDetach);
+    assert_eq!(
+        public_drain.scope,
+        DrainScope::FaultGroup {
+            fault_group_id: group_id
+        }
+    );
+    let page = fixture
+        .repository
+        .storage_drains(None, super::PageLimit::new(2)?)?;
+    assert_eq!(page.items.len(), 2);
+    assert!(page.items[0].requested_at > page.items[1].requested_at);
+    assert_eq!(page.items[1], public_drain);
+    assert_eq!(page.next, None);
+    let replacement = RegisterStorageTarget {
+        target_id: TargetId::from_bytes([63; 16])?,
+        name: RecordName::new("Unexpected replacement")?,
+        marker_fingerprint: [64; 32],
+        backing_device_fingerprint: Some([65; 32]),
+        filesystem_fingerprint: Some([66; 32]),
+        ..target_value(fixture, StorageUsageLimit::Percent(95))?
+    };
+    assert!(matches!(
+        fixture.repository.apply_committed(
+            LogPosition { index: 10, term: 1 },
+            context(67, fixture.administrator, 68, 100, Some(9))?,
+            &AuthoritativeCommand::RegisterStorageTarget(replacement),
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    Ok(())
+}
+
+fn prepare_fault_group_scope_drain()
+-> Result<ActiveFaultGroupScopeDrain, Box<dyn std::error::Error>> {
+    let mut fixture = fixture()?;
+    let group_id = FaultGroupId::from_bytes([44; 16])?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 2, term: 1 },
+        context(45, fixture.administrator, 46, 20, Some(1))?,
+        &AuthoritativeCommand::CreateFaultGroup(CreateFaultGroup {
+            class_id: FaultGroupClassId::from_bytes([47; 16])?,
+            class_name: RecordName::new("Power source")?,
+            group_id,
+            group_name: RecordName::new("Supply A")?,
+        }),
+    )?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 3, term: 1 },
+        context(48, fixture.administrator, 49, 30, Some(2))?,
+        &AuthoritativeCommand::SetHostFaultGroupMembership(SetHostFaultGroupMembership {
+            group_id,
+            host_id: fixture.host,
+            present: true,
+        }),
+    )?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 4, term: 1 },
+        context(50, fixture.administrator, 51, 40, Some(3))?,
+        &target_command(&fixture, StorageUsageLimit::Percent(95))?,
+    )?;
+    let drain_id = WorkId::from_bytes([52; 16])?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 5, term: 1 },
+        context(53, fixture.administrator, 54, 50, Some(4))?,
+        &AuthoritativeCommand::BeginStorageScopeDrain(BeginStorageScopeDrain {
+            drain_id,
+            scope: DrainScope::FaultGroup {
+                fault_group_id: group_id,
+            },
+            allow_temporary_degraded: true,
+            cleanup_requested: false,
+        }),
+    )?;
+    Ok(ActiveFaultGroupScopeDrain {
+        fixture,
+        drain_id,
+        group_id,
+        target_id: TargetId::from_bytes([40; 16])?,
+    })
+}
+
+#[test]
+fn sole_voter_node_drain_waits_for_a_replacement_after_evacuating_targets()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture()?;
+    let target_id = TargetId::from_bytes([40; 16])?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 2, term: 1 },
+        context(63, fixture.administrator, 64, 20, Some(1))?,
+        &target_command(&fixture, StorageUsageLimit::Percent(95))?,
+    )?;
+    let drain_id = WorkId::from_bytes([65; 16])?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 3, term: 1 },
+        context(66, fixture.administrator, 67, 30, Some(2))?,
+        &AuthoritativeCommand::BeginStorageScopeDrain(BeginStorageScopeDrain {
+            drain_id,
+            scope: DrainScope::Node {
+                node_id: fixture.node,
+                node_incarnation: 1,
+            },
+            allow_temporary_degraded: true,
+            cleanup_requested: false,
+        }),
+    )?;
+    let child_work = WorkId::from_bytes([68; 16])?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 4, term: 1 },
+        context(69, fixture.administrator, 70, 40, Some(3))?,
+        &drain_command(target_id, child_work),
+    )?;
+    assert!(
+        attest_gateway(
+            &mut fixture.repository,
+            fixture.administrator,
+            target_id,
+            child_work,
+            fixture.node,
+            1,
+            71,
+            5,
+            50,
+        )?
+        .is_some()
+    );
+    assert_eq!(
+        fixture.repository.storage_scope_drain_action(drain_id)?,
+        None
+    );
+    assert_eq!(
+        fixture
+            .repository
+            .storage_scope_drain(drain_id)?
+            .ok_or("node drain disappeared")?
+            .state,
+        StorageScopeDrainState::Evacuating
+    );
+    Ok(())
 }
 
 #[test]

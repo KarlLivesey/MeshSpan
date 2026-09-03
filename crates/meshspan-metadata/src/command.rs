@@ -21,7 +21,7 @@ use meshspan_domain::{
     WorkId,
 };
 use meshspan_secret_envelope::{EncryptedSecretParts, RecipientEnvelopeParts};
-use meshspan_work::{WorkDemand, WorkSignals, WorkSubject};
+use meshspan_work::{DrainScope, WorkDemand, WorkSignals, WorkSubject};
 use sha2::{Digest, Sha256};
 
 use crate::AdmitFederatedMutation;
@@ -188,6 +188,12 @@ pub enum AuthoritativeCommand {
     QueueMaintenanceWork(QueueMaintenanceWork),
     /// Excludes one target generation from new writes and atomically queues its evacuation.
     BeginStorageTargetDrain(BeginStorageTargetDrain),
+    /// Fences new placement into one node or fault group before composing its target drains.
+    BeginStorageScopeDrain(BeginStorageScopeDrain),
+    /// Marks one fully evacuated node as retiring from every metadata membership.
+    FenceStorageNodeDrainMembership(FenceStorageNodeDrainMembership),
+    /// Commits the authoritative safe-to-detach proof for one drained node or fault group.
+    CompleteStorageScopeDrain(CompleteStorageScopeDrain),
     /// Records one gateway's exact empty-catalogue proof for a draining target.
     AttestStorageTargetDrain(AttestStorageTargetDrain),
     /// Commits one bounded restart-safe volume rebalance scan page.
@@ -368,6 +374,9 @@ impl AuthoritativeCommand {
             Self::AssignVolumeAcknowledgementPolicy(value) => value.update_digest(digest),
             Self::QueueMaintenanceWork(value) => value.update_digest(digest),
             Self::BeginStorageTargetDrain(value) => value.update_digest(digest),
+            Self::BeginStorageScopeDrain(value) => value.update_digest(digest),
+            Self::FenceStorageNodeDrainMembership(value) => value.update_digest(digest),
+            Self::CompleteStorageScopeDrain(value) => value.update_digest(digest),
             Self::AttestStorageTargetDrain(value) => value.update_digest(digest),
             Self::CommitRebalanceScanPage(value) => value.update_digest(digest),
             Self::ClaimMaintenanceWork(value) => value.update_digest(digest),
@@ -1960,6 +1969,39 @@ pub struct BeginStorageTargetDrain {
     pub cleanup_requested: bool,
 }
 
+/// Authoritative node or fault-group placement fence composed from ordinary target drains.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BeginStorageScopeDrain {
+    /// Stable drain identity used to derive idempotent child target work.
+    pub drain_id: WorkId,
+    /// Exact node incarnation or fault group to drain; target scope is rejected.
+    pub scope: DrainScope,
+    /// Allows physical removal after recoverability is proved despite temporary policy debt.
+    pub allow_temporary_degraded: bool,
+    /// Requests eventual physical cleanup for every child target after safe proof.
+    pub cleanup_requested: bool,
+}
+
+/// Exact transition from evacuated node to consensus-membership retirement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FenceStorageNodeDrainMembership {
+    /// Existing live node drain.
+    pub drain_id: WorkId,
+    /// Exact node bound by that drain.
+    pub node_id: NodeId,
+    /// Incarnation captured when the drain began.
+    pub node_incarnation: u64,
+}
+
+/// Terminal proof request for one fully evacuated and, when applicable, consensus-retired scope.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompleteStorageScopeDrain {
+    /// Existing live scope drain.
+    pub drain_id: WorkId,
+    /// Digest over the exact scope, every terminal child proof and current membership exclusion.
+    pub safety_evidence_digest: [u8; 32],
+}
+
 /// One snapshotted gateway's claim-bound proof that a draining target has no current routes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AttestStorageTargetDrain {
@@ -3392,6 +3434,33 @@ digest_simple_record!(
         value.work.update_digest(digest);
         digest.boolean(value.allow_temporary_degraded);
         digest.boolean(value.cleanup_requested);
+    }
+);
+digest_simple_record!(
+    BeginStorageScopeDrain,
+    b"begin-storage-scope-drain",
+    |value, digest| {
+        digest.identifier(value.drain_id.as_bytes());
+        digest.bytes(&WorkSubject::Drain(value.scope).encode());
+        digest.boolean(value.allow_temporary_degraded);
+        digest.boolean(value.cleanup_requested);
+    }
+);
+digest_simple_record!(
+    FenceStorageNodeDrainMembership,
+    b"fence-storage-node-drain-membership",
+    |value, digest| {
+        digest.identifier(value.drain_id.as_bytes());
+        digest.identifier(value.node_id.as_bytes());
+        digest.unsigned(value.node_incarnation);
+    }
+);
+digest_simple_record!(
+    CompleteStorageScopeDrain,
+    b"complete-storage-scope-drain",
+    |value, digest| {
+        digest.identifier(value.drain_id.as_bytes());
+        digest.bytes(&value.safety_evidence_digest);
     }
 );
 digest_simple_record!(

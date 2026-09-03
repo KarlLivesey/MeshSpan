@@ -297,6 +297,141 @@ export type AssignVolumeProtectionPolicyResponse = {
 };
 
 /**
+ * BeginStorageDrainRequest
+ *
+ * Exact-retry request to start one safe storage drain.
+ */
+export type BeginStorageDrainRequest = {
+  /**
+   * Permit safe removal while desired redundancy is temporarily degraded.
+   */
+  allow_temporary_degraded: boolean;
+  /**
+   * Reclaim physical shard bytes after the safe-to-detach proof commits.
+   */
+  cleanup_requested: boolean;
+  /**
+   * Client-generated idempotency identity; also becomes the stable drain identity.
+   */
+  operation_id: string;
+  /**
+   * Exact target, node incarnation or fault group to remove.
+   */
+  scope:
+    | {
+        /**
+         * Exact generation so path reuse cannot inherit a drain.
+         */
+        generation: string;
+        kind: "target";
+        /**
+         * Stable target identity.
+         */
+        target_id: string;
+      }
+    | {
+        /**
+         * Exact restart incarnation.
+         */
+        incarnation: string;
+        kind: "node";
+        /**
+         * Stable daemon identity.
+         */
+        node_id: string;
+      }
+    | {
+        /**
+         * Stable fault-group identity.
+         */
+        fault_group_id: string;
+        kind: "fault_group";
+      };
+};
+
+/**
+ * BeginStorageDrainResponse
+ *
+ * Durable result returned after drain admission.
+ */
+export type BeginStorageDrainResponse = {
+  /**
+   * Current admitted drain.
+   */
+  drain: {
+    /**
+     * Whether temporary protection debt was accepted.
+     */
+    allow_temporary_degraded: boolean;
+    /**
+     * Whether post-proof physical cleanup was requested.
+     */
+    cleanup_requested: boolean;
+    /**
+     * Stable drain identity.
+     */
+    drain_id: string;
+    /**
+     * Authority-agreed admission instant.
+     */
+    requested_at_epoch_micros: number;
+    /**
+     * Latest authoritative revision.
+     */
+    revision: number;
+    /**
+     * Terminal safe instant, or null until detachment is proved safe.
+     */
+    safe_at_epoch_micros: number | null;
+    /**
+     * Exact fenced scope.
+     */
+    scope:
+      | {
+          /**
+           * Exact generation so path reuse cannot inherit a drain.
+           */
+          generation: string;
+          kind: "target";
+          /**
+           * Stable target identity.
+           */
+          target_id: string;
+        }
+      | {
+          /**
+           * Exact restart incarnation.
+           */
+          incarnation: string;
+          kind: "node";
+          /**
+           * Stable daemon identity.
+           */
+          node_id: string;
+        }
+      | {
+          /**
+           * Stable fault-group identity.
+           */
+          fault_group_id: string;
+          kind: "fault_group";
+        };
+    /**
+     * Current authoritative lifecycle.
+     */
+    state: "evacuating" | "membership_fenced" | "safe_to_detach";
+    /**
+     * Ready-to-follow current-status URL.
+     */
+    status_url: string;
+  };
+  /**
+   * Exact idempotency identity whose result was resolved.
+   */
+  operation_id: string;
+};
+
+/**
  * BeginUploadRequest
  *
  * Starts one durable private upload session.
@@ -2928,6 +3063,88 @@ export type ListProtectionPoliciesResponse = {
 };
 
 /**
+ * ListStorageDrainsResponse
+ *
+ * One current manager-only storage-drain page.
+ */
+export type ListStorageDrainsResponse = {
+  /**
+   * Newest-first authoritative drain summaries.
+   */
+  drains: Array<{
+    /**
+     * Whether temporary protection debt was accepted.
+     */
+    allow_temporary_degraded: boolean;
+    /**
+     * Whether post-proof physical cleanup was requested.
+     */
+    cleanup_requested: boolean;
+    /**
+     * Stable drain identity.
+     */
+    drain_id: string;
+    /**
+     * Authority-agreed admission instant.
+     */
+    requested_at_epoch_micros: number;
+    /**
+     * Latest authoritative revision.
+     */
+    revision: number;
+    /**
+     * Terminal safe instant, or null until detachment is proved safe.
+     */
+    safe_at_epoch_micros: number | null;
+    /**
+     * Exact fenced scope.
+     */
+    scope:
+      | {
+          /**
+           * Exact generation so path reuse cannot inherit a drain.
+           */
+          generation: string;
+          kind: "target";
+          /**
+           * Stable target identity.
+           */
+          target_id: string;
+        }
+      | {
+          /**
+           * Exact restart incarnation.
+           */
+          incarnation: string;
+          kind: "node";
+          /**
+           * Stable daemon identity.
+           */
+          node_id: string;
+        }
+      | {
+          /**
+           * Stable fault-group identity.
+           */
+          fault_group_id: string;
+          kind: "fault_group";
+        };
+    /**
+     * Current authoritative lifecycle.
+     */
+    state: "evacuating" | "membership_fenced" | "safe_to_detach";
+    /**
+     * Ready-to-follow current-status URL.
+     */
+    status_url: string;
+  }>;
+  /**
+   * Ready-to-follow same-origin URL, or null at the terminal page.
+   */
+  next_page_url: string | null;
+};
+
+/**
  * ListStorageFoldersResponse
  *
  * Current manager-only page of local storage folders.
@@ -3869,6 +4086,79 @@ export type StepUpCurrentSessionRequest = {
    * Client-generated idempotency key for the exact rotation.
    */
   operation_id: string;
+};
+
+/**
+ * StorageDrainSummary
+ *
+ * One current manager-visible storage drain.
+ */
+export type StorageDrainSummary = {
+  /**
+   * Whether temporary protection debt was accepted.
+   */
+  allow_temporary_degraded: boolean;
+  /**
+   * Whether post-proof physical cleanup was requested.
+   */
+  cleanup_requested: boolean;
+  /**
+   * Stable drain identity.
+   */
+  drain_id: string;
+  /**
+   * Authority-agreed admission instant.
+   */
+  requested_at_epoch_micros: number;
+  /**
+   * Latest authoritative revision.
+   */
+  revision: number;
+  /**
+   * Terminal safe instant, or null until detachment is proved safe.
+   */
+  safe_at_epoch_micros: number | null;
+  /**
+   * Exact fenced scope.
+   */
+  scope:
+    | {
+        /**
+         * Exact generation so path reuse cannot inherit a drain.
+         */
+        generation: string;
+        kind: "target";
+        /**
+         * Stable target identity.
+         */
+        target_id: string;
+      }
+    | {
+        /**
+         * Exact restart incarnation.
+         */
+        incarnation: string;
+        kind: "node";
+        /**
+         * Stable daemon identity.
+         */
+        node_id: string;
+      }
+    | {
+        /**
+         * Stable fault-group identity.
+         */
+        fault_group_id: string;
+        kind: "fault_group";
+      };
+  /**
+   * Current authoritative lifecycle.
+   */
+  state: "evacuating" | "membership_fenced" | "safe_to_detach";
+  /**
+   * Ready-to-follow current-status URL.
+   */
+  status_url: string;
 };
 
 /**
@@ -5257,6 +5547,164 @@ export type WithdrawSmbExportResponses = {
 
 export type WithdrawSmbExportResponse2 =
   WithdrawSmbExportResponses[keyof WithdrawSmbExportResponses];
+
+export type ListStorageDrainsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/admin/storage-drains";
+};
+
+export type ListStorageDrainsErrors = {
+  /**
+   * Invalid query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Storage-drain authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListStorageDrainsError =
+  ListStorageDrainsErrors[keyof ListStorageDrainsErrors];
+
+export type ListStorageDrainsResponses = {
+  /**
+   * One newest-first storage-drain page
+   */
+  200: ListStorageDrainsResponse;
+};
+
+export type ListStorageDrainsResponse2 =
+  ListStorageDrainsResponses[keyof ListStorageDrainsResponses];
+
+export type BeginStorageDrainData = {
+  /**
+   * Exact storage scope and safe-removal policy
+   */
+  body: BeginStorageDrainRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/admin/storage-drains";
+};
+
+export type BeginStorageDrainErrors = {
+  /**
+   * Invalid drain request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Scope, lifecycle or operation conflict
+   */
+  409: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Storage-drain authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type BeginStorageDrainError =
+  BeginStorageDrainErrors[keyof BeginStorageDrainErrors];
+
+export type BeginStorageDrainResponses = {
+  /**
+   * Storage drain durably admitted
+   */
+  202: BeginStorageDrainResponse;
+};
+
+export type BeginStorageDrainResponse2 =
+  BeginStorageDrainResponses[keyof BeginStorageDrainResponses];
+
+export type GetStorageDrainData = {
+  body?: never;
+  path: {
+    /**
+     * Storage-drain identity
+     */
+    drain_id: string;
+  };
+  query?: never;
+  url: "/admin/storage-drains/{drain_id}";
+};
+
+export type GetStorageDrainErrors = {
+  /**
+   * Invalid drain identity
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Storage drain not found
+   */
+  404: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Storage-drain authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type GetStorageDrainError =
+  GetStorageDrainErrors[keyof GetStorageDrainErrors];
+
+export type GetStorageDrainResponses = {
+  /**
+   * Current authoritative drain state
+   */
+  200: StorageDrainSummary;
+};
+
+export type GetStorageDrainResponse =
+  GetStorageDrainResponses[keyof GetStorageDrainResponses];
 
 export type ListStorageFoldersData = {
   body?: never;

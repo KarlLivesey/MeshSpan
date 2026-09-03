@@ -18,6 +18,10 @@ import {
 import { renderSetupClientInterface } from "./render-setup-client.mjs";
 import { renderSmbExportClientInterface } from "./render-smb-export-client.mjs";
 import {
+  renderStorageDrainClientInterface,
+  renderStorageDrainRequestTypes,
+} from "./render-storage-drain-client.mjs";
+import {
   renderStorageFolderClientInterface,
   renderStorageFolderRequestTypes,
 } from "./render-storage-folder-client.mjs";
@@ -90,6 +94,8 @@ ${renderPermissionAdministrationRequestTypes()}
 
 ${renderOperationStatusRequestTypes()}
 
+${renderStorageDrainRequestTypes()}
+
 ${renderStorageFolderRequestTypes()}
 
 ${renderTopologyRequestTypes()}
@@ -112,6 +118,7 @@ function renderClientInterface() {
   ${renderSmbExportClientInterface()}
   ${renderPermissionAdministrationClientInterface()}
   ${renderOperationStatusClientInterface()}
+  ${renderStorageDrainClientInterface()}
   ${renderStorageFolderClientInterface()}
   ${renderTopologyClientInterface()}
   ${renderDirectoryClientInterface()}

@@ -7,6 +7,8 @@ import type {
   AddGroupMemberRequest,
   AddGroupMemberResponse,
   ApiError,
+  BeginStorageDrainRequest,
+  BeginStorageDrainResponse,
   BeginUploadRequest,
   BeginUploadResponse,
   CommitUploadRequest,
@@ -55,6 +57,7 @@ import type {
   ListAuthenticationMethodsResponse,
   ListPrincipalsResponse,
   ListStorageFoldersResponse,
+  ListStorageDrainsResponse,
   ListTopologyNodesResponse,
   ListTopologyTargetsResponse,
   ListUploadRangesResponse,
@@ -76,6 +79,7 @@ import type {
   RegisterStorageFolderRequest,
   RegisterStorageFolderResponse,
   SetupStatusResponse,
+  StorageDrainSummary,
   SetFaultGroupMembershipRequest,
   SetFaultGroupMembershipResponse,
   StepUpCurrentSessionRequestWritable,
@@ -95,6 +99,8 @@ import {
   zBeginUploadBody,
   zBeginUploadPath,
   zBeginUploadResponse2,
+  zBeginStorageDrainBody,
+  zBeginStorageDrainResponse2,
   zCommitUploadBody,
   zCommitUploadPath,
   zCommitUploadResponse2,
@@ -140,6 +146,8 @@ import {
   zGetObjectResponse2,
   zGetOperationStatusPath,
   zGetOperationStatusResponse,
+  zGetStorageDrainPath,
+  zGetStorageDrainResponse,
   zGetOpenApiResponse,
   zGetSetupStatusResponse,
   zGetUploadPath,
@@ -159,6 +167,8 @@ import {
   zListOperationsResponse,
   zListStorageFoldersQuery,
   zListStorageFoldersResponse2,
+  zListStorageDrainsQuery,
+  zListStorageDrainsResponse2,
   zListTopologyNodesQuery,
   zListTopologyNodesResponse2,
   zListTopologyTargetsQuery,
@@ -292,6 +302,11 @@ export type ListVolumePermissionGrantsRequest = Readonly<{
 }>;
 
 export type ListOperationsRequest = Readonly<{
+  cursor?: string;
+  limit?: number;
+}>;
+
+export type ListStorageDrainsRequest = Readonly<{
   cursor?: string;
   limit?: number;
 }>;
@@ -479,6 +494,17 @@ export interface MeshSpanFetchClient {
     request?: ListOperationsRequest,
   ): Promise<ListOperationsResponse>;
   listNextOperations(nextPageUrl: string): Promise<ListOperationsResponse>;
+  beginStorageDrain(
+    request: BeginStorageDrainRequest,
+    csrfToken?: string,
+  ): Promise<BeginStorageDrainResponse>;
+  getStorageDrain(drainId: string): Promise<StorageDrainSummary>;
+  listStorageDrains(
+    request?: ListStorageDrainsRequest,
+  ): Promise<ListStorageDrainsResponse>;
+  listNextStorageDrains(
+    nextPageUrl: string,
+  ): Promise<ListStorageDrainsResponse>;
   listStorageFolders(
     request?: ListStorageFoldersRequest,
   ): Promise<ListStorageFoldersResponse>;
@@ -1305,6 +1331,54 @@ export function createMeshSpanFetchClient(
         zListOperationsResponse,
       );
     },
+    async beginStorageDrain(
+      request,
+      csrfToken,
+    ): Promise<BeginStorageDrainResponse> {
+      const body = zBeginStorageDrainBody.parse(request);
+      return requestJson(
+        context,
+        "/admin/storage-drains",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zBeginStorageDrainResponse2,
+      );
+    },
+    async getStorageDrain(drainId): Promise<StorageDrainSummary> {
+      const path = zGetStorageDrainPath.parse({ drain_id: drainId });
+      return requestJson(
+        context,
+        substitutePathParameter(
+          "/admin/storage-drains/{drain_id}",
+          "drain_id",
+          path.drain_id,
+        ),
+        { method: "GET" },
+        zGetStorageDrainResponse,
+      );
+    },
+    async listStorageDrains(request = {}): Promise<ListStorageDrainsResponse> {
+      const query = zListStorageDrainsQuery.parse(request);
+      return requestJson(
+        context,
+        appendQuery("/admin/storage-drains", query),
+        { method: "GET" },
+        zListStorageDrainsResponse2,
+      );
+    },
+    async listNextStorageDrains(
+      nextPageUrl,
+    ): Promise<ListStorageDrainsResponse> {
+      return requestJson(
+        context,
+        validateStorageDrainPageUrl(context.apiRoot, nextPageUrl),
+        { method: "GET" },
+        zListStorageDrainsResponse2,
+      );
+    },
     async listStorageFolders(
       request = {},
     ): Promise<ListStorageFoldersResponse> {
@@ -2096,6 +2170,37 @@ function isOperationPageRoute(apiRoot: URL, route: URL): boolean {
     route.hash === "" &&
     route.pathname === "/api/latest/admin/operations"
   );
+}
+
+function validateStorageDrainPageUrl(apiRoot: URL, value: string): string {
+  if (value.length === 0 || value.length > 16_384 || !value.startsWith("/")) {
+    throw new TypeError("storage-drain page URL is invalid");
+  }
+  const route = new URL(value, apiRoot.origin);
+  if (
+    route.origin !== apiRoot.origin ||
+    route.username !== "" ||
+    route.password !== "" ||
+    route.hash !== "" ||
+    route.pathname !== "/api/latest/admin/storage-drains"
+  ) {
+    throw new TypeError(
+      "storage-drain page URL is outside the administration API",
+    );
+  }
+  const names = [...route.searchParams.keys()];
+  if (
+    names.some((name) => name !== "cursor" && name !== "limit") ||
+    new Set(names).size !== names.length
+  ) {
+    throw new TypeError("storage-drain page URL has invalid query fields");
+  }
+  const rawLimit = route.searchParams.get("limit");
+  zListStorageDrainsQuery.parse({
+    cursor: route.searchParams.get("cursor") ?? undefined,
+    limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
+  });
+  return route.pathname + route.search;
 }
 
 function validateStorageFolderPageUrl(apiRoot: URL, value: string): string {
