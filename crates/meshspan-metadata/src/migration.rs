@@ -11,7 +11,7 @@ use thiserror::Error;
 const MAXIMUM_MIGRATIONS: usize = 256;
 
 pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 83;
-pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 12;
+pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 13;
 
 const PARTITION_MIGRATIONS: [Migration; 83] = [
     Migration {
@@ -348,7 +348,7 @@ const PARTITION_MIGRATIONS: [Migration; 83] = [
     },
 ];
 
-const LOCAL_MIGRATIONS: [Migration; 12] = [
+const LOCAL_MIGRATIONS: [Migration; 13] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/local/001_initial.sql"),
@@ -394,8 +394,12 @@ const LOCAL_MIGRATIONS: [Migration; 12] = [
         sql: include_str!("../schema/local/011_storage_target_registration.sql"),
     },
     Migration {
-        version: LOCAL_SCHEMA_VERSION,
+        version: 12,
         sql: include_str!("../schema/local/012_maintenance_scrub_progress.sql"),
+    },
+    Migration {
+        version: LOCAL_SCHEMA_VERSION,
+        sql: include_str!("../schema/local/013_metadata_backup_staging.sql"),
     },
 ];
 
@@ -957,4 +961,9 @@ pub(crate) fn local_storage_target_registration_migration_digest() -> [u8; 32] {
 #[cfg(test)]
 pub(crate) fn local_maintenance_scrub_progress_migration_digest() -> [u8; 32] {
     migration_digest(LOCAL_MIGRATIONS[11].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn local_metadata_backup_staging_migration_digest() -> [u8; 32] {
+    migration_digest(LOCAL_MIGRATIONS[12].sql)
 }

@@ -31,6 +31,9 @@ mod local_authentication_ceremony_tests;
 mod local_claim;
 #[cfg(test)]
 mod local_claim_tests;
+mod local_metadata_backup_staging;
+#[cfg(test)]
+mod local_metadata_backup_staging_tests;
 mod local_scrub_progress;
 mod local_setup;
 #[cfg(test)]
@@ -172,6 +175,10 @@ pub use local_authentication_ceremony::{
 pub use local_claim::{
     LocalClaimError, LocalClaimMutationDisposition, LocalClaimRecord, LocalClaimState,
     NewLocalClaim,
+};
+pub use local_metadata_backup_staging::{
+    LocalMetadataBackupStaging, LocalMetadataBackupStagingDisposition,
+    LocalMetadataBackupStagingError,
 };
 pub use local_scrub_progress::{
     LocalScrubProgress, LocalScrubProgressError, LocalScrubProgressUpdate,
