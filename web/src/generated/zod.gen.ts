@@ -3159,6 +3159,60 @@ export const zListLocalityPoliciesResponse = z
   .strict();
 
 /**
+ * ListManualDnsTasksResponse
+ *
+ * One bounded deadline-ordered page of current manual DNS work.
+ */
+export const zListManualDnsTasksResponse = z
+  .strictObject({
+    next_page_url: z
+      .string()
+      .min(1)
+      .max(16384)
+      .regex(/^\/api\/latest\/admin\/certificate-tasks\/manual-dns/)
+      .nullable(),
+    tasks: z
+      .array(
+        z
+          .strictObject({
+            action: z.union([z.literal("publish"), z.literal("remove")]),
+            created_at_epoch_micros: z.int().gte(1).lte(9007199254740991),
+            expires_at_epoch_micros: z.int().gte(1).lte(9007199254740991),
+            order_fence: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^[1-9][0-9]{0,19}$/),
+            order_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            record_name: z
+              .string()
+              .min(1)
+              .max(253)
+              .regex(/^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+$/),
+            record_value: z
+              .string()
+              .min(1)
+              .max(512)
+              .regex(/^[A-Za-z0-9_-]+$/),
+            revision: z.int().gte(1).lte(9007199254740991),
+            task_digest: z
+              .string()
+              .length(64)
+              .regex(/^[0-9a-f]{64}$/),
+            transitioned_at_epoch_micros: z.int().gte(1).lte(9007199254740991),
+          })
+          .strict(),
+      )
+      .max(200),
+  })
+  .strict();
+
+/**
  * ListOperationsResponse
  *
  * One bounded reverse-chronological administrator operation page.
@@ -5190,6 +5244,23 @@ export const zCreateAcknowledgementPolicyHeaders = z
  */
 export const zCreateAcknowledgementPolicyResponse2 =
   zCreateAcknowledgementPolicyResponse;
+
+export const zListManualDnsTasksQuery = z
+  .object({
+    cursor: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^[A-Za-z0-9._~-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(200).optional(),
+  })
+  .strict();
+
+/**
+ * One deadline-ordered manual DNS task page
+ */
+export const zListManualDnsTasksResponse2 = zListManualDnsTasksResponse;
 
 export const zListGroupsQuery = z
   .object({

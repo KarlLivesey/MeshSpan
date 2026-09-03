@@ -77,6 +77,24 @@ impl ManualDnsTaskCursor {
             task_digest,
         }
     }
+
+    /// Returns the expiry portion of the stable seek key.
+    #[must_use]
+    pub const fn expires_at(self) -> UnixMicros {
+        self.expires_at
+    }
+
+    /// Returns the creation-time portion of the stable seek key.
+    #[must_use]
+    pub const fn created_at(self) -> UnixMicros {
+        self.created_at
+    }
+
+    /// Returns the task identity portion of the stable seek key.
+    #[must_use]
+    pub const fn task_digest(self) -> [u8; 32] {
+        self.task_digest
+    }
 }
 
 pub(super) fn advance(

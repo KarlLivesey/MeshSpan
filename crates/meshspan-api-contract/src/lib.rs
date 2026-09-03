@@ -16,6 +16,8 @@ mod group_membership_administration;
 mod group_membership_administration_validation;
 mod identity_administration;
 mod identity_administration_validation;
+mod manual_dns_task;
+mod manual_dns_task_validation;
 mod model;
 mod namespace_mutation;
 mod namespace_mutation_validation;
@@ -61,6 +63,8 @@ mod file_upload_tests;
 mod group_membership_administration_tests;
 #[cfg(test)]
 mod identity_administration_tests;
+#[cfg(test)]
+mod manual_dns_task_tests;
 #[cfg(test)]
 mod namespace_mutation_tests;
 #[cfg(test)]
@@ -136,6 +140,13 @@ pub use identity_administration_validation::{
     MAX_CREATE_PRINCIPAL_BYTES, decode_create_group_request, decode_create_user_request,
     encode_create_principal_response, encode_list_principals_response,
     validate_list_principals_query, validate_list_principals_query_value,
+};
+pub use manual_dns_task::{
+    ListManualDnsTasksQuery, ListManualDnsTasksResponse, ManualDnsTaskAction, ManualDnsTaskCursor,
+    ManualDnsTaskSummary,
+};
+pub use manual_dns_task_validation::{
+    encode_list_manual_dns_tasks_response, validate_list_manual_dns_tasks_query,
 };
 pub use model::{
     ApiError, ApiErrorCode, ApiErrorIssue, AssuranceLevel, CreateMeshSetupRequest,

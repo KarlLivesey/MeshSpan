@@ -67,14 +67,14 @@ use crate::{
     DaemonLocalStateError, DirectoryListingApiError, DirectoryListingService, FileApiRoutes,
     FileReadApiError, FileReadService, GatewaySessionIdentity, HeadlessDaemonConfig,
     HeadlessDaemonConfigError, HttpsServer, HttpsServerError, IdentityAdministrationApiError,
-    IdentityAdministrationService, JoinMeshSetupService, NativeApiAuthenticator,
-    NativeApiKeyAuthenticator, NativeFilesystemRuntime, NativeFilesystemRuntimeConfiguration,
-    NativeNamespaceMutationApiError, NativeNamespaceMutationService, NativeStorageTarget,
-    NativeUploadApiError, NativeUploadService, NativeUploadServicePolicy, NodeActivationError,
-    NodeActivationRequest, NodeActivationService, NodeEnrolmentApiError, NodeEnrolmentService,
-    NodeJoinGrantIssuanceApiError, NodeJoinGrantIssuanceService,
-    NodeWrappingKeyRegistrationService, ObjectStatApiError, ObjectStatService,
-    OperatingSystemRandom, OperationStatusApiError, OperationStatusService,
+    IdentityAdministrationService, JoinMeshSetupService, ManualDnsTaskAdministrationApiError,
+    ManualDnsTaskAdministrationService, NativeApiAuthenticator, NativeApiKeyAuthenticator,
+    NativeFilesystemRuntime, NativeFilesystemRuntimeConfiguration, NativeNamespaceMutationApiError,
+    NativeNamespaceMutationService, NativeStorageTarget, NativeUploadApiError, NativeUploadService,
+    NativeUploadServicePolicy, NodeActivationError, NodeActivationRequest, NodeActivationService,
+    NodeEnrolmentApiError, NodeEnrolmentService, NodeJoinGrantIssuanceApiError,
+    NodeJoinGrantIssuanceService, NodeWrappingKeyRegistrationService, ObjectStatApiError,
+    ObjectStatService, OperatingSystemRandom, OperationStatusApiError, OperationStatusService,
     PasskeyChallengeApiError, PasskeyChallengeConfiguration, PasskeyChallengeConfigurationError,
     PasskeyChallengeService, PasskeyRegistrationApiError, PasskeyRegistrationConfiguration,
     PasskeyRegistrationConfigurationError, PasskeyRegistrationService, PasskeySessionService,
@@ -99,7 +99,8 @@ use crate::{
     current_session_api_router, directory_listing_api_router, execute_rebalance_step,
     execute_resumable_storage_scrub, execute_resumable_target_reconciliation,
     execute_scope_drain_action, execute_shard_repair, execute_target_drain_step,
-    file_read_api_router, identity_administration_api_router, native_namespace_mutation_api_router,
+    file_read_api_router, identity_administration_api_router,
+    manual_dns_task_administration_api_router, native_namespace_mutation_api_router,
     native_upload_api_router, node_enrolment_api_router, node_join_grant_api_router,
     object_stat_api_router, operation_status_api_router, passkey_challenge_api_router,
     passkey_registration_api_router, permission_administration_api_router,
@@ -184,11 +185,13 @@ struct PrivateNetworkStarter {
     local_private_key_pkcs8: Arc<Zeroizing<Vec<u8>>>,
     listen_address: SocketAddr,
     data_streams: tokio::sync::mpsc::Sender<PeerDataStream>,
+    topology_reconciler_started: Arc<AtomicBool>,
 }
 
 impl PrivateNetworkStarter {
     fn start(&self, now: UnixMicros) -> Result<(), DaemonProcessError> {
         if self.network.network().is_ok() {
+            self.spawn_topology_reconciler(now)?;
             return Ok(());
         }
         let repository = open_root_repository_at(&self.state_directory, now)?;
@@ -246,6 +249,7 @@ impl PrivateNetworkStarter {
         self.network
             .install(network.clone())
             .map_err(|()| DaemonProcessError::PrivateNetworkState)?;
+        self.spawn_topology_reconciler(now)?;
         let authority = self.authority.clone();
         self.runtime.spawn(async move {
             while let Some(message) = received_peer_messages.recv().await {
@@ -255,6 +259,41 @@ impl PrivateNetworkStarter {
             }
         });
         self.spawn_control_runtime(network, received_control_requests);
+        Ok(())
+    }
+
+    fn spawn_topology_reconciler(&self, now: UnixMicros) -> Result<(), DaemonProcessError> {
+        if self
+            .topology_reconciler_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Ok(());
+        }
+        let repository = match open_root_repository_at(&self.state_directory, now) {
+            Ok(repository) => repository,
+            Err(error) => {
+                self.topology_reconciler_started
+                    .store(false, Ordering::Release);
+                return Err(error);
+            }
+        };
+        let network = Arc::clone(&self.network);
+        let local_node_id = self.local_node_id;
+        self.runtime.spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(250));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                let Ok(active_network) = network.network() else {
+                    continue;
+                };
+                let Ok(routes) = load_active_peer_routes(&repository, local_node_id) else {
+                    continue;
+                };
+                reconcile_active_peer_routes(&active_network, routes).await;
+            }
+        });
         Ok(())
     }
 
@@ -507,6 +546,7 @@ async fn start_private_authority(
         )),
         listen_address: config.private_listen(),
         data_streams: node.data_streams.clone(),
+        topology_reconciler_started: Arc::new(AtomicBool::new(false)),
     };
     if let Some(control_requests) = node.joining_control_requests.take() {
         private_network_starter.spawn_control_runtime(
@@ -1227,6 +1267,17 @@ fn security_administration_routes(
                 gateway,
             ),
         )?)
+        .merge(manual_dns_task_administration_api_router(
+            ManualDnsTaskAdministrationService::new(
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                gateway,
+            ),
+        )?)
         .merge(recovery_bundle_verification_api_router(
             RecoveryBundleVerificationService::new(
                 open_authentication_authority(
@@ -1513,6 +1564,80 @@ async fn apply_topology_update(
         })?;
     }
     Ok(())
+}
+
+struct ActivePeerRoute {
+    node_id: NodeId,
+    incarnation: u64,
+    private_endpoint: String,
+    certificate_der: Vec<u8>,
+}
+
+fn load_active_peer_routes(
+    repository: &AuthoritativeRepository,
+    local_node_id: NodeId,
+) -> Result<Vec<ActivePeerRoute>, DaemonProcessError> {
+    let limit = PageLimit::new(256)?;
+    let mut after = None;
+    let mut routes = Vec::new();
+    loop {
+        let page = repository.topology_nodes(after.as_ref(), limit)?;
+        for node in page.items {
+            if node.node_id == local_node_id || node.state != 2 {
+                continue;
+            }
+            let private_endpoint = node
+                .private_endpoint
+                .ok_or(DaemonProcessError::PrivateNetworkState)?;
+            let certificate = repository
+                .active_node_certificate(node.node_id)?
+                .ok_or(DaemonProcessError::PrivateNetworkState)?;
+            routes.push(ActivePeerRoute {
+                node_id: node.node_id,
+                incarnation: node.incarnation,
+                private_endpoint,
+                certificate_der: certificate.certificate_der,
+            });
+        }
+        after = page.next;
+        if after.is_none() {
+            break;
+        }
+    }
+    Ok(routes)
+}
+
+async fn reconcile_active_peer_routes(network: &ConsensusNetwork, routes: Vec<ActivePeerRoute>) {
+    let current = network
+        .peer_routes()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|peer| (peer.node_id, peer))
+        .collect::<BTreeMap<_, _>>();
+    for route in routes {
+        let Ok(mut addresses) = tokio::net::lookup_host(&route.private_endpoint).await else {
+            continue;
+        };
+        let Some(address) = addresses.next() else {
+            continue;
+        };
+        let peer = ConsensusPeerConfig {
+            node_id: route.node_id,
+            incarnation: route.incarnation,
+            address,
+            certificate_der: route.certificate_der,
+            certificate_name: certificate_name(route.node_id),
+        };
+        let unchanged = current.get(&route.node_id).is_some_and(|existing| {
+            existing.incarnation == peer.incarnation
+                && existing.address == peer.address
+                && existing.certificate_der == peer.certificate_der
+                && existing.certificate_name == peer.certificate_name
+        });
+        if !unchanged {
+            let _updated = network.upsert_peer(&peer);
+        }
+    }
 }
 
 fn spawn_topology_broadcast(network: ConsensusNetwork, topology_revision: u64) {
@@ -3091,6 +3216,9 @@ pub enum DaemonProcessError {
     /// Manager-only permission-administration API construction failed.
     #[error("daemon permission-administration API failed")]
     PermissionAdministrationApi(#[from] PermissionAdministrationApiError),
+    /// Manager-only manual DNS challenge task API construction failed.
+    #[error("daemon manual DNS task administration API failed")]
+    ManualDnsTaskAdministrationApi(#[from] ManualDnsTaskAdministrationApiError),
     /// Authenticated durable-operation status API construction failed.
     #[error("daemon operation-status API failed")]
     OperationStatusApi(#[from] OperationStatusApiError),
