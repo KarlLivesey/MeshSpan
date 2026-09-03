@@ -2234,6 +2234,17 @@ impl AuthoritativeRepository {
         backup_run::live_claim(self.database.connection(), backup_id)
     }
 
+    /// Returns the partition's sole queued, claimed or recorded automatic backup run.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when persisted run identity or lifecycle state is malformed.
+    pub fn unfinished_metadata_backup_run(
+        &self,
+    ) -> Result<Option<MetadataBackupRun>, RepositoryError> {
+        backup_run::unfinished(self.database.connection(), self.database.partition_id())
+    }
+
     /// Creates a complete state-machine snapshot bound to one proved quorum plan.
     ///
     /// # Errors

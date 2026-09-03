@@ -46,6 +46,30 @@ pub(super) fn live_claim(
     active_claim(connection, backup_id)
 }
 
+pub(super) fn unfinished(
+    connection: &Connection,
+    partition_id: PartitionId,
+) -> Result<Option<MetadataBackupRun>, RepositoryError> {
+    let stored = connection
+        .query_row(
+            "SELECT backup_id FROM metadata_backup_runs
+             WHERE partition_id = ?1 AND state IN (?2, ?3, ?4)",
+            params![
+                partition_id.as_bytes().as_slice(),
+                RUN_QUEUED,
+                RUN_CLAIMED,
+                RUN_RECORDED,
+            ],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()?;
+    stored
+        .map(|bytes| backup_identifier(&bytes))
+        .transpose()?
+        .map(|backup_id| load(connection, backup_id)?.ok_or(RepositoryError::CorruptState))
+        .transpose()
+}
+
 pub(super) fn run_head(
     connection: &Connection,
     backup_id: BackupId,
@@ -245,6 +269,13 @@ fn partition_identifier(value: &[u8]) -> Result<PartitionId, RepositoryError> {
         .try_into()
         .map_err(|_| RepositoryError::CorruptState)?;
     PartitionId::from_bytes(bytes).map_err(|_| RepositoryError::CorruptState)
+}
+
+fn backup_identifier(value: &[u8]) -> Result<BackupId, RepositoryError> {
+    let bytes: [u8; 16] = value
+        .try_into()
+        .map_err(|_| RepositoryError::CorruptState)?;
+    BackupId::from_bytes(bytes).map_err(|_| RepositoryError::CorruptState)
 }
 
 fn node_identifier(value: &[u8]) -> Result<NodeId, RepositoryError> {
