@@ -721,7 +721,7 @@ fn execute_infrastructure_command(
             acme::renew(transaction, context, *value, revision)
         }
         AuthoritativeCommand::CompleteCertificateOrder(value) => {
-            acme::complete(transaction, context, *value, revision)
+            acme::complete(transaction, context, value, revision)
         }
         AuthoritativeCommand::RegisterNodeWrappingKey(value) => {
             node_wrapping_key::register(transaction, context, *value, revision)

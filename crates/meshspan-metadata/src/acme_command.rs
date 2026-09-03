@@ -5,6 +5,8 @@
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{AcmeConfigurationId, CertificateOrderId, NodeId, UnixMicros};
 
+use crate::CommitSecretGeneration;
+
 /// Encrypted secret generation referenced without exposing its plaintext through metadata.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SecretGenerationReference {
@@ -86,7 +88,7 @@ pub struct RenewCertificateOrder {
 }
 
 /// Result of one exact fenced ACME attempt.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CertificateOrderCompletion {
     /// Return the order to the queue without making any certificate safety claim.
     Retry {
@@ -97,8 +99,8 @@ pub enum CertificateOrderCompletion {
     },
     /// Bind a validated encrypted certificate/private-key generation to the order.
     Issued {
-        /// Encrypted certificate and private-key bundle installed through recipient envelopes.
-        certificate: SecretGenerationReference,
+        /// Encrypted certificate and private-key bundle for every exact gateway recipient.
+        certificate: Box<CommitSecretGeneration>,
         /// Validated certificate lower validity bound.
         not_before: UnixMicros,
         /// Validated certificate upper validity bound.
@@ -109,7 +111,7 @@ pub enum CertificateOrderCompletion {
 }
 
 /// Completes or retries one still-current certificate-order claim.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompleteCertificateOrder {
     /// Claimed order.
     pub order_id: CertificateOrderId,

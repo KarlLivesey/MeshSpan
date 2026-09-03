@@ -14,7 +14,8 @@ use super::{ApplyDisposition, AuthoritativeRepository, EntityKind, LogPosition, 
 use crate::{
     AuthoritativeCommand, BootstrapMesh, BootstrapRecoveryIdentity, CommandContext,
     CommitSecretGeneration, ConfirmRecoveryBundleSaved, CreateAuthenticationMethod,
-    NewAuthenticationCredential, PartitionDatabase, RecordName,
+    NewAuthenticationCredential, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PartitionDatabase,
+    RecordName,
 };
 
 struct Fixture {
@@ -143,6 +144,53 @@ fn pending_recovery_or_missing_recovery_recipient_blocks_secret_provisioning()
     assert_eq!(
         verified.repository.secret_generation(omitted_context)?,
         None
+    );
+    Ok(())
+}
+
+#[test]
+fn public_certificate_requires_every_gateway_and_recovery_recipient()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture(true)?;
+    let secret_context = SecretContext::new(PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, [80; 16], 1)?;
+    let missing_gateway = secret_command(
+        secret_context,
+        b"encrypted certificate bundle",
+        &[fixture.recovery_private_key.public_key()],
+        81,
+    )?;
+    assert!(matches!(
+        fixture.repository.apply_committed(
+            LogPosition { index: 3, term: 1 },
+            context(82, fixture.administrator, 83, 30, Some(2))?,
+            &missing_gateway,
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    assert_eq!(fixture.repository.secret_generation(secret_context)?, None);
+
+    let complete = secret_command(
+        secret_context,
+        b"encrypted certificate bundle",
+        &[
+            fixture.private_key.public_key(),
+            fixture.recovery_private_key.public_key(),
+        ],
+        84,
+    )?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 3, term: 1 },
+        context(85, fixture.administrator, 86, 30, Some(2))?,
+        &complete,
+    )?;
+    assert_eq!(
+        fixture
+            .repository
+            .secret_generation(secret_context)?
+            .ok_or("certificate secret missing")?
+            .recipients
+            .len(),
+        2
     );
     Ok(())
 }

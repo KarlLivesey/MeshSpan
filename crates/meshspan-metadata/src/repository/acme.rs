@@ -255,7 +255,7 @@ pub(super) fn renew(
 pub(super) fn complete(
     transaction: &Transaction<'_>,
     context: CommandContext,
-    value: CompleteCertificateOrder,
+    value: &CompleteCertificateOrder,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
     validate_worker(transaction, value.worker_node_id, value.worker_incarnation)?;
@@ -268,7 +268,13 @@ pub(super) fn complete(
         value.worker_incarnation,
         value.fence,
     )?;
-    let completion = completion_values(transaction, context, value.outcome)?;
+    let completion = completion_values(
+        transaction,
+        context,
+        value.order_id,
+        &value.outcome,
+        revision,
+    )?;
     let changed = transaction.execute(
         "UPDATE certificate_order_claims
          SET state = ?1, finished_at = ?2, result_digest = ?3, retry_at = ?4, revision = ?5
@@ -356,46 +362,57 @@ struct CompletionValues {
 fn completion_values(
     transaction: &Transaction<'_>,
     context: CommandContext,
-    outcome: CertificateOrderCompletion,
+    order_id: CertificateOrderId,
+    outcome: &CertificateOrderCompletion,
+    revision: Revision,
 ) -> Result<CompletionValues, RepositoryError> {
     match outcome {
         CertificateOrderCompletion::Retry {
             failure_digest,
             retry_at,
-        } if failure_digest != [0; 32] && retry_at > context.occurred_at => Ok(CompletionValues {
-            order_state: ORDER_QUEUED,
-            next_attempt_at: retry_at.get(),
-            certificate: None,
-            not_before: None,
-            not_after: None,
-            completed_at: None,
-            order_digest: None,
-            claim_digest: failure_digest,
-            retry_at: Some(retry_at.get()),
-        }),
+        } if *failure_digest != [0; 32] && *retry_at > context.occurred_at => {
+            Ok(CompletionValues {
+                order_state: ORDER_QUEUED,
+                next_attempt_at: retry_at.get(),
+                certificate: None,
+                not_before: None,
+                not_after: None,
+                completed_at: None,
+                order_digest: None,
+                claim_digest: *failure_digest,
+                retry_at: Some(retry_at.get()),
+            })
+        }
         CertificateOrderCompletion::Issued {
             certificate,
             not_before,
             not_after,
             result_digest,
-        } if not_after > not_before
-            && not_after > context.occurred_at
-            && result_digest != [0; 32] =>
+        } if *not_after > *not_before
+            && *not_after > context.occurred_at
+            && *result_digest != [0; 32] =>
         {
-            require_secret(
-                transaction,
-                PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
-                certificate,
-            )?;
+            let secret_context = certificate.secret.context;
+            if secret_context.kind() != PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND
+                || secret_context.id() != order_id.as_bytes()
+                || secret_context.generation() != 1
+            {
+                return Err(RepositoryError::InvalidCommand);
+            }
+            super::secret_generation::commit(transaction, context, certificate, revision)?;
+            let reference = SecretGenerationReference {
+                secret_id: secret_context.id(),
+                generation: secret_context.generation(),
+            };
             Ok(CompletionValues {
                 order_state: ORDER_COMPLETE,
                 next_attempt_at: context.occurred_at.get(),
-                certificate: Some(certificate),
+                certificate: Some(reference),
                 not_before: Some(not_before.get()),
                 not_after: Some(not_after.get()),
                 completed_at: Some(context.occurred_at.get()),
-                order_digest: Some(result_digest),
-                claim_digest: result_digest,
+                order_digest: Some(*result_digest),
+                claim_digest: *result_digest,
                 retry_at: None,
             })
         }

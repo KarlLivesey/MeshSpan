@@ -13,8 +13,8 @@ use super::apply::to_i64;
 use super::{EntityKind, EntityReference, RepositoryError, recovery_authority};
 use crate::{
     AUTHENTICATION_ROOT_KEY_SECRET_KIND, CommandContext, CommitSecretGeneration,
-    ONLINE_AUTHORITY_KEY_SECRET_KIND, PartitionDatabase, STORAGE_PERMIT_KEY_SECRET_KIND,
-    VOLUME_CONTENT_KEY_SECRET_KIND,
+    ONLINE_AUTHORITY_KEY_SECRET_KIND, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PartitionDatabase,
+    STORAGE_PERMIT_KEY_SECRET_KIND, VOLUME_CONTENT_KEY_SECRET_KIND,
 };
 
 const VOLUME_CONTENT_KEY_BYTES: usize = 32;
@@ -66,6 +66,9 @@ pub(super) fn commit(
                 .is_ok_and(|public_key| public_key == recovery.public_key)
     }) {
         return Err(RepositoryError::InvalidCommand);
+    }
+    if secret.context().kind() == PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND {
+        require_exact_gateway_recipients(transaction, &recipients)?;
     }
     persist(
         transaction,
@@ -324,6 +327,23 @@ fn current_volume_key_recipients(
         return Err(RepositoryError::CorruptState);
     }
     Ok(recipients)
+}
+
+fn require_exact_gateway_recipients(
+    connection: &Connection,
+    supplied: &[RecipientKeyEnvelope],
+) -> Result<(), RepositoryError> {
+    let expected = current_volume_key_recipients(connection)?;
+    let supplied = supplied
+        .iter()
+        .map(RecipientKeyEnvelope::recipient_public_key)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| RepositoryError::InvalidCommand)?;
+    if supplied == expected {
+        Ok(())
+    } else {
+        Err(RepositoryError::InvalidCommand)
+    }
 }
 
 pub(super) fn load(

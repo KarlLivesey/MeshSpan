@@ -8,7 +8,8 @@ use super::decoder::Decoder;
 use super::encoder::Encoder;
 use crate::{
     AcmeChallengeKind, CertificateOrderCompletion, ClaimCertificateOrder, CompleteCertificateOrder,
-    ConfigureAcme, QueueCertificateOrder, RenewCertificateOrder, SecretGenerationReference,
+    ConfigureAcme, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, QueueCertificateOrder,
+    RenewCertificateOrder, SecretGenerationReference,
 };
 
 pub(super) const CONFIGURE_ACME: u16 = 49;
@@ -31,7 +32,7 @@ pub(super) fn encode_command(
         crate::AuthoritativeCommand::ClaimCertificateOrder(value) => encode_claim(encoder, *value)?,
         crate::AuthoritativeCommand::RenewCertificateOrder(value) => encode_renew(encoder, *value)?,
         crate::AuthoritativeCommand::CompleteCertificateOrder(value) => {
-            encode_complete(encoder, *value)?;
+            encode_complete(encoder, value)?;
         }
         _ => return Ok(false),
     }
@@ -204,7 +205,7 @@ fn decode_renew(
 
 fn encode_complete(
     encoder: &mut Encoder,
-    value: CompleteCertificateOrder,
+    value: &CompleteCertificateOrder,
 ) -> Result<(), MetadataCommandCodecError> {
     encoder.u16(COMPLETE_CERTIFICATE_ORDER)?;
     encode_claim_identity(
@@ -215,14 +216,14 @@ fn encode_complete(
         value.worker_incarnation,
         value.fence,
     )?;
-    match value.outcome {
+    match &value.outcome {
         CertificateOrderCompletion::Retry {
             failure_digest,
             retry_at,
         } => {
-            nonzero_digest(failure_digest)?;
+            nonzero_digest(*failure_digest)?;
             encoder.u8(1)?;
-            encoder.fixed(&failure_digest)?;
+            encoder.fixed(failure_digest)?;
             encoder.i64(retry_at.get())
         }
         CertificateOrderCompletion::Issued {
@@ -231,12 +232,18 @@ fn encode_complete(
             not_after,
             result_digest,
         } => {
-            validate_issued(certificate, not_before, not_after, result_digest)?;
+            validate_issued(
+                value.order_id,
+                certificate,
+                *not_before,
+                *not_after,
+                *result_digest,
+            )?;
             encoder.u8(2)?;
-            encode_secret(encoder, certificate)?;
+            super::secret_generation::encode_payload(encoder, certificate)?;
             encoder.i64(not_before.get())?;
             encoder.i64(not_after.get())?;
-            encoder.fixed(&result_digest)
+            encoder.fixed(result_digest)
         }
     }
 }
@@ -251,11 +258,17 @@ fn decode_complete(
             retry_at: UnixMicros::new(decoder.i64()?),
         },
         2 => {
-            let certificate = decode_secret(decoder)?;
+            let certificate = Box::new(super::secret_generation::decode_payload(decoder)?);
             let not_before = UnixMicros::new(decoder.i64()?);
             let not_after = UnixMicros::new(decoder.i64()?);
             let result_digest = decoder.fixed()?;
-            validate_issued(certificate, not_before, not_after, result_digest)?;
+            validate_issued(
+                identity.order_id,
+                &certificate,
+                not_before,
+                not_after,
+                result_digest,
+            )?;
             CertificateOrderCompletion::Issued {
                 certificate,
                 not_before,
@@ -388,13 +401,15 @@ fn decode_optional_secret(
 }
 
 fn validate_issued(
-    certificate: SecretGenerationReference,
+    order_id: CertificateOrderId,
+    certificate: &crate::CommitSecretGeneration,
     not_before: UnixMicros,
     not_after: UnixMicros,
     digest: [u8; 32],
 ) -> Result<(), MetadataCommandCodecError> {
-    if certificate.secret_id == [0; 16]
-        || certificate.generation == 0
+    if certificate.secret.context.kind() != PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND
+        || certificate.secret.context.id() != order_id.as_bytes()
+        || certificate.secret.context.generation() != 1
         || not_after <= not_before
         || digest == [0; 32]
     {

@@ -14,7 +14,8 @@ use meshspan_metadata::{
 };
 
 use crate::{
-    AuthenticationRootAuthority, ConsensusAuthenticationAuthority,
+    AuthenticationRootAuthority, CertificateOrderCompletionAuthority,
+    CertificateOrderCompletionAuthorityError, ConsensusAuthenticationAuthority,
     NodeWrappingKeyRegistrationAuthority, NodeWrappingKeyRegistrationAuthorityError,
     OnlineAuthorityLoadingAuthority, RecoveryBundleVerificationAuthority,
     RecoveryBundleVerificationAuthorityError, RecoveryBundleVerificationCommit,
@@ -23,6 +24,66 @@ use crate::{
     VolumeAdministrationAuthority, VolumeAdministrationAuthorityError, VolumeAdministrationCommit,
     VolumeInventoryAuthority, VolumeInventoryAuthorityError, VolumeKeyAuthority,
 };
+
+impl CertificateOrderCompletionAuthority for ConsensusAuthenticationAuthority {
+    fn resolve_certificate_order_completion(
+        &self,
+        operation_id: meshspan_domain::OperationId,
+    ) -> Result<Option<meshspan_metadata::CommandReceipt>, CertificateOrderCompletionAuthorityError>
+    {
+        self.reader()
+            .resolve_operation(operation_id)
+            .map_err(|error| map_certificate_repository_error(&error))
+    }
+
+    fn certificate_recipients(
+        &self,
+    ) -> Result<
+        Vec<meshspan_secret_envelope::WrappingPublicKey>,
+        CertificateOrderCompletionAuthorityError,
+    > {
+        self.reader()
+            .volume_key_recipients()
+            .map_err(|error| map_certificate_repository_error(&error))
+    }
+
+    fn complete_certificate_order(
+        &self,
+        context: CommandContext,
+        command: &AuthoritativeCommand,
+    ) -> Result<meshspan_metadata::CommandReceipt, CertificateOrderCompletionAuthorityError> {
+        self.commit_authoritative(context, command)
+            .map_err(map_certificate_authority_error)
+    }
+}
+
+fn map_certificate_repository_error(
+    error: &RepositoryError,
+) -> CertificateOrderCompletionAuthorityError {
+    match error {
+        RepositoryError::Store(_) | RepositoryError::Sqlite(_) | RepositoryError::Io(_) => {
+            CertificateOrderCompletionAuthorityError::Unavailable
+        }
+        _ => CertificateOrderCompletionAuthorityError::Failed,
+    }
+}
+
+fn map_certificate_authority_error(
+    error: MetadataAuthorityRequestError,
+) -> CertificateOrderCompletionAuthorityError {
+    match error {
+        MetadataAuthorityRequestError::NotLeader { .. }
+        | MetadataAuthorityRequestError::Unavailable => {
+            CertificateOrderCompletionAuthorityError::Unavailable
+        }
+        MetadataAuthorityRequestError::Conflict | MetadataAuthorityRequestError::Rejected => {
+            CertificateOrderCompletionAuthorityError::Conflict
+        }
+        MetadataAuthorityRequestError::Unsupported | MetadataAuthorityRequestError::Failed => {
+            CertificateOrderCompletionAuthorityError::Failed
+        }
+    }
+}
 
 impl FilesystemAccessAuthority for ConsensusAuthenticationAuthority {
     type Error = MetadataFilesystemAuthorityError;
