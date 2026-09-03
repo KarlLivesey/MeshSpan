@@ -12,10 +12,11 @@ use tempfile::{TempDir, tempdir};
 
 use super::{ApplyDisposition, AuthoritativeRepository, EntityKind, LogPosition, RepositoryError};
 use crate::{
-    AuthoritativeCommand, BootstrapMesh, BootstrapRecoveryIdentity, CommandContext,
-    CommitSecretGeneration, ConfirmRecoveryBundleSaved, CreateAuthenticationMethod,
-    NewAuthenticationCredential, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PartitionDatabase,
-    RecordName,
+    ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND, AuthoritativeCommand,
+    BootstrapMesh, BootstrapRecoveryIdentity, CommandContext, CommitSecretGeneration,
+    ConfirmRecoveryBundleSaved, CreateAuthenticationMethod, NewAuthenticationCredential,
+    PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND,
+    PartitionDatabase, RecordName,
 };
 
 struct Fixture {
@@ -192,6 +193,75 @@ fn public_certificate_requires_every_gateway_and_recovery_recipient()
             .len(),
         2
     );
+    Ok(())
+}
+
+#[test]
+fn every_acme_private_secret_requires_every_gateway_and_recovery_recipient()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (offset, secret_kind) in [
+        ACME_ACCOUNT_KEY_SECRET_KIND,
+        ACME_CHALLENGE_SETTINGS_SECRET_KIND,
+        PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut fixture = fixture(true)?;
+        let identity_byte = u8::try_from(90 + offset)?;
+        let secret_context = SecretContext::new(secret_kind, [identity_byte; 16], 1)?;
+        let missing_gateway = secret_command(
+            secret_context,
+            b"encrypted ACME private material",
+            &[fixture.recovery_private_key.public_key()],
+            identity_byte.saturating_add(10),
+        )?;
+        assert!(matches!(
+            fixture.repository.apply_committed(
+                LogPosition { index: 3, term: 1 },
+                context(
+                    identity_byte.saturating_add(20),
+                    fixture.administrator,
+                    identity_byte.saturating_add(30),
+                    30,
+                    Some(2),
+                )?,
+                &missing_gateway,
+            ),
+            Err(RepositoryError::InvalidCommand)
+        ));
+        assert_eq!(fixture.repository.secret_generation(secret_context)?, None);
+
+        let complete = secret_command(
+            secret_context,
+            b"encrypted ACME private material",
+            &[
+                fixture.private_key.public_key(),
+                fixture.recovery_private_key.public_key(),
+            ],
+            identity_byte.saturating_add(40),
+        )?;
+        fixture.repository.apply_committed(
+            LogPosition { index: 3, term: 1 },
+            context(
+                identity_byte.saturating_add(50),
+                fixture.administrator,
+                identity_byte.saturating_add(60),
+                30,
+                Some(2),
+            )?,
+            &complete,
+        )?;
+        assert_eq!(
+            fixture
+                .repository
+                .secret_generation(secret_context)?
+                .ok_or("ACME secret missing")?
+                .recipients
+                .len(),
+            2
+        );
+    }
     Ok(())
 }
 
