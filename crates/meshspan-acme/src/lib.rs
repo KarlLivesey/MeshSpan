@@ -7,6 +7,7 @@ mod challenge_payload;
 mod cloudflare_provider;
 #[cfg(test)]
 mod cloudflare_provider_tests;
+mod cloudflare_transport;
 mod cloudflare_v4;
 #[cfg(test)]
 mod cloudflare_v4_tests;
@@ -24,6 +25,7 @@ mod rfc2136_provider;
 mod rfc2136_provider_tests;
 #[cfg(test)]
 mod rfc2136_test_server;
+mod rustls_http;
 mod strict_json;
 mod transport;
 mod wire;
@@ -33,6 +35,7 @@ pub use challenge_payload::{Dns01Payload, Http01Payload, PayloadError};
 pub use cloudflare_provider::{
     AuthoritativeTxtObserver, CloudflareDnsApi, CloudflareDnsProvider, CloudflareTxtRecord,
 };
+pub use cloudflare_transport::RustlsCloudflareHttpTransport;
 pub use cloudflare_v4::{
     CloudflareHttpMethod, CloudflareHttpRequest, CloudflareHttpResponse, CloudflareHttpTransport,
     CloudflareV4Api,
