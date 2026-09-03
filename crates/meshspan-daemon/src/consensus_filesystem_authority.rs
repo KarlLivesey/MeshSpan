@@ -17,13 +17,69 @@ use crate::{
     AuthenticationRootAuthority, CertificateOrderCompletionAuthority,
     CertificateOrderCompletionAuthorityError, ConsensusAuthenticationAuthority,
     NodeWrappingKeyRegistrationAuthority, NodeWrappingKeyRegistrationAuthorityError,
-    OnlineAuthorityLoadingAuthority, RecoveryBundleVerificationAuthority,
+    OnlineAuthorityLoadingAuthority, PublicCertificateInstallationAuthority,
+    PublicCertificateInstallationAuthorityError, RecoveryBundleVerificationAuthority,
     RecoveryBundleVerificationAuthorityError, RecoveryBundleVerificationCommit,
     SecretGenerationAuthority, SecretGenerationAuthorityError, StoragePermitAuthority,
     StorageTargetRegistrationAuthority, StorageTargetRegistrationAuthorityError,
     VolumeAdministrationAuthority, VolumeAdministrationAuthorityError, VolumeAdministrationCommit,
     VolumeInventoryAuthority, VolumeInventoryAuthorityError, VolumeKeyAuthority,
 };
+
+impl PublicCertificateInstallationAuthority for ConsensusAuthenticationAuthority {
+    fn resolve_public_certificate_installation(
+        &self,
+        operation_id: meshspan_domain::OperationId,
+    ) -> Result<
+        Option<meshspan_metadata::CommandReceipt>,
+        PublicCertificateInstallationAuthorityError,
+    > {
+        self.reader()
+            .resolve_operation(operation_id)
+            .map_err(|error| map_installation_repository_error(&error))
+    }
+
+    fn acknowledge_public_certificate_installation(
+        &self,
+        context: CommandContext,
+        command: &AuthoritativeCommand,
+    ) -> Result<meshspan_metadata::CommandReceipt, PublicCertificateInstallationAuthorityError>
+    {
+        self.commit_authoritative(context, command)
+            .map_err(map_installation_authority_error)
+    }
+}
+
+fn map_installation_repository_error(
+    error: &RepositoryError,
+) -> PublicCertificateInstallationAuthorityError {
+    match error {
+        RepositoryError::Store(_) | RepositoryError::Sqlite(_) | RepositoryError::Io(_) => {
+            PublicCertificateInstallationAuthorityError::Unavailable
+        }
+        RepositoryError::OperationConflict
+        | RepositoryError::StaleRevision
+        | RepositoryError::InvalidCommand => PublicCertificateInstallationAuthorityError::Conflict,
+        _ => PublicCertificateInstallationAuthorityError::Failed,
+    }
+}
+
+fn map_installation_authority_error(
+    error: MetadataAuthorityRequestError,
+) -> PublicCertificateInstallationAuthorityError {
+    match error {
+        MetadataAuthorityRequestError::NotLeader { .. }
+        | MetadataAuthorityRequestError::Unavailable => {
+            PublicCertificateInstallationAuthorityError::Unavailable
+        }
+        MetadataAuthorityRequestError::Conflict | MetadataAuthorityRequestError::Rejected => {
+            PublicCertificateInstallationAuthorityError::Conflict
+        }
+        MetadataAuthorityRequestError::Unsupported | MetadataAuthorityRequestError::Failed => {
+            PublicCertificateInstallationAuthorityError::Failed
+        }
+    }
+}
 
 impl CertificateOrderCompletionAuthority for ConsensusAuthenticationAuthority {
     fn resolve_certificate_order_completion(

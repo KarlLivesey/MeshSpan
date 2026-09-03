@@ -156,7 +156,10 @@ pub use access_query::{
 pub use acknowledgement_policy::{
     AcknowledgementPolicyCursor, AcknowledgementPolicyRecord, VolumeAcknowledgementPolicy,
 };
-pub use acme::{CertificateOrderClaim, CertificateOrderRecord, CertificateOrderState};
+pub use acme::{
+    CertificateOrderClaim, CertificateOrderRecord, CertificateOrderState,
+    PublicCertificateInstallationRecord, PublicCertificateRolloutSummary,
+};
 pub use authentication_method::{
     ApiKeyAuthentication, AuthenticationMethodRevocationReplay, PasskeyVerificationMaterial,
     RecoveryCodeVerificationMaterial, SmbVerificationMaterial, TotpVerificationMaterial,

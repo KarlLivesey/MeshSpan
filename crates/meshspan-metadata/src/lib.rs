@@ -43,8 +43,9 @@ mod repository;
 mod test_support;
 
 pub use acme_command::{
-    AcmeChallengeKind, CertificateOrderCompletion, ClaimCertificateOrder, CompleteCertificateOrder,
-    ConfigureAcme, QueueCertificateOrder, RenewCertificateOrder, SecretGenerationReference,
+    AcknowledgePublicCertificateInstallation, AcmeChallengeKind, CertificateOrderCompletion,
+    ClaimCertificateOrder, CompleteCertificateOrder, ConfigureAcme, QueueCertificateOrder,
+    RenewCertificateOrder, SecretGenerationReference,
 };
 pub use command::{
     ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
@@ -202,7 +203,8 @@ pub use repository::{
     PasskeyRegistrationProfile, PasskeyRegistrationReplay, PasskeySessionReplay,
     PasskeyVerificationMaterial, PermissionGrantRecord, PermissionGrantRevocationRecord,
     PreservedVote, PrincipalCursor, PrincipalKind, PrincipalRecord, ProtectionPolicyCursor,
-    ProtectionPolicyRecord, ProtectionScenarioRecord, ProtectionTermRecord, ReadyMaintenanceWork,
+    ProtectionPolicyRecord, ProtectionScenarioRecord, ProtectionTermRecord,
+    PublicCertificateInstallationRecord, PublicCertificateRolloutSummary, ReadyMaintenanceWork,
     ReadyMaintenanceWorkPage, RebalanceScanProgress, RecoveryBundleState,
     RecoveryCodeVerificationMaterial, RepositoryConformanceCheck, RepositoryConformanceReport,
     RepositoryConformanceVector, RepositoryError, RetainedNamespaceRoot,

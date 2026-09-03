@@ -14,12 +14,13 @@ use super::{
     AuthoritativeRepository, CertificateOrderState, EntityKind, LogPosition, RepositoryError,
 };
 use crate::{
-    ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND, AcmeChallengeKind,
-    AuthoritativeCommand, BootstrapMesh, BootstrapRecoveryIdentity, CertificateOrderCompletion,
-    ClaimCertificateOrder, CommandContext, CommitSecretGeneration, CompleteCertificateOrder,
-    ConfigureAcme, ConfirmRecoveryBundleSaved, CreateAuthenticationMethod,
-    NewAuthenticationCredential, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PartitionDatabase,
-    QueueCertificateOrder, RecordName, RenewCertificateOrder, SecretGenerationReference,
+    ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
+    AcknowledgePublicCertificateInstallation, AcmeChallengeKind, AuthoritativeCommand,
+    BootstrapMesh, BootstrapRecoveryIdentity, CertificateOrderCompletion, ClaimCertificateOrder,
+    CommandContext, CommitSecretGeneration, CompleteCertificateOrder, ConfigureAcme,
+    ConfirmRecoveryBundleSaved, CreateAuthenticationMethod, NewAuthenticationCredential,
+    PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PartitionDatabase, QueueCertificateOrder, RecordName,
+    RenewCertificateOrder, SecretGenerationReference,
 };
 
 #[test]
@@ -114,6 +115,99 @@ fn certificate_order_is_retried_reclaimed_and_stale_workers_are_fenced()
         })
     );
     assert!(complete.claim.is_none());
+    Ok(())
+}
+
+#[test]
+fn gateway_installation_requires_exact_issued_recipient_and_is_idempotent()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    let config_id = AcmeConfigurationId::from_bytes([50; 16])?;
+    let order_id = CertificateOrderId::from_bytes([51; 16])?;
+    fixture.apply(
+        3,
+        2,
+        &AuthoritativeCommand::ConfigureAcme(fixture.configuration(config_id)?),
+    )?;
+    fixture.apply(
+        4,
+        10,
+        &AuthoritativeCommand::QueueCertificateOrder(QueueCertificateOrder {
+            order_id,
+            config_id,
+            next_attempt_at: UnixMicros::new(10),
+        }),
+    )?;
+    fixture.apply(
+        5,
+        11,
+        &AuthoritativeCommand::ClaimCertificateOrder(fixture.claim(order_id, 1, 501, 100)),
+    )?;
+    fixture.apply(
+        6,
+        12,
+        &AuthoritativeCommand::CompleteCertificateOrder(CompleteCertificateOrder {
+            order_id,
+            claim_generation: 1,
+            worker_node_id: fixture.node,
+            worker_incarnation: 1,
+            fence: 501,
+            outcome: CertificateOrderCompletion::Issued {
+                certificate: fixture.certificate(order_id)?,
+                not_before: UnixMicros::new(1),
+                not_after: UnixMicros::new(1_000),
+                result_digest: [52; 32],
+            },
+        }),
+    )?;
+    let complete = fixture
+        .repository
+        .certificate_order(order_id)?
+        .ok_or("completed order missing")?;
+    let certificate = complete.certificate.ok_or("certificate missing")?;
+    let acknowledgement = AcknowledgePublicCertificateInstallation {
+        order_id,
+        gateway_node_id: fixture.node,
+        gateway_incarnation: 1,
+        certificate,
+        bundle_digest: [52; 32],
+        observed_order_revision: complete.revision,
+    };
+    fixture.apply(
+        7,
+        13,
+        &AuthoritativeCommand::AcknowledgePublicCertificateInstallation(acknowledgement),
+    )?;
+    let installation = fixture
+        .repository
+        .public_certificate_installation(order_id, fixture.node)?
+        .ok_or("gateway installation missing")?;
+    assert_eq!(installation.gateway_incarnation, 1);
+    assert_eq!(installation.certificate, certificate);
+    assert_eq!(installation.bundle_digest, [52; 32]);
+    assert_eq!(installation.installed_at, UnixMicros::new(13));
+    let summary = fixture
+        .repository
+        .public_certificate_rollout_summary(order_id)?;
+    assert_eq!(summary.required_gateway_count, 1);
+    assert_eq!(summary.installed_gateway_count, 1);
+    assert!(summary.complete);
+
+    fixture.apply(
+        8,
+        14,
+        &AuthoritativeCommand::AcknowledgePublicCertificateInstallation(acknowledgement),
+    )?;
+    let mut substituted = acknowledgement;
+    substituted.bundle_digest = [53; 32];
+    assert!(matches!(
+        fixture.apply(
+            9,
+            15,
+            &AuthoritativeCommand::AcknowledgePublicCertificateInstallation(substituted)
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
     Ok(())
 }
 

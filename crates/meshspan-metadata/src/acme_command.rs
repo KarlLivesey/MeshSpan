@@ -126,3 +126,20 @@ pub struct CompleteCertificateOrder {
     /// Retry or validated issuance result.
     pub outcome: CertificateOrderCompletion,
 }
+
+/// Records one gateway's proof that it selected an exact issued generation for new handshakes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcknowledgePublicCertificateInstallation {
+    /// Completed order whose encrypted generation was installed.
+    pub order_id: CertificateOrderId,
+    /// Gateway reporting its own installation.
+    pub gateway_node_id: NodeId,
+    /// Exact current gateway process incarnation.
+    pub gateway_incarnation: u64,
+    /// Immutable encrypted generation decrypted and installed by the gateway.
+    pub certificate: SecretGenerationReference,
+    /// Digest of the canonical decrypted bundle installed by the gateway.
+    pub bundle_digest: [u8; 32],
+    /// Order revision the gateway observed before loading the certificate.
+    pub observed_order_revision: meshspan_domain::Revision,
+}

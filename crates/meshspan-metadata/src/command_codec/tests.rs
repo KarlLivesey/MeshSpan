@@ -19,25 +19,26 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::{
-    AcknowledgementCellRequirement, AcknowledgementCellRole, AcknowledgementConsistencyClass,
-    AcmeChallengeKind, AddGroupMember, AssignVolumeAcknowledgementPolicy,
-    AssignVolumeLocalityPolicy, AssignVolumeProtectionPolicy, AttestStorageTargetDrain,
-    BeginStorageScopeDrain, BeginStorageTargetDrain, BootstrapMesh, BootstrapRecoveryIdentity,
-    CertificateOrderCompletion, ClaimCertificateOrder, ClaimMaintenanceWork,
-    CommitConvergedVolumeHead, CommitRebalanceScanPage, CommitScrubPass, CommitSecretGeneration,
-    CommitShardRepair, CommitTargetReconciliation, CompleteCertificateOrder,
-    CompleteMaintenanceWork, CompleteStorageScopeDrain, ConfigureAcme, ConvergedHeadEvidence,
-    CreateAcknowledgementPolicy, CreateActivationPolicy, CreateAuthenticationMethod,
-    CreateAvailabilityCell, CreateComponent, CreateFaultGroup, CreateGroup, CreateLocalityPolicy,
-    CreateProtectionPolicy, CreateUser, CreateVolume, FenceStorageNodeDrainMembership,
-    GrantInheritance, GrantPermission, GrantPermissionWithActivation, IssueAuthenticationSession,
-    LocalityRequirementConfiguration, MaintenanceWorkCompletion, NewAuthenticationCredential,
-    NewRecoveryCode, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PermissionScope,
-    ProtectionScenarioConfiguration, PublishSmbExport, QueueCertificateOrder, QueueMaintenanceWork,
-    RebalanceScanCursor, RecordName, RegisterNodeWrappingKey, RegisterStorageTarget,
-    RemoveGroupMember, RenewCertificateOrder, RenewMaintenanceWork, RevokeAuthenticationMethod,
-    RevokeAuthenticationSession, SecretGenerationReference, SessionAuthenticationFactor,
-    SessionClientLabel, SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
+    AcknowledgePublicCertificateInstallation, AcknowledgementCellRequirement,
+    AcknowledgementCellRole, AcknowledgementConsistencyClass, AcmeChallengeKind, AddGroupMember,
+    AssignVolumeAcknowledgementPolicy, AssignVolumeLocalityPolicy, AssignVolumeProtectionPolicy,
+    AttestStorageTargetDrain, BeginStorageScopeDrain, BeginStorageTargetDrain, BootstrapMesh,
+    BootstrapRecoveryIdentity, CertificateOrderCompletion, ClaimCertificateOrder,
+    ClaimMaintenanceWork, CommitConvergedVolumeHead, CommitRebalanceScanPage, CommitScrubPass,
+    CommitSecretGeneration, CommitShardRepair, CommitTargetReconciliation,
+    CompleteCertificateOrder, CompleteMaintenanceWork, CompleteStorageScopeDrain, ConfigureAcme,
+    ConvergedHeadEvidence, CreateAcknowledgementPolicy, CreateActivationPolicy,
+    CreateAuthenticationMethod, CreateAvailabilityCell, CreateComponent, CreateFaultGroup,
+    CreateGroup, CreateLocalityPolicy, CreateProtectionPolicy, CreateUser, CreateVolume,
+    FenceStorageNodeDrainMembership, GrantInheritance, GrantPermission,
+    GrantPermissionWithActivation, IssueAuthenticationSession, LocalityRequirementConfiguration,
+    MaintenanceWorkCompletion, NewAuthenticationCredential, NewRecoveryCode,
+    PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PermissionScope, ProtectionScenarioConfiguration,
+    PublishSmbExport, QueueCertificateOrder, QueueMaintenanceWork, RebalanceScanCursor, RecordName,
+    RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember, RenewCertificateOrder,
+    RenewMaintenanceWork, RevokeAuthenticationMethod, RevokeAuthenticationSession,
+    SecretGenerationReference, SessionAuthenticationFactor, SessionClientLabel,
+    SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
     SetTargetAvailabilityCellMembership, SmbExportGatewaySelection, StepUpAuthenticationSession,
     StorageUsageLimit, StrongFallbackMode, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND,
     WithdrawSmbExport,
@@ -727,6 +728,30 @@ fn acme_commands_round_trip_configuration_claims_and_both_outcomes()
     ] {
         assert_round_trip(context, command)?;
     }
+    Ok(())
+}
+
+#[test]
+fn public_certificate_installation_round_trips_exact_gateway_evidence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let order_id = CertificateOrderId::from_bytes([101; 16])?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::AcknowledgePublicCertificateInstallation(
+            AcknowledgePublicCertificateInstallation {
+                order_id,
+                gateway_node_id: NodeId::from_bytes([104; 16])?,
+                gateway_incarnation: 5,
+                certificate: SecretGenerationReference {
+                    secret_id: order_id.as_bytes(),
+                    generation: 1,
+                },
+                bundle_digest: [109; 32],
+                observed_order_revision: Revision::new(12),
+            },
+        ),
+    )?;
     Ok(())
 }
 

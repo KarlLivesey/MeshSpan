@@ -167,6 +167,9 @@ mod private_consensus_runtime;
 mod protected_api_key_issuance;
 mod protected_file;
 mod protected_recovery_code_issuance;
+mod public_certificate_installation;
+#[cfg(test)]
+mod public_certificate_installation_tests;
 mod public_certificate_loading;
 #[cfg(test)]
 mod public_certificate_loading_tests;
@@ -483,6 +486,11 @@ pub use permission_administration::{
 };
 pub use protected_api_key_issuance::ProtectedApiKeyIssuanceController;
 pub use protected_recovery_code_issuance::ProtectedRecoveryCodeIssuanceController;
+pub use public_certificate_installation::{
+    PublicCertificateInstallationAuthority, PublicCertificateInstallationAuthorityError,
+    PublicCertificateInstallationCommit, PublicCertificateInstallationError,
+    PublicCertificateInstallationRequest, PublicCertificateInstallationService,
+};
 pub use public_certificate_loading::{
     LoadedPublicCertificate, PublicCertificateLoadingError, PublicCertificateLoadingService,
 };

@@ -640,6 +640,7 @@ fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::ClaimCertificateOrder(_)
             | AuthoritativeCommand::RenewCertificateOrder(_)
             | AuthoritativeCommand::CompleteCertificateOrder(_)
+            | AuthoritativeCommand::AcknowledgePublicCertificateInstallation(_)
             | AuthoritativeCommand::RegisterNodeWrappingKey(_)
             | AuthoritativeCommand::CommitSecretGeneration(_)
             | AuthoritativeCommand::ConfirmRecoveryBundleSaved(_)
@@ -722,6 +723,9 @@ fn execute_infrastructure_command(
         }
         AuthoritativeCommand::CompleteCertificateOrder(value) => {
             acme::complete(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::AcknowledgePublicCertificateInstallation(value) => {
+            acme::acknowledge_installation(transaction, context, *value, revision)
         }
         AuthoritativeCommand::RegisterNodeWrappingKey(value) => {
             node_wrapping_key::register(transaction, context, *value, revision)
@@ -1273,6 +1277,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::ClaimCertificateOrder(_) => 116,
         AuthoritativeCommand::RenewCertificateOrder(_) => 117,
         AuthoritativeCommand::CompleteCertificateOrder(_) => 118,
+        AuthoritativeCommand::AcknowledgePublicCertificateInstallation(_) => 119,
     }
 }
 
