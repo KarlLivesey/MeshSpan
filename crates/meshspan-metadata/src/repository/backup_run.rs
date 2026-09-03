@@ -14,9 +14,7 @@ use crate::{
     ClaimMetadataBackupRun, CommandContext, CompleteMetadataBackupRun, MetadataBackupRunClaim,
     MetadataBackupRunCompletion, RecordMetadataBackup, RenewMetadataBackupRun,
 };
-use query::{
-    active_claim, latest_claim_generation, require_live_claim, run_head, verified_copy_counts,
-};
+use query::{active_claim, latest_claim_generation, require_live_claim, run_head};
 use transition::{
     advance_schedule, completion_digest, exactly_one, finish_incomplete_claim,
     mark_backup_incomplete, mark_backup_verified, supersede, update_run_revision, update_run_state,
@@ -85,6 +83,19 @@ pub struct MetadataBackupRunClaimRecord {
     pub lease_expires_at: UnixMicros,
     /// Latest authoritative revision affecting the claim.
     pub revision: Revision,
+}
+
+/// Canonical evidence for the currently usable verified-copy set.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MetadataBackupProtectionEvidence {
+    /// Backup generation whose copies were evaluated.
+    pub backup_id: BackupId,
+    /// Verified copies using each destination's current provider generation.
+    pub verified_copies: u64,
+    /// Verified copies whose destination declares independent failure boundaries.
+    pub independent_copies: u64,
+    /// Domain-separated digest of the complete ordered evidence set.
+    pub digest: [u8; 32],
 }
 
 pub(super) fn claim(
@@ -225,9 +236,12 @@ pub(super) fn complete(
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
     let run = run_head(transaction, command.backup_id)?;
-    let copies = verified_copy_counts(transaction, command.backup_id)?;
-    let protected = copies.0 >= u64::from(run.minimum_verified_copies)
-        && copies.1 >= u64::from(run.minimum_independent_copies);
+    let evidence = query::protection_evidence(transaction, command.backup_id)?;
+    if completion_digest(command.outcome) != evidence.digest {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    let protected = evidence.verified_copies >= u64::from(run.minimum_verified_copies)
+        && evidence.independent_copies >= u64::from(run.minimum_independent_copies);
     let terminal_state = match command.outcome {
         MetadataBackupRunCompletion::Protected { .. } if run.state == RUN_RECORDED && protected => {
             mark_backup_verified(transaction, context, command.backup_id, revision)?;
@@ -237,7 +251,13 @@ pub(super) fn complete(
             if matches!(run.state, RUN_QUEUED | RUN_CLAIMED | RUN_RECORDED) && !protected =>
         {
             finish_incomplete_claim(transaction, context, command.backup_id, revision)?;
-            mark_backup_incomplete(transaction, context, command.backup_id, copies.0, revision)?;
+            mark_backup_incomplete(
+                transaction,
+                context,
+                command.backup_id,
+                evidence.verified_copies,
+                revision,
+            )?;
             RUN_INCOMPLETE
         }
         _ => return Err(RepositoryError::InvalidCommand),
@@ -280,6 +300,13 @@ pub(super) fn unfinished(
     partition_id: PartitionId,
 ) -> Result<Option<MetadataBackupRun>, RepositoryError> {
     query::unfinished(connection, partition_id)
+}
+
+pub(super) fn protection_evidence(
+    connection: &rusqlite::Connection,
+    backup_id: BackupId,
+) -> Result<MetadataBackupProtectionEvidence, RepositoryError> {
+    query::protection_evidence(connection, backup_id)
 }
 
 fn validate_lease(now: UnixMicros, expires_at: UnixMicros) -> Result<(), RepositoryError> {

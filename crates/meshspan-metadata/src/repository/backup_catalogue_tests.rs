@@ -183,13 +183,18 @@ fn record_and_verify_backup(
             .state,
         MetadataBackupState::Recorded
     );
+    let evidence = fixture
+        .repository
+        .metadata_backup_protection_evidence(backup)?;
+    assert_eq!(evidence.verified_copies, 1);
+    assert_eq!(evidence.independent_copies, 1);
     fixture.repository.apply_committed(
         LogPosition { index: 9, term: 1 },
         context(46, fixture.administrator, 47, 70, 8)?,
         &AuthoritativeCommand::CompleteMetadataBackupRun(CompleteMetadataBackupRun {
             backup_id: backup,
             outcome: MetadataBackupRunCompletion::Protected {
-                result_digest: [48; 32],
+                result_digest: evidence.digest,
             },
         }),
     )?;

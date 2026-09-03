@@ -4,10 +4,12 @@
 
 use meshspan_domain::{BackupId, NodeId, PartitionId, Revision, UnixMicros};
 use rusqlite::{Connection, OptionalExtension, params};
+use sha2::{Digest, Sha256};
 
 use super::{
-    CLAIM_ACTIVE, MetadataBackupRun, MetadataBackupRunClaimRecord, MetadataBackupRunState,
-    RUN_CLAIMED, RUN_INCOMPLETE, RUN_PROTECTED, RUN_QUEUED, RUN_RECORDED,
+    CLAIM_ACTIVE, MetadataBackupProtectionEvidence, MetadataBackupRun,
+    MetadataBackupRunClaimRecord, MetadataBackupRunState, RUN_CLAIMED, RUN_INCOMPLETE,
+    RUN_PROTECTED, RUN_QUEUED, RUN_RECORDED,
 };
 use crate::{CommandContext, MetadataBackupRunClaim};
 
@@ -156,19 +158,74 @@ pub(super) fn latest_claim_generation(
     parse_u64(generation)
 }
 
-pub(super) fn verified_copy_counts(
+pub(super) fn protection_evidence(
     connection: &Connection,
     backup_id: BackupId,
-) -> Result<(u64, u64), RepositoryError> {
-    let stored = connection.query_row(
-        "SELECT count(*),
-                coalesce(sum(CASE WHEN d.failure_relationship = 3 THEN 1 ELSE 0 END), 0)
+) -> Result<MetadataBackupProtectionEvidence, RepositoryError> {
+    let mut statement = connection.prepare(
+        "SELECT c.destination_id, c.provider_generation, c.object_reference,
+                c.byte_length, c.copy_digest, d.failure_relationship,
+                d.failure_evidence_digest
          FROM backup_copies c JOIN backup_destinations d USING(destination_id)
-         WHERE c.backup_id = ?1 AND c.state = 2 AND d.state IN (1, 2)",
-        [backup_id.as_bytes().as_slice()],
-        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+         WHERE c.backup_id = ?1 AND c.state = 2 AND d.state IN (1, 2)
+           AND c.provider_generation = d.provider_generation
+         ORDER BY c.destination_id",
     )?;
-    Ok((parse_u64(stored.0)?, parse_u64(stored.1)?))
+    let rows = statement.query_map([backup_id.as_bytes().as_slice()], |row| {
+        Ok((
+            row.get::<_, Vec<u8>>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, Vec<u8>>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, Vec<u8>>(6)?,
+        ))
+    })?;
+    let mut digest = Sha256::new();
+    digest.update(b"meshspan.metadata-backup-protection-evidence.v1\0");
+    digest.update(backup_id.as_bytes());
+    let mut verified_copies = 0_u64;
+    let mut independent_copies = 0_u64;
+    for row in rows {
+        let row = row?;
+        let destination = backup_destination_identifier(&row.0)?;
+        let provider_generation = parse_u64(row.1)?;
+        let byte_length = parse_u64(row.3)?;
+        let reference_length =
+            u64::try_from(row.2.len()).map_err(|_| RepositoryError::CapacityExceeded)?;
+        let copy_digest = digest32(&row.4)?;
+        let failure_evidence_digest = digest32(&row.6)?;
+        if row.2.is_empty()
+            || row.2.len() > crate::MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES
+            || row.2.chars().any(char::is_control)
+            || !matches!(row.5, 1..=3)
+        {
+            return Err(RepositoryError::CorruptState);
+        }
+        verified_copies = verified_copies
+            .checked_add(1)
+            .ok_or(RepositoryError::CapacityExceeded)?;
+        independent_copies = independent_copies
+            .checked_add(u64::from(row.5 == 3))
+            .ok_or(RepositoryError::CapacityExceeded)?;
+        digest.update(destination.as_bytes());
+        digest.update(provider_generation.to_be_bytes());
+        digest.update(byte_length.to_be_bytes());
+        digest.update(reference_length.to_be_bytes());
+        digest.update(row.2.as_bytes());
+        digest.update(copy_digest);
+        digest.update(row.5.to_be_bytes());
+        digest.update(failure_evidence_digest);
+    }
+    digest.update(verified_copies.to_be_bytes());
+    digest.update(independent_copies.to_be_bytes());
+    Ok(MetadataBackupProtectionEvidence {
+        backup_id,
+        verified_copies,
+        independent_copies,
+        digest: digest.finalize().into(),
+    })
 }
 
 type StoredRun = (
@@ -276,6 +333,16 @@ fn backup_identifier(value: &[u8]) -> Result<BackupId, RepositoryError> {
         .try_into()
         .map_err(|_| RepositoryError::CorruptState)?;
     BackupId::from_bytes(bytes).map_err(|_| RepositoryError::CorruptState)
+}
+
+fn backup_destination_identifier(
+    value: &[u8],
+) -> Result<meshspan_domain::BackupDestinationId, RepositoryError> {
+    let bytes: [u8; 16] = value
+        .try_into()
+        .map_err(|_| RepositoryError::CorruptState)?;
+    meshspan_domain::BackupDestinationId::from_bytes(bytes)
+        .map_err(|_| RepositoryError::CorruptState)
 }
 
 fn node_identifier(value: &[u8]) -> Result<NodeId, RepositoryError> {
