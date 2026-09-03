@@ -12,6 +12,7 @@ version.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+tokio.workspace = true
 
 [lints]
 workspace = true

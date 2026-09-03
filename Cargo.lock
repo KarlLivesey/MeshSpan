@@ -1316,6 +1316,7 @@ name = "meshspan-dns"
 version = "0.1.0"
 dependencies = [
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
