@@ -3,13 +3,15 @@
 //! Canonical publication identities, catalogue records and receipt validation.
 
 use meshspan_backup::BackupFileEvidence;
-use meshspan_contracts::{BackupObjectIdentity, ContractVersion, RequestContext};
+use meshspan_contracts::{
+    BackupObjectIdentity, BackupObjectReceipt, ContractVersion, RequestContext,
+};
 use meshspan_domain::{
     AuditEventId, BackupDestinationId, OperationId, PrincipalId, Revision, UnixMicros, uuid_v8,
 };
 use meshspan_metadata::{
     AuthoritativeCommand, BackupCopyRecord, BackupCopyState, CommandContext, CommandReceipt,
-    EntityKind, MetadataBackupRecord, MetadataBackupState, RecordMetadataBackup,
+    EntityKind, InitialBackupCopy, MetadataBackupRecord, MetadataBackupState, RecordMetadataBackup,
 };
 use sha2::{Digest, Sha256};
 
@@ -19,7 +21,6 @@ use super::BackupPublicationError;
 pub(super) enum PublicationStep {
     RecordBackup,
     StoreProvider,
-    RecordCopy,
     VerifyProvider,
     VerifyCopy,
 }
@@ -29,14 +30,16 @@ impl PublicationStep {
         match self {
             Self::RecordBackup => b"meshspan.backup-publication.record-backup.v1\0",
             Self::StoreProvider => b"meshspan.backup-publication.store-provider.v1\0",
-            Self::RecordCopy => b"meshspan.backup-publication.record-copy.v1\0",
             Self::VerifyProvider => b"meshspan.backup-publication.verify-provider.v1\0",
             Self::VerifyCopy => b"meshspan.backup-publication.verify-copy.v1\0",
         }
     }
 }
 
-pub(super) fn record_backup(evidence: BackupFileEvidence) -> RecordMetadataBackup {
+pub(super) fn record_backup(
+    evidence: BackupFileEvidence,
+    receipt: &BackupObjectReceipt,
+) -> RecordMetadataBackup {
     RecordMetadataBackup {
         backup_id: evidence.source.backup_id,
         partition_id: evidence.source.partition_id,
@@ -50,6 +53,13 @@ pub(super) fn record_backup(evidence: BackupFileEvidence) -> RecordMetadataBacku
         manifest_digest: evidence.source.catalogue_digest(),
         encrypted_byte_length: evidence.byte_length,
         encrypted_digest: evidence.digest,
+        initial_copy: InitialBackupCopy {
+            destination_id: receipt.object.destination_id,
+            provider_generation: receipt.object.provider_generation,
+            object_reference: receipt.object_reference.as_str().to_owned(),
+            byte_length: receipt.object.byte_length,
+            copy_digest: receipt.object.digest,
+        },
     }
 }
 
@@ -71,19 +81,19 @@ pub(super) fn validate_backup(
     backup: MetadataBackupRecord,
     evidence: BackupFileEvidence,
 ) -> Result<MetadataBackupRecord, BackupPublicationError> {
-    let expected = record_backup(evidence);
-    if backup.backup_id == expected.backup_id
-        && backup.partition_id == expected.partition_id
-        && backup.mesh_id == expected.mesh_id
-        && backup.last_log_index == expected.last_log_index
-        && backup.last_log_term == expected.last_log_term
-        && backup.state_revision == expected.state_revision
-        && backup.schema_version == expected.schema_version
-        && backup.source_byte_length == expected.source_byte_length
-        && backup.source_digest == expected.source_digest
-        && backup.manifest_digest == expected.manifest_digest
-        && backup.encrypted_byte_length == expected.encrypted_byte_length
-        && backup.encrypted_digest == expected.encrypted_digest
+    let source = evidence.source;
+    if backup.backup_id == source.backup_id
+        && backup.partition_id == source.partition_id
+        && backup.mesh_id == source.mesh_id
+        && backup.last_log_index == source.last_log_index
+        && backup.last_log_term == source.last_log_term
+        && backup.state_revision == Revision::new(source.state_revision)
+        && backup.schema_version == source.schema_version
+        && backup.source_byte_length == source.byte_length
+        && backup.source_digest == source.digest
+        && backup.manifest_digest == source.catalogue_digest()
+        && backup.encrypted_byte_length == evidence.byte_length
+        && backup.encrypted_digest == evidence.digest
         && backup.revision != Revision::ZERO
         && matches!(
             backup.state,

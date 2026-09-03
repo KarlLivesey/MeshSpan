@@ -215,6 +215,7 @@ fn map_repository_error(error: &RepositoryError) -> FederationAuthorityPageSourc
         | RepositoryError::StaleAuthenticationPolicy
         | RepositoryError::StaleSnapshot
         | RepositoryError::StaleSnapshotSchedule
+        | RepositoryError::StaleMetadataBackupSchedule
         | RepositoryError::InvalidCommand
         | RepositoryError::CapacityExceeded
         | RepositoryError::CorruptState

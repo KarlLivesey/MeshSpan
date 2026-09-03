@@ -145,6 +145,13 @@ fn backup_catalogue_commands_round_trip_canonically() -> Result<(), Box<dyn std:
             manifest_digest: [90; 32],
             encrypted_byte_length: 4_512,
             encrypted_digest: [91; 32],
+            initial_copy: crate::InitialBackupCopy {
+                destination_id,
+                provider_generation: 4,
+                object_reference: "backups/root/82.msbackup".to_owned(),
+                byte_length: 4_512,
+                copy_digest: [91; 32],
+            },
         }),
     )?;
     assert_round_trip(

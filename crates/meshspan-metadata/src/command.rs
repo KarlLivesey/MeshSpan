@@ -3410,6 +3410,11 @@ digest_simple_record!(
         digest.bytes(&value.manifest_digest);
         digest.unsigned(value.encrypted_byte_length);
         digest.bytes(&value.encrypted_digest);
+        digest.identifier(value.initial_copy.destination_id.as_bytes());
+        digest.unsigned(value.initial_copy.provider_generation);
+        digest.bytes(value.initial_copy.object_reference.as_bytes());
+        digest.unsigned(value.initial_copy.byte_length);
+        digest.bytes(&value.initial_copy.copy_digest);
     }
 );
 digest_simple_record!(RecordBackupCopy, b"record-backup-copy", |value, digest| {
