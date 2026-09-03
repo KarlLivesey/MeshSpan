@@ -1,17 +1,23 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::error::Error;
+use std::{error::Error, net::Ipv4Addr, time::Duration};
 
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
-
-use crate::{
-    Rfc2136Request, Rfc2136ResponseError, Rfc2136TsigKey, SignedRfc2136Request, TsigAlgorithm,
-    TxtUpdate,
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
 };
 
+use crate::{
+    Rfc2136Client, Rfc2136Request, Rfc2136ResponseError, Rfc2136TsigKey, SignedRfc2136Request,
+    TsigAlgorithm, TxtUpdate,
+};
+
+type TestError = Box<dyn Error + Send + Sync>;
+
 #[test]
-fn encodes_atomic_publish_with_full_authenticated_tsig() -> Result<(), Box<dyn Error>> {
+fn encodes_atomic_publish_with_full_authenticated_tsig() -> Result<(), TestError> {
     let secret = b"0123456789abcdef0123456789abcdef";
     let key = Rfc2136TsigKey::new(
         "meshspan-key.example.test",
@@ -81,7 +87,7 @@ fn rejects_out_of_zone_owner_and_invalid_publish_ttl() {
 }
 
 #[test]
-fn authenticates_exact_response_and_rejects_tampering() -> Result<(), Box<dyn Error>> {
+fn authenticates_exact_response_and_rejects_tampering() -> Result<(), TestError> {
     let secret = b"0123456789abcdef0123456789abcdef";
     let key = Rfc2136TsigKey::new(
         "meshspan-key.example.test",
@@ -122,11 +128,54 @@ fn authenticates_exact_response_and_rejects_tampering() -> Result<(), Box<dyn Er
     Ok(())
 }
 
+#[tokio::test]
+async fn completes_real_bounded_tcp_update_transaction() -> Result<(), TestError> {
+    let secret = b"0123456789abcdef0123456789abcdef";
+    let key = Rfc2136TsigKey::new(
+        "meshspan-key.example.test",
+        TsigAlgorithm::HmacSha256,
+        secret.to_vec(),
+    )?;
+    let request = Rfc2136Request::new(
+        0x7654,
+        "example.test",
+        "_acme-challenge.example.test",
+        b"proof-token",
+        TxtUpdate::Publish { ttl_seconds: 30 },
+        1_700_000_000,
+        300,
+    )?
+    .sign(&key)?;
+    let expected_request = request.as_bytes().to_vec();
+    let response = signed_success_response(&request, secret, 1_700_000_001)?;
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let server_address = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await?;
+        let request_length = usize::from(stream.read_u16().await?);
+        let mut received = vec![0_u8; request_length];
+        stream.read_exact(&mut received).await?;
+        if received != expected_request {
+            return Err("RFC 2136 client changed the signed request".into());
+        }
+        stream
+            .write_all(&u16::try_from(response.len())?.to_be_bytes())
+            .await?;
+        stream.write_all(&response).await?;
+        Ok::<_, TestError>(())
+    });
+
+    let client = Rfc2136Client::new(server_address, Duration::from_secs(2))?;
+    client.execute(&request, &key, 1_700_000_002).await?;
+    server.await??;
+    Ok(())
+}
+
 fn signed_success_response(
     request: &SignedRfc2136Request,
     secret: &[u8],
     signed_at_seconds: u64,
-) -> Result<Vec<u8>, Box<dyn Error>> {
+) -> Result<Vec<u8>, TestError> {
     let mut unsigned = Vec::from(request.id().to_be_bytes());
     unsigned.extend_from_slice(&0xa800_u16.to_be_bytes());
     unsigned.extend_from_slice(&[0_u8; 8]);
@@ -180,7 +229,7 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
-fn encode_name(output: &mut Vec<u8>, name: &str) -> Result<(), Box<dyn Error>> {
+fn encode_name(output: &mut Vec<u8>, name: &str) -> Result<(), TestError> {
     for label in name.split('.') {
         output.push(u8::try_from(label.len())?);
         output.extend_from_slice(label.as_bytes());
