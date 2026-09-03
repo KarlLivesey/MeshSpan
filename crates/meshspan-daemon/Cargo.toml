@@ -20,6 +20,7 @@ hmac.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 meshspan-api-contract = { path = "../meshspan-api-contract" }
+meshspan-acme = { path = "../meshspan-acme" }
 meshspan-certificates = { path = "../meshspan-certificates" }
 meshspan-cluster = { path = "../meshspan-cluster" }
 meshspan-coding = { path = "../meshspan-coding" }

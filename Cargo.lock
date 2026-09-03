@@ -1177,6 +1177,7 @@ dependencies = [
  "hmac",
  "hyper",
  "hyper-util",
+ "meshspan-acme",
  "meshspan-api-contract",
  "meshspan-certificates",
  "meshspan-cluster",
