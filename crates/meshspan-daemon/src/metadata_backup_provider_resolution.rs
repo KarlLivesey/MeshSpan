@@ -1,0 +1,80 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+//! Replaceable destination resolution for metadata-backup placement.
+
+use meshspan_contracts::BackupProvider;
+use meshspan_metadata::BackupDestinationRecord;
+use thiserror::Error;
+
+use crate::{
+    BackupPublicationAuthority, BackupPublicationError, BackupPublicationOutcome,
+    BackupPublicationRequest, MetadataBackupDestinationWriter, MetadataBackupPublisher,
+};
+
+/// Resolves one exact replicated destination binding to a live provider implementation.
+pub trait MetadataBackupProviderResolver {
+    /// Returns a provider fenced to the destination's exact identity and generation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unsupported, unavailable, stale or contradictory bindings before provider IO.
+    fn resolve(
+        &mut self,
+        destination: &BackupDestinationRecord,
+    ) -> Result<Box<dyn BackupProvider>, MetadataBackupProviderResolutionError>;
+}
+
+/// Destination writer which composes generic placement with generic provider resolution.
+pub struct ResolvingMetadataBackupDestinationWriter<'a, Authority, Resolver> {
+    publisher: MetadataBackupPublisher<'a, Authority>,
+    resolver: &'a mut Resolver,
+}
+
+impl<'a, Authority, Resolver> ResolvingMetadataBackupDestinationWriter<'a, Authority, Resolver> {
+    /// Binds an authoritative publisher to one runtime provider resolver.
+    #[must_use]
+    pub const fn new(authority: &'a Authority, resolver: &'a mut Resolver) -> Self {
+        Self {
+            publisher: MetadataBackupPublisher::new(authority),
+            resolver,
+        }
+    }
+}
+
+impl<Authority, Resolver> MetadataBackupDestinationWriter
+    for ResolvingMetadataBackupDestinationWriter<'_, Authority, Resolver>
+where
+    Authority: BackupPublicationAuthority,
+    Resolver: MetadataBackupProviderResolver,
+{
+    fn publish_destination(
+        &mut self,
+        destination: &BackupDestinationRecord,
+        request: &BackupPublicationRequest<'_>,
+    ) -> Result<BackupPublicationOutcome, BackupPublicationError> {
+        if destination.destination_id != request.destination_id
+            || destination.binding.provider_generation() == 0
+        {
+            return Err(BackupPublicationError::InvalidProjection);
+        }
+        let mut provider = self.resolver.resolve(destination)?;
+        self.publisher.publish(provider.as_mut(), request)
+    }
+}
+
+/// Closed provider-resolution failure before any backup bytes are sent.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum MetadataBackupProviderResolutionError {
+    /// This build has no implementation for the configured binding kind.
+    #[error("metadata backup destination provider is unsupported")]
+    Unsupported,
+    /// The exact provider is temporarily unavailable.
+    #[error("metadata backup destination provider is unavailable")]
+    Unavailable,
+    /// Runtime provider identity or generation contradicts replicated configuration.
+    #[error("metadata backup destination provider binding is stale")]
+    Stale,
+    /// Replicated or local provider configuration is malformed.
+    #[error("metadata backup destination provider configuration is invalid")]
+    Invalid,
+}
