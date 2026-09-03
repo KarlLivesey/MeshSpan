@@ -15,7 +15,7 @@ use meshspan_metadata::{
 use super::NodeRuntimeError;
 use super::config::NodeConfig;
 use super::network::{OutboundSnapshot, PeerNetwork, ReceivedSnapshot};
-use super::service::{node_number, now, partition_id};
+use super::service::{mesh_id, node_number, now, partition_id};
 use crate::membership::{
     MembershipCoordinatorError, membership_operation_id, membership_proposal_id,
     plan_next_transition,
@@ -59,6 +59,7 @@ pub(super) fn install_admission_snapshot(
         backup: PartitionBackupManifest {
             backup_id: BackupId::from_bytes(snapshot_id.as_bytes())?,
             partition_id: partition_id()?,
+            mesh_id: mesh_id()?,
             applied_position: MetadataLogPosition {
                 term: included.term,
                 index: included.index,
