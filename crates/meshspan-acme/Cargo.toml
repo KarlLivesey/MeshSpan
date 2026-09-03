@@ -17,6 +17,7 @@ hyper.workspace = true
 hyper-util.workspace = true
 meshspan-contracts = { path = "../meshspan-contracts" }
 meshspan-domain = { path = "../meshspan-domain" }
+meshspan-dns = { path = "../meshspan-dns" }
 p256.workspace = true
 rustls.workspace = true
 serde.workspace = true

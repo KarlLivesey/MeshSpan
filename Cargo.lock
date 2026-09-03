@@ -1152,6 +1152,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "meshspan-contracts",
+ "meshspan-dns",
  "meshspan-domain",
  "meshspan-rustls-provider",
  "meshspan-test-certificates",
