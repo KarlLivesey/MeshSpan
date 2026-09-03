@@ -141,6 +141,7 @@ fn prepared() -> Result<PreparedCertificateOrder, Box<dyn std::error::Error>> {
         },
         machine,
         account_key: account_key()?,
+        challenge_settings: None,
         certificate_key,
         csr_der,
         certificate_key_reference: SecretGenerationReference {

@@ -10,11 +10,11 @@ use meshspan_domain::{
     uuid_v8,
 };
 use meshspan_metadata::{
-    ACME_ACCOUNT_KEY_SECRET_KIND, AuthoritativeCommand, CommandContext, CommandReceipt,
-    CommitSecretGeneration, EntityKind, PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND,
-    RepositoryError, SecretGenerationReference,
+    ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND, AuthoritativeCommand,
+    CommandContext, CommandReceipt, CommitSecretGeneration, EntityKind,
+    PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND, RepositoryError, SecretGenerationReference,
 };
-use meshspan_secret_envelope::{SecretContext, WrappingPublicKey, encrypt_secret};
+use meshspan_secret_envelope::{SecretContext, SecretPlaintext, WrappingPublicKey, encrypt_secret};
 use thiserror::Error;
 
 use crate::volume_key_loading::load_secret_generation;
@@ -94,6 +94,8 @@ pub struct PreparedCertificateOrder {
     pub machine: AcmeOrderMachine,
     /// Decrypted account signing capability, never printable or exportable.
     pub account_key: AcmeAccountKey,
+    /// Decrypted automatic DNS provider settings, absent for HTTP-01 and manual DNS-01.
+    pub challenge_settings: Option<SecretPlaintext>,
     /// Order-bound leaf key retained for CSR and final bundle construction.
     pub certificate_key: ExternalCertificateRequestKey,
     /// Exact DER PKCS#10 request bound to the immutable configured names.
@@ -141,6 +143,7 @@ where
     ) -> Result<PreparedCertificateOrder, CertificateOrderPreparationError> {
         let claim = validate_assignment(now, &assignment)?;
         let account_key = self.load_account_key(&assignment)?;
+        let challenge_settings = self.load_challenge_settings(&assignment)?;
         let certificate_key_reference = SecretGenerationReference {
             secret_id: assignment.order.order_id.as_bytes(),
             generation: LEAF_KEY_GENERATION,
@@ -157,6 +160,7 @@ where
             assignment,
             machine,
             account_key,
+            challenge_settings,
             certificate_key,
             csr_der,
             certificate_key_reference,
@@ -176,6 +180,24 @@ where
         .map_err(|_| CertificateOrderPreparationError::InvalidInput)?;
         let plaintext = load_secret_generation(&self.authority, &self.decryptor, context)?;
         AcmeAccountKey::from_secret_bytes(plaintext.expose()).map_err(Into::into)
+    }
+
+    fn load_challenge_settings(
+        &self,
+        assignment: &CertificateOrderAssignment,
+    ) -> Result<Option<SecretPlaintext>, CertificateOrderPreparationError> {
+        let Some(reference) = assignment.configuration.challenge_settings else {
+            return Ok(None);
+        };
+        let context = SecretContext::new(
+            ACME_CHALLENGE_SETTINGS_SECRET_KIND,
+            reference.secret_id,
+            reference.generation,
+        )
+        .map_err(|_| CertificateOrderPreparationError::InvalidInput)?;
+        load_secret_generation(&self.authority, &self.decryptor, context)
+            .map(Some)
+            .map_err(Into::into)
     }
 
     fn load_or_create_certificate_key(

@@ -115,6 +115,7 @@ mod https_server_tests;
 mod identity_administration;
 #[cfg(test)]
 mod identity_administration_tests;
+mod in_process_certificate_runtime;
 mod join_mesh_setup;
 #[cfg(test)]
 mod join_mesh_setup_tests;
@@ -455,6 +456,11 @@ pub use identity_administration::{
     IdentityAdministrationAuthority, IdentityAdministrationAuthorityError,
     IdentityAdministrationCommit, IdentityAdministrationController, IdentityAdministrationError,
     IdentityAdministrationService, IdentityAdministrator, identity_administration_api_router,
+};
+pub use in_process_certificate_runtime::{
+    InProcessCertificateChallenge, InProcessCertificateExecutionFactory,
+    InProcessCertificateRuntimeComponents, InProcessCertificateRuntimePolicy,
+    InProcessChallengeKind,
 };
 pub use join_mesh_setup::{JoinMeshSetupError, JoinMeshSetupService};
 pub use local_node_identity::{LocalNodeIdentity, LocalNodeIdentityError};
