@@ -36,7 +36,7 @@ pub trait DnsTxtProvider {
         name: &str,
         value: &[u8],
         order_epoch: u64,
-    ) -> Result<DnsTxtReceipt, ContractError>;
+    ) -> impl std::future::Future<Output = Result<DnsTxtReceipt, ContractError>> + Send;
 
     /// Confirms that the provider currently observes the exact value.
     ///
@@ -48,7 +48,7 @@ pub trait DnsTxtProvider {
         name: &str,
         value: &[u8],
         receipt: DnsTxtReceipt,
-    ) -> Result<bool, ContractError>;
+    ) -> impl std::future::Future<Output = Result<bool, ContractError>> + Send;
 
     /// Removes only the exact publication represented by the provider receipt.
     ///
@@ -60,7 +60,7 @@ pub trait DnsTxtProvider {
         name: &str,
         value: &[u8],
         receipt: DnsTxtReceipt,
-    ) -> Result<(), ContractError>;
+    ) -> impl std::future::Future<Output = Result<(), ContractError>> + Send;
 }
 
 /// Certificate-challenge implementation around one configured DNS TXT publisher.
@@ -108,8 +108,8 @@ impl<P> Dns01Challenge<P> {
     }
 }
 
-impl<P: DnsTxtProvider> CertificateChallenge for Dns01Challenge<P> {
-    fn publish(
+impl<P: DnsTxtProvider + Send + Sync> CertificateChallenge for Dns01Challenge<P> {
+    async fn publish(
         &mut self,
         request: &CertificateChallengeRequest,
     ) -> Result<CertificateChallengeReceipt, ContractError> {
@@ -117,11 +117,14 @@ impl<P: DnsTxtProvider> CertificateChallenge for Dns01Challenge<P> {
         validate_request(request, CertificateChallengeKind::Dns01)?;
         let payload =
             Dns01Payload::decode(&request.challenge).map_err(|_| ContractError::InvalidInput)?;
-        let provider = self.provider.publish_txt(
-            payload.record_name(),
-            payload.record_value(),
-            request.order_epoch,
-        )?;
+        let provider = self
+            .provider
+            .publish_txt(
+                payload.record_name(),
+                payload.record_value(),
+                request.order_epoch,
+            )
+            .await?;
         let receipt = Self::receipt(request, &payload, provider);
         self.provider_receipts
             .write()
@@ -130,7 +133,7 @@ impl<P: DnsTxtProvider> CertificateChallenge for Dns01Challenge<P> {
         Ok(receipt)
     }
 
-    fn is_visible(
+    async fn is_visible(
         &self,
         request: &CertificateChallengeRequest,
         receipt: CertificateChallengeReceipt,
@@ -153,9 +156,10 @@ impl<P: DnsTxtProvider> CertificateChallenge for Dns01Challenge<P> {
         }
         self.provider
             .is_txt_visible(payload.record_name(), payload.record_value(), provider)
+            .await
     }
 
-    fn cleanup(
+    async fn cleanup(
         &mut self,
         request: &CertificateChallengeRequest,
         receipt: CertificateChallengeReceipt,
@@ -177,7 +181,8 @@ impl<P: DnsTxtProvider> CertificateChallenge for Dns01Challenge<P> {
             return Err(ContractError::Stale);
         }
         self.provider
-            .remove_txt(payload.record_name(), payload.record_value(), provider)?;
+            .remove_txt(payload.record_name(), payload.record_value(), provider)
+            .await?;
         self.provider_receipts
             .write()
             .map_err(|_| ContractError::Unavailable)?

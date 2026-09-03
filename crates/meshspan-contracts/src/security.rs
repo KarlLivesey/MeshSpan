@@ -2,6 +2,8 @@
 
 //! Replaceable authentication-handler and certificate-challenge contracts.
 
+use std::future::Future;
+
 use meshspan_domain::{AssuranceLevel, PrincipalId, Revision, UnixMicros};
 
 use crate::{BoundedBytes, ComponentLifecycle, ContractError, RequestContext, VersionedPayload};
@@ -100,7 +102,7 @@ pub trait CertificateChallenge: ComponentLifecycle {
     fn publish(
         &mut self,
         request: &CertificateChallengeRequest,
-    ) -> Result<CertificateChallengeReceipt, ContractError>;
+    ) -> impl Future<Output = Result<CertificateChallengeReceipt, ContractError>> + Send;
 
     /// Observes whether the exact publication is externally visible.
     ///
@@ -111,7 +113,7 @@ pub trait CertificateChallenge: ComponentLifecycle {
         &self,
         request: &CertificateChallengeRequest,
         receipt: CertificateChallengeReceipt,
-    ) -> Result<bool, ContractError>;
+    ) -> impl Future<Output = Result<bool, ContractError>> + Send;
 
     /// Removes only the exact fenced publication represented by the receipt.
     ///
@@ -122,5 +124,5 @@ pub trait CertificateChallenge: ComponentLifecycle {
         &mut self,
         request: &CertificateChallengeRequest,
         receipt: CertificateChallengeReceipt,
-    ) -> Result<(), ContractError>;
+    ) -> impl Future<Output = Result<(), ContractError>> + Send;
 }

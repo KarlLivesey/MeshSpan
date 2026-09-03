@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use std::collections::BTreeMap;
+use std::future::Future;
 
 use meshspan_contracts::{
     BoundedBytes, CertificateChallenge, CertificateChallengeKind, CertificateChallengeRequest,
@@ -13,14 +14,14 @@ use crate::{
     Dns01Challenge, Dns01Payload, DnsTxtProvider, DnsTxtReceipt, Http01Challenge, Http01Payload,
 };
 
-#[test]
-fn http_publication_is_shared_bounded_expiring_and_epoch_fenced()
+#[tokio::test]
+async fn http_publication_is_shared_bounded_expiring_and_epoch_fenced()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut publisher = Http01Challenge::new();
     let reader = publisher.clone();
     let request = http_request(7, b"token.thumbprint")?;
-    let receipt = publisher.publish(&request)?;
-    assert_eq!(publisher.publish(&request)?, receipt);
+    let receipt = publisher.publish(&request).await?;
+    assert_eq!(publisher.publish(&request).await?, receipt);
     assert_eq!(
         reader.response("token", UnixMicros::new(199))?,
         Some(b"token.thumbprint".to_vec())
@@ -28,19 +29,22 @@ fn http_publication_is_shared_bounded_expiring_and_epoch_fenced()
     assert_eq!(reader.response("token", UnixMicros::new(200))?, None);
 
     let conflict = http_request(7, b"different.thumbprint")?;
-    assert_eq!(publisher.publish(&conflict), Err(ContractError::Conflict));
-    let newer = http_request(8, b"replacement.thumbprint")?;
-    publisher.publish(&newer)?;
-    assert_eq!(publisher.publish(&request), Err(ContractError::Stale));
     assert_eq!(
-        publisher.cleanup(&request, receipt),
+        publisher.publish(&conflict).await,
+        Err(ContractError::Conflict)
+    );
+    let newer = http_request(8, b"replacement.thumbprint")?;
+    publisher.publish(&newer).await?;
+    assert_eq!(publisher.publish(&request).await, Err(ContractError::Stale));
+    assert_eq!(
+        publisher.cleanup(&request, receipt).await,
         Err(ContractError::Stale)
     );
     Ok(())
 }
 
-#[test]
-fn dns_publication_uses_exact_provider_receipt_for_probe_and_cleanup()
+#[tokio::test]
+async fn dns_publication_uses_exact_provider_receipt_for_probe_and_cleanup()
 -> Result<(), Box<dyn std::error::Error>> {
     let provider = MemoryDns::default();
     let mut challenge = Dns01Challenge::new(provider);
@@ -51,17 +55,17 @@ fn dns_publication_uses_exact_provider_receipt_for_probe_and_cleanup()
         payload.encode()?,
         9,
     )?;
-    let receipt = challenge.publish(&request)?;
-    assert!(challenge.is_visible(&request, receipt)?);
+    let receipt = challenge.publish(&request).await?;
+    assert!(challenge.is_visible(&request, receipt).await?);
     let mut stale = receipt;
     stale.publication_digest[0] ^= 1;
     assert_eq!(
-        challenge.cleanup(&request, stale),
+        challenge.cleanup(&request, stale).await,
         Err(ContractError::Stale)
     );
-    challenge.cleanup(&request, receipt)?;
+    challenge.cleanup(&request, receipt).await?;
     assert_eq!(
-        challenge.is_visible(&request, receipt),
+        challenge.is_visible(&request, receipt).await,
         Err(ContractError::Stale)
     );
     Ok(())
@@ -111,7 +115,7 @@ impl DnsTxtProvider for MemoryDns {
         name: &str,
         value: &[u8],
         order_epoch: u64,
-    ) -> Result<DnsTxtReceipt, ContractError> {
+    ) -> impl Future<Output = Result<DnsTxtReceipt, ContractError>> + Send {
         let mut digest = Sha256::new();
         digest.update(name.as_bytes());
         digest.update(value);
@@ -121,7 +125,7 @@ impl DnsTxtProvider for MemoryDns {
         };
         self.records
             .insert(name.to_owned(), (value.to_vec(), receipt));
-        Ok(receipt)
+        std::future::ready(Ok(receipt))
     }
 
     fn is_txt_visible(
@@ -129,11 +133,11 @@ impl DnsTxtProvider for MemoryDns {
         name: &str,
         value: &[u8],
         receipt: DnsTxtReceipt,
-    ) -> Result<bool, ContractError> {
-        Ok(self
+    ) -> impl Future<Output = Result<bool, ContractError>> + Send {
+        std::future::ready(Ok(self
             .records
             .get(name)
-            .is_some_and(|record| record.0 == value && record.1 == receipt))
+            .is_some_and(|record| record.0 == value && record.1 == receipt)))
     }
 
     fn remove_txt(
@@ -141,15 +145,15 @@ impl DnsTxtProvider for MemoryDns {
         name: &str,
         value: &[u8],
         receipt: DnsTxtReceipt,
-    ) -> Result<(), ContractError> {
+    ) -> impl Future<Output = Result<(), ContractError>> + Send {
         if !self
             .records
             .get(name)
             .is_some_and(|record| record.0 == value && record.1 == receipt)
         {
-            return Err(ContractError::Stale);
+            return std::future::ready(Err(ContractError::Stale));
         }
         self.records.remove(name);
-        Ok(())
+        std::future::ready(Ok(()))
     }
 }

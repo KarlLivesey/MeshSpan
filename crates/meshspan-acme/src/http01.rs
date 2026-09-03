@@ -78,10 +78,8 @@ impl Http01Challenge {
             publication_digest: digest.finalize().into(),
         }
     }
-}
 
-impl CertificateChallenge for Http01Challenge {
-    fn publish(
+    fn publish_now(
         &mut self,
         request: &CertificateChallengeRequest,
     ) -> Result<CertificateChallengeReceipt, ContractError> {
@@ -118,7 +116,7 @@ impl CertificateChallenge for Http01Challenge {
         Ok(receipt)
     }
 
-    fn is_visible(
+    fn visible_now(
         &self,
         request: &CertificateChallengeRequest,
         receipt: CertificateChallengeReceipt,
@@ -135,7 +133,7 @@ impl CertificateChallenge for Http01Challenge {
         }))
     }
 
-    fn cleanup(
+    fn cleanup_now(
         &mut self,
         request: &CertificateChallengeRequest,
         receipt: CertificateChallengeReceipt,
@@ -155,6 +153,32 @@ impl CertificateChallenge for Http01Challenge {
         }
         records.remove(payload.token());
         Ok(())
+    }
+}
+
+impl CertificateChallenge for Http01Challenge {
+    fn publish(
+        &mut self,
+        request: &CertificateChallengeRequest,
+    ) -> impl std::future::Future<Output = Result<CertificateChallengeReceipt, ContractError>> + Send
+    {
+        std::future::ready(self.publish_now(request))
+    }
+
+    fn is_visible(
+        &self,
+        request: &CertificateChallengeRequest,
+        receipt: CertificateChallengeReceipt,
+    ) -> impl std::future::Future<Output = Result<bool, ContractError>> + Send {
+        std::future::ready(self.visible_now(request, receipt))
+    }
+
+    fn cleanup(
+        &mut self,
+        request: &CertificateChallengeRequest,
+        receipt: CertificateChallengeReceipt,
+    ) -> impl std::future::Future<Output = Result<(), ContractError>> + Send {
+        std::future::ready(self.cleanup_now(request, receipt))
     }
 }
 
