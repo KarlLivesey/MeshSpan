@@ -78,6 +78,9 @@ mod headless_config;
 #[cfg(test)]
 mod headless_config_tests;
 mod headless_node_join;
+mod http01_server;
+#[cfg(test)]
+mod http01_server_tests;
 mod https_server;
 #[cfg(test)]
 mod https_server_tests;
@@ -195,6 +198,7 @@ mod storage_drain_administration_api_tests;
 mod storage_scrub_worker;
 mod target_drain_worker;
 
+pub use http01_server::{Http01Server, Http01ServerError};
 pub use maintenance_authority::MaintenanceMetadataAuthority;
 pub use maintenance_dispatcher::{
     MaintenanceDispatchAssignment, MaintenanceDispatchBatch, MaintenanceDispatchError,
