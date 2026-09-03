@@ -12,7 +12,8 @@ use rusqlite::params;
 use sha2::{Digest as _, Sha256};
 
 use super::{
-    AuthoritativeRepository, CertificateOrderState, EntityKind, LogPosition, RepositoryError,
+    AuthoritativeRepository, CertificateOrderState, EntityKind, LogPosition, PageLimit,
+    RepositoryError,
 };
 use crate::{
     ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
@@ -24,6 +25,101 @@ use crate::{
     PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND, PartitionDatabase, QueueCertificateOrder,
     RecordName, RenewCertificateOrder, SecretGenerationReference,
 };
+
+#[test]
+fn complete_acme_configuration_round_trips_from_authoritative_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    let config_id = AcmeConfigurationId::from_bytes([60; 16])?;
+    let expected = fixture.configuration(config_id)?;
+    fixture.apply(3, 2, &AuthoritativeCommand::ConfigureAcme(expected.clone()))?;
+
+    let actual = fixture
+        .repository
+        .acme_configuration(config_id)?
+        .ok_or("configuration missing")?;
+    assert_eq!(actual.config_id, expected.config_id);
+    assert_eq!(actual.directory_url, expected.directory_url);
+    assert_eq!(actual.account_key, expected.account_key);
+    assert_eq!(actual.challenge_kind, expected.challenge_kind);
+    assert_eq!(actual.challenge_settings, expected.challenge_settings);
+    assert_eq!(
+        actual.certificate_names,
+        expected.certificate_names.as_slice()
+    );
+    assert_eq!(actual.revision, Revision::new(3));
+    Ok(())
+}
+
+#[test]
+fn due_certificate_orders_page_queued_and_expired_claims_in_stable_order()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    let first_config = AcmeConfigurationId::from_bytes([61; 16])?;
+    let second_config = AcmeConfigurationId::from_bytes([62; 16])?;
+    let first_order = CertificateOrderId::from_bytes([63; 16])?;
+    let second_order = CertificateOrderId::from_bytes([64; 16])?;
+    fixture.apply(
+        3,
+        2,
+        &AuthoritativeCommand::ConfigureAcme(fixture.configuration(first_config)?),
+    )?;
+    fixture.apply(
+        4,
+        3,
+        &AuthoritativeCommand::ConfigureAcme(fixture.configuration(second_config)?),
+    )?;
+    fixture.apply(
+        5,
+        10,
+        &AuthoritativeCommand::QueueCertificateOrder(QueueCertificateOrder {
+            order_id: first_order,
+            config_id: first_config,
+            next_attempt_at: UnixMicros::new(10),
+        }),
+    )?;
+    fixture.apply(
+        6,
+        10,
+        &AuthoritativeCommand::QueueCertificateOrder(QueueCertificateOrder {
+            order_id: second_order,
+            config_id: second_config,
+            next_attempt_at: UnixMicros::new(10),
+        }),
+    )?;
+    fixture.apply(
+        7,
+        12,
+        &AuthoritativeCommand::ClaimCertificateOrder(fixture.claim(first_order, 1, 610, 20)),
+    )?;
+
+    let before_expiry = fixture.repository.due_certificate_orders(
+        UnixMicros::new(19),
+        None,
+        PageLimit::new(10)?,
+    )?;
+    assert_eq!(before_expiry.items.len(), 1);
+    assert_eq!(before_expiry.items[0].order_id, second_order);
+
+    let first_page =
+        fixture
+            .repository
+            .due_certificate_orders(UnixMicros::new(20), None, PageLimit::new(1)?)?;
+    assert_eq!(first_page.items.len(), 1);
+    assert_eq!(first_page.items[0].order_id, first_order);
+    assert_eq!(first_page.items[0].state, CertificateOrderState::Claimed);
+    let cursor = first_page.next.ok_or("next cursor missing")?;
+    let second_page = fixture.repository.due_certificate_orders(
+        UnixMicros::new(20),
+        Some(&cursor),
+        PageLimit::new(1)?,
+    )?;
+    assert_eq!(second_page.items.len(), 1);
+    assert_eq!(second_page.items[0].order_id, second_order);
+    assert_eq!(second_page.items[0].state, CertificateOrderState::Queued);
+    assert_eq!(second_page.next, None);
+    Ok(())
+}
 
 #[test]
 fn checkpoint_survives_worker_replacement_under_one_protected_leaf_key()
