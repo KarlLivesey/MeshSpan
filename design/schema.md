@@ -1292,6 +1292,13 @@ certificate_orders(
   last_error_kind NULL, created_at, completed_at NULL, revision
 )
 
+certificate_order_checkpoints(
+  order_id PK -> certificate_orders,
+  claim_generation, worker_node_id, worker_incarnation, fence,
+  certificate_key_secret_id, certificate_key_secret_generation,
+  checkpoint, checkpoint_digest, revision
+)
+
 dns_challenge_tasks(
   task_id PK, order_id -> certificate_orders,
   record_name, record_type, record_value_secret_id,

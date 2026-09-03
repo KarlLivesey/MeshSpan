@@ -8,9 +8,9 @@ use super::decoder::Decoder;
 use super::encoder::Encoder;
 use crate::{
     AcknowledgePublicCertificateInstallation, AcmeChallengeKind, CertificateOrderCompletion,
-    ClaimCertificateOrder, CompleteCertificateOrder, ConfigureAcme,
-    PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, QueueCertificateOrder, RenewCertificateOrder,
-    SecretGenerationReference,
+    CheckpointCertificateOrder, ClaimCertificateOrder, CompleteCertificateOrder, ConfigureAcme,
+    MAXIMUM_CERTIFICATE_ORDER_CHECKPOINT_BYTES, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+    QueueCertificateOrder, RenewCertificateOrder, SecretGenerationReference,
 };
 
 pub(super) const CONFIGURE_ACME: u16 = 49;
@@ -19,6 +19,7 @@ pub(super) const CLAIM_CERTIFICATE_ORDER: u16 = 51;
 pub(super) const RENEW_CERTIFICATE_ORDER: u16 = 52;
 pub(super) const COMPLETE_CERTIFICATE_ORDER: u16 = 53;
 pub(super) const ACKNOWLEDGE_PUBLIC_CERTIFICATE_INSTALLATION: u16 = 54;
+pub(super) const CHECKPOINT_CERTIFICATE_ORDER: u16 = 55;
 
 const MAXIMUM_DIRECTORY_URL_BYTES: usize = 2_048;
 const MAXIMUM_CERTIFICATE_NAMES: usize = 256;
@@ -33,6 +34,9 @@ pub(super) fn encode_command(
         crate::AuthoritativeCommand::QueueCertificateOrder(value) => encode_queue(encoder, *value)?,
         crate::AuthoritativeCommand::ClaimCertificateOrder(value) => encode_claim(encoder, *value)?,
         crate::AuthoritativeCommand::RenewCertificateOrder(value) => encode_renew(encoder, *value)?,
+        crate::AuthoritativeCommand::CheckpointCertificateOrder(value) => {
+            encode_checkpoint(encoder, value)?;
+        }
         crate::AuthoritativeCommand::CompleteCertificateOrder(value) => {
             encode_complete(encoder, value)?;
         }
@@ -53,6 +57,7 @@ pub(super) const fn is_command_kind(kind: u16) -> bool {
             | RENEW_CERTIFICATE_ORDER
             | COMPLETE_CERTIFICATE_ORDER
             | ACKNOWLEDGE_PUBLIC_CERTIFICATE_INSTALLATION
+            | CHECKPOINT_CERTIFICATE_ORDER
     )
 }
 
@@ -71,6 +76,9 @@ pub(super) fn decode_command(
         RENEW_CERTIFICATE_ORDER => {
             decode_renew(decoder).map(crate::AuthoritativeCommand::RenewCertificateOrder)
         }
+        CHECKPOINT_CERTIFICATE_ORDER => {
+            decode_checkpoint(decoder).map(crate::AuthoritativeCommand::CheckpointCertificateOrder)
+        }
         COMPLETE_CERTIFICATE_ORDER => {
             decode_complete(decoder).map(crate::AuthoritativeCommand::CompleteCertificateOrder)
         }
@@ -78,6 +86,61 @@ pub(super) fn decode_command(
             .map(crate::AuthoritativeCommand::AcknowledgePublicCertificateInstallation),
         _ => Err(MetadataCommandCodecError::Unsupported),
     }
+}
+
+fn encode_checkpoint(
+    encoder: &mut Encoder,
+    value: &CheckpointCertificateOrder,
+) -> Result<(), MetadataCommandCodecError> {
+    validate_checkpoint(value)?;
+    encoder.u16(CHECKPOINT_CERTIFICATE_ORDER)?;
+    encode_claim_identity(
+        encoder,
+        value.order_id,
+        value.claim_generation,
+        value.worker_node_id,
+        value.worker_incarnation,
+        value.fence,
+    )?;
+    encode_secret(encoder, value.certificate_key)?;
+    encoder.bytes(
+        &value.checkpoint,
+        MAXIMUM_CERTIFICATE_ORDER_CHECKPOINT_BYTES,
+    )
+}
+
+fn decode_checkpoint(
+    decoder: &mut Decoder<'_>,
+) -> Result<CheckpointCertificateOrder, MetadataCommandCodecError> {
+    let identity = decode_claim_identity(decoder)?;
+    let value = CheckpointCertificateOrder {
+        order_id: identity.order_id,
+        claim_generation: identity.claim_generation,
+        worker_node_id: identity.worker_node_id,
+        worker_incarnation: identity.worker_incarnation,
+        fence: identity.fence,
+        certificate_key: decode_secret(decoder)?,
+        checkpoint: decoder.bytes(MAXIMUM_CERTIFICATE_ORDER_CHECKPOINT_BYTES)?,
+    };
+    validate_checkpoint(&value)?;
+    Ok(value)
+}
+
+fn validate_checkpoint(
+    value: &CheckpointCertificateOrder,
+) -> Result<(), MetadataCommandCodecError> {
+    if value.certificate_key.secret_id != value.order_id.as_bytes()
+        || value.certificate_key.generation != 1
+        || value.checkpoint.is_empty()
+    {
+        return Err(MetadataCommandCodecError::Invalid);
+    }
+    let machine = meshspan_acme::AcmeOrderMachine::decode_checkpoint(&value.checkpoint)
+        .map_err(|_| MetadataCommandCodecError::Invalid)?;
+    if machine.order_epoch() != value.fence {
+        return Err(MetadataCommandCodecError::Invalid);
+    }
+    Ok(())
 }
 
 fn encode_installation(

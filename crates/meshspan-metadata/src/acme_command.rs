@@ -7,6 +7,9 @@ use meshspan_domain::{AcmeConfigurationId, CertificateOrderId, NodeId, UnixMicro
 
 use crate::CommitSecretGeneration;
 
+/// Maximum encoded ACME checkpoint accepted into one authoritative command.
+pub const MAXIMUM_CERTIFICATE_ORDER_CHECKPOINT_BYTES: usize = 900 * 1_024;
+
 /// Encrypted secret generation referenced without exposing its plaintext through metadata.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SecretGenerationReference {
@@ -85,6 +88,25 @@ pub struct RenewCertificateOrder {
     pub fence: u64,
     /// Later bounded lease end.
     pub lease_expires_at: UnixMicros,
+}
+
+/// Persists one validated restart point under the exact current certificate-order fence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckpointCertificateOrder {
+    /// Claimed order.
+    pub order_id: CertificateOrderId,
+    /// Exact live claim generation.
+    pub claim_generation: u64,
+    /// Current worker node.
+    pub worker_node_id: NodeId,
+    /// Exact current process incarnation.
+    pub worker_incarnation: u64,
+    /// Unchanged live fence and ACME order epoch.
+    pub fence: u64,
+    /// Protected leaf-key generation used by this order and every replacement worker.
+    pub certificate_key: SecretGenerationReference,
+    /// Complete versioned `meshspan-acme` checkpoint for the next side effect.
+    pub checkpoint: Vec<u8>,
 }
 
 /// Result of one exact fenced ACME attempt.

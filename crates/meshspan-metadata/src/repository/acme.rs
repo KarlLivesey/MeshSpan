@@ -2,6 +2,8 @@
 
 //! Immutable ACME configuration and single-worker fenced certificate orders.
 
+mod order_checkpoint;
+
 use meshspan_domain::{AcmeConfigurationId, CertificateOrderId, NodeId, Revision, UnixMicros};
 use rusqlite::{OptionalExtension, Row, Transaction, params};
 use sha2::{Digest, Sha256};
@@ -15,6 +17,9 @@ use crate::{
     PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, QueueCertificateOrder, RenewCertificateOrder,
     SecretGenerationReference,
 };
+
+pub use order_checkpoint::CertificateOrderCheckpointRecord;
+pub(super) use order_checkpoint::checkpoint;
 
 const ORDER_QUEUED: i64 = 1;
 const ORDER_CLAIMED: i64 = 2;
@@ -354,6 +359,12 @@ pub(super) fn complete(
         ],
     )?;
     exactly_one(changed)?;
+    if matches!(&value.outcome, CertificateOrderCompletion::Issued { .. }) {
+        transaction.execute(
+            "DELETE FROM certificate_order_checkpoints WHERE order_id = ?1",
+            [value.order_id.as_bytes().as_slice()],
+        )?;
+    }
     Ok(order_entity(value.order_id))
 }
 

@@ -310,6 +310,50 @@ impl AcmeOrderMachine {
         Self::decode_validated_checkpoint(bytes)
     }
 
+    /// Returns the immutable ACME directory URL bound into this order.
+    #[must_use]
+    pub fn directory_url(&self) -> &str {
+        &self.directory_url
+    }
+
+    /// Returns the immutable canonical DNS-name set bound into this order.
+    #[must_use]
+    pub fn dns_names(&self) -> &[String] {
+        self.request.dns_names()
+    }
+
+    /// Returns the authority fence which owns every side effect in this order.
+    #[must_use]
+    pub const fn order_epoch(&self) -> u64 {
+        self.order_epoch
+    }
+
+    /// Rebinds a restored checkpoint to a replacement worker's authoritative fence.
+    ///
+    /// An in-progress challenge publication is deliberately returned to publication: the new
+    /// worker must obtain its own fenced visibility receipt, while cleanup by the stale worker is
+    /// rejected by the challenge provider.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a zero fence or a completed order.
+    pub fn resume_under_fence(&mut self, order_epoch: u64) -> Result<(), AcmeMachineError> {
+        if order_epoch == 0 || self.phase == Phase::Complete {
+            return Err(AcmeMachineError::InvalidInput);
+        }
+        if order_epoch != self.order_epoch
+            && matches!(
+                self.phase,
+                Phase::NotifyChallenge | Phase::PollAuthorization | Phase::CleanupChallenge
+            )
+        {
+            self.publication_digest = None;
+            self.phase = Phase::PublishChallenge;
+        }
+        self.order_epoch = order_epoch;
+        self.action_for_phase().map(|_| ())
+    }
+
     /// Applies one exact result only when it matches the current action.
     ///
     /// # Errors

@@ -93,6 +93,42 @@ fn hostile_checkpoint_version_shape_and_size_fail_closed() -> Result<(), Box<dyn
     Ok(())
 }
 
+#[test]
+fn replacement_fence_republishes_an_unfinished_challenge() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut machine = machine()?;
+    machine.advance(AcmeMachineEvent::DirectoryDiscovered(directory()))?;
+    machine.advance(AcmeMachineEvent::NonceAcquired("nonce-1".to_owned()))?;
+    machine.advance(AcmeMachineEvent::AccountCreated {
+        account_url: "https://ca.example.test/account/1".to_owned(),
+        replay_nonce: "nonce-2".to_owned(),
+    })?;
+    machine.advance(AcmeMachineEvent::OrderCreated {
+        order_url: "https://ca.example.test/order/1".to_owned(),
+        order: order(AcmeResourceStatus::Pending, None),
+        replay_nonce: "nonce-3".to_owned(),
+    })?;
+    machine.advance(AcmeMachineEvent::AuthorizationFetched {
+        authorization: authorization(AcmeResourceStatus::Pending),
+        replay_nonce: "nonce-4".to_owned(),
+    })?;
+    machine.advance(AcmeMachineEvent::ChallengePublished {
+        publication_digest: [7; 32],
+    })?;
+
+    machine.resume_under_fence(18)?;
+    assert_eq!(machine.order_epoch(), 18);
+    assert!(matches!(
+        machine.action()?,
+        crate::AcmeMachineAction::PublishChallenge {
+            order_epoch: 18,
+            ..
+        }
+    ));
+    assert_round_trip(&machine)?;
+    Ok(())
+}
+
 fn assert_round_trip(machine: &AcmeOrderMachine) -> Result<(), Box<dyn std::error::Error>> {
     let decoded = AcmeOrderMachine::decode_checkpoint(&machine.encode_checkpoint()?)?;
     assert_eq!(decoded, *machine);

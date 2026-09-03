@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+use meshspan_acme::{AcmeChallengePreference, AcmeOrderMachine, AcmeOrderRequest};
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     AcmeConfigurationId, ApiKeyId, AuditEventId, AuthenticationMethodId, CertificateOrderId,
@@ -16,12 +17,152 @@ use super::{
 use crate::{
     ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
     AcknowledgePublicCertificateInstallation, AcmeChallengeKind, AuthoritativeCommand,
-    BootstrapMesh, BootstrapRecoveryIdentity, CertificateOrderCompletion, ClaimCertificateOrder,
-    CommandContext, CommitSecretGeneration, CompleteCertificateOrder, ConfigureAcme,
-    ConfirmRecoveryBundleSaved, CreateAuthenticationMethod, NewAuthenticationCredential,
-    PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PartitionDatabase, QueueCertificateOrder, RecordName,
-    RenewCertificateOrder, SecretGenerationReference,
+    BootstrapMesh, BootstrapRecoveryIdentity, CertificateOrderCompletion,
+    CheckpointCertificateOrder, ClaimCertificateOrder, CommandContext, CommitSecretGeneration,
+    CompleteCertificateOrder, ConfigureAcme, ConfirmRecoveryBundleSaved,
+    CreateAuthenticationMethod, NewAuthenticationCredential, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+    PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND, PartitionDatabase, QueueCertificateOrder,
+    RecordName, RenewCertificateOrder, SecretGenerationReference,
 };
+
+#[test]
+fn checkpoint_survives_worker_replacement_under_one_protected_leaf_key()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    let config_id = AcmeConfigurationId::from_bytes([70; 16])?;
+    let order_id = CertificateOrderId::from_bytes([71; 16])?;
+    fixture.apply(
+        3,
+        2,
+        &AuthoritativeCommand::ConfigureAcme(fixture.configuration(config_id)?),
+    )?;
+    fixture.apply(
+        4,
+        10,
+        &AuthoritativeCommand::QueueCertificateOrder(QueueCertificateOrder {
+            order_id,
+            config_id,
+            next_attempt_at: UnixMicros::new(10),
+        }),
+    )?;
+    fixture.apply(
+        5,
+        10,
+        &AuthoritativeCommand::ClaimCertificateOrder(fixture.claim(order_id, 1, 707, 100)),
+    )?;
+    let certificate_key = SecretGenerationReference {
+        secret_id: order_id.as_bytes(),
+        generation: 1,
+    };
+    fixture.insert_secret(PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND, certificate_key)?;
+    let checkpoint = checkpoint(&fixture, config_id, 707)?;
+    fixture.apply(
+        6,
+        11,
+        &checkpoint_command(&fixture, order_id, 1, 707, certificate_key, checkpoint),
+    )?;
+    let first = fixture
+        .repository
+        .certificate_order_checkpoint(order_id)?
+        .ok_or("checkpoint missing")?;
+    assert_eq!(first.certificate_key, certificate_key);
+    assert_eq!(first.fence, 707);
+
+    fixture.apply(
+        7,
+        12,
+        &AuthoritativeCommand::CompleteCertificateOrder(fixture.retry(order_id, 1, 707, 20)),
+    )?;
+    assert!(
+        fixture
+            .repository
+            .certificate_order_checkpoint(order_id)?
+            .is_some()
+    );
+    fixture.apply(
+        8,
+        20,
+        &AuthoritativeCommand::ClaimCertificateOrder(fixture.claim(order_id, 2, 708, 100)),
+    )?;
+    let mut resumed = AcmeOrderMachine::decode_checkpoint(&first.checkpoint)?;
+    resumed.resume_under_fence(708)?;
+    fixture.apply(
+        9,
+        21,
+        &checkpoint_command(
+            &fixture,
+            order_id,
+            2,
+            708,
+            certificate_key,
+            resumed.encode_checkpoint()?,
+        ),
+    )?;
+    let replacement = fixture
+        .repository
+        .certificate_order_checkpoint(order_id)?
+        .ok_or("replacement checkpoint missing")?;
+    assert_eq!(replacement.certificate_key, certificate_key);
+    assert_eq!(replacement.claim_generation, 2);
+    assert_eq!(replacement.fence, 708);
+
+    fixture.apply(
+        10,
+        22,
+        &AuthoritativeCommand::CompleteCertificateOrder(CompleteCertificateOrder {
+            order_id,
+            claim_generation: 2,
+            worker_node_id: fixture.node,
+            worker_incarnation: 1,
+            fence: 708,
+            outcome: CertificateOrderCompletion::Issued {
+                certificate: fixture.certificate(order_id)?,
+                not_before: UnixMicros::new(20),
+                not_after: UnixMicros::new(1_000),
+                result_digest: [72; 32],
+            },
+        }),
+    )?;
+    assert_eq!(
+        fixture.repository.certificate_order_checkpoint(order_id)?,
+        None
+    );
+    Ok(())
+}
+
+fn checkpoint_command(
+    fixture: &Fixture,
+    order_id: CertificateOrderId,
+    claim_generation: u64,
+    fence: u64,
+    certificate_key: SecretGenerationReference,
+    checkpoint: Vec<u8>,
+) -> AuthoritativeCommand {
+    AuthoritativeCommand::CheckpointCertificateOrder(CheckpointCertificateOrder {
+        order_id,
+        claim_generation,
+        worker_node_id: fixture.node,
+        worker_incarnation: 1,
+        fence,
+        certificate_key,
+        checkpoint,
+    })
+}
+
+fn checkpoint(
+    fixture: &Fixture,
+    config_id: AcmeConfigurationId,
+    fence: u64,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let configuration = fixture.configuration(config_id)?;
+    Ok(AcmeOrderMachine::new(
+        configuration.directory_url,
+        AcmeOrderRequest::new(configuration.certificate_names.as_slice().to_vec())?,
+        AcmeChallengePreference::Dns01,
+        fence,
+    )?
+    .encode_checkpoint()?)
+}
 
 #[test]
 fn certificate_order_is_retried_reclaimed_and_stale_workers_are_fenced()
