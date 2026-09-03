@@ -10,8 +10,8 @@ use super::receipt::{decode_receipt, encode_result, result_digest, validate_posi
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError,
     acknowledgement_policy, acme, authentication_method, authentication_method_creation,
-    authentication_policy, availability_cell, backup_catalogue, backup_schedule, bootstrap,
-    cleanup_attestation, cleanup_completion, cleanup_inventory, cleanup_permit,
+    authentication_policy, availability_cell, backup_catalogue, backup_run, backup_schedule,
+    bootstrap, cleanup_attestation, cleanup_completion, cleanup_inventory, cleanup_permit,
     cleanup_reclamation, cluster, component, external_certificate, federation_actor_attestation,
     federation_assignment, federation_grant, federation_mutation_admission, federation_quarantine,
     federation_relationship, federation_storage_allocation, federation_succession, identity,
@@ -653,6 +653,9 @@ fn is_backup_command(command: &AuthoritativeCommand) -> bool {
         AuthoritativeCommand::ConfigureBackupDestination(_)
             | AuthoritativeCommand::ConfigureMetadataBackupSchedule(_)
             | AuthoritativeCommand::QueueMetadataBackupRun(_)
+            | AuthoritativeCommand::ClaimMetadataBackupRun(_)
+            | AuthoritativeCommand::RenewMetadataBackupRun(_)
+            | AuthoritativeCommand::CompleteMetadataBackupRun(_)
             | AuthoritativeCommand::RecordMetadataBackup(_)
             | AuthoritativeCommand::RecordBackupCopy(_)
             | AuthoritativeCommand::VerifyBackupCopy(_)
@@ -788,8 +791,26 @@ fn execute_backup_command(
         AuthoritativeCommand::QueueMetadataBackupRun(value) => {
             backup_schedule::queue(transaction, partition_id, context, *value, revision)
         }
+        AuthoritativeCommand::ClaimMetadataBackupRun(value) => {
+            backup_run::claim(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::RenewMetadataBackupRun(value) => {
+            backup_run::renew(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::CompleteMetadataBackupRun(value) => {
+            backup_run::complete(transaction, context, *value, revision)
+        }
         AuthoritativeCommand::RecordMetadataBackup(value) => {
-            backup_catalogue::record_backup(transaction, partition_id, context, value, revision)
+            backup_run::validate_admission(transaction, context, value)?;
+            let entity = backup_catalogue::record_backup(
+                transaction,
+                partition_id,
+                context,
+                value,
+                revision,
+            )?;
+            backup_run::mark_admitted(transaction, context, value, revision)?;
+            Ok(entity)
         }
         AuthoritativeCommand::RecordBackupCopy(value) => {
             backup_catalogue::record_copy(transaction, context, value, revision)
@@ -1394,6 +1415,9 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::VerifyBackupCopy(_) => 131,
         AuthoritativeCommand::ConfigureMetadataBackupSchedule(_) => 132,
         AuthoritativeCommand::QueueMetadataBackupRun(_) => 133,
+        AuthoritativeCommand::ClaimMetadataBackupRun(_) => 134,
+        AuthoritativeCommand::RenewMetadataBackupRun(_) => 135,
+        AuthoritativeCommand::CompleteMetadataBackupRun(_) => 136,
     }
 }
 

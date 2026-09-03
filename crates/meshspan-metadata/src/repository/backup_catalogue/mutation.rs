@@ -201,19 +201,6 @@ pub(in crate::repository) fn verify_copy(
     if changed != 1 {
         return Err(RepositoryError::InvalidCommand);
     }
-    let backup_changed = transaction.execute(
-        "UPDATE metadata_backups
-         SET state = 2, verified_at = COALESCE(verified_at, ?1), revision = ?2
-         WHERE backup_id = ?3 AND state IN (1, 2)",
-        params![
-            context.occurred_at.get(),
-            to_i64(revision.get())?,
-            command.backup_id.as_bytes().as_slice(),
-        ],
-    )?;
-    if backup_changed != 1 {
-        return Err(RepositoryError::CorruptState);
-    }
     Ok(EntityReference {
         kind: EntityKind::BackupCopy,
         id: command.backup_id.as_bytes(),

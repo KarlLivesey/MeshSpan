@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_domain::{
-    BackupDestinationId, BackupId, ComponentInstanceId, DurationMicros, MeshId, PartitionId,
-    Revision, TargetId, UnixMicros,
+    BackupDestinationId, BackupId, ComponentInstanceId, DurationMicros, MeshId, NodeId,
+    PartitionId, Revision, TargetId, UnixMicros,
 };
 
 use super::MetadataCommandCodecError;
 use super::decoder::Decoder;
 use super::encoder::Encoder;
 use crate::{
-    BackupDestinationBinding, BackupFailureRelationship, ConfigureBackupDestination,
-    ConfigureMetadataBackupSchedule, InitialBackupCopy, MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES,
-    QueueMetadataBackupRun, RecordBackupCopy, RecordMetadataBackup, RecordName, VerifyBackupCopy,
+    BackupDestinationBinding, BackupFailureRelationship, ClaimMetadataBackupRun,
+    CompleteMetadataBackupRun, ConfigureBackupDestination, ConfigureMetadataBackupSchedule,
+    InitialBackupCopy, MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES, MetadataBackupRunClaim,
+    MetadataBackupRunCompletion, QueueMetadataBackupRun, RecordBackupCopy, RecordMetadataBackup,
+    RecordName, RenewMetadataBackupRun, VerifyBackupCopy,
 };
 
 pub(super) const CONFIGURE_BACKUP_DESTINATION: u16 = 63;
@@ -20,6 +22,9 @@ pub(super) const RECORD_BACKUP_COPY: u16 = 65;
 pub(super) const VERIFY_BACKUP_COPY: u16 = 66;
 pub(super) const CONFIGURE_METADATA_BACKUP_SCHEDULE: u16 = 67;
 pub(super) const QUEUE_METADATA_BACKUP_RUN: u16 = 68;
+pub(super) const CLAIM_METADATA_BACKUP_RUN: u16 = 69;
+pub(super) const RENEW_METADATA_BACKUP_RUN: u16 = 70;
+pub(super) const COMPLETE_METADATA_BACKUP_RUN: u16 = 71;
 const MAXIMUM_NAME_BYTES: usize = 128;
 
 pub(super) const fn is_command_kind(kind: u16) -> bool {
@@ -31,6 +36,9 @@ pub(super) const fn is_command_kind(kind: u16) -> bool {
             | VERIFY_BACKUP_COPY
             | CONFIGURE_METADATA_BACKUP_SCHEDULE
             | QUEUE_METADATA_BACKUP_RUN
+            | CLAIM_METADATA_BACKUP_RUN
+            | RENEW_METADATA_BACKUP_RUN
+            | COMPLETE_METADATA_BACKUP_RUN
     )
 }
 
@@ -47,6 +55,15 @@ pub(super) fn encode_command(
         }
         crate::AuthoritativeCommand::QueueMetadataBackupRun(value) => {
             encode_run(encoder, *value)?;
+        }
+        crate::AuthoritativeCommand::ClaimMetadataBackupRun(value) => {
+            encode_claim_command(encoder, *value)?;
+        }
+        crate::AuthoritativeCommand::RenewMetadataBackupRun(value) => {
+            encode_renew_command(encoder, *value)?;
+        }
+        crate::AuthoritativeCommand::CompleteMetadataBackupRun(value) => {
+            encode_completion(encoder, *value)?;
         }
         crate::AuthoritativeCommand::RecordMetadataBackup(value) => {
             encode_backup(encoder, value)?;
@@ -72,6 +89,15 @@ pub(super) fn decode_command(
             .map(crate::AuthoritativeCommand::ConfigureMetadataBackupSchedule),
         QUEUE_METADATA_BACKUP_RUN => {
             decode_run(decoder).map(crate::AuthoritativeCommand::QueueMetadataBackupRun)
+        }
+        CLAIM_METADATA_BACKUP_RUN => {
+            decode_claim_command(decoder).map(crate::AuthoritativeCommand::ClaimMetadataBackupRun)
+        }
+        RENEW_METADATA_BACKUP_RUN => {
+            decode_renew_command(decoder).map(crate::AuthoritativeCommand::RenewMetadataBackupRun)
+        }
+        COMPLETE_METADATA_BACKUP_RUN => {
+            decode_completion(decoder).map(crate::AuthoritativeCommand::CompleteMetadataBackupRun)
         }
         RECORD_METADATA_BACKUP => {
             decode_backup(decoder).map(crate::AuthoritativeCommand::RecordMetadataBackup)
@@ -142,6 +168,109 @@ fn decode_run(
     };
     validate_run(value)?;
     Ok(value)
+}
+
+fn encode_claim_command(
+    encoder: &mut Encoder,
+    value: ClaimMetadataBackupRun,
+) -> Result<(), MetadataCommandCodecError> {
+    validate_claim(value.claim)?;
+    encoder.u16(CLAIM_METADATA_BACKUP_RUN)?;
+    encoder.identifier(value.backup_id.as_bytes())?;
+    encode_claim(encoder, value.claim)?;
+    encoder.i64(value.lease_expires_at.get())
+}
+
+fn decode_claim_command(
+    decoder: &mut Decoder<'_>,
+) -> Result<ClaimMetadataBackupRun, MetadataCommandCodecError> {
+    let value = ClaimMetadataBackupRun {
+        backup_id: BackupId::from_bytes(decoder.identifier()?)?,
+        claim: decode_claim(decoder)?,
+        lease_expires_at: UnixMicros::new(decoder.i64()?),
+    };
+    validate_claim(value.claim)?;
+    Ok(value)
+}
+
+fn encode_renew_command(
+    encoder: &mut Encoder,
+    value: RenewMetadataBackupRun,
+) -> Result<(), MetadataCommandCodecError> {
+    validate_claim(value.claim)?;
+    encoder.u16(RENEW_METADATA_BACKUP_RUN)?;
+    encoder.identifier(value.backup_id.as_bytes())?;
+    encode_claim(encoder, value.claim)?;
+    encoder.i64(value.lease_expires_at.get())
+}
+
+fn decode_renew_command(
+    decoder: &mut Decoder<'_>,
+) -> Result<RenewMetadataBackupRun, MetadataCommandCodecError> {
+    let value = RenewMetadataBackupRun {
+        backup_id: BackupId::from_bytes(decoder.identifier()?)?,
+        claim: decode_claim(decoder)?,
+        lease_expires_at: UnixMicros::new(decoder.i64()?),
+    };
+    validate_claim(value.claim)?;
+    Ok(value)
+}
+
+fn encode_completion(
+    encoder: &mut Encoder,
+    value: CompleteMetadataBackupRun,
+) -> Result<(), MetadataCommandCodecError> {
+    validate_completion(value.outcome)?;
+    encoder.u16(COMPLETE_METADATA_BACKUP_RUN)?;
+    encoder.identifier(value.backup_id.as_bytes())?;
+    match value.outcome {
+        MetadataBackupRunCompletion::Protected { result_digest } => {
+            encoder.u8(1)?;
+            encoder.fixed(&result_digest)
+        }
+        MetadataBackupRunCompletion::Incomplete { result_digest } => {
+            encoder.u8(2)?;
+            encoder.fixed(&result_digest)
+        }
+    }
+}
+
+fn decode_completion(
+    decoder: &mut Decoder<'_>,
+) -> Result<CompleteMetadataBackupRun, MetadataCommandCodecError> {
+    let backup_id = BackupId::from_bytes(decoder.identifier()?)?;
+    let outcome = match decoder.u8()? {
+        1 => MetadataBackupRunCompletion::Protected {
+            result_digest: decoder.fixed()?,
+        },
+        2 => MetadataBackupRunCompletion::Incomplete {
+            result_digest: decoder.fixed()?,
+        },
+        _ => return Err(MetadataCommandCodecError::Invalid),
+    };
+    validate_completion(outcome)?;
+    Ok(CompleteMetadataBackupRun { backup_id, outcome })
+}
+
+fn encode_claim(
+    encoder: &mut Encoder,
+    value: MetadataBackupRunClaim,
+) -> Result<(), MetadataCommandCodecError> {
+    encoder.u64(value.claim_generation)?;
+    encoder.identifier(value.worker_node_id.as_bytes())?;
+    encoder.u64(value.worker_incarnation)?;
+    encoder.u64(value.fence)
+}
+
+fn decode_claim(
+    decoder: &mut Decoder<'_>,
+) -> Result<MetadataBackupRunClaim, MetadataCommandCodecError> {
+    Ok(MetadataBackupRunClaim {
+        claim_generation: decoder.u64()?,
+        worker_node_id: NodeId::from_bytes(decoder.identifier()?)?,
+        worker_incarnation: decoder.u64()?,
+        fence: decoder.u64()?,
+    })
 }
 
 fn encode_destination(
@@ -232,6 +361,7 @@ fn encode_backup(
     encoder.fixed(&value.manifest_digest)?;
     encoder.u64(value.encrypted_byte_length)?;
     encoder.fixed(&value.encrypted_digest)?;
+    encode_claim(encoder, value.claim)?;
     encode_initial_copy(encoder, &value.initial_copy)
 }
 
@@ -252,6 +382,7 @@ fn decode_backup(
         manifest_digest: decoder.fixed()?,
         encrypted_byte_length: decoder.u64()?,
         encrypted_digest: decoder.fixed()?,
+        claim: decode_claim(decoder)?,
         initial_copy: decode_initial_copy(decoder)?,
     };
     validate_backup(&value)?;
@@ -368,9 +499,32 @@ fn validate_backup(value: &RecordMetadataBackup) -> Result<(), MetadataCommandCo
         || value.schema_version == 0
         || value.source_byte_length == 0
         || value.encrypted_byte_length == 0
+        || validate_claim(value.claim).is_err()
         || value.initial_copy.byte_length != value.encrypted_byte_length
         || value.initial_copy.copy_digest != value.encrypted_digest
     {
+        Err(MetadataCommandCodecError::Invalid)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_claim(value: MetadataBackupRunClaim) -> Result<(), MetadataCommandCodecError> {
+    if value.claim_generation == 0 || value.worker_incarnation == 0 || value.fence == 0 {
+        Err(MetadataCommandCodecError::Invalid)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_completion(
+    value: MetadataBackupRunCompletion,
+) -> Result<(), MetadataCommandCodecError> {
+    let result_digest = match value {
+        MetadataBackupRunCompletion::Protected { result_digest }
+        | MetadataBackupRunCompletion::Incomplete { result_digest } => result_digest,
+    };
+    if result_digest == [0; 32] {
         Err(MetadataCommandCodecError::Invalid)
     } else {
         Ok(())

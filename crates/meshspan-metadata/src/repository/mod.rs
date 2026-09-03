@@ -30,6 +30,9 @@ mod backup;
 mod backup_catalogue;
 #[cfg(test)]
 mod backup_catalogue_tests;
+mod backup_run;
+#[cfg(test)]
+mod backup_run_tests;
 mod backup_schedule;
 #[cfg(test)]
 mod backup_schedule_tests;
@@ -191,7 +194,8 @@ pub use backup_catalogue::{
     BackupCopyRecord, BackupCopyState, BackupDestinationRecord, BackupDestinationState,
     MetadataBackupRecord, MetadataBackupState,
 };
-pub use backup_schedule::{MetadataBackupRun, MetadataBackupSchedule};
+pub use backup_run::{MetadataBackupRun, MetadataBackupRunClaimRecord, MetadataBackupRunState};
+pub use backup_schedule::MetadataBackupSchedule;
 pub use cleanup_attestation::{VersionCleanupAttestationProgress, VersionCleanupParticipant};
 pub use cleanup_completion::{VersionCleanupCompletion, VersionCleanupItemCompletion};
 pub use cleanup_inventory::{
@@ -2215,7 +2219,19 @@ impl AuthoritativeRepository {
         &self,
         backup_id: meshspan_domain::BackupId,
     ) -> Result<Option<MetadataBackupRun>, RepositoryError> {
-        backup_schedule::run(self.database.connection(), backup_id)
+        backup_run::load(self.database.connection(), backup_id)
+    }
+
+    /// Returns the current live worker claim for one automatic backup run.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when persisted worker identity, fence or lease state is malformed.
+    pub fn metadata_backup_run_claim(
+        &self,
+        backup_id: meshspan_domain::BackupId,
+    ) -> Result<Option<MetadataBackupRunClaimRecord>, RepositoryError> {
+        backup_run::live_claim(self.database.connection(), backup_id)
     }
 
     /// Creates a complete state-machine snapshot bound to one proved quorum plan.

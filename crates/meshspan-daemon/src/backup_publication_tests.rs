@@ -11,14 +11,15 @@ use meshspan_contracts::{
     ImplementationDescriptor,
 };
 use meshspan_domain::{
-    BackupDestinationId, BackupId, ComponentInstanceId, MeshId, PartitionId, PrincipalId, Revision,
-    UnixMicros,
+    BackupDestinationId, BackupId, ComponentInstanceId, MeshId, NodeId, PartitionId, PrincipalId,
+    Revision, UnixMicros,
 };
 use meshspan_metadata::{
     ApplyDisposition, AuthoritativeCommand, BackupCopyRecord, BackupCopyState,
     BackupDestinationBinding, BackupDestinationRecord, BackupDestinationState,
     BackupFailureRelationship, CommandContext, CommandReceipt, EntityKind, EntityReference,
-    LogPosition, MetadataBackupRecord, MetadataBackupState, RepositoryError,
+    LogPosition, MetadataBackupRecord, MetadataBackupRunClaim, MetadataBackupState,
+    RepositoryError,
 };
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
@@ -39,26 +40,28 @@ fn publication_records_stores_verifies_and_replays_exact_copy()
 
     let first = publisher.publish(
         &mut provider,
-        BackupPublicationRequest {
+        &BackupPublicationRequest {
             encrypted_source: &encrypted,
             evidence: fixture.evidence,
             destination_id,
+            claim: fixture.claim,
             actor_principal_id: fixture.actor,
             now: UnixMicros::new(20),
             deadline: UnixMicros::new(100),
         },
     )?;
-    assert_eq!(first.backup.state, MetadataBackupState::Verified);
+    assert_eq!(first.backup.state, MetadataBackupState::Recorded);
     assert_eq!(first.copy.state, BackupCopyState::Verified);
     assert_eq!(provider.stores, 1);
     assert_eq!(provider.verifications.get(), 1);
 
     let replay = publisher.publish(
         &mut provider,
-        BackupPublicationRequest {
+        &BackupPublicationRequest {
             encrypted_source: &encrypted,
             evidence: fixture.evidence,
             destination_id,
+            claim: fixture.claim,
             actor_principal_id: fixture.actor,
             now: UnixMicros::new(21),
             deadline: UnixMicros::new(101),
@@ -92,11 +95,12 @@ fn publication_uses_real_restartable_directory_provider() -> Result<(), Box<dyn 
         encrypted_source: &encrypted,
         evidence: fixture.evidence,
         destination_id,
+        claim: fixture.claim,
         actor_principal_id: fixture.actor,
         now: UnixMicros::new(20),
         deadline: UnixMicros::new(100),
     };
-    let first = publisher.publish(&mut provider, request)?;
+    let first = publisher.publish(&mut provider, &request)?;
     assert_eq!(first.copy.state, BackupCopyState::Verified);
     drop(provider);
 
@@ -107,14 +111,12 @@ fn publication_uses_real_restartable_directory_provider() -> Result<(), Box<dyn 
         1_024,
         UnixMicros::new(21),
     )?;
-    let replay = publisher.publish(
-        &mut reopened,
-        BackupPublicationRequest {
-            now: UnixMicros::new(21),
-            deadline: UnixMicros::new(101),
-            ..request
-        },
-    )?;
+    let replay_request = BackupPublicationRequest {
+        now: UnixMicros::new(21),
+        deadline: UnixMicros::new(101),
+        ..request
+    };
+    let replay = publisher.publish(&mut reopened, &replay_request)?;
     assert_eq!(replay, first);
     assert_eq!(authority.commit_count(), 2);
     Ok(())
@@ -138,10 +140,11 @@ fn corrupt_encrypted_source_never_records_a_copy() -> Result<(), Box<dyn std::er
     )?;
     let result = publisher.publish(
         &mut provider,
-        BackupPublicationRequest {
+        &BackupPublicationRequest {
             encrypted_source: &encrypted,
             evidence: fixture.evidence,
             destination_id,
+            claim: fixture.claim,
             actor_principal_id: fixture.actor,
             now: UnixMicros::new(20),
             deadline: UnixMicros::new(100),
@@ -173,6 +176,7 @@ fn provider_success_before_authority_failure_replays_without_false_catalogue_sta
         encrypted_source: &encrypted,
         evidence: fixture.evidence,
         destination_id,
+        claim: fixture.claim,
         actor_principal_id: fixture.actor,
         now: UnixMicros::new(20),
         deadline: UnixMicros::new(100),
@@ -185,22 +189,20 @@ fn provider_success_before_authority_failure_replays_without_false_catalogue_sta
         UnixMicros::new(1),
     )?;
     assert!(matches!(
-        publisher.publish(&mut provider, request),
+        publisher.publish(&mut provider, &request),
         Err(crate::BackupPublicationError::Authority(_))
     ));
     assert!(authority.backup.borrow().is_none());
     assert!(authority.copy.borrow().is_none());
 
     authority.reject_commits.set(false);
-    let completed = publisher.publish(
-        &mut provider,
-        BackupPublicationRequest {
-            now: UnixMicros::new(21),
-            deadline: UnixMicros::new(101),
-            ..request
-        },
-    )?;
-    assert_eq!(completed.backup.state, MetadataBackupState::Verified);
+    let retry_request = BackupPublicationRequest {
+        now: UnixMicros::new(21),
+        deadline: UnixMicros::new(101),
+        ..request
+    };
+    let completed = publisher.publish(&mut provider, &retry_request)?;
+    assert_eq!(completed.backup.state, MetadataBackupState::Recorded);
     assert_eq!(completed.copy.state, BackupCopyState::Verified);
     assert_eq!(authority.commit_count(), 3);
     Ok(())
@@ -211,6 +213,7 @@ struct Fixture {
     evidence: BackupFileEvidence,
     destination: BackupDestinationRecord,
     actor: PrincipalId,
+    claim: MetadataBackupRunClaim,
 }
 
 impl Fixture {
@@ -252,6 +255,12 @@ impl Fixture {
                 revision: Revision::new(6),
             },
             actor: PrincipalId::from_bytes([8; 16])?,
+            claim: MetadataBackupRunClaim {
+                claim_generation: 1,
+                worker_node_id: NodeId::from_bytes([9; 16])?,
+                worker_incarnation: 1,
+                fence: 99,
+            },
         })
     }
 }
@@ -372,13 +381,6 @@ impl BackupPublicationAuthority for MemoryAuthority {
                 record.state = BackupCopyState::Verified;
                 record.verified_at = Some(context.occurred_at);
                 record.revision = Revision::new(12);
-                let mut backup = self.backup.borrow_mut();
-                let backup = backup
-                    .as_mut()
-                    .ok_or(MetadataAuthorityRequestError::Failed)?;
-                backup.state = MetadataBackupState::Verified;
-                backup.verified_at = Some(context.occurred_at);
-                backup.revision = Revision::new(12);
                 (EntityKind::BackupCopy, value.backup_id.as_bytes(), 12)
             }
             _ => return Err(MetadataAuthorityRequestError::Unsupported),

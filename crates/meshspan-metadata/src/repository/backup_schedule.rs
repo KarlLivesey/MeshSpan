@@ -2,7 +2,7 @@
 
 //! Replicated automatic metadata-backup policy and due-run materialisation.
 
-use meshspan_domain::{BackupId, DurationMicros, PartitionId, Revision, UnixMicros};
+use meshspan_domain::{DurationMicros, PartitionId, Revision, UnixMicros};
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use super::apply::to_i64;
@@ -35,23 +35,6 @@ pub struct MetadataBackupSchedule {
     /// Number of runs materialised by this schedule.
     pub run_sequence: u64,
     /// Latest authoritative revision affecting the head.
-    pub revision: Revision,
-}
-
-/// One durable due occurrence awaiting fenced execution.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MetadataBackupRun {
-    /// Stable generation identity.
-    pub backup_id: BackupId,
-    /// Source partition.
-    pub partition_id: PartitionId,
-    /// Exact schedule policy selected for the run.
-    pub schedule_sequence: u64,
-    /// Monotonic run number within the partition.
-    pub run_sequence: u64,
-    /// Exact occurrence instant.
-    pub scheduled_for: UnixMicros,
-    /// Latest authoritative revision affecting the run.
     pub revision: Revision,
 }
 
@@ -190,46 +173,6 @@ pub(super) fn due(
     Ok(schedule.filter(|value| value.enabled && value.next_due_at <= now && unfinished == 0))
 }
 
-pub(super) fn run(
-    connection: &rusqlite::Connection,
-    backup_id: BackupId,
-) -> Result<Option<MetadataBackupRun>, RepositoryError> {
-    connection
-        .query_row(
-            "SELECT partition_id, schedule_sequence, run_sequence, scheduled_for, revision,
-                    state, completed_at, result_digest
-             FROM metadata_backup_runs WHERE backup_id = ?1",
-            [backup_id.as_bytes().as_slice()],
-            |row| {
-                Ok((
-                    row.get::<_, Vec<u8>>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, i64>(5)?,
-                    row.get::<_, Option<i64>>(6)?,
-                    row.get::<_, Option<Vec<u8>>>(7)?,
-                ))
-            },
-        )
-        .optional()?
-        .map(|stored| {
-            if stored.5 != RUN_QUEUED || stored.6.is_some() || stored.7.is_some() {
-                return Err(RepositoryError::CorruptState);
-            }
-            Ok(MetadataBackupRun {
-                backup_id,
-                partition_id: partition_identifier(&stored.0)?,
-                schedule_sequence: parse_u64(stored.1)?,
-                run_sequence: parse_u64(stored.2)?,
-                scheduled_for: UnixMicros::new(stored.3),
-                revision: Revision::new(parse_u64(stored.4)?),
-            })
-        })
-        .transpose()
-}
-
 fn load_from_connection(
     connection: &rusqlite::Connection,
     partition_id: PartitionId,
@@ -244,7 +187,6 @@ fn load_from_connection(
                               AND r.minimum_verified_copies = h.minimum_verified_copies
                               AND r.minimum_independent_copies = h.minimum_independent_copies
                               AND r.enabled = h.enabled
-                              AND r.next_due_at = h.next_due_at
                               AND (SELECT count(*) FROM metadata_backup_schedule_revisions c
                                    WHERE c.partition_id = h.partition_id) = h.schedule_sequence
                          THEN 1 ELSE 0 END
@@ -406,13 +348,6 @@ fn write_head(
         ],
     )?;
     Ok(())
-}
-
-fn partition_identifier(value: &[u8]) -> Result<PartitionId, RepositoryError> {
-    let bytes: [u8; 16] = value
-        .try_into()
-        .map_err(|_| RepositoryError::CorruptState)?;
-    PartitionId::from_bytes(bytes).map_err(|_| RepositoryError::CorruptState)
 }
 
 fn parse_u64(value: i64) -> Result<u64, RepositoryError> {

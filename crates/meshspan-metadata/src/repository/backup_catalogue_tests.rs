@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_domain::{
-    AuditEventId, BackupDestinationId, BackupId, ComponentInstanceId, HostId, MeshId, NodeId,
-    OperationId, PartitionId, PrincipalId, Revision, RoleId, TargetId, UnixMicros,
+    AuditEventId, BackupDestinationId, BackupId, ComponentInstanceId, DurationMicros, HostId,
+    MeshId, NodeId, OperationId, PartitionId, PrincipalId, Revision, RoleId, TargetId, UnixMicros,
 };
 use sha2::{Digest, Sha256};
 use tempfile::{TempDir, tempdir};
@@ -14,9 +14,10 @@ use super::{
 };
 use crate::{
     AuthoritativeCommand, BackupDestinationBinding, BackupFailureRelationship, BootstrapMesh,
-    CommandContext, ConfigureBackupDestination, CreateComponent, InitialBackupCopy,
-    PartitionDatabase, RecordMetadataBackup, RecordName, RegisterStorageTarget, StorageUsageLimit,
-    VerifyBackupCopy,
+    ClaimMetadataBackupRun, CommandContext, CompleteMetadataBackupRun, ConfigureBackupDestination,
+    ConfigureMetadataBackupSchedule, CreateComponent, InitialBackupCopy, MetadataBackupRunClaim,
+    MetadataBackupRunCompletion, PartitionDatabase, QueueMetadataBackupRun, RecordMetadataBackup,
+    RecordName, RegisterStorageTarget, StorageUsageLimit, VerifyBackupCopy,
 };
 
 struct Fixture {
@@ -25,6 +26,7 @@ struct Fixture {
     administrator: PrincipalId,
     partition: PartitionId,
     mesh: MeshId,
+    node: NodeId,
     target: TargetId,
 }
 
@@ -35,8 +37,18 @@ fn exact_backup_copy_is_catalogued_and_verified_after_read_back()
     let destination = BackupDestinationId::from_bytes([30; 16])?;
     let backup = BackupId::from_bytes([31; 16])?;
     let encrypted_digest = [35; 32];
+    configure_destination(&mut fixture, destination)?;
+    let claim = queue_and_claim(&mut fixture, backup)?;
+    record_and_verify_backup(&mut fixture, destination, backup, encrypted_digest, claim)?;
+    assert_protected_backup(&fixture, destination, backup, encrypted_digest)?;
+    Ok(())
+}
 
-    let destination_receipt = fixture.repository.apply_committed(
+fn configure_destination(
+    fixture: &mut Fixture,
+    destination: BackupDestinationId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let receipt = fixture.repository.apply_committed(
         LogPosition { index: 3, term: 1 },
         context(32, fixture.administrator, 33, 30, 2)?,
         &AuthoritativeCommand::ConfigureBackupDestination(ConfigureBackupDestination {
@@ -51,27 +63,34 @@ fn exact_backup_copy_is_catalogued_and_verified_after_read_back()
             enabled: true,
         }),
     )?;
-    assert_eq!(
-        destination_receipt.entity.kind,
-        EntityKind::BackupDestination
-    );
+    assert_eq!(receipt.entity.kind, EntityKind::BackupDestination);
+    Ok(())
+}
 
-    let backup_receipt = fixture.repository.apply_committed(
-        LogPosition { index: 4, term: 1 },
-        context(36, fixture.administrator, 37, 40, 3)?,
+fn record_and_verify_backup(
+    fixture: &mut Fixture,
+    destination: BackupDestinationId,
+    backup: BackupId,
+    encrypted_digest: [u8; 32],
+    claim: MetadataBackupRunClaim,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let receipt = fixture.repository.apply_committed(
+        LogPosition { index: 7, term: 1 },
+        context(36, fixture.administrator, 37, 40, 6)?,
         &AuthoritativeCommand::RecordMetadataBackup(RecordMetadataBackup {
             backup_id: backup,
             partition_id: fixture.partition,
             mesh_id: fixture.mesh,
-            last_log_index: 3,
+            last_log_index: 6,
             last_log_term: 1,
-            state_revision: Revision::new(3),
+            state_revision: Revision::new(6),
             schema_version: crate::migration::PARTITION_SCHEMA_VERSION,
             source_byte_length: 4_096,
             source_digest: [38; 32],
             manifest_digest: [39; 32],
             encrypted_byte_length: 4_512,
             encrypted_digest,
+            claim,
             initial_copy: InitialBackupCopy {
                 destination_id: destination,
                 provider_generation: 1,
@@ -81,7 +100,7 @@ fn exact_backup_copy_is_catalogued_and_verified_after_read_back()
             },
         }),
     )?;
-    assert_eq!(backup_receipt.entity.kind, EntityKind::MetadataBackup);
+    assert_eq!(receipt.entity.kind, EntityKind::MetadataBackup);
     assert_eq!(
         fixture
             .repository
@@ -92,8 +111,8 @@ fn exact_backup_copy_is_catalogued_and_verified_after_read_back()
     );
 
     fixture.repository.apply_committed(
-        LogPosition { index: 5, term: 1 },
-        context(44, fixture.administrator, 45, 60, 4)?,
+        LogPosition { index: 8, term: 1 },
+        context(44, fixture.administrator, 45, 60, 7)?,
         &AuthoritativeCommand::VerifyBackupCopy(VerifyBackupCopy {
             backup_id: backup,
             destination_id: destination,
@@ -101,7 +120,33 @@ fn exact_backup_copy_is_catalogued_and_verified_after_read_back()
             copy_digest: encrypted_digest,
         }),
     )?;
+    assert_eq!(
+        fixture
+            .repository
+            .metadata_backup(backup)?
+            .ok_or("backup missing before completion")?
+            .state,
+        MetadataBackupState::Recorded
+    );
+    fixture.repository.apply_committed(
+        LogPosition { index: 9, term: 1 },
+        context(46, fixture.administrator, 47, 70, 8)?,
+        &AuthoritativeCommand::CompleteMetadataBackupRun(CompleteMetadataBackupRun {
+            backup_id: backup,
+            outcome: MetadataBackupRunCompletion::Protected {
+                result_digest: [48; 32],
+            },
+        }),
+    )?;
+    Ok(())
+}
 
+fn assert_protected_backup(
+    fixture: &Fixture,
+    destination: BackupDestinationId,
+    backup: BackupId,
+    encrypted_digest: [u8; 32],
+) -> Result<(), Box<dyn std::error::Error>> {
     let stored_destination = fixture
         .repository
         .backup_destination(destination)?
@@ -113,7 +158,7 @@ fn exact_backup_copy_is_catalogued_and_verified_after_read_back()
         .metadata_backup(backup)?
         .ok_or("backup missing")?;
     assert_eq!(stored_backup.state, MetadataBackupState::Verified);
-    assert_eq!(stored_backup.verified_at, Some(UnixMicros::new(60)));
+    assert_eq!(stored_backup.verified_at, Some(UnixMicros::new(70)));
     let stored_copy = fixture
         .repository
         .backup_copy(backup, destination)?
@@ -122,6 +167,52 @@ fn exact_backup_copy_is_catalogued_and_verified_after_read_back()
     assert_eq!(stored_copy.verified_at, Some(UnixMicros::new(60)));
     assert_eq!(stored_copy.copy_digest, encrypted_digest);
     Ok(())
+}
+
+fn queue_and_claim(
+    fixture: &mut Fixture,
+    backup_id: BackupId,
+) -> Result<MetadataBackupRunClaim, Box<dyn std::error::Error>> {
+    fixture.repository.apply_committed(
+        LogPosition { index: 4, term: 1 },
+        context(50, fixture.administrator, 51, 31, 3)?,
+        &AuthoritativeCommand::ConfigureMetadataBackupSchedule(ConfigureMetadataBackupSchedule {
+            partition_id: fixture.partition,
+            expected_schedule_sequence: 0,
+            interval: DurationMicros::new(86_400_000_000),
+            retained_generations: 3,
+            minimum_verified_copies: 1,
+            minimum_independent_copies: 1,
+            enabled: true,
+            next_due_at: UnixMicros::new(32),
+        }),
+    )?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 5, term: 1 },
+        context(52, fixture.administrator, 53, 32, 4)?,
+        &AuthoritativeCommand::QueueMetadataBackupRun(QueueMetadataBackupRun {
+            backup_id,
+            partition_id: fixture.partition,
+            expected_schedule_sequence: 1,
+            scheduled_for: UnixMicros::new(32),
+        }),
+    )?;
+    let claim = MetadataBackupRunClaim {
+        claim_generation: 1,
+        worker_node_id: fixture.node,
+        worker_incarnation: 1,
+        fence: 54,
+    };
+    fixture.repository.apply_committed(
+        LogPosition { index: 6, term: 1 },
+        context(55, fixture.administrator, 56, 33, 5)?,
+        &AuthoritativeCommand::ClaimMetadataBackupRun(ClaimMetadataBackupRun {
+            backup_id,
+            claim,
+            lease_expires_at: UnixMicros::new(100),
+        }),
+    )?;
+    Ok(claim)
 }
 
 fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
@@ -188,6 +279,7 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
         administrator,
         partition,
         mesh,
+        node,
         target,
     })
 }

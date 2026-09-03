@@ -100,10 +100,9 @@ fn unsupported_command_never_produces_partial_wire_bytes() -> Result<(), Box<dyn
 }
 
 #[test]
-fn backup_catalogue_commands_round_trip_canonically() -> Result<(), Box<dyn std::error::Error>> {
+fn backup_destination_bindings_round_trip_canonically() -> Result<(), Box<dyn std::error::Error>> {
     let (context, _) = fixture()?;
     let destination_id = BackupDestinationId::from_bytes([81; 16])?;
-    let backup_id = BackupId::from_bytes([82; 16])?;
     for binding in [
         crate::BackupDestinationBinding::RegisteredTarget {
             target_id: TargetId::from_bytes([83; 16])?,
@@ -130,6 +129,14 @@ fn backup_catalogue_commands_round_trip_canonically() -> Result<(), Box<dyn std:
             }),
         )?;
     }
+    Ok(())
+}
+
+#[test]
+fn backup_catalogue_commands_round_trip_canonically() -> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let destination_id = BackupDestinationId::from_bytes([81; 16])?;
+    let backup_id = BackupId::from_bytes([82; 16])?;
     assert_round_trip(
         context,
         AuthoritativeCommand::RecordMetadataBackup(crate::RecordMetadataBackup {
@@ -145,6 +152,12 @@ fn backup_catalogue_commands_round_trip_canonically() -> Result<(), Box<dyn std:
             manifest_digest: [90; 32],
             encrypted_byte_length: 4_512,
             encrypted_digest: [91; 32],
+            claim: crate::MetadataBackupRunClaim {
+                claim_generation: 2,
+                worker_node_id: NodeId::from_bytes([93; 16])?,
+                worker_incarnation: 7,
+                fence: 99,
+            },
             initial_copy: crate::InitialBackupCopy {
                 destination_id,
                 provider_generation: 4,
@@ -174,6 +187,13 @@ fn backup_catalogue_commands_round_trip_canonically() -> Result<(), Box<dyn std:
             copy_digest: [91; 32],
         }),
     )?;
+    Ok(())
+}
+
+#[test]
+fn backup_run_commands_round_trip_canonically() -> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let backup_id = BackupId::from_bytes([82; 16])?;
     let partition_id = meshspan_domain::PartitionId::from_bytes([92; 16])?;
     assert_round_trip(
         context,
@@ -199,6 +219,44 @@ fn backup_catalogue_commands_round_trip_canonically() -> Result<(), Box<dyn std:
             scheduled_for: UnixMicros::new(5_000),
         }),
     )?;
+    let claim = crate::MetadataBackupRunClaim {
+        claim_generation: 2,
+        worker_node_id: NodeId::from_bytes([93; 16])?,
+        worker_incarnation: 7,
+        fence: 99,
+    };
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::ClaimMetadataBackupRun(crate::ClaimMetadataBackupRun {
+            backup_id,
+            claim,
+            lease_expires_at: UnixMicros::new(6_000),
+        }),
+    )?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::RenewMetadataBackupRun(crate::RenewMetadataBackupRun {
+            backup_id,
+            claim,
+            lease_expires_at: UnixMicros::new(7_000),
+        }),
+    )?;
+    for outcome in [
+        crate::MetadataBackupRunCompletion::Protected {
+            result_digest: [94; 32],
+        },
+        crate::MetadataBackupRunCompletion::Incomplete {
+            result_digest: [95; 32],
+        },
+    ] {
+        assert_round_trip(
+            context,
+            AuthoritativeCommand::CompleteMetadataBackupRun(crate::CompleteMetadataBackupRun {
+                backup_id,
+                outcome,
+            }),
+        )?;
+    }
     Ok(())
 }
 

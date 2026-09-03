@@ -21,7 +21,8 @@ use meshspan_contracts::{
 use meshspan_domain::{BackupDestinationId, PrincipalId, Revision, UnixMicros};
 use meshspan_metadata::{
     AuthoritativeCommand, BackupCopyRecord, BackupCopyState, BackupDestinationRecord,
-    BackupDestinationState, EntityKind, MetadataBackupRecord, RepositoryError, VerifyBackupCopy,
+    BackupDestinationState, EntityKind, MetadataBackupRecord, MetadataBackupRunClaim,
+    RepositoryError, VerifyBackupCopy,
 };
 use thiserror::Error;
 
@@ -36,6 +37,8 @@ pub struct BackupPublicationRequest<'a> {
     pub evidence: BackupFileEvidence,
     /// Configured destination selected for this copy.
     pub destination_id: BackupDestinationId,
+    /// Exact live schedule-run claim which produced this first recoverable copy.
+    pub claim: MetadataBackupRunClaim,
     /// Authoritative principal responsible for this automatic policy operation.
     pub actor_principal_id: PrincipalId,
     /// Authority time shared by this bounded attempt's durable transitions.
@@ -83,7 +86,7 @@ where
     pub fn publish<P: BackupProvider>(
         &self,
         provider: &mut P,
-        request: BackupPublicationRequest<'_>,
+        request: &BackupPublicationRequest<'_>,
     ) -> Result<BackupPublicationOutcome, BackupPublicationError> {
         validate_request(request)?;
         let destination = self.load_active_destination(request.destination_id)?;
@@ -102,9 +105,6 @@ where
         let copy_revision = copy.revision;
         let verified = self.verify_and_record(provider, request, object, copy, copy_revision)?;
         let backup = self.load_backup(request.evidence)?;
-        if backup.state != meshspan_metadata::MetadataBackupState::Verified {
-            return Err(BackupPublicationError::InvalidProjection);
-        }
         Ok(BackupPublicationOutcome {
             backup,
             copy: verified,
@@ -143,7 +143,7 @@ where
     fn store_and_admit<P: BackupProvider>(
         &self,
         provider: &mut P,
-        request: BackupPublicationRequest<'_>,
+        request: &BackupPublicationRequest<'_>,
         object: BackupObjectIdentity,
         destination_revision: Revision,
     ) -> Result<BackupCopyRecord, BackupPublicationError> {
@@ -174,8 +174,11 @@ where
             request.actor_principal_id,
             request.now,
         )?;
-        let command =
-            AuthoritativeCommand::RecordMetadataBackup(record_backup(request.evidence, &receipt));
+        let command = AuthoritativeCommand::RecordMetadataBackup(record_backup(
+            request.evidence,
+            &receipt,
+            request.claim,
+        ));
         let committed = self.authority.commit_backup_publication(context, &command);
         if let Ok(receipt) = committed {
             validate_receipt(
@@ -207,7 +210,7 @@ where
     fn verify_and_record<P: BackupProvider>(
         &self,
         provider: &P,
-        request: BackupPublicationRequest<'_>,
+        request: &BackupPublicationRequest<'_>,
         object: BackupObjectIdentity,
         copy: BackupCopyRecord,
         copy_revision: Revision,
@@ -243,7 +246,7 @@ where
 
     fn record_verified_copy(
         &self,
-        request: BackupPublicationRequest<'_>,
+        request: &BackupPublicationRequest<'_>,
         object: BackupObjectIdentity,
     ) -> Result<BackupCopyRecord, BackupPublicationError> {
         let context = command_context(
@@ -281,7 +284,7 @@ where
     }
 }
 
-fn validate_request(request: BackupPublicationRequest<'_>) -> Result<(), BackupPublicationError> {
+fn validate_request(request: &BackupPublicationRequest<'_>) -> Result<(), BackupPublicationError> {
     if request.now.get() < 0 || request.deadline <= request.now {
         return Err(BackupPublicationError::InvalidInput);
     }
