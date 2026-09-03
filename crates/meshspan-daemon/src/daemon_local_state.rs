@@ -11,6 +11,7 @@ use std::sync::Arc;
 use meshspan_domain::{InitialBootstrapMaterial, NodeId, UnixMicros};
 use meshspan_metadata::{LocalDatabase, MetadataStoreError};
 use rustls::ServerConfig;
+use rustls::sign::CertifiedKey;
 use thiserror::Error;
 
 use crate::{
@@ -298,6 +299,17 @@ impl DaemonLocalState {
     /// Rejects an identity/provider mismatch.
     pub fn bootstrap_server_config(&self) -> Result<Arc<ServerConfig>, DaemonLocalStateError> {
         self.identity.bootstrap_server_config().map_err(Into::into)
+    }
+
+    /// Returns the parsed bootstrap identity without exposing its private-key bytes.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed or mismatched locally protected identity material.
+    pub(crate) fn bootstrap_certified_key(
+        &self,
+    ) -> Result<Arc<CertifiedKey>, DaemonLocalStateError> {
+        self.identity.bootstrap_certified_key().map_err(Into::into)
     }
 }
 

@@ -71,7 +71,13 @@ fn live_installation_is_acknowledged_once_and_ambiguous_retry_resolves_exactly()
     assert_eq!(committed.certificate, reference);
     assert_eq!(committed.bundle_digest, bundle.digest());
     assert_eq!(committed.acknowledgement_revision, Revision::new(11));
-    assert_eq!(identity.current()?.revision, Revision::new(10));
+    assert_eq!(
+        identity
+            .current()?
+            .ok_or("installed identity missing")?
+            .revision,
+        Revision::new(10)
+    );
     assert_eq!(acknowledgements.commit_count(), 1);
     let command = acknowledgements.command()?;
     let AuthoritativeCommand::AcknowledgePublicCertificateInstallation(command) = command else {

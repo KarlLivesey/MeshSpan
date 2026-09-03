@@ -35,6 +35,7 @@ pub enum PublicCertificateInstallOutcome {
 }
 
 /// One HTTPS configuration whose certificate can be replaced without rebinding its listener.
+#[derive(Clone)]
 pub struct RotatingHttpsIdentity {
     state: Arc<CertificateResolverState>,
     server_config: Arc<ServerConfig>,
@@ -54,19 +55,27 @@ impl RotatingHttpsIdentity {
         let state = Arc::new(CertificateResolverState {
             installed: RwLock::new(installed),
         });
-        let provider = Arc::new(meshspan_rustls_provider::provider());
-        let mut server_config = ServerConfig::builder_with_provider(provider)
-            .with_protocol_versions(&[&rustls::version::TLS13])
-            .map_err(|_| PublicCertificateRotationError::Configuration)?
-            .with_no_client_auth()
-            .with_cert_resolver(Arc::new(RotatingCertificateResolver {
-                state: Arc::clone(&state),
-            }));
-        server_config.alpn_protocols = vec![HTTP_1_1_ALPN.to_vec()];
-        Ok(Self {
-            state,
-            server_config: Arc::new(server_config),
-        })
+        Self::from_state(state)
+    }
+
+    /// Creates a rotatable resolver around the node-local first-start certificate.
+    ///
+    /// The bootstrap identity has no replicated certificate revision and is replaced by the first
+    /// valid completed public-certificate selection.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the TLS 1.3 configuration cannot be composed with the `MeshSpan` provider.
+    pub(crate) fn new_bootstrap(
+        certified_key: Arc<CertifiedKey>,
+    ) -> Result<Self, PublicCertificateRotationError> {
+        let state = Arc::new(CertificateResolverState {
+            installed: RwLock::new(InstalledCertificate {
+                public: None,
+                certified_key,
+            }),
+        });
+        Self::from_state(state)
     }
 
     /// Returns the stable server configuration used for the listener's entire lifetime.
@@ -80,7 +89,9 @@ impl RotatingHttpsIdentity {
     /// # Errors
     ///
     /// Fails closed if another thread panicked while changing the installed identity.
-    pub fn current(&self) -> Result<InstalledPublicCertificate, PublicCertificateRotationError> {
+    pub fn current(
+        &self,
+    ) -> Result<Option<InstalledPublicCertificate>, PublicCertificateRotationError> {
         self.state
             .installed
             .read()
@@ -108,33 +119,59 @@ impl RotatingHttpsIdentity {
             .installed
             .write()
             .map_err(|_| PublicCertificateRotationError::Unavailable)?;
-        if replacement.public.revision < installed.public.revision {
-            return Err(PublicCertificateRotationError::StaleRevision);
-        }
-        if replacement.public.revision == installed.public.revision {
-            if replacement.public == installed.public {
+        if let Some(current) = installed.public {
+            if replacement
+                .public
+                .is_none_or(|public| public.revision < current.revision)
+            {
+                return Err(PublicCertificateRotationError::StaleRevision);
+            }
+            if replacement.public == Some(current) {
                 return Ok(PublicCertificateInstallOutcome::AlreadyCurrent);
             }
-            return Err(PublicCertificateRotationError::ConflictingRevision);
+            if replacement
+                .public
+                .is_some_and(|public| public.revision == current.revision)
+            {
+                return Err(PublicCertificateRotationError::ConflictingRevision);
+            }
         }
         *installed = replacement;
         Ok(PublicCertificateInstallOutcome::Installed)
     }
+
+    fn from_state(
+        state: Arc<CertificateResolverState>,
+    ) -> Result<Self, PublicCertificateRotationError> {
+        let provider = Arc::new(meshspan_rustls_provider::provider());
+        let mut server_config = ServerConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .map_err(|_| PublicCertificateRotationError::Configuration)?
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::new(RotatingCertificateResolver {
+                state: Arc::clone(&state),
+            }));
+        server_config.alpn_protocols = vec![HTTP_1_1_ALPN.to_vec()];
+        Ok(Self {
+            state,
+            server_config: Arc::new(server_config),
+        })
+    }
 }
 
 struct InstalledCertificate {
-    public: InstalledPublicCertificate,
+    public: Option<InstalledPublicCertificate>,
     certified_key: Arc<CertifiedKey>,
 }
 
 impl InstalledCertificate {
     fn new(revision: Revision, certificate: &LoadedPublicCertificate) -> Self {
         Self {
-            public: InstalledPublicCertificate {
+            public: Some(InstalledPublicCertificate {
                 revision,
                 generation: certificate.generation(),
                 bundle_digest: certificate.bundle_digest(),
-            },
+            }),
             certified_key: certificate.certified_key(),
         }
     }

@@ -69,8 +69,9 @@ async fn live_listener_rotates_new_handshakes_without_breaking_existing_sessions
     assert_eq!(peer_leaf(&first_session)?, first_der);
     let second_session = connect(address, Arc::clone(&client_config)).await?;
     assert_eq!(peer_leaf(&second_session)?, second_der);
-    assert_eq!(identity.current()?.revision, Revision::new(8));
-    assert_eq!(identity.current()?.generation, second_reference);
+    let current = identity.current()?.ok_or("rotated identity missing")?;
+    assert_eq!(current.revision, Revision::new(8));
+    assert_eq!(current.generation, second_reference);
 
     assert_eq!(
         identity.install(Revision::new(8), &second_loaded)?,

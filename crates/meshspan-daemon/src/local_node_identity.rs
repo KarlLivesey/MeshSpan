@@ -8,6 +8,7 @@ use std::sync::Arc;
 use meshspan_certificates::{CertificateError, NodeIdentityKey};
 use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+use rustls::sign::CertifiedKey;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -129,6 +130,24 @@ impl LocalNodeIdentity {
                 PrivatePkcs8KeyDer::from(self.key.private_key_pkcs8().to_vec()).into(),
             )?;
         Ok(Arc::new(config))
+    }
+
+    /// Parses the bootstrap certificate and node-owned key for a rotatable HTTPS resolver.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a malformed key or certificate/key mismatch without exposing key material.
+    pub(crate) fn bootstrap_certified_key(
+        &self,
+    ) -> Result<Arc<CertifiedKey>, LocalNodeIdentityError> {
+        let provider = Arc::new(meshspan_rustls_provider::provider());
+        CertifiedKey::from_der(
+            vec![CertificateDer::from(self.bootstrap_certificate.clone())],
+            PrivatePkcs8KeyDer::from(self.key.private_key_pkcs8().to_vec()).into(),
+            provider.as_ref(),
+        )
+        .map(Arc::new)
+        .map_err(LocalNodeIdentityError::Tls)
     }
 
     fn from_private_key(
