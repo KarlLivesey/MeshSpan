@@ -2,6 +2,7 @@
 
 //! Key ownership and PKCS#10 construction for certificates issued by an external authority.
 
+use p256::pkcs8::{DecodePrivateKey as _, EncodePrivateKey as _};
 use rcgen::{
     CertificateParams, DistinguishedName, ExtendedKeyUsagePurpose, KeyUsagePurpose, PublicKeyData,
 };
@@ -42,6 +43,20 @@ impl ExternalCertificateRequestKey {
         Ok(Self {
             key: RustCryptoKey::from_pkcs8(private_key)?,
         })
+    }
+
+    /// Parses one unencrypted PKCS#8 PEM P-256 key supplied by an automated certificate issuer.
+    ///
+    /// # Errors
+    ///
+    /// Rejects encrypted, malformed, non-canonical or wrong-algorithm private-key material.
+    pub fn from_pkcs8_pem(private_key: &str) -> Result<Self, CertificateError> {
+        let key = p256::SecretKey::from_pkcs8_pem(private_key)
+            .map_err(|_| CertificateError::KeyDecoding)?;
+        let document = key
+            .to_pkcs8_der()
+            .map_err(|_| CertificateError::KeyEncoding)?;
+        Self::from_pkcs8(document.as_bytes())
     }
 
     /// Borrows the PKCS#8 key for immediate envelope encryption or protected persistence.
@@ -129,6 +144,8 @@ fn valid_dns_label(label: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use p256::pkcs8::{DecodePrivateKey as _, EncodePrivateKey as _, LineEnding};
+
     use super::ExternalCertificateRequestKey;
     use crate::CertificateError;
 
@@ -174,6 +191,27 @@ mod tests {
                 Err(CertificateError::CertificateRequest)
             ));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn automated_publisher_key_parses_only_unencrypted_pkcs8_pem()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let key = ExternalCertificateRequestKey::generate()?;
+        let secret = p256::SecretKey::from_pkcs8_der(key.private_key_pkcs8())?;
+        let pem = secret.to_pkcs8_pem(LineEnding::LF)?;
+        let parsed = ExternalCertificateRequestKey::from_pkcs8_pem(&pem)?;
+
+        assert_eq!(
+            parsed.public_key_fingerprint(),
+            key.public_key_fingerprint()
+        );
+        assert!(
+            ExternalCertificateRequestKey::from_pkcs8_pem(
+                "-----BEGIN PRIVATE KEY-----\nnot-a-key\n-----END PRIVATE KEY-----"
+            )
+            .is_err()
+        );
         Ok(())
     }
 

@@ -6,7 +6,7 @@ use std::fmt;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::OperationId;
 
@@ -47,6 +47,14 @@ public_identifier!(
     CertificateOrderId,
     "Stable identity of one durable public-certificate order."
 );
+public_identifier!(
+    ExternalCertificatePublicationId,
+    "Stable identity of one automated external-certificate publication."
+);
+public_identifier!(
+    PublicCertificateId,
+    "Stable identity of one public-certificate generation."
+);
 
 /// Sensitive text accepted once and encrypted before authoritative persistence.
 #[derive(Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -78,6 +86,65 @@ impl fmt::Debug for ProtectedText {
 impl Drop for ProtectedText {
     fn drop(&mut self) {
         self.0.zeroize();
+    }
+}
+
+/// One bounded leaf-first PEM certificate chain supplied by an automated issuer.
+#[derive(Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct CertificateChainPem(#[schemars(length(min = 64, max = 98_304))] String);
+
+impl CertificateChainPem {
+    /// Borrows the public PEM bytes for semantic and cryptographic validation.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+/// Sensitive unencrypted PKCS#8 PEM accepted once from an automated issuer.
+#[derive(Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct ExternalCertificatePrivateKeyPem(#[schemars(length(min = 64, max = 16_384))] String);
+
+impl ExternalCertificatePrivateKeyPem {
+    /// Moves the key into zeroising storage for immediate validation and envelope encryption.
+    #[must_use]
+    pub fn into_zeroizing(mut self) -> Zeroizing<String> {
+        Zeroizing::new(std::mem::take(&mut self.0))
+    }
+}
+
+impl fmt::Debug for ExternalCertificatePrivateKeyPem {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ExternalCertificatePrivateKeyPem([redacted])")
+    }
+}
+
+impl Drop for ExternalCertificatePrivateKeyPem {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+/// Positive externally assigned generation represented exactly outside JavaScript numbers.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct CertificateGeneration(
+    #[schemars(length(min = 1, max = 20), pattern(r"^[1-9][0-9]{0,19}$"))] String,
+);
+
+impl CertificateGeneration {
+    /// Constructs canonical decimal text for one positive generation.
+    #[must_use]
+    pub fn from_value(value: u64) -> Option<Self> {
+        (value > 0).then(|| Self(value.to_string()))
+    }
+
+    /// Parses the canonical positive decimal generation.
+    #[must_use]
+    pub fn value(&self) -> Option<u64> {
+        self.0.parse().ok().filter(|value| *value > 0)
     }
 }
 
@@ -163,6 +230,53 @@ pub struct ProvisionCertificateResponse {
     #[schemars(length(min = 1, max = 256))]
     pub certificate_names: Vec<String>,
     /// Authoritative revision created by the operation.
+    #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
+    pub revision: u64,
+}
+
+/// Exact-retry automated publication of a certificate issued outside `MeshSpan`.
+#[derive(Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublishExternalCertificateRequest {
+    /// Client-generated identity binding exact retries.
+    pub operation_id: OperationId,
+    /// Monotonic generation chosen by the external issuer integration.
+    pub generation: CertificateGeneration,
+    /// Sorted, unique lower-case DNS names expected in the leaf certificate.
+    #[schemars(length(min = 1, max = 256))]
+    pub certificate_names: Vec<String>,
+    /// Complete leaf-first certificate chain in PEM form.
+    pub certificate_chain_pem: CertificateChainPem,
+    /// Matching unencrypted PKCS#8 PEM private key, accepted only on this protected request.
+    #[schemars(extend("x-meshspan-sensitive" = true))]
+    pub private_key_pkcs8_pem: ExternalCertificatePrivateKeyPem,
+}
+
+/// Secret-free durable result of one automated external-certificate publication.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublishExternalCertificateResponse {
+    /// Exact idempotency identity whose result was committed or resolved.
+    pub operation_id: OperationId,
+    /// Stable publication identity.
+    pub publication_id: ExternalCertificatePublicationId,
+    /// Immutable public-certificate identity.
+    pub certificate_id: PublicCertificateId,
+    /// Accepted external generation.
+    pub generation: CertificateGeneration,
+    /// Canonical DNS names bound to the leaf certificate.
+    #[schemars(length(min = 1, max = 256))]
+    pub certificate_names: Vec<String>,
+    /// Lower-case SHA-256 fingerprint of the leaf subject public key.
+    #[schemars(length(equal = 64), pattern(r"^[0-9a-f]{64}$"))]
+    pub public_key_fingerprint: String,
+    /// Inclusive leaf validity start as epoch microseconds.
+    #[schemars(range(min = 0, max = 9_007_199_254_740_991_u64))]
+    pub not_before_epoch_micros: u64,
+    /// Exclusive leaf validity end as epoch microseconds.
+    #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
+    pub not_after_epoch_micros: u64,
+    /// Authoritative revision containing the encrypted generation.
     #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
     pub revision: u64,
 }

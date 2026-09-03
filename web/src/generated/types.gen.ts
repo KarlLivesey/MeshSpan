@@ -3754,6 +3754,78 @@ export type ProvisionCertificateResponse = {
 };
 
 /**
+ * PublishExternalCertificateRequest
+ *
+ * Exact-retry automated publication of a certificate issued outside `MeshSpan`.
+ */
+export type PublishExternalCertificateRequest = {
+  /**
+   * Complete leaf-first certificate chain in PEM form.
+   */
+  certificate_chain_pem: string;
+  /**
+   * Sorted, unique lower-case DNS names expected in the leaf certificate.
+   */
+  certificate_names: Array<string>;
+  /**
+   * Monotonic generation chosen by the external issuer integration.
+   */
+  generation: string;
+  /**
+   * Client-generated identity binding exact retries.
+   */
+  operation_id: string;
+  /**
+   * Matching unencrypted PKCS#8 PEM private key, accepted only on this protected request.
+   */
+  private_key_pkcs8_pem: string;
+};
+
+/**
+ * PublishExternalCertificateResponse
+ *
+ * Secret-free durable result of one automated external-certificate publication.
+ */
+export type PublishExternalCertificateResponse = {
+  /**
+   * Immutable public-certificate identity.
+   */
+  certificate_id: string;
+  /**
+   * Canonical DNS names bound to the leaf certificate.
+   */
+  certificate_names: Array<string>;
+  /**
+   * Accepted external generation.
+   */
+  generation: string;
+  /**
+   * Exclusive leaf validity end as epoch microseconds.
+   */
+  not_after_epoch_micros: number;
+  /**
+   * Inclusive leaf validity start as epoch microseconds.
+   */
+  not_before_epoch_micros: number;
+  /**
+   * Exact idempotency identity whose result was committed or resolved.
+   */
+  operation_id: string;
+  /**
+   * Lower-case SHA-256 fingerprint of the leaf subject public key.
+   */
+  public_key_fingerprint: string;
+  /**
+   * Stable publication identity.
+   */
+  publication_id: string;
+  /**
+   * Authoritative revision containing the encrypted generation.
+   */
+  revision: number;
+};
+
+/**
  * PublishSmbExportRequest
  *
  * Exact-retry request to publish one existing volume or folder explicitly.
@@ -5083,6 +5155,64 @@ export type ProvisionCertificateResponses = {
 
 export type ProvisionCertificateResponse2 =
   ProvisionCertificateResponses[keyof ProvisionCertificateResponses];
+
+export type PublishExternalCertificateData = {
+  /**
+   * External certificate publication
+   */
+  body: PublishExternalCertificateRequest;
+  path?: never;
+  query?: never;
+  url: "/admin/certificates/external";
+};
+
+export type PublishExternalCertificateErrors = {
+  /**
+   * Invalid certificate publication
+   */
+  400: ApiError;
+  /**
+   * API-key authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Operation or generation conflicts with committed state
+   */
+  409: ApiError;
+  /**
+   * Publication body exceeds its bound
+   */
+  413: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Certificate authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type PublishExternalCertificateError =
+  PublishExternalCertificateErrors[keyof PublishExternalCertificateErrors];
+
+export type PublishExternalCertificateResponses = {
+  /**
+   * Encrypted certificate generation durably published or exactly replayed
+   */
+  201: PublishExternalCertificateResponse;
+};
+
+export type PublishExternalCertificateResponse2 =
+  PublishExternalCertificateResponses[keyof PublishExternalCertificateResponses];
 
 export type ListGroupsData = {
   body?: never;

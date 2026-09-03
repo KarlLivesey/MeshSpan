@@ -8598,6 +8598,138 @@
         "title": "ProvisionCertificateResponse",
         "type": "object"
       },
+      "PublishExternalCertificateRequest": {
+        "additionalProperties": false,
+        "description": "Exact-retry automated publication of a certificate issued outside `MeshSpan`.",
+        "properties": {
+          "certificate_chain_pem": {
+            "description": "Complete leaf-first certificate chain in PEM form.",
+            "maxLength": 98304,
+            "minLength": 64,
+            "type": "string"
+          },
+          "certificate_names": {
+            "description": "Sorted, unique lower-case DNS names expected in the leaf certificate.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array"
+          },
+          "generation": {
+            "description": "Monotonic generation chosen by the external issuer integration.",
+            "maxLength": 20,
+            "minLength": 1,
+            "pattern": "^[1-9][0-9]{0,19}$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Client-generated identity binding exact retries.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "private_key_pkcs8_pem": {
+            "description": "Matching unencrypted PKCS#8 PEM private key, accepted only on this protected request.",
+            "maxLength": 16384,
+            "minLength": 64,
+            "type": "string",
+            "x-meshspan-sensitive": true
+          }
+        },
+        "required": [
+          "operation_id",
+          "generation",
+          "certificate_names",
+          "certificate_chain_pem",
+          "private_key_pkcs8_pem"
+        ],
+        "title": "PublishExternalCertificateRequest",
+        "type": "object"
+      },
+      "PublishExternalCertificateResponse": {
+        "additionalProperties": false,
+        "description": "Secret-free durable result of one automated external-certificate publication.",
+        "properties": {
+          "certificate_id": {
+            "description": "Immutable public-certificate identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "certificate_names": {
+            "description": "Canonical DNS names bound to the leaf certificate.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array"
+          },
+          "generation": {
+            "description": "Accepted external generation.",
+            "maxLength": 20,
+            "minLength": 1,
+            "pattern": "^[1-9][0-9]{0,19}$",
+            "type": "string"
+          },
+          "not_after_epoch_micros": {
+            "description": "Exclusive leaf validity end as epoch microseconds.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "not_before_epoch_micros": {
+            "description": "Inclusive leaf validity start as epoch microseconds.",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "operation_id": {
+            "description": "Exact idempotency identity whose result was committed or resolved.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "public_key_fingerprint": {
+            "description": "Lower-case SHA-256 fingerprint of the leaf subject public key.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "publication_id": {
+            "description": "Stable publication identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "revision": {
+            "description": "Authoritative revision containing the encrypted generation.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "operation_id",
+          "publication_id",
+          "certificate_id",
+          "generation",
+          "certificate_names",
+          "public_key_fingerprint",
+          "not_before_epoch_micros",
+          "not_after_epoch_micros",
+          "revision"
+        ],
+        "title": "PublishExternalCertificateResponse",
+        "type": "object"
+      },
       "PublishSmbExportRequest": {
         "additionalProperties": false,
         "description": "Exact-retry request to publish one existing volume or folder explicitly.",
@@ -10940,6 +11072,261 @@
         "summary": "Provision automatic public certificates and queue the initial order",
         "x-meshspan-access": "system-manager-csrf",
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/admin/certificates/external": {
+      "post": {
+        "operationId": "publishExternalCertificate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishExternalCertificateRequest"
+              }
+            }
+          },
+          "description": "External certificate publication",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishExternalCertificateResponse"
+                }
+              }
+            },
+            "description": "Encrypted certificate generation durably published or exactly replayed",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid certificate publication",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "API-key authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Operation or generation conflicts with committed state",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Publication body exceeds its bound",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsupported request media type",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Certificate authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Publish an externally issued HTTPS certificate through protected automation",
+        "x-meshspan-access": "system-manager-api-key",
+        "x-meshspan-idempotency": "operation-id-generation-and-canonical-request-digest"
       }
     },
     "/admin/groups": {
