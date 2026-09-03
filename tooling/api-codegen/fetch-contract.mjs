@@ -108,6 +108,7 @@ function readAdministrationRoutes(operations) {
     ),
     listGroupMembers: requireOperation(operations, "listGroupMembers"),
     listOperations: requireOperation(operations, "listOperations"),
+    listManualDnsTasks: requireOperation(operations, "listManualDnsTasks"),
     beginStorageDrain: requireOperation(operations, "beginStorageDrain"),
     getStorageDrain: requireOperation(operations, "getStorageDrain"),
     listStorageDrains: requireOperation(operations, "listStorageDrains"),
@@ -121,6 +122,10 @@ function readAdministrationRoutes(operations) {
     listUsers: requireOperation(operations, "listUsers"),
     listVolumes: requireOperation(operations, "listVolumes"),
     publishSmbExport: requireOperation(operations, "publishSmbExport"),
+    provisionCertificate: requireOperation(
+      operations,
+      "provisionCertificate",
+    ),
     removeGroupMember: requireOperation(operations, "removeGroupMember"),
     setFaultGroupMembership: requireOperation(
       operations,

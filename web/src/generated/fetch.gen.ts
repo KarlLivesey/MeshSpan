@@ -53,6 +53,7 @@ import type {
   ListFaultGroupMembershipsResponse,
   ListFaultGroupsResponse,
   ListGroupMembershipsResponse,
+  ListManualDnsTasksResponse,
   ListOperationsResponse,
   ListAuthenticationMethodsResponse,
   ListPrincipalsResponse,
@@ -66,6 +67,8 @@ import type {
   OperationStatusResponse,
   PublishSmbExportRequest,
   PublishSmbExportResponse,
+  ProvisionCertificateRequest,
+  ProvisionCertificateResponse,
   RevokeAuthenticationMethodRequest,
   RevokeAuthenticationMethodResponse,
   RevokeCurrentSessionRequest,
@@ -163,6 +166,8 @@ import {
   zListFaultGroupsResponse2,
   zListGroupsQuery,
   zListGroupsResponse,
+  zListManualDnsTasksQuery,
+  zListManualDnsTasksResponse2,
   zListOperationsQuery,
   zListOperationsResponse,
   zListStorageFoldersQuery,
@@ -194,6 +199,8 @@ import {
   zPublishSmbExportBody,
   zPublishSmbExportPath,
   zPublishSmbExportResponse2,
+  zProvisionCertificateBody,
+  zProvisionCertificateResponse2,
   zRevokeCurrentUserAuthenticationMethodBody,
   zRevokeCurrentUserAuthenticationMethodPath,
   zRevokeCurrentUserAuthenticationMethodResponse,
@@ -252,6 +259,11 @@ export type MeshSpanFetchClientOptions = Readonly<{
 export type ListDirectoryRequest = Readonly<{
   volumeId: string;
   path?: string;
+  cursor?: string;
+  limit?: number;
+}>;
+
+export type ListManualDnsTasksRequest = Readonly<{
   cursor?: string;
   limit?: number;
 }>;
@@ -390,6 +402,16 @@ export interface MeshSpanFetchClient {
     request: StepUpCurrentSessionRequestWritable,
     csrfToken: string,
   ): Promise<CreateSessionResult>;
+  listManualDnsTasks(
+    request?: ListManualDnsTasksRequest,
+  ): Promise<ListManualDnsTasksResponse>;
+  listNextManualDnsTasks(
+    nextPageUrl: string,
+  ): Promise<ListManualDnsTasksResponse>;
+  provisionCertificate(
+    request: ProvisionCertificateRequest,
+    csrfToken?: string,
+  ): Promise<ProvisionCertificateResponse>;
   addGroupMember(
     groupId: string,
     request: AddGroupMemberRequest,
@@ -782,6 +804,43 @@ export function createMeshSpanFetchClient(
         csrfToken: readCsrfToken(response.headers),
         session: response.body,
       };
+    },
+    async listManualDnsTasks(
+      request = {},
+    ): Promise<ListManualDnsTasksResponse> {
+      const query = zListManualDnsTasksQuery.parse(request);
+      return requestJson(
+        context,
+        appendQuery("/admin/certificate-tasks/manual-dns", query),
+        { method: "GET" },
+        zListManualDnsTasksResponse2,
+      );
+    },
+    async listNextManualDnsTasks(
+      nextPageUrl,
+    ): Promise<ListManualDnsTasksResponse> {
+      return requestJson(
+        context,
+        validateManualDnsTaskPageUrl(context.apiRoot, nextPageUrl),
+        { method: "GET" },
+        zListManualDnsTasksResponse2,
+      );
+    },
+    async provisionCertificate(
+      request,
+      csrfToken,
+    ): Promise<ProvisionCertificateResponse> {
+      const body = zProvisionCertificateBody.parse(request);
+      return requestJson(
+        context,
+        "/admin/certificates/acme",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zProvisionCertificateResponse2,
+      );
     },
     async addGroupMember(
       groupId,
@@ -2020,6 +2079,37 @@ function validateAuthenticationMethodPageQuery(route: URL): void {
     cursor: route.searchParams.get("cursor") ?? undefined,
     limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
   });
+}
+
+function validateManualDnsTaskPageUrl(apiRoot: URL, value: string): string {
+  if (value.length === 0 || value.length > 16_384 || !value.startsWith("/")) {
+    throw new TypeError("manual DNS task page URL is invalid");
+  }
+  const route = new URL(value, apiRoot.origin);
+  if (
+    route.origin !== apiRoot.origin ||
+    route.username !== "" ||
+    route.password !== "" ||
+    route.hash !== "" ||
+    route.pathname !== "/api/latest/admin/certificate-tasks/manual-dns"
+  ) {
+    throw new TypeError(
+      "manual DNS task page URL is outside the administration API",
+    );
+  }
+  const names = [...route.searchParams.keys()];
+  if (
+    names.some((name) => name !== "cursor" && name !== "limit") ||
+    new Set(names).size !== names.length
+  ) {
+    throw new TypeError("manual DNS task page URL has invalid query fields");
+  }
+  const rawLimit = route.searchParams.get("limit");
+  zListManualDnsTasksQuery.parse({
+    cursor: route.searchParams.get("cursor") ?? undefined,
+    limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
+  });
+  return route.pathname + route.search;
 }
 
 const VOLUME_RIGHT_ORDER = [

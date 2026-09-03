@@ -3,6 +3,8 @@
 import { Show, createSignal } from "solid-js";
 import type { JSX } from "@solidjs/web";
 
+import { AdministrationNavigation } from "../administration/AdministrationNavigation";
+
 import { createPrincipalDirectory } from "../identity-administration/model";
 import { CreateVolumeForm } from "./CreateVolumeForm";
 import { createVolumeDirectory } from "./model";
@@ -104,15 +106,7 @@ function VolumeAdministrationHeader(): JSX.Element {
           from any supported gateway.
         </p>
       </header>
-      <nav class="administration-nav" aria-label="Administration sections">
-        <a href="/admin/identities">People and groups</a>
-        <a aria-current="page" href="/admin/volumes">
-          Volumes
-        </a>
-        <a href="/admin/storage-folders">Storage folders</a>
-        <a href="/admin/topology">Mesh topology</a>
-        <a href="/admin/operations">Operations</a>
-      </nav>
+      <AdministrationNavigation current="volumes" />
     </>
   );
 }

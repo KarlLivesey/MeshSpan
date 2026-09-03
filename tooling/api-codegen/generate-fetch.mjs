@@ -21,6 +21,10 @@ import {
   renderAuthenticationClientRuntime,
 } from "./render-authentication-client.mjs";
 import {
+  renderCertificateClientMethods,
+  renderCertificateRuntime,
+} from "./render-certificate-client.mjs";
+import {
   renderVolumeClientMethods,
   renderVolumeClientRuntime,
 } from "./render-volume-client.mjs";
@@ -120,6 +124,7 @@ import type {
   ListFaultGroupMembershipsResponse,
   ListFaultGroupsResponse,
   ListGroupMembershipsResponse,
+  ListManualDnsTasksResponse,
   ListOperationsResponse,
   ListAuthenticationMethodsResponse,
   ListPrincipalsResponse,
@@ -133,6 +138,8 @@ import type {
   OperationStatusResponse,
   PublishSmbExportRequest,
   PublishSmbExportResponse,
+  ProvisionCertificateRequest,
+  ProvisionCertificateResponse,
   RevokeAuthenticationMethodRequest,
   RevokeAuthenticationMethodResponse,
   RevokeCurrentSessionRequest,
@@ -230,6 +237,8 @@ import {
   zListFaultGroupsResponse2,
   zListGroupsQuery,
   zListGroupsResponse,
+  zListManualDnsTasksQuery,
+  zListManualDnsTasksResponse2,
   zListOperationsQuery,
   zListOperationsResponse,
   zListStorageFoldersQuery,
@@ -261,6 +270,8 @@ import {
   zPublishSmbExportBody,
   zPublishSmbExportPath,
   zPublishSmbExportResponse2,
+  zProvisionCertificateBody,
+  zProvisionCertificateResponse2,
   zRevokeCurrentUserAuthenticationMethodBody,
   zRevokeCurrentUserAuthenticationMethodPath,
   zRevokeCurrentUserAuthenticationMethodResponse,
@@ -348,6 +359,7 @@ export function createMeshSpanFetchClient(
 
   return {
     ${renderAuthenticationClientMethods(routes)}
+    ${renderCertificateClientMethods(routes)}
     ${renderIdentityAdministrationClientMethods(routes)}
     ${renderNamespaceMutationClientMethods(routes)}
     ${renderUploadClientMethods(routes)}
@@ -481,6 +493,8 @@ ${renderDirectoryClientRuntime()}
 ${renderIdentityAdministrationRuntime(routes)}
 
 ${renderAuthenticationClientRuntime(routes)}
+
+${renderCertificateRuntime(routes)}
 
 ${renderVolumeClientRuntime(routes)}
 
