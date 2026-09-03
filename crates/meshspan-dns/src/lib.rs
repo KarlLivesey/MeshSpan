@@ -6,6 +6,7 @@ mod authoritative_probe;
 #[cfg(test)]
 mod authoritative_probe_tests;
 mod rfc2136;
+mod rfc2136_response;
 #[cfg(test)]
 mod rfc2136_tests;
 mod wire;
@@ -17,4 +18,5 @@ pub use rfc2136::{
     Rfc2136Request, Rfc2136RequestError, Rfc2136TsigKey, SignedRfc2136Request, TsigAlgorithm,
     TxtUpdate,
 };
+pub use rfc2136_response::Rfc2136ResponseError;
 pub use wire::{DnsName, DnsQuery, DnsWireError, TxtValue};

@@ -29,7 +29,7 @@ pub enum TsigAlgorithm {
 }
 
 impl TsigAlgorithm {
-    fn name(self) -> Result<DnsName, DnsWireError> {
+    pub(crate) fn name(self) -> Result<DnsName, DnsWireError> {
         DnsName::new(match self {
             Self::HmacSha256 => "hmac-sha256",
             Self::HmacSha512 => "hmac-sha512",
@@ -49,6 +49,30 @@ impl TsigAlgorithm {
                     .map_err(|_| Rfc2136RequestError::Signing)?;
                 hmac.update(message);
                 Ok(hmac.finalize().into_bytes().to_vec())
+            }
+        }
+    }
+
+    pub(crate) fn verify(
+        self,
+        secret: &[u8],
+        message: &[u8],
+        signature: &[u8],
+    ) -> Result<(), Rfc2136RequestError> {
+        match self {
+            Self::HmacSha256 => {
+                let mut hmac = Hmac::<Sha256>::new_from_slice(secret)
+                    .map_err(|_| Rfc2136RequestError::Signing)?;
+                hmac.update(message);
+                hmac.verify_slice(signature)
+                    .map_err(|_| Rfc2136RequestError::Signing)
+            }
+            Self::HmacSha512 => {
+                let mut hmac = Hmac::<Sha512>::new_from_slice(secret)
+                    .map_err(|_| Rfc2136RequestError::Signing)?;
+                hmac.update(message);
+                hmac.verify_slice(signature)
+                    .map_err(|_| Rfc2136RequestError::Signing)
             }
         }
     }
@@ -80,6 +104,18 @@ impl Rfc2136TsigKey {
             algorithm,
             secret: Zeroizing::new(secret),
         })
+    }
+
+    pub(crate) fn name(&self) -> &DnsName {
+        &self.name
+    }
+
+    pub(crate) const fn algorithm(&self) -> TsigAlgorithm {
+        self.algorithm
+    }
+
+    pub(crate) fn secret(&self) -> &[u8] {
+        &self.secret
     }
 }
 
