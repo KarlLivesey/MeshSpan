@@ -23,18 +23,12 @@ fn due_order_is_claimed_then_returned_with_exact_configuration_and_checkpoint()
 -> Result<(), Box<dyn std::error::Error>> {
     let candidate = queued_order()?;
     let checkpoint = previous_checkpoint(candidate.order_id)?;
-    let authority = FakeAuthority::new(candidate, Some(checkpoint.clone()), CommitMode::Success);
+    let authority = FakeAuthority::new(candidate, Some(checkpoint.clone()), CommitMode::Success)?;
     let worker = NodeId::from_bytes([21; 16])?;
     let mut random = IncrementingRandom(1);
-    let assignment = CertificateOrderDispatcher::new(
-        &authority,
-        &mut random,
-        worker,
-        7,
-        PrincipalId::from_bytes([22; 16])?,
-    )
-    .claim_next(UnixMicros::new(20), DurationMicros::new(1_000), None, 8)?
-    .ok_or("assignment missing")?;
+    let assignment = CertificateOrderDispatcher::new(&authority, &mut random, worker, 7)
+        .claim_next(UnixMicros::new(20), DurationMicros::new(1_000), None, 8)?
+        .ok_or("assignment missing")?;
 
     let claim = assignment.order.claim.ok_or("claim missing")?;
     assert_eq!(claim.worker_node_id, worker);
@@ -52,16 +46,11 @@ fn due_order_is_claimed_then_returned_with_exact_configuration_and_checkpoint()
 fn rejected_claim_is_skipped_only_after_another_live_claim_is_observed()
 -> Result<(), Box<dyn std::error::Error>> {
     let candidate = queued_order()?;
-    let authority = FakeAuthority::new(candidate, None, CommitMode::WonRace);
+    let authority = FakeAuthority::new(candidate, None, CommitMode::WonRace)?;
     let mut random = IncrementingRandom(1);
-    let assignment = CertificateOrderDispatcher::new(
-        &authority,
-        &mut random,
-        NodeId::from_bytes([23; 16])?,
-        1,
-        PrincipalId::from_bytes([24; 16])?,
-    )
-    .claim_next(UnixMicros::new(20), DurationMicros::new(1_000), None, 1)?;
+    let assignment =
+        CertificateOrderDispatcher::new(&authority, &mut random, NodeId::from_bytes([23; 16])?, 1)
+            .claim_next(UnixMicros::new(20), DurationMicros::new(1_000), None, 1)?;
     assert_eq!(assignment, None);
     assert_eq!(authority.commit_count(), 1);
     Ok(())
@@ -75,14 +64,13 @@ fn unexplained_rejection_and_forged_receipt_fail_closed() -> Result<(), Box<dyn 
         (CommitMode::BadReceipt, true),
     ] {
         let candidate = queued_order()?;
-        let authority = FakeAuthority::new(candidate, None, mode);
+        let authority = FakeAuthority::new(candidate, None, mode)?;
         let mut random = IncrementingRandom(1);
         let result = CertificateOrderDispatcher::new(
             &authority,
             &mut random,
             NodeId::from_bytes([25; 16])?,
             1,
-            PrincipalId::from_bytes([26; 16])?,
         )
         .claim_next(UnixMicros::new(20), DurationMicros::new(1_000), None, 1);
         let Err(error) = result else {
@@ -115,8 +103,10 @@ fn queued_order() -> Result<CertificateOrderRecord, Box<dyn std::error::Error>> 
     })
 }
 
-fn configuration(config_id: AcmeConfigurationId) -> AcmeConfigurationRecord {
-    AcmeConfigurationRecord {
+fn configuration(
+    config_id: AcmeConfigurationId,
+) -> Result<AcmeConfigurationRecord, meshspan_domain::IdentifierError> {
+    Ok(AcmeConfigurationRecord {
         provisioning_intent_digest: None,
         config_id,
         directory_url: "https://acme.example.test/directory".to_owned(),
@@ -127,8 +117,9 @@ fn configuration(config_id: AcmeConfigurationId) -> AcmeConfigurationRecord {
         challenge_kind: AcmeChallengeKind::Http01,
         challenge_settings: None,
         certificate_names: vec!["files.example.test".to_owned()],
+        configured_by: PrincipalId::from_bytes([22; 16])?,
         revision: Revision::new(2),
-    }
+    })
 }
 
 fn previous_checkpoint(
@@ -175,16 +166,16 @@ impl FakeAuthority {
         order: CertificateOrderRecord,
         checkpoint: Option<CertificateOrderCheckpointRecord>,
         mode: CommitMode,
-    ) -> Self {
-        Self {
-            configuration: configuration(order.config_id),
+    ) -> Result<Self, meshspan_domain::IdentifierError> {
+        Ok(Self {
+            configuration: configuration(order.config_id)?,
             checkpoint,
             state: Mutex::new(FakeState {
                 order,
                 mode,
                 commits: 0,
             }),
-        }
+        })
     }
 
     fn commit_count(&self) -> usize {
@@ -244,6 +235,9 @@ impl CertificateOrderWorkerAuthority for FakeAuthority {
         let AuthoritativeCommand::ClaimCertificateOrder(claim) = command else {
             return Err(MetadataAuthorityRequestError::Failed);
         };
+        if context.actor_principal_id != self.configuration.configured_by {
+            return Err(MetadataAuthorityRequestError::Failed);
+        }
         let mut state = self
             .state
             .lock()

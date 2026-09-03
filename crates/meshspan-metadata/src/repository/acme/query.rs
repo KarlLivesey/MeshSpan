@@ -3,7 +3,7 @@
 //! Complete ACME configuration reads and bounded actionable-order admission.
 
 use meshspan_contracts::BoundedItems;
-use meshspan_domain::{AcmeConfigurationId, CertificateOrderId, Revision, UnixMicros};
+use meshspan_domain::{AcmeConfigurationId, CertificateOrderId, PrincipalId, Revision, UnixMicros};
 use rusqlite::{OptionalExtension, params};
 
 use super::{
@@ -31,6 +31,8 @@ pub struct AcmeConfigurationRecord {
     pub certificate_names: Vec<String>,
     /// Canonical public provisioning intent, absent for internal low-level configurations.
     pub provisioning_intent_digest: Option<[u8; 32]>,
+    /// Administrator whose committed policy authorises automatic issuance and renewal.
+    pub configured_by: PrincipalId,
     /// Immutable authoritative configuration revision.
     pub revision: Revision,
 }
@@ -50,6 +52,8 @@ pub struct CertificateRenewalCandidate {
     pub source_order_id: CertificateOrderId,
     /// Immutable configuration reused by the replacement order.
     pub config_id: AcmeConfigurationId,
+    /// Administrator whose committed configuration authorises the replacement order.
+    pub configured_by: PrincipalId,
     /// Exact validated expiry of the currently selected generation.
     pub not_after: UnixMicros,
     /// Latest authoritative revision of the completed source order.
@@ -141,7 +145,8 @@ pub(super) fn configuration(
         .query_row(
             "SELECT directory_url, account_key_secret_id, account_key_secret_generation,
                     challenge_kind, challenge_settings_secret_id,
-                    challenge_settings_secret_generation, provisioning_intent_digest, revision
+                    challenge_settings_secret_generation, provisioning_intent_digest,
+                    created_by, revision
              FROM acme_configurations WHERE config_id = ?1",
             [config_id.as_bytes().as_slice()],
             |row| {
@@ -153,7 +158,8 @@ pub(super) fn configuration(
                     row.get::<_, Option<Vec<u8>>>(4)?,
                     row.get::<_, Option<i64>>(5)?,
                     row.get::<_, Option<Vec<u8>>>(6)?,
-                    row.get::<_, i64>(7)?,
+                    row.get::<_, Vec<u8>>(7)?,
+                    row.get::<_, i64>(8)?,
                 ))
             },
         )
@@ -186,7 +192,9 @@ pub(super) fn configuration(
         challenge_settings,
         certificate_names,
         provisioning_intent_digest: stored.6.map(exact).transpose()?,
-        revision: Revision::new(positive(stored.7)?),
+        configured_by: PrincipalId::from_bytes(exact(stored.7)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        revision: Revision::new(positive(stored.8)?),
     }))
 }
 
@@ -255,8 +263,10 @@ pub(super) fn due_renewals(
     let sql_limit = i64::try_from(limit.get().saturating_add(1))
         .map_err(|_| RepositoryError::InvalidPageLimit)?;
     let mut statement = database.connection().prepare(
-        "SELECT o.order_id, o.config_id, o.certificate_not_after, o.completed_at, o.revision
+        "SELECT o.order_id, o.config_id, c.created_by, o.certificate_not_after,
+                o.completed_at, o.revision
          FROM certificate_orders o
+         JOIN acme_configurations c ON c.config_id = o.config_id
          WHERE o.state = 3
            AND o.certificate_not_after <= ?1
            AND NOT EXISTS (
@@ -289,14 +299,19 @@ pub(super) fn due_renewals(
             let config_bytes = exact(row.get(1)?).map_err(|_| rusqlite::Error::InvalidQuery)?;
             let config_id = AcmeConfigurationId::from_bytes(config_bytes)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?;
-            let not_after = UnixMicros::new(row.get(2)?);
-            let completed_at = UnixMicros::new(row.get(3)?);
+            let configured_by_bytes =
+                exact(row.get(2)?).map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let configured_by = PrincipalId::from_bytes(configured_by_bytes)
+                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let not_after = UnixMicros::new(row.get(3)?);
+            let completed_at = UnixMicros::new(row.get(4)?);
             let revision =
-                Revision::new(positive(row.get(4)?).map_err(|_| rusqlite::Error::InvalidQuery)?);
+                Revision::new(positive(row.get(5)?).map_err(|_| rusqlite::Error::InvalidQuery)?);
             Ok((
                 CertificateRenewalCandidate {
                     source_order_id,
                     config_id,
+                    configured_by,
                     not_after,
                     revision,
                 },

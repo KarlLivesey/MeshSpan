@@ -130,6 +130,7 @@ fn execution(
                 challenge_kind: AcmeChallengeKind::Http01,
                 challenge_settings: None,
                 certificate_names: names,
+                configured_by: PrincipalId::from_bytes([2; 16])?,
                 revision: Revision::new(7),
             },
             checkpoint: None,

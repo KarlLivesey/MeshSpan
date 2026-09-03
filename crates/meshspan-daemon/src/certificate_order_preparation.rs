@@ -137,7 +137,6 @@ where
     /// substituted checkpoints, entropy failure, unavailable consensus and invalid receipts.
     pub fn prepare(
         &mut self,
-        actor_principal_id: PrincipalId,
         now: UnixMicros,
         assignment: CertificateOrderAssignment,
     ) -> Result<PreparedCertificateOrder, CertificateOrderPreparationError> {
@@ -149,7 +148,7 @@ where
             generation: LEAF_KEY_GENERATION,
         };
         let certificate_key = self.load_or_create_certificate_key(
-            actor_principal_id,
+            assignment.configuration.configured_by,
             now,
             certificate_key_reference,
         )?;

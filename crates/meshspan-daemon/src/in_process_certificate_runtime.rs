@@ -255,7 +255,6 @@ pub struct InProcessCertificateExecutionFactory<A, O, R, C> {
     observer: O,
     random: R,
     clock: C,
-    actor_principal_id: meshspan_domain::PrincipalId,
     tls: Arc<ClientConfig>,
     http01: Http01Challenge,
     policy: InProcessCertificateRuntimePolicy,
@@ -271,8 +270,6 @@ pub struct InProcessCertificateRuntimeComponents<A, O, R, C> {
     pub random: R,
     /// Authority-aligned time.
     pub clock: C,
-    /// Audited internal certificate-worker principal.
-    pub actor_principal_id: meshspan_domain::PrincipalId,
     /// Public CA and provider HTTPS trust configuration.
     pub tls: Arc<ClientConfig>,
     /// Shared HTTP-01 catalogue served by eligible gateways.
@@ -290,7 +287,6 @@ impl<A, O, R, C> InProcessCertificateExecutionFactory<A, O, R, C> {
             observer: components.observer,
             random: components.random,
             clock: components.clock,
-            actor_principal_id: components.actor_principal_id,
             tls: components.tls,
             http01: components.http01,
             policy: components.policy,
@@ -348,7 +344,7 @@ impl<A, O, R, C> InProcessCertificateExecutionFactory<A, O, R, C> {
                 self.clock.clone(),
                 prepared.assignment.order.order_id,
                 claim,
-                self.actor_principal_id,
+                prepared.assignment.configuration.configured_by,
             );
             return Ok(InProcessCertificateChallenge::ManualDns(
                 ManualDns01Challenge::new(authority, self.observer.clone()),
@@ -443,7 +439,7 @@ mod tests {
     };
     use meshspan_certificates::ExternalCertificateRequestKey;
     use meshspan_domain::{
-        AcmeConfigurationId, CertificateOrderId, EntropyError, NodeId, OperationId, PrincipalId,
+        AcmeConfigurationId, CertificateOrderId, EntropyError, NodeId, OperationId,
     };
     use meshspan_metadata::{
         AcmeConfigurationRecord, CertificateOrderClaim, CertificateOrderRecord,
@@ -538,7 +534,6 @@ mod tests {
                 observer: NeverObserver,
                 random: FixedRandom,
                 clock: FixedClock,
-                actor_principal_id: PrincipalId::from_bytes([9; 16])?,
                 tls: Arc::new(tls),
                 http01: Http01Challenge::new(),
                 policy,
@@ -608,6 +603,7 @@ mod tests {
                         }
                     }),
                     certificate_names: names,
+                    configured_by: meshspan_domain::PrincipalId::from_bytes([9; 16])?,
                     revision: Revision::new(3),
                 },
                 checkpoint: None,

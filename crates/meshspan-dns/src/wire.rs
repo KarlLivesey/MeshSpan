@@ -7,6 +7,7 @@ use thiserror::Error;
 const HEADER_BYTES: usize = 12;
 const MAXIMUM_MESSAGE_BYTES: usize = 65_535;
 const MAXIMUM_POINTERS: usize = 32;
+const TYPE_NS: u16 = 2;
 const TYPE_TXT: u16 = 16;
 const CLASS_IN: u16 = 1;
 
@@ -176,6 +177,106 @@ impl DnsQuery {
             return Err(DnsWireError::InvalidMessage);
         }
         Ok(found)
+    }
+}
+
+/// Exact recursive query used only to discover the authoritative servers for one DNS name.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DnsNameServerQuery {
+    id: u16,
+    name: DnsName,
+}
+
+impl DnsNameServerQuery {
+    /// Creates one recursive NS query with a caller-generated non-zero correlation identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero identities, which are reserved to catch missing entropy.
+    pub fn new(id: u16, name: DnsName) -> Result<Self, DnsWireError> {
+        if id == 0 {
+            return Err(DnsWireError::InvalidId);
+        }
+        Ok(Self { id, name })
+    }
+
+    /// Encodes the bounded recursive NS request.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the already validated name cannot be represented canonically.
+    pub fn encode(&self) -> Result<Vec<u8>, DnsWireError> {
+        let mut output = Vec::with_capacity(HEADER_BYTES + self.name.0.len() + 6);
+        output.extend_from_slice(&self.id.to_be_bytes());
+        output.extend_from_slice(&0x0100_u16.to_be_bytes());
+        output.extend_from_slice(&1_u16.to_be_bytes());
+        output.extend_from_slice(&[0; 6]);
+        self.name.encode(&mut output)?;
+        output.extend_from_slice(&TYPE_NS.to_be_bytes());
+        output.extend_from_slice(&CLASS_IN.to_be_bytes());
+        Ok(output)
+    }
+
+    /// Validates a recursive response and returns its exact NS answer set.
+    ///
+    /// An empty result means that this exact name is not a zone apex. Callers may then try its
+    /// parent. NXDOMAIN is likewise represented as an empty result, while all other DNS failures
+    /// fail closed.
+    ///
+    /// # Errors
+    ///
+    /// Rejects mismatched identities/questions, truncation, malformed compression, invalid
+    /// records, excessive answers, unsupported response codes and trailing bytes.
+    pub fn response_name_servers(&self, response: &[u8]) -> Result<Vec<DnsName>, DnsWireError> {
+        if response.len() < HEADER_BYTES || response.len() > MAXIMUM_MESSAGE_BYTES {
+            return Err(DnsWireError::InvalidMessage);
+        }
+        let header = Header::decode(response)?;
+        if header.id != self.id || !header.response || header.opcode != 0 || header.questions != 1 {
+            return Err(DnsWireError::InvalidMessage);
+        }
+        if header.truncated {
+            return Err(DnsWireError::Truncated);
+        }
+        if !matches!(header.rcode, 0 | 3) {
+            return Err(DnsWireError::Rejected);
+        }
+        let mut cursor = HEADER_BYTES;
+        let question = decode_name(response, &mut cursor)?;
+        if question != self.name
+            || read_u16(response, &mut cursor)? != TYPE_NS
+            || read_u16(response, &mut cursor)? != CLASS_IN
+        {
+            return Err(DnsWireError::InvalidMessage);
+        }
+        let mut names = BTreeSet::new();
+        for index in 0..header.total_records()? {
+            let owner = decode_name(response, &mut cursor)?;
+            let record_type = read_u16(response, &mut cursor)?;
+            let class = read_u16(response, &mut cursor)?;
+            let _ttl = read_u32(response, &mut cursor)?;
+            let length = usize::from(read_u16(response, &mut cursor)?);
+            let record_end = cursor
+                .checked_add(length)
+                .filter(|end| *end <= response.len())
+                .ok_or(DnsWireError::InvalidMessage)?;
+            if index < usize::from(header.answers)
+                && owner == self.name
+                && record_type == TYPE_NS
+                && class == CLASS_IN
+            {
+                let server = decode_name(response, &mut cursor)?;
+                if cursor != record_end || !names.insert(server) {
+                    return Err(DnsWireError::InvalidMessage);
+                }
+            } else {
+                cursor = record_end;
+            }
+        }
+        if cursor != response.len() {
+            return Err(DnsWireError::InvalidMessage);
+        }
+        Ok(names.into_iter().collect())
     }
 }
 

@@ -5,7 +5,7 @@
 use meshspan_cluster::MetadataAuthorityRequestError;
 use meshspan_domain::{
     AuditEventId, CertificateOrderId, DurationMicros, EntropyError, NodeId, OperationId,
-    PrincipalId, RandomSource, UnixMicros, uuid_v8,
+    RandomSource, UnixMicros, uuid_v8,
 };
 use meshspan_metadata::{
     AcmeConfigurationRecord, AuthoritativeCommand, CertificateOrderCheckpointRecord,
@@ -132,7 +132,6 @@ pub struct CertificateOrderDispatcher<'a, Authority, Random> {
     random: &'a mut Random,
     worker_node_id: NodeId,
     worker_incarnation: u64,
-    actor_principal_id: PrincipalId,
 }
 
 impl<'a, Authority, Random> CertificateOrderDispatcher<'a, Authority, Random> {
@@ -143,14 +142,12 @@ impl<'a, Authority, Random> CertificateOrderDispatcher<'a, Authority, Random> {
         random: &'a mut Random,
         worker_node_id: NodeId,
         worker_incarnation: u64,
-        actor_principal_id: PrincipalId,
     ) -> Self {
         Self {
             authority,
             random,
             worker_node_id,
             worker_incarnation,
-            actor_principal_id,
         }
     }
 }
@@ -201,6 +198,13 @@ where
         if !ready_at(&candidate, now) {
             return Err(CertificateOrderDispatchError::InvalidProjection);
         }
+        let configuration = self
+            .authority
+            .acme_configuration(candidate.config_id)?
+            .ok_or(CertificateOrderDispatchError::InvalidProjection)?;
+        if configuration.config_id != candidate.config_id {
+            return Err(CertificateOrderDispatchError::InvalidProjection);
+        }
         let claim_generation = candidate
             .attempt_count
             .checked_add(1)
@@ -208,7 +212,7 @@ where
         let (operation_id, audit_event_id, fence) = random_claim_identity(self.random)?;
         let context = CommandContext {
             operation_id,
-            actor_principal_id: self.actor_principal_id,
+            actor_principal_id: configuration.configured_by,
             audit_event_id,
             occurred_at: now,
             expected_revision: None,
@@ -249,13 +253,6 @@ where
             || order.claim != Some(claim)
             || order.revision != receipt.committed_revision
         {
-            return Err(CertificateOrderDispatchError::InvalidProjection);
-        }
-        let configuration = self
-            .authority
-            .acme_configuration(order.config_id)?
-            .ok_or(CertificateOrderDispatchError::InvalidProjection)?;
-        if configuration.config_id != order.config_id {
             return Err(CertificateOrderDispatchError::InvalidProjection);
         }
         let checkpoint = self

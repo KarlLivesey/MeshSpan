@@ -85,10 +85,11 @@ fn driver(
         certificate_authority.certificate_der().to_vec(),
     ))?;
     Ok(CertificateOrderDriver::new(
+        authority.clone(),
+        authority.clone(),
         authority,
         SharedRandom::default(),
         FixedClock(UnixMicros::new(20_000_000)),
-        PrincipalId::from_bytes([2; 16])?,
         CertificateOrderDrivePolicy::new(DurationMicros::new(1_000_000), maximum_steps)?,
         CertificateOrderResultService::new(roots)?,
     ))
@@ -136,6 +137,7 @@ fn prepared() -> Result<PreparedCertificateOrder, Box<dyn std::error::Error>> {
                 challenge_kind: AcmeChallengeKind::Http01,
                 challenge_settings: None,
                 certificate_names: names,
+                configured_by: PrincipalId::from_bytes([2; 16])?,
                 revision: Revision::new(7),
             },
             checkpoint: None,

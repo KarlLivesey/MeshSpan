@@ -4,9 +4,7 @@
 
 use meshspan_acme::{AcmeTransport, AcmeWorkerError};
 use meshspan_contracts::{CertificateChallenge, ContractVersion, RequestContext};
-use meshspan_domain::{
-    Clock, DurationMicros, OperationId, PrincipalId, RandomSource, UnixMicros, uuid_v8,
-};
+use meshspan_domain::{Clock, DurationMicros, OperationId, RandomSource, UnixMicros, uuid_v8};
 use thiserror::Error;
 
 use crate::{
@@ -81,33 +79,34 @@ pub struct CertificateOrderDriver<A, R, C> {
     result: CertificateOrderResultService,
     operation_random: R,
     clock: C,
-    actor_principal_id: PrincipalId,
     policy: CertificateOrderDrivePolicy,
 }
 
 impl<A, R, C> CertificateOrderDriver<A, R, C>
 where
-    A: Clone,
     R: Clone,
 {
     /// Binds one worker identity to durable authority, trusted roots, time and entropy.
     #[must_use]
     pub fn new(
-        authority: A,
+        checkpoint_authority: A,
+        completion_authority: A,
+        retry_authority: A,
         random: R,
         clock: C,
-        actor_principal_id: PrincipalId,
         policy: CertificateOrderDrivePolicy,
         result: CertificateOrderResultService,
     ) -> Self {
         Self {
-            checkpoint: CertificateOrderCheckpointService::new(authority.clone()),
-            completion: CertificateOrderCompletionService::new(authority.clone(), random.clone()),
-            retry: CertificateOrderRetryService::new(authority),
+            checkpoint: CertificateOrderCheckpointService::new(checkpoint_authority),
+            completion: CertificateOrderCompletionService::new(
+                completion_authority,
+                random.clone(),
+            ),
+            retry: CertificateOrderRetryService::new(retry_authority),
             result,
             operation_random: random,
             clock,
-            actor_principal_id,
             policy,
         }
     }
@@ -139,6 +138,7 @@ where
     {
         for completed_steps in 0..self.policy.maximum_steps {
             let now = self.clock.now();
+            let actor_principal_id = execution.assignment().configuration.configured_by;
             let context = self.request_context(execution, now)?;
             let challenge_expires_at = execution
                 .assignment()
@@ -149,7 +149,7 @@ where
             let step = execution
                 .execute_step(
                     &self.checkpoint,
-                    self.actor_principal_id,
+                    actor_principal_id,
                     now,
                     context,
                     challenge_expires_at,
@@ -237,7 +237,7 @@ where
     ) -> Result<CertificateOrderDriveOutcome, CertificateOrderDriverError> {
         match self.result.complete(
             &mut self.completion,
-            self.actor_principal_id,
+            execution.assignment().configuration.configured_by,
             now,
             execution,
             certificate_chain,
@@ -258,7 +258,7 @@ where
         failure_class: CertificateOrderFailureClass,
     ) -> Result<CertificateOrderDriveOutcome, CertificateOrderDriverError> {
         let commit = self.retry.retry(
-            self.actor_principal_id,
+            execution.assignment().configuration.configured_by,
             now,
             execution.assignment(),
             failure_class,

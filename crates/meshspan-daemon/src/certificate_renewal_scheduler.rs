@@ -4,8 +4,7 @@
 
 use meshspan_cluster::MetadataAuthorityRequestError;
 use meshspan_domain::{
-    AuditEventId, CertificateOrderId, DurationMicros, OperationId, PrincipalId, Revision,
-    UnixMicros, uuid_v8,
+    AuditEventId, CertificateOrderId, DurationMicros, OperationId, Revision, UnixMicros, uuid_v8,
 };
 use meshspan_metadata::{
     AuthoritativeCommand, CertificateOrderRecord, CertificateOrderState,
@@ -100,17 +99,13 @@ pub struct CertificateRenewalScheduleCommit {
 /// Stateless certificate-renewal scheduler.
 pub struct CertificateRenewalScheduler<'a, A> {
     authority: &'a A,
-    actor_principal_id: PrincipalId,
 }
 
 impl<'a, A> CertificateRenewalScheduler<'a, A> {
-    /// Binds renewal scheduling to one internal actor and authority.
+    /// Binds renewal scheduling to current replicated authority.
     #[must_use]
-    pub const fn new(authority: &'a A, actor_principal_id: PrincipalId) -> Self {
-        Self {
-            authority,
-            actor_principal_id,
-        }
+    pub const fn new(authority: &'a A) -> Self {
+        Self { authority }
     }
 }
 
@@ -158,7 +153,7 @@ where
         let replacement_order_id = derived_order_id(candidate)?;
         let context = CommandContext {
             operation_id: derived_operation_id(OPERATION_ID_DOMAIN, candidate, now)?,
-            actor_principal_id: self.actor_principal_id,
+            actor_principal_id: candidate.configured_by,
             audit_event_id: derived_audit_id(candidate, now)?,
             occurred_at: now,
             expected_revision: None,

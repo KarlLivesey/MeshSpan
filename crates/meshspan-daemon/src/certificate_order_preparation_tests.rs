@@ -55,7 +55,6 @@ fn preparation_creates_one_encrypted_leaf_key_then_reuses_it_after_worker_replac
     let mut service =
         CertificateOrderPreparationService::new(&authority, &decryptor, IncrementingRandom(30));
     let first = service.prepare(
-        PrincipalId::from_bytes([5; 16])?,
         UnixMicros::new(20),
         assignment(order_id, account_reference, 55, None)?,
     )?;
@@ -82,7 +81,6 @@ fn preparation_creates_one_encrypted_leaf_key_then_reuses_it_after_worker_replac
     drop(first);
 
     let replacement = service.prepare(
-        PrincipalId::from_bytes([5; 16])?,
         UnixMicros::new(30),
         assignment(order_id, account_reference, 56, Some(checkpoint))?,
     )?;
@@ -143,11 +141,7 @@ fn preparation_decrypts_automatic_dns_settings_into_zeroising_runtime_state()
     assigned.configuration.challenge_settings = Some(settings_reference);
     let prepared =
         CertificateOrderPreparationService::new(&authority, &decryptor, IncrementingRandom(30))
-            .prepare(
-                PrincipalId::from_bytes([5; 16])?,
-                UnixMicros::new(20),
-                assigned,
-            )?;
+            .prepare(UnixMicros::new(20), assigned)?;
     assert_eq!(
         prepared
             .challenge_settings
@@ -190,6 +184,7 @@ fn assignment(
             challenge_kind: AcmeChallengeKind::Http01,
             challenge_settings: None,
             certificate_names: vec!["files.example.test".to_owned()],
+            configured_by: PrincipalId::from_bytes([5; 16])?,
             revision: Revision::new(3),
         },
         checkpoint,
