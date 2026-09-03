@@ -41,6 +41,61 @@ pub struct DueCertificateOrderCursor {
     order_id: CertificateOrderId,
 }
 
+/// Latest completed certificate generation eligible for automatic renewal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CertificateRenewalCandidate {
+    /// Completed order whose certificate is approaching expiry.
+    pub source_order_id: CertificateOrderId,
+    /// Immutable configuration reused by the replacement order.
+    pub config_id: AcmeConfigurationId,
+    /// Exact validated expiry of the currently selected generation.
+    pub not_after: UnixMicros,
+    /// Latest authoritative revision of the completed source order.
+    pub revision: Revision,
+}
+
+/// Stable seek position in the automatic certificate-renewal index.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DueCertificateRenewalCursor {
+    not_after: UnixMicros,
+    completed_at: UnixMicros,
+    source_order_id: CertificateOrderId,
+}
+
+impl DueCertificateRenewalCursor {
+    /// Reconstructs a cursor after a public boundary validates its fields.
+    #[must_use]
+    pub const fn new(
+        not_after: UnixMicros,
+        completed_at: UnixMicros,
+        source_order_id: CertificateOrderId,
+    ) -> Self {
+        Self {
+            not_after,
+            completed_at,
+            source_order_id,
+        }
+    }
+
+    /// Returns the certificate-expiry seek key.
+    #[must_use]
+    pub const fn not_after(self) -> UnixMicros {
+        self.not_after
+    }
+
+    /// Returns the completed-at seek key.
+    #[must_use]
+    pub const fn completed_at(self) -> UnixMicros {
+        self.completed_at
+    }
+
+    /// Returns the final stable source-order seek key.
+    #[must_use]
+    pub const fn source_order_id(self) -> CertificateOrderId {
+        self.source_order_id
+    }
+}
+
 impl DueCertificateOrderCursor {
     /// Reconstructs a cursor after a public boundary validates its fields.
     #[must_use]
@@ -184,6 +239,79 @@ pub(super) fn due_orders(
     })
 }
 
+pub(super) fn due_renewals(
+    database: &PartitionDatabase,
+    renew_by: UnixMicros,
+    after: Option<&DueCertificateRenewalCursor>,
+    limit: PageLimit,
+) -> Result<Page<CertificateRenewalCandidate, DueCertificateRenewalCursor>, RepositoryError> {
+    let lower_expiry = after.map_or(i64::MIN, |cursor| cursor.not_after.get());
+    let lower_completed = after.map_or(i64::MIN, |cursor| cursor.completed_at.get());
+    let lower_id = after.map_or([0; 16], |cursor| cursor.source_order_id.as_bytes());
+    let sql_limit = i64::try_from(limit.get().saturating_add(1))
+        .map_err(|_| RepositoryError::InvalidPageLimit)?;
+    let mut statement = database.connection().prepare(
+        "SELECT o.order_id, o.config_id, o.certificate_not_after, o.completed_at, o.revision
+         FROM certificate_orders o
+         WHERE o.state = 3
+           AND o.certificate_not_after <= ?1
+           AND NOT EXISTS (
+               SELECT 1 FROM certificate_orders active
+               WHERE active.config_id = o.config_id AND active.state IN (1, 2)
+           )
+           AND NOT EXISTS (
+               SELECT 1 FROM certificate_orders newer
+               WHERE newer.config_id = o.config_id
+                 AND newer.state = 3
+                 AND (newer.completed_at, newer.order_id) > (o.completed_at, o.order_id)
+           )
+           AND (o.certificate_not_after, o.completed_at, o.order_id) > (?2, ?3, ?4)
+         ORDER BY o.certificate_not_after, o.completed_at, o.order_id
+         LIMIT ?5",
+    )?;
+    let rows = statement.query_map(
+        params![
+            renew_by.get(),
+            lower_expiry,
+            lower_completed,
+            lower_id.as_slice(),
+            sql_limit,
+        ],
+        |row| {
+            let source_order_bytes =
+                exact(row.get(0)?).map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let source_order_id = CertificateOrderId::from_bytes(source_order_bytes)
+                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let config_bytes = exact(row.get(1)?).map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let config_id = AcmeConfigurationId::from_bytes(config_bytes)
+                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let not_after = UnixMicros::new(row.get(2)?);
+            let completed_at = UnixMicros::new(row.get(3)?);
+            let revision =
+                Revision::new(positive(row.get(4)?).map_err(|_| rusqlite::Error::InvalidQuery)?);
+            Ok((
+                CertificateRenewalCandidate {
+                    source_order_id,
+                    config_id,
+                    not_after,
+                    revision,
+                },
+                completed_at,
+            ))
+        },
+    )?;
+    let mut records = Vec::with_capacity(limit.get().saturating_add(1));
+    for row in rows {
+        records.push(row?);
+    }
+    let next = (records.len() > limit.get()).then(|| renewal_cursor(&records[limit.get() - 1]));
+    records.truncate(limit.get());
+    Ok(Page {
+        items: records.into_iter().map(|(record, _)| record).collect(),
+        next,
+    })
+}
+
 fn configuration_names(
     database: &PartitionDatabase,
     config_id: AcmeConfigurationId,
@@ -231,4 +359,10 @@ fn parse_optional_secret(
 
 fn cursor(value: &(CertificateOrderRecord, UnixMicros)) -> DueCertificateOrderCursor {
     DueCertificateOrderCursor::new(value.0.next_attempt_at, value.1, value.0.order_id)
+}
+
+fn renewal_cursor(
+    value: &(CertificateRenewalCandidate, UnixMicros),
+) -> DueCertificateRenewalCursor {
+    DueCertificateRenewalCursor::new(value.0.not_after, value.1, value.0.source_order_id)
 }

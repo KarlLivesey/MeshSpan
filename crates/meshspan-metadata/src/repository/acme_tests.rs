@@ -122,6 +122,87 @@ fn due_certificate_orders_page_queued_and_expired_claims_in_stable_order()
 }
 
 #[test]
+fn due_certificate_renewal_disappears_when_a_replacement_is_actionable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    let config_id = AcmeConfigurationId::from_bytes([65; 16])?;
+    let source_order_id = CertificateOrderId::from_bytes([66; 16])?;
+    let replacement_order_id = CertificateOrderId::from_bytes([67; 16])?;
+    fixture.apply(
+        3,
+        2,
+        &AuthoritativeCommand::ConfigureAcme(fixture.configuration(config_id)?),
+    )?;
+    fixture.apply(
+        4,
+        10,
+        &AuthoritativeCommand::QueueCertificateOrder(QueueCertificateOrder {
+            order_id: source_order_id,
+            config_id,
+            next_attempt_at: UnixMicros::new(10),
+        }),
+    )?;
+    fixture.apply(
+        5,
+        10,
+        &AuthoritativeCommand::ClaimCertificateOrder(fixture.claim(source_order_id, 1, 651, 100)),
+    )?;
+    fixture.apply(
+        6,
+        20,
+        &AuthoritativeCommand::CompleteCertificateOrder(CompleteCertificateOrder {
+            order_id: source_order_id,
+            claim_generation: 1,
+            worker_node_id: fixture.node,
+            worker_incarnation: 1,
+            fence: 651,
+            outcome: CertificateOrderCompletion::Issued {
+                certificate: fixture.certificate(source_order_id)?,
+                not_before: UnixMicros::new(15),
+                not_after: UnixMicros::new(1_000),
+                result_digest: [68; 32],
+            },
+        }),
+    )?;
+
+    assert!(
+        fixture
+            .repository
+            .due_certificate_renewals(UnixMicros::new(999), None, PageLimit::new(10)?)?
+            .items
+            .is_empty()
+    );
+    let due = fixture.repository.due_certificate_renewals(
+        UnixMicros::new(1_000),
+        None,
+        PageLimit::new(10)?,
+    )?;
+    assert_eq!(due.items.len(), 1);
+    assert_eq!(due.items[0].source_order_id, source_order_id);
+    assert_eq!(due.items[0].config_id, config_id);
+    assert_eq!(due.items[0].not_after, UnixMicros::new(1_000));
+    assert_eq!(due.items[0].revision, Revision::new(6));
+
+    fixture.apply(
+        7,
+        21,
+        &AuthoritativeCommand::QueueCertificateOrder(QueueCertificateOrder {
+            order_id: replacement_order_id,
+            config_id,
+            next_attempt_at: UnixMicros::new(21),
+        }),
+    )?;
+    assert!(
+        fixture
+            .repository
+            .due_certificate_renewals(UnixMicros::new(1_000), None, PageLimit::new(10)?)?
+            .items
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[test]
 fn checkpoint_survives_worker_replacement_under_one_protected_leaf_key()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = Fixture::new()?;

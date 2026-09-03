@@ -158,8 +158,9 @@ pub use acknowledgement_policy::{
 };
 pub use acme::{
     AcmeConfigurationRecord, CertificateOrderCheckpointRecord, CertificateOrderClaim,
-    CertificateOrderRecord, CertificateOrderState, DueCertificateOrderCursor,
-    PublicCertificateInstallationRecord, PublicCertificateRolloutSummary,
+    CertificateOrderRecord, CertificateOrderState, CertificateRenewalCandidate,
+    DueCertificateOrderCursor, DueCertificateRenewalCursor, PublicCertificateInstallationRecord,
+    PublicCertificateRolloutSummary,
 };
 pub use authentication_method::{
     ApiKeyAuthentication, AuthenticationMethodRevocationReplay, PasskeyVerificationMaterial,
