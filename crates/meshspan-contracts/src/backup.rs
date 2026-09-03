@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 
 use meshspan_domain::{BackupDestinationId, BackupId, OperationId, Revision, UnixMicros};
 
-use crate::{ComponentLifecycle, ContractError, ContractVersion, RequestContext};
+use crate::{ContractError, ContractVersion, ImplementationDescriptor, RequestContext};
 
 /// Maximum UTF-8 bytes in a provider-owned opaque object reference.
 pub const MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES: usize = 2_048;
@@ -148,7 +148,10 @@ pub struct BackupDeleteReceipt {
 }
 
 /// Replaceable destination for encrypted metadata-backup objects.
-pub trait BackupProvider: ComponentLifecycle {
+pub trait BackupProvider {
+    /// Describes the compiled provider implementation and explicit bounds.
+    fn describe(&self) -> ImplementationDescriptor;
+
     /// Atomically persists exactly the declared stream or publishes no object.
     ///
     /// # Errors
@@ -268,7 +271,10 @@ fn validate_context(context: RequestContext, observed_at: UnixMicros) -> Result<
     if context.deadline <= observed_at {
         return Err(ContractError::DeadlineExceeded);
     }
-    if context.expected_revision.is_none() {
+    if context
+        .expected_revision
+        .is_none_or(|revision| revision.get() == 0)
+    {
         return Err(ContractError::InvalidInput);
     }
     Ok(())
@@ -322,6 +328,12 @@ mod tests {
         missing_revision.context.expected_revision = None;
         assert_eq!(
             validate_backup_store_request(missing_revision, UnixMicros::new(19)),
+            Err(ContractError::InvalidInput)
+        );
+        let mut zero_revision = request;
+        zero_revision.context.expected_revision = Some(Revision::new(0));
+        assert_eq!(
+            validate_backup_store_request(zero_revision, UnixMicros::new(19)),
             Err(ContractError::InvalidInput)
         );
         assert_eq!(

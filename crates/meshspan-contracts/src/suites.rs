@@ -83,12 +83,31 @@ where
         move |input| execute(&mut component, input)
     })
 }
-typed_suite!(
-    run_backup_provider_suite,
-    BackupProvider,
-    ContractKind::BackupProvider,
-    "Runs exact vectors against fresh encrypted-backup-provider implementations."
-);
+/// Runs exact vectors against fresh encrypted-backup-provider implementations.
+///
+/// # Errors
+///
+/// Rejects an invalid descriptor/suite or returns exact deterministic case failures.
+pub fn run_backup_provider_suite<Input, Output, Failure, Component, Factory, Handler>(
+    cases: &[ConformanceCase<Input, Output, Failure>],
+    mut factory: Factory,
+    handler: Handler,
+) -> Result<Vec<ConformanceFailure>, HarnessError>
+where
+    Input: Clone,
+    Output: Debug + Eq,
+    Failure: Debug + Eq,
+    Component: BackupProvider,
+    Factory: FnMut() -> Component,
+    Handler: Clone + Fn(&mut Component, Input) -> Result<Output, Failure>,
+{
+    verify_descriptor(factory().describe(), ContractKind::BackupProvider)?;
+    run_conformance_cases(cases, || {
+        let mut component = factory();
+        let execute = handler.clone();
+        move |input| execute(&mut component, input)
+    })
+}
 typed_suite!(
     run_access_connector_suite,
     AccessConnector,

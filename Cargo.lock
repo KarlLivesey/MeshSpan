@@ -1204,9 +1204,12 @@ dependencies = [
 name = "meshspan-backup"
 version = "0.1.0"
 dependencies = [
+ "cap-std",
  "chacha20poly1305",
+ "meshspan-contracts",
  "meshspan-domain",
  "meshspan-secret-envelope",
+ "rusqlite",
  "sha2",
  "tempfile",
  "thiserror",
