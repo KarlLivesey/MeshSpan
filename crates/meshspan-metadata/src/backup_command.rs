@@ -3,7 +3,8 @@
 //! Authoritative metadata-backup catalogue commands.
 
 use meshspan_domain::{
-    BackupDestinationId, BackupId, ComponentInstanceId, MeshId, PartitionId, Revision, TargetId,
+    BackupDestinationId, BackupId, ComponentInstanceId, DurationMicros, MeshId, PartitionId,
+    Revision, TargetId, UnixMicros,
 };
 
 pub use meshspan_contracts::MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES;
@@ -82,6 +83,40 @@ pub struct ConfigureBackupDestination {
     pub failure_evidence_digest: [u8; 32],
     /// Whether new backup generations may be sent here.
     pub enabled: bool,
+}
+
+/// Creates or replaces the automatic backup policy for one metadata partition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConfigureMetadataBackupSchedule {
+    /// Partition whose committed state is backed up.
+    pub partition_id: PartitionId,
+    /// Current immutable schedule sequence, or zero when creating it.
+    pub expected_schedule_sequence: u64,
+    /// Positive delay between completed backup attempts.
+    pub interval: DurationMicros,
+    /// Number of newest usable generations retained before reclamation.
+    pub retained_generations: u16,
+    /// Verified provider copies required for a protected generation.
+    pub minimum_verified_copies: u8,
+    /// Required subset whose configured failure relationship is independent.
+    pub minimum_independent_copies: u8,
+    /// Whether the scheduler may materialise new runs.
+    pub enabled: bool,
+    /// First or replacement authoritative due instant.
+    pub next_due_at: UnixMicros,
+}
+
+/// Materialises one exact due occurrence without claiming that backup bytes exist.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QueueMetadataBackupRun {
+    /// Stable identity reserved for this generation and its provider objects.
+    pub backup_id: BackupId,
+    /// Partition selected by the schedule.
+    pub partition_id: PartitionId,
+    /// Exact immutable schedule revision observed by the scheduler.
+    pub expected_schedule_sequence: u64,
+    /// Exact due instant observed by the scheduler.
+    pub scheduled_for: UnixMicros,
 }
 
 /// Exact encrypted partition backup admitted to the replicated catalogue.

@@ -46,7 +46,10 @@ use crate::{
     ReplaceFederationGrant, RevokeFederationGrant, RevokeFederationGrantAssignment,
     RevokeFederationGrantAssignmentActivation,
 };
-use crate::{ConfigureBackupDestination, RecordBackupCopy, RecordMetadataBackup, VerifyBackupCopy};
+use crate::{
+    ConfigureBackupDestination, ConfigureMetadataBackupSchedule, QueueMetadataBackupRun,
+    RecordBackupCopy, RecordMetadataBackup, VerifyBackupCopy,
+};
 use crate::{IssueFederationStorageAllocation, RevokeFederationStorageAllocation};
 use crate::{
     ResolveFederatedMutationQuarantine, RetainFederatedMutationQuarantine,
@@ -253,6 +256,10 @@ pub enum AuthoritativeCommand {
     AcknowledgeMeshLocalCertificateInstallation(AcknowledgeMeshLocalCertificateInstallation),
     /// Creates or replaces one encrypted metadata-backup destination.
     ConfigureBackupDestination(ConfigureBackupDestination),
+    /// Creates or replaces one partition's automatic metadata-backup schedule.
+    ConfigureMetadataBackupSchedule(ConfigureMetadataBackupSchedule),
+    /// Materialises one exact due automatic metadata-backup occurrence.
+    QueueMetadataBackupRun(QueueMetadataBackupRun),
     /// Admits one exact encrypted partition backup generation.
     RecordMetadataBackup(RecordMetadataBackup),
     /// Records one provider-confirmed encrypted backup copy.
@@ -449,6 +456,8 @@ impl AuthoritativeCommand {
                 value.update_digest(digest);
             }
             Self::ConfigureBackupDestination(value) => value.update_digest(digest),
+            Self::ConfigureMetadataBackupSchedule(value) => value.update_digest(digest),
+            Self::QueueMetadataBackupRun(value) => value.update_digest(digest),
             Self::RecordMetadataBackup(value) => value.update_digest(digest),
             Self::RecordBackupCopy(value) => value.update_digest(digest),
             Self::VerifyBackupCopy(value) => value.update_digest(digest),
@@ -3359,6 +3368,30 @@ digest_simple_record!(
         });
         digest.bytes(&value.failure_evidence_digest);
         digest.byte(u8::from(value.enabled));
+    }
+);
+digest_simple_record!(
+    ConfigureMetadataBackupSchedule,
+    b"configure-metadata-backup-schedule",
+    |value, digest| {
+        digest.identifier(value.partition_id.as_bytes());
+        digest.unsigned(value.expected_schedule_sequence);
+        digest.unsigned(value.interval.get());
+        digest.unsigned(u64::from(value.retained_generations));
+        digest.byte(value.minimum_verified_copies);
+        digest.byte(value.minimum_independent_copies);
+        digest.boolean(value.enabled);
+        digest.signed(value.next_due_at.get());
+    }
+);
+digest_simple_record!(
+    QueueMetadataBackupRun,
+    b"queue-metadata-backup-run",
+    |value, digest| {
+        digest.identifier(value.backup_id.as_bytes());
+        digest.identifier(value.partition_id.as_bytes());
+        digest.unsigned(value.expected_schedule_sequence);
+        digest.signed(value.scheduled_for.get());
     }
 );
 digest_simple_record!(

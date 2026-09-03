@@ -167,6 +167,31 @@ fn backup_catalogue_commands_round_trip_canonically() -> Result<(), Box<dyn std:
             copy_digest: [91; 32],
         }),
     )?;
+    let partition_id = meshspan_domain::PartitionId::from_bytes([92; 16])?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::ConfigureMetadataBackupSchedule(
+            crate::ConfigureMetadataBackupSchedule {
+                partition_id,
+                expected_schedule_sequence: 2,
+                interval: DurationMicros::new(86_400_000_000),
+                retained_generations: 4,
+                minimum_verified_copies: 3,
+                minimum_independent_copies: 2,
+                enabled: true,
+                next_due_at: UnixMicros::new(5_000),
+            },
+        ),
+    )?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::QueueMetadataBackupRun(crate::QueueMetadataBackupRun {
+            backup_id,
+            partition_id,
+            expected_schedule_sequence: 3,
+            scheduled_for: UnixMicros::new(5_000),
+        }),
+    )?;
     Ok(())
 }
 

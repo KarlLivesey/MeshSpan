@@ -146,6 +146,10 @@ pub enum EntityKind {
     MetadataBackup = 55,
     /// Provider-confirmed or verified copy of one backup generation.
     BackupCopy = 56,
+    /// Automatic metadata-backup policy for one partition.
+    MetadataBackupSchedule = 57,
+    /// One materialised automatic metadata-backup occurrence.
+    MetadataBackupRun = 58,
 }
 
 impl EntityKind {
@@ -207,6 +211,8 @@ impl EntityKind {
             54 => Ok(Self::BackupDestination),
             55 => Ok(Self::MetadataBackup),
             56 => Ok(Self::BackupCopy),
+            57 => Ok(Self::MetadataBackupSchedule),
+            58 => Ok(Self::MetadataBackupRun),
             _ => Err(RepositoryError::CorruptState),
         }
     }
