@@ -126,6 +126,9 @@ mod local_totp_ceremony_key;
 mod local_wrapping_key;
 mod maintenance_authority;
 mod maintenance_dispatcher;
+mod manual_dns_task_authority;
+#[cfg(test)]
+mod manual_dns_task_authority_tests;
 mod metadata_forwarding;
 mod multi_factor_session;
 mod namespace_mutation_api;
@@ -240,6 +243,9 @@ pub use maintenance_authority::MaintenanceMetadataAuthority;
 pub use maintenance_dispatcher::{
     MaintenanceDispatchAssignment, MaintenanceDispatchBatch, MaintenanceDispatchError,
     MaintenanceDispatcher, MaintenanceWorkSource,
+};
+pub use manual_dns_task_authority::{
+    ConsensusManualDnsTaskAuthority, ManualDnsTaskCommitAuthority,
 };
 pub use periodic_scrub_scheduler::{
     PeriodicScrubAdmissionPage, PeriodicScrubAuthority, PeriodicScrubScheduler,

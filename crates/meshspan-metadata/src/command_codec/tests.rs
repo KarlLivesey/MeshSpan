@@ -22,27 +22,27 @@ use super::*;
 use crate::{
     AcknowledgePublicCertificateInstallation, AcknowledgementCellRequirement,
     AcknowledgementCellRole, AcknowledgementConsistencyClass, AcmeChallengeKind, AddGroupMember,
-    AssignVolumeAcknowledgementPolicy, AssignVolumeLocalityPolicy, AssignVolumeProtectionPolicy,
-    AttestStorageTargetDrain, BeginStorageScopeDrain, BeginStorageTargetDrain, BootstrapMesh,
-    BootstrapRecoveryIdentity, CertificateOrderCompletion, CheckpointCertificateOrder,
-    ClaimCertificateOrder, ClaimMaintenanceWork, CommitConvergedVolumeHead,
-    CommitRebalanceScanPage, CommitScrubPass, CommitSecretGeneration, CommitShardRepair,
-    CommitTargetReconciliation, CompleteCertificateOrder, CompleteMaintenanceWork,
-    CompleteStorageScopeDrain, ConfigureAcme, ConvergedHeadEvidence, CreateAcknowledgementPolicy,
-    CreateActivationPolicy, CreateAuthenticationMethod, CreateAvailabilityCell, CreateComponent,
-    CreateFaultGroup, CreateGroup, CreateLocalityPolicy, CreateProtectionPolicy, CreateUser,
-    CreateVolume, FenceStorageNodeDrainMembership, GrantInheritance, GrantPermission,
-    GrantPermissionWithActivation, IssueAuthenticationSession, LocalityRequirementConfiguration,
-    MaintenanceWorkCompletion, NewAuthenticationCredential, NewRecoveryCode,
-    PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PermissionScope, ProtectionScenarioConfiguration,
-    PublishSmbExport, QueueCertificateOrder, QueueMaintenanceWork, RebalanceScanCursor, RecordName,
-    RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember, RenewCertificateOrder,
-    RenewMaintenanceWork, RevokeAuthenticationMethod, RevokeAuthenticationSession,
-    SecretGenerationReference, SessionAuthenticationFactor, SessionClientLabel,
-    SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
-    SetTargetAvailabilityCellMembership, SmbExportGatewaySelection, StepUpAuthenticationSession,
-    StorageUsageLimit, StrongFallbackMode, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND,
-    WithdrawSmbExport,
+    AdvanceManualDnsTask, AssignVolumeAcknowledgementPolicy, AssignVolumeLocalityPolicy,
+    AssignVolumeProtectionPolicy, AttestStorageTargetDrain, BeginStorageScopeDrain,
+    BeginStorageTargetDrain, BootstrapMesh, BootstrapRecoveryIdentity, CertificateOrderCompletion,
+    CheckpointCertificateOrder, ClaimCertificateOrder, ClaimMaintenanceWork,
+    CommitConvergedVolumeHead, CommitRebalanceScanPage, CommitScrubPass, CommitSecretGeneration,
+    CommitShardRepair, CommitTargetReconciliation, CompleteCertificateOrder,
+    CompleteMaintenanceWork, CompleteStorageScopeDrain, ConfigureAcme, ConvergedHeadEvidence,
+    CreateAcknowledgementPolicy, CreateActivationPolicy, CreateAuthenticationMethod,
+    CreateAvailabilityCell, CreateComponent, CreateFaultGroup, CreateGroup, CreateLocalityPolicy,
+    CreateProtectionPolicy, CreateUser, CreateVolume, FenceStorageNodeDrainMembership,
+    GrantInheritance, GrantPermission, GrantPermissionWithActivation, IssueAuthenticationSession,
+    LocalityRequirementConfiguration, MaintenanceWorkCompletion, ManualDnsTaskPhase,
+    NewAuthenticationCredential, NewRecoveryCode, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+    PermissionScope, ProtectionScenarioConfiguration, PublishSmbExport, QueueCertificateOrder,
+    QueueMaintenanceWork, RebalanceScanCursor, RecordName, RegisterNodeWrappingKey,
+    RegisterStorageTarget, RemoveGroupMember, RenewCertificateOrder, RenewMaintenanceWork,
+    RevokeAuthenticationMethod, RevokeAuthenticationSession, SecretGenerationReference,
+    SessionAuthenticationFactor, SessionClientLabel, SetHostAvailabilityCellMembership,
+    SetHostFaultGroupMembership, SetTargetAvailabilityCellMembership, SmbExportGatewaySelection,
+    StepUpAuthenticationSession, StorageUsageLimit, StrongFallbackMode, TotpAlgorithm,
+    VOLUME_CONTENT_KEY_SECRET_KIND, WithdrawSmbExport,
 };
 
 #[test]
@@ -730,6 +730,26 @@ fn acme_commands_round_trip_configuration_claims_and_both_outcomes()
     ] {
         assert_round_trip(context, command)?;
     }
+    Ok(())
+}
+
+#[test]
+fn manual_dns_task_command_round_trips_exact_fenced_work() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (context, _) = fixture()?;
+    let command = AuthoritativeCommand::AdvanceManualDnsTask(AdvanceManualDnsTask {
+        task_digest: [109; 32],
+        order_id: CertificateOrderId::from_bytes([101; 16])?,
+        claim_generation: 4,
+        worker_node_id: NodeId::from_bytes([104; 16])?,
+        worker_incarnation: 5,
+        fence: 6,
+        record_name: "_acme-challenge.files.example.test".to_owned(),
+        record_value: b"txt-value".to_vec(),
+        expires_at: UnixMicros::new(700),
+        phase: ManualDnsTaskPhase::AwaitingPublication,
+    });
+    assert_round_trip(context, command)?;
     Ok(())
 }
 

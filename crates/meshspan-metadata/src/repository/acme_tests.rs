@@ -12,19 +12,124 @@ use rusqlite::params;
 use sha2::{Digest as _, Sha256};
 
 use super::{
-    AuthoritativeRepository, CertificateOrderState, EntityKind, LogPosition, PageLimit,
-    RepositoryError,
+    AuthoritativeRepository, CertificateOrderState, EntityKind, LogPosition, ManualDnsTaskState,
+    PageLimit, RepositoryError,
 };
 use crate::{
     ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
-    AcknowledgePublicCertificateInstallation, AcmeChallengeKind, AuthoritativeCommand,
-    BootstrapMesh, BootstrapRecoveryIdentity, CertificateOrderCompletion,
+    AcknowledgePublicCertificateInstallation, AcmeChallengeKind, AdvanceManualDnsTask,
+    AuthoritativeCommand, BootstrapMesh, BootstrapRecoveryIdentity, CertificateOrderCompletion,
     CheckpointCertificateOrder, ClaimCertificateOrder, CommandContext, CommitSecretGeneration,
     CompleteCertificateOrder, ConfigureAcme, ConfirmRecoveryBundleSaved,
-    CreateAuthenticationMethod, NewAuthenticationCredential, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
-    PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND, PartitionDatabase, QueueCertificateOrder,
-    RecordName, RenewCertificateOrder, SecretGenerationReference,
+    CreateAuthenticationMethod, ManualDnsTaskPhase, NewAuthenticationCredential,
+    PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND,
+    PartitionDatabase, QueueCertificateOrder, RecordName, RenewCertificateOrder,
+    SecretGenerationReference,
 };
+
+#[test]
+fn manual_dns_tasks_advance_and_replacement_fences_supersede_stale_work()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    let config_id = AcmeConfigurationId::from_bytes([90; 16])?;
+    let order_id = CertificateOrderId::from_bytes([91; 16])?;
+    let mut configuration = fixture.configuration(config_id)?;
+    configuration.challenge_settings = None;
+    fixture.apply(3, 2, &AuthoritativeCommand::ConfigureAcme(configuration))?;
+    fixture.apply(
+        4,
+        10,
+        &AuthoritativeCommand::QueueCertificateOrder(QueueCertificateOrder {
+            order_id,
+            config_id,
+            next_attempt_at: UnixMicros::new(10),
+        }),
+    )?;
+    fixture.apply(
+        5,
+        10,
+        &AuthoritativeCommand::ClaimCertificateOrder(fixture.claim(order_id, 1, 901, 100)),
+    )?;
+    let first = manual_task(
+        &fixture,
+        order_id,
+        1,
+        901,
+        [1; 32],
+        ManualDnsTaskPhase::AwaitingPublication,
+    );
+    fixture.apply(
+        6,
+        11,
+        &AuthoritativeCommand::AdvanceManualDnsTask(first.clone()),
+    )?;
+    let mut observed = first.clone();
+    observed.phase = ManualDnsTaskPhase::PublicationObserved;
+    fixture.apply(7, 12, &AuthoritativeCommand::AdvanceManualDnsTask(observed))?;
+    assert_eq!(
+        fixture
+            .repository
+            .manual_dns_task([1; 32])?
+            .ok_or("missing task")?
+            .state,
+        ManualDnsTaskState::PublicationObserved
+    );
+
+    fixture.apply(
+        8,
+        100,
+        &AuthoritativeCommand::ClaimCertificateOrder(fixture.claim(order_id, 2, 902, 200)),
+    )?;
+    let replacement = manual_task(
+        &fixture,
+        order_id,
+        2,
+        902,
+        [2; 32],
+        ManualDnsTaskPhase::AwaitingPublication,
+    );
+    fixture.apply(
+        9,
+        101,
+        &AuthoritativeCommand::AdvanceManualDnsTask(replacement),
+    )?;
+    assert_eq!(
+        fixture
+            .repository
+            .manual_dns_task([1; 32])?
+            .ok_or("missing stale task")?
+            .state,
+        ManualDnsTaskState::Superseded
+    );
+    let page = fixture
+        .repository
+        .actionable_manual_dns_tasks(None, PageLimit::new(10)?)?;
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].task_digest, [2; 32]);
+    Ok(())
+}
+
+fn manual_task(
+    fixture: &Fixture,
+    order_id: CertificateOrderId,
+    claim_generation: u64,
+    fence: u64,
+    task_digest: [u8; 32],
+    phase: ManualDnsTaskPhase,
+) -> AdvanceManualDnsTask {
+    AdvanceManualDnsTask {
+        task_digest,
+        order_id,
+        claim_generation,
+        worker_node_id: fixture.node,
+        worker_incarnation: 1,
+        fence,
+        record_name: "_acme-challenge.files.example.test".to_owned(),
+        record_value: b"txt-value".to_vec(),
+        expires_at: UnixMicros::new(150),
+        phase,
+    }
+}
 
 #[test]
 fn complete_acme_configuration_round_trips_from_authoritative_state()

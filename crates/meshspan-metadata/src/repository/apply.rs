@@ -15,9 +15,10 @@ use super::{
     federation_actor_attestation, federation_assignment, federation_grant,
     federation_mutation_admission, federation_quarantine, federation_relationship,
     federation_storage_allocation, federation_succession, identity, locality_policy,
-    maintenance_work, namespace, node_wrapping_key, protection_policy, recovery_authority,
-    retention, root_delegation, routing, secret_generation, session, smb_export_configuration,
-    snapshot_schedule, storage_target, tags, topology, user_snapshot, version_cleanup, volume_head,
+    maintenance_work, manual_dns_task, namespace, node_wrapping_key, protection_policy,
+    recovery_authority, retention, root_delegation, routing, secret_generation, session,
+    smb_export_configuration, snapshot_schedule, storage_target, tags, topology, user_snapshot,
+    version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -640,6 +641,7 @@ fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::ClaimCertificateOrder(_)
             | AuthoritativeCommand::RenewCertificateOrder(_)
             | AuthoritativeCommand::CheckpointCertificateOrder(_)
+            | AuthoritativeCommand::AdvanceManualDnsTask(_)
             | AuthoritativeCommand::CompleteCertificateOrder(_)
             | AuthoritativeCommand::AcknowledgePublicCertificateInstallation(_)
             | AuthoritativeCommand::RegisterNodeWrappingKey(_)
@@ -724,6 +726,9 @@ fn execute_infrastructure_command(
         }
         AuthoritativeCommand::CheckpointCertificateOrder(value) => {
             acme::checkpoint(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::AdvanceManualDnsTask(value) => {
+            manual_dns_task::advance(transaction, context, value, revision)
         }
         AuthoritativeCommand::CompleteCertificateOrder(value) => {
             acme::complete(transaction, context, value, revision)
@@ -1283,6 +1288,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::CompleteCertificateOrder(_) => 118,
         AuthoritativeCommand::AcknowledgePublicCertificateInstallation(_) => 119,
         AuthoritativeCommand::CheckpointCertificateOrder(_) => 120,
+        AuthoritativeCommand::AdvanceManualDnsTask(_) => 121,
     }
 }
 

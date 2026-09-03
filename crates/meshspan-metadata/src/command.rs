@@ -34,9 +34,9 @@ use crate::{
     RevokeFederationSuccessorDesignation, RotateFederationTrustIdentity,
 };
 use crate::{
-    AcknowledgePublicCertificateInstallation, AcmeChallengeKind, CertificateOrderCompletion,
-    CheckpointCertificateOrder, ClaimCertificateOrder, CompleteCertificateOrder, ConfigureAcme,
-    QueueCertificateOrder, RenewCertificateOrder,
+    AcknowledgePublicCertificateInstallation, AcmeChallengeKind, AdvanceManualDnsTask,
+    CertificateOrderCompletion, CheckpointCertificateOrder, ClaimCertificateOrder,
+    CompleteCertificateOrder, ConfigureAcme, QueueCertificateOrder, RenewCertificateOrder,
 };
 use crate::{
     ActivateFederationGrantAssignment, CreateFederationGrantAssignment, IssueFederationGrant,
@@ -229,6 +229,8 @@ pub enum AuthoritativeCommand {
     RenewCertificateOrder(RenewCertificateOrder),
     /// Persists one validated ACME restart point under the current order fence.
     CheckpointCertificateOrder(CheckpointCertificateOrder),
+    /// Creates or advances one exact manual DNS task under the current order fence.
+    AdvanceManualDnsTask(AdvanceManualDnsTask),
     /// Commits an issued certificate generation or schedules a bounded retry.
     CompleteCertificateOrder(CompleteCertificateOrder),
     /// Records one gateway's exact live public-certificate generation.
@@ -411,6 +413,7 @@ impl AuthoritativeCommand {
             Self::ClaimCertificateOrder(value) => value.update_digest(digest),
             Self::RenewCertificateOrder(value) => value.update_digest(digest),
             Self::CheckpointCertificateOrder(value) => value.update_digest(digest),
+            Self::AdvanceManualDnsTask(value) => value.update_digest(digest),
             Self::CompleteCertificateOrder(value) => value.update_digest(digest),
             Self::AcknowledgePublicCertificateInstallation(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
@@ -3763,6 +3766,27 @@ digest_simple_record!(
         digest.identifier(value.certificate_key.secret_id);
         digest.unsigned(value.certificate_key.generation);
         digest.bytes(&value.checkpoint);
+    }
+);
+digest_simple_record!(
+    AdvanceManualDnsTask,
+    b"advance-manual-dns-task",
+    |value, digest| {
+        digest.bytes(&value.task_digest);
+        digest.identifier(value.order_id.as_bytes());
+        digest.unsigned(value.claim_generation);
+        digest.identifier(value.worker_node_id.as_bytes());
+        digest.unsigned(value.worker_incarnation);
+        digest.unsigned(value.fence);
+        digest.bytes(value.record_name.as_bytes());
+        digest.bytes(&value.record_value);
+        digest.signed(value.expires_at.get());
+        digest.byte(match value.phase {
+            crate::ManualDnsTaskPhase::AwaitingPublication => 1,
+            crate::ManualDnsTaskPhase::PublicationObserved => 2,
+            crate::ManualDnsTaskPhase::AwaitingRemoval => 3,
+            crate::ManualDnsTaskPhase::Complete => 4,
+        });
     }
 );
 digest_simple_record!(
