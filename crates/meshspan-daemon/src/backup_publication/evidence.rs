@@ -21,6 +21,7 @@ use super::BackupPublicationError;
 #[derive(Clone, Copy)]
 pub(super) enum PublicationStep {
     RecordBackup,
+    RecordCopy,
     StoreProvider,
     VerifyProvider,
     VerifyCopy,
@@ -30,6 +31,7 @@ impl PublicationStep {
     const fn domain(self) -> &'static [u8] {
         match self {
             Self::RecordBackup => b"meshspan.backup-publication.record-backup.v1\0",
+            Self::RecordCopy => b"meshspan.backup-publication.record-copy.v1\0",
             Self::StoreProvider => b"meshspan.backup-publication.store-provider.v1\0",
             Self::VerifyProvider => b"meshspan.backup-publication.verify-provider.v1\0",
             Self::VerifyCopy => b"meshspan.backup-publication.verify-copy.v1\0",
@@ -63,6 +65,17 @@ pub(super) fn record_backup(
             byte_length: receipt.object.byte_length,
             copy_digest: receipt.object.digest,
         },
+    }
+}
+
+pub(super) fn record_copy(receipt: &BackupObjectReceipt) -> meshspan_metadata::RecordBackupCopy {
+    meshspan_metadata::RecordBackupCopy {
+        backup_id: receipt.object.backup_id,
+        destination_id: receipt.object.destination_id,
+        provider_generation: receipt.object.provider_generation,
+        object_reference: receipt.object_reference.as_str().to_owned(),
+        byte_length: receipt.object.byte_length,
+        copy_digest: receipt.object.digest,
     }
 }
 
