@@ -14,9 +14,9 @@ use super::{EntityKind, EntityReference, RepositoryError, recovery_authority};
 use crate::{
     ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
     AUTHENTICATION_ROOT_KEY_SECRET_KIND, CommandContext, CommitSecretGeneration,
-    ONLINE_AUTHORITY_KEY_SECRET_KIND, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
-    PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND, PartitionDatabase, STORAGE_PERMIT_KEY_SECRET_KIND,
-    VOLUME_CONTENT_KEY_SECRET_KIND,
+    MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND, ONLINE_AUTHORITY_KEY_SECRET_KIND,
+    PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND,
+    PartitionDatabase, STORAGE_PERMIT_KEY_SECRET_KIND, VOLUME_CONTENT_KEY_SECRET_KIND,
 };
 
 const VOLUME_CONTENT_KEY_BYTES: usize = 32;
@@ -73,6 +73,7 @@ pub(super) fn commit(
         secret.context().kind(),
         ACME_ACCOUNT_KEY_SECRET_KIND
             | ACME_CHALLENGE_SETTINGS_SECRET_KIND
+            | MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND
             | PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND
             | PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND
     ) {
@@ -444,7 +445,7 @@ pub(super) fn latest_online_authority_generation(
     )
 }
 
-fn latest_generation(
+pub(super) fn latest_generation(
     database: &PartitionDatabase,
     secret_kind: u16,
     secret_id: &[u8; 16],
@@ -464,6 +465,22 @@ fn latest_generation(
                 .ok_or(RepositoryError::CorruptState)
         })
         .transpose()
+}
+
+pub(super) fn latest_reference(
+    database: &PartitionDatabase,
+    secret_kind: u16,
+    original: crate::SecretGenerationReference,
+) -> Result<crate::SecretGenerationReference, RepositoryError> {
+    let generation = latest_generation(database, secret_kind, &original.secret_id)?
+        .ok_or(RepositoryError::CorruptState)?;
+    if generation < original.generation {
+        return Err(RepositoryError::CorruptState);
+    }
+    Ok(crate::SecretGenerationReference {
+        secret_id: original.secret_id,
+        generation,
+    })
 }
 
 fn insert_secret(

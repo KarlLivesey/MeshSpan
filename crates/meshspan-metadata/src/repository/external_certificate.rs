@@ -125,34 +125,18 @@ pub(super) fn acknowledge_installation(
         value.gateway_incarnation,
     )?;
     validate_installation(transaction, value)?;
-    if let Some(existing) =
-        existing_installation(transaction, value.publication_id, value.gateway_node_id)?
-    {
-        if existing.gateway_incarnation == value.gateway_incarnation
-            && existing.certificate == value.certificate
-            && existing.bundle_digest == value.bundle_digest
-        {
-            return Ok(publication_entity(value.publication_id));
-        }
-        return Err(RepositoryError::InvalidCommand);
-    }
-    transaction.execute(
-        "INSERT INTO external_public_certificate_installations(
-            publication_id, gateway_node_id, gateway_incarnation, certificate_secret_kind,
-            certificate_secret_id, certificate_secret_generation, bundle_digest, installed_at,
-            revision
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![
-            value.publication_id.as_bytes().as_slice(),
-            value.gateway_node_id.as_bytes().as_slice(),
-            to_i64(value.gateway_incarnation)?,
-            i64::from(PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND),
-            value.certificate.secret_id.as_slice(),
-            to_i64(value.certificate.generation)?,
-            value.bundle_digest.as_slice(),
-            context.occurred_at.get(),
-            to_i64(revision.get())?,
-        ],
+    super::public_certificate_delivery::record(
+        transaction,
+        super::public_certificate_delivery::EXTERNAL_SOURCE,
+        value.publication_id.as_bytes(),
+        super::public_certificate_delivery::DeliveryInstallation {
+            gateway_node_id: value.gateway_node_id,
+            gateway_incarnation: value.gateway_incarnation,
+            certificate: value.certificate,
+            bundle_digest: value.bundle_digest,
+            installed_at: context.occurred_at,
+            revision,
+        },
     )?;
     Ok(publication_entity(value.publication_id))
 }
@@ -187,12 +171,17 @@ pub(super) fn latest_public_certificate(
     };
     let publication_id = ExternalCertificatePublicationId::from_bytes(exact(stored.0)?)
         .map_err(|_| RepositoryError::CorruptState)?;
+    let original_certificate = SecretGenerationReference {
+        secret_id: exact(stored.1)?,
+        generation: positive(stored.2)?,
+    };
     let selection = PublicCertificateSelection {
         source: PublicCertificateSource::ExternalPublication(publication_id),
-        certificate: SecretGenerationReference {
-            secret_id: exact(stored.1)?,
-            generation: positive(stored.2)?,
-        },
+        certificate: super::secret_generation::latest_reference(
+            database,
+            PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+            original_certificate,
+        )?,
         bundle_digest: exact(stored.3)?,
         configured_by: PrincipalId::from_bytes(exact(stored.4)?)
             .map_err(|_| RepositoryError::CorruptState)?,
@@ -312,33 +301,26 @@ fn validate_installation(
     let matches = transaction.query_row(
         "SELECT EXISTS(
             SELECT 1 FROM external_certificate_publications p
-            JOIN secret_recipient_envelopes e
-              ON e.secret_kind = ?1
-             AND e.secret_id = p.certificate_secret_id
-             AND e.secret_generation = p.certificate_secret_generation
-            JOIN secret_wrapping_recipients r
-              ON r.key_fingerprint = e.recipient_key_fingerprint
-            WHERE p.publication_id = ?2
-              AND p.certificate_secret_id = ?3 AND p.certificate_secret_generation = ?4
-              AND p.bundle_digest = ?5 AND p.revision = ?6
-              AND r.recipient_kind = 1 AND r.owner_id = ?7
+            WHERE p.publication_id = ?1
+              AND p.certificate_secret_id = ?2
+              AND p.bundle_digest = ?3 AND p.revision = ?4
          )",
         params![
-            i64::from(PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND),
             value.publication_id.as_bytes().as_slice(),
             value.certificate.secret_id.as_slice(),
-            to_i64(value.certificate.generation)?,
             value.bundle_digest.as_slice(),
             to_i64(value.observed_publication_revision.get())?,
-            value.gateway_node_id.as_bytes().as_slice(),
         ],
         |row| row.get::<_, i64>(0),
     )?;
-    if matches == 1 {
-        Ok(())
-    } else {
-        Err(RepositoryError::InvalidCommand)
+    if matches != 1 {
+        return Err(RepositoryError::InvalidCommand);
     }
+    super::public_certificate_delivery::validate_latest_recipient(
+        transaction,
+        value.gateway_node_id,
+        value.certificate,
+    )
 }
 
 fn publication(
@@ -434,39 +416,22 @@ fn existing_installation(
     publication_id: ExternalCertificatePublicationId,
     gateway_node_id: NodeId,
 ) -> Result<Option<ExternalCertificateInstallationRecord>, RepositoryError> {
-    transaction
-        .query_row(
-            "SELECT publication_id, gateway_node_id, gateway_incarnation,
-                    certificate_secret_id, certificate_secret_generation, bundle_digest,
-                    installed_at, revision
-             FROM external_public_certificate_installations
-             WHERE publication_id = ?1 AND gateway_node_id = ?2",
-            params![
-                publication_id.as_bytes().as_slice(),
-                gateway_node_id.as_bytes().as_slice()
-            ],
-            |row| decode_installation_inner(row).map_err(|_| rusqlite::Error::InvalidQuery),
-        )
-        .optional()
-        .map_err(RepositoryError::from)
-}
-
-fn decode_installation_inner(
-    row: &Row<'_>,
-) -> Result<ExternalCertificateInstallationRecord, RepositoryError> {
-    Ok(ExternalCertificateInstallationRecord {
-        publication_id: ExternalCertificatePublicationId::from_bytes(exact(row.get(0)?)?)
-            .map_err(|_| RepositoryError::CorruptState)?,
-        gateway_node_id: NodeId::from_bytes(exact(row.get(1)?)?)
-            .map_err(|_| RepositoryError::CorruptState)?,
-        gateway_incarnation: positive(row.get(2)?)?,
-        certificate: SecretGenerationReference {
-            secret_id: exact(row.get(3)?)?,
-            generation: positive(row.get(4)?)?,
-        },
-        bundle_digest: exact(row.get(5)?)?,
-        installed_at: UnixMicros::new(row.get(6)?),
-        revision: Revision::new(positive(row.get(7)?)?),
+    super::public_certificate_delivery::existing(
+        transaction,
+        super::public_certificate_delivery::EXTERNAL_SOURCE,
+        publication_id.as_bytes(),
+        gateway_node_id,
+    )
+    .map(|value| {
+        value.map(|value| ExternalCertificateInstallationRecord {
+            publication_id,
+            gateway_node_id: value.gateway_node_id,
+            gateway_incarnation: value.gateway_incarnation,
+            certificate: value.certificate,
+            bundle_digest: value.bundle_digest,
+            installed_at: value.installed_at,
+            revision: value.revision,
+        })
     })
 }
 

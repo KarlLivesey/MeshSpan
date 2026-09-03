@@ -6,7 +6,8 @@ use meshspan_cluster::MetadataAuthorityRequestError;
 use meshspan_domain::{AuditEventId, OperationId, PrincipalId, UnixMicros, uuid_v8};
 use meshspan_metadata::{
     AUTHENTICATION_ROOT_KEY_SECRET_KIND, AuthoritativeCommand, CommandContext,
-    CommitSecretGeneration, EntityKind, ONLINE_AUTHORITY_KEY_SECRET_KIND,
+    CommitSecretGeneration, EntityKind, MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND,
+    ONLINE_AUTHORITY_KEY_SECRET_KIND, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
     STORAGE_PERMIT_KEY_SECRET_KIND,
 };
 use meshspan_secret_envelope::{SecretContext, SecretEnvelopeError, encrypt_secret};
@@ -68,6 +69,30 @@ pub(crate) fn redistribute_cluster_secrets(
             kind,
             mesh_id.as_bytes(),
             generation,
+            &recipients,
+        )?;
+    }
+    if let Some(local_authority) = authority.reader().mesh_local_certificate_authority()? {
+        redistribute_generation(
+            authority,
+            decryptor,
+            actor_principal_id,
+            occurred_at,
+            MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND,
+            local_authority.authority_key.secret_id,
+            local_authority.authority_key.generation,
+            &recipients,
+        )?;
+    }
+    if let Some(certificate) = authority.reader().latest_public_certificate()? {
+        redistribute_generation(
+            authority,
+            decryptor,
+            actor_principal_id,
+            occurred_at,
+            PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+            certificate.certificate.secret_id,
+            certificate.certificate.generation,
             &recipients,
         )?;
     }

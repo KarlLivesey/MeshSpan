@@ -14,7 +14,8 @@ use super::{ApplyDisposition, AuthoritativeRepository, EntityKind, LogPosition, 
 use crate::{
     ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND, AuthoritativeCommand,
     BootstrapMesh, BootstrapRecoveryIdentity, CommandContext, CommitSecretGeneration,
-    ConfirmRecoveryBundleSaved, CreateAuthenticationMethod, NewAuthenticationCredential,
+    ConfirmRecoveryBundleSaved, CreateAuthenticationMethod,
+    MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND, NewAuthenticationCredential,
     PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND,
     PartitionDatabase, RecordName,
 };
@@ -197,12 +198,13 @@ fn public_certificate_requires_every_gateway_and_recovery_recipient()
 }
 
 #[test]
-fn every_acme_private_secret_requires_every_gateway_and_recovery_recipient()
+fn every_gateway_private_secret_requires_every_gateway_and_recovery_recipient()
 -> Result<(), Box<dyn std::error::Error>> {
     for (offset, secret_kind) in [
         ACME_ACCOUNT_KEY_SECRET_KIND,
         ACME_CHALLENGE_SETTINGS_SECRET_KIND,
         PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND,
+        MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND,
     ]
     .into_iter()
     .enumerate()
