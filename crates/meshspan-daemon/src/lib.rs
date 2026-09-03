@@ -51,6 +51,9 @@ mod certificate_order_preparation_tests;
 mod certificate_order_result;
 #[cfg(test)]
 mod certificate_order_result_tests;
+mod certificate_order_retry;
+#[cfg(test)]
+mod certificate_order_retry_tests;
 mod certificate_order_worker;
 #[cfg(test)]
 mod certificate_order_worker_tests;
@@ -381,6 +384,10 @@ pub use certificate_order_preparation::{
     CertificateOrderPreparationError, CertificateOrderPreparationService, PreparedCertificateOrder,
 };
 pub use certificate_order_result::{CertificateOrderResultError, CertificateOrderResultService};
+pub use certificate_order_retry::{
+    CertificateOrderFailureClass, CertificateOrderRetryCommit, CertificateOrderRetryError,
+    CertificateOrderRetryService,
+};
 pub use certificate_order_worker::{
     CertificateOrderAssignment, CertificateOrderDispatchError, CertificateOrderDispatcher,
     CertificateOrderWorkerAuthority,
