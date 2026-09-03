@@ -194,7 +194,10 @@ pub use backup_catalogue::{
     BackupCopyRecord, BackupCopyState, BackupDestinationCursor, BackupDestinationRecord,
     BackupDestinationState, MetadataBackupRecord, MetadataBackupState,
 };
-pub use backup_run::{MetadataBackupRun, MetadataBackupRunClaimRecord, MetadataBackupRunState};
+pub use backup_run::{
+    MetadataBackupProtectionEvidence, MetadataBackupRun, MetadataBackupRunClaimRecord,
+    MetadataBackupRunState,
+};
 pub use backup_schedule::MetadataBackupSchedule;
 pub use cleanup_attestation::{VersionCleanupAttestationProgress, VersionCleanupParticipant};
 pub use cleanup_completion::{VersionCleanupCompletion, VersionCleanupItemCompletion};
@@ -2256,6 +2259,18 @@ impl AuthoritativeRepository {
         &self,
     ) -> Result<Option<MetadataBackupRun>, RepositoryError> {
         backup_run::unfinished(self.database.connection(), self.database.partition_id())
+    }
+
+    /// Returns canonical evidence for the current usable verified-copy set.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for stale provider generations or malformed copy/destination evidence.
+    pub fn metadata_backup_protection_evidence(
+        &self,
+        backup_id: meshspan_domain::BackupId,
+    ) -> Result<MetadataBackupProtectionEvidence, RepositoryError> {
+        backup_run::protection_evidence(self.database.connection(), backup_id)
     }
 
     /// Creates a complete state-machine snapshot bound to one proved quorum plan.

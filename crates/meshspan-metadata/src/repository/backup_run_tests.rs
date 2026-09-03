@@ -91,10 +91,13 @@ fn incomplete_run_waits_for_claim_expiry_and_advances_from_completion()
     queue_run(&mut fixture, backup)?;
     let worker = fixture.node;
     apply_claim(&mut fixture, backup, claim(1, worker, 31), 150, 4)?;
+    let evidence = fixture
+        .repository
+        .metadata_backup_protection_evidence(backup)?;
     let completion = AuthoritativeCommand::CompleteMetadataBackupRun(CompleteMetadataBackupRun {
         backup_id: backup,
         outcome: MetadataBackupRunCompletion::Incomplete {
-            result_digest: [32; 32],
+            result_digest: evidence.digest,
         },
     });
 
@@ -103,6 +106,20 @@ fn incomplete_run_waits_for_claim_expiry_and_advances_from_completion()
             LogPosition { index: 5, term: 1 },
             context(33, fixture.administrator, 34, 149, 4)?,
             &completion,
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    let substituted = AuthoritativeCommand::CompleteMetadataBackupRun(CompleteMetadataBackupRun {
+        backup_id: backup,
+        outcome: MetadataBackupRunCompletion::Incomplete {
+            result_digest: [99; 32],
+        },
+    });
+    assert!(matches!(
+        fixture.repository.apply_committed(
+            LogPosition { index: 5, term: 1 },
+            context(37, fixture.administrator, 38, 150, 4)?,
+            &substituted,
         ),
         Err(RepositoryError::InvalidCommand)
     ));
@@ -122,7 +139,7 @@ fn incomplete_run_waits_for_claim_expiry_and_advances_from_completion()
         .ok_or("completed run missing")?;
     assert_eq!(run.state, MetadataBackupRunState::Incomplete);
     assert_eq!(run.completed_at, Some(UnixMicros::new(150)));
-    assert_eq!(run.result_digest, Some([32; 32]));
+    assert_eq!(run.result_digest, Some(evidence.digest));
     assert_eq!(fixture.repository.unfinished_metadata_backup_run()?, None);
     assert_eq!(
         fixture
