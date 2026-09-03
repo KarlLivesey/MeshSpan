@@ -39,6 +39,9 @@ mod browser_session;
 mod certificate_order_completion;
 #[cfg(test)]
 mod certificate_order_completion_tests;
+mod certificate_order_worker;
+#[cfg(test)]
+mod certificate_order_worker_tests;
 mod claim_file;
 mod claim_service;
 #[cfg(test)]
@@ -352,6 +355,10 @@ pub use certificate_order_completion::{
     CertificateOrderCompletionAuthority, CertificateOrderCompletionAuthorityError,
     CertificateOrderCompletionCommit, CertificateOrderCompletionError,
     CertificateOrderCompletionService, CertificateOrderIssuance,
+};
+pub use certificate_order_worker::{
+    CertificateOrderAssignment, CertificateOrderDispatchError, CertificateOrderDispatcher,
+    CertificateOrderWorkerAuthority,
 };
 pub use claim_file::{ClaimFile, ClaimFileError};
 pub use claim_service::{
