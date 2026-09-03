@@ -57,6 +57,9 @@ mod certificate_order_retry_tests;
 mod certificate_order_worker;
 #[cfg(test)]
 mod certificate_order_worker_tests;
+mod certificate_renewal_scheduler;
+#[cfg(test)]
+mod certificate_renewal_scheduler_tests;
 mod claim_file;
 mod claim_service;
 #[cfg(test)]
@@ -391,6 +394,10 @@ pub use certificate_order_retry::{
 pub use certificate_order_worker::{
     CertificateOrderAssignment, CertificateOrderDispatchError, CertificateOrderDispatcher,
     CertificateOrderWorkerAuthority,
+};
+pub use certificate_renewal_scheduler::{
+    CertificateRenewalAuthority, CertificateRenewalScheduleCommit, CertificateRenewalScheduleError,
+    CertificateRenewalScheduler,
 };
 pub use claim_file::{ClaimFile, ClaimFileError};
 pub use claim_service::{
