@@ -231,7 +231,9 @@ pub use maintenance_work::{
 };
 pub use manual_dns_task::{ManualDnsTaskCursor, ManualDnsTaskRecord, ManualDnsTaskState};
 pub use membership::AuthoritativeMembership;
-pub use mesh_local_certificate::MeshLocalCertificateAuthorityRecord;
+pub use mesh_local_certificate::{
+    MeshLocalCertificateAuthorityRecord, MeshLocalCertificateIssuanceRecord,
+};
 pub use meshspan_domain::AuthenticationService;
 pub use node_wrapping_key::NodeWrappingKeyRecord;
 pub use operation_status::{

@@ -4,8 +4,8 @@
 
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
-    AcmeConfigurationId, CertificateOrderId, ExternalCertificatePublicationId, PrincipalId,
-    Revision, UnixMicros,
+    AcmeConfigurationId, CertificateOrderId, ExternalCertificatePublicationId,
+    MeshLocalCertificateIssuanceId, PrincipalId, Revision, UnixMicros,
 };
 use rusqlite::{OptionalExtension, params};
 
@@ -70,6 +70,8 @@ pub enum PublicCertificateSource {
     AcmeOrder(CertificateOrderId),
     /// An authenticated external publisher supplied the generation.
     ExternalPublication(ExternalCertificatePublicationId),
+    /// The mesh-local HTTPS authority issued the generation.
+    MeshLocalIssuance(MeshLocalCertificateIssuanceId),
 }
 
 /// Latest completed public-certificate generation selected for gateway installation.

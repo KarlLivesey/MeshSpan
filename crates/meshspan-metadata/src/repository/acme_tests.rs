@@ -5,8 +5,8 @@ use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     AcmeConfigurationId, ApiKeyId, AuditEventId, AuthenticationMethodId, CertificateOrderId,
     EntropyError, ExternalCertificatePublicationId, HostId, MeshId,
-    MeshLocalCertificateAuthorityId, NodeId, OperationId, PartitionId, PrincipalId,
-    PublicCertificateId, RandomSource, Revision, RoleId, UnixMicros,
+    MeshLocalCertificateAuthorityId, MeshLocalCertificateIssuanceId, NodeId, OperationId,
+    PartitionId, PrincipalId, PublicCertificateId, RandomSource, Revision, RoleId, UnixMicros,
 };
 use meshspan_secret_envelope::{SecretContext, WrappingPrivateKey, encrypt_secret};
 use rusqlite::params;
@@ -14,17 +14,19 @@ use sha2::{Digest as _, Sha256};
 
 use super::{
     AuthoritativeRepository, CertificateOrderState, EntityKind, LogPosition, ManualDnsTaskState,
-    PageLimit, PublicCertificateSource, RepositoryError,
+    MeshLocalCertificateAuthorityRecord, MeshLocalCertificateIssuanceRecord, PageLimit,
+    PublicCertificateSource, RepositoryError,
 };
 use crate::{
     ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
-    AcknowledgeExternalCertificateInstallation, AcknowledgePublicCertificateInstallation,
-    AcmeChallengeKind, AdvanceManualDnsTask, AuthoritativeCommand, BootstrapMesh,
-    BootstrapRecoveryIdentity, CertificateOrderCompletion, CheckpointCertificateOrder,
-    ClaimCertificateOrder, CommandContext, CommitSecretGeneration, CompleteCertificateOrder,
-    ConfigureAcme, ConfirmRecoveryBundleSaved, CreateAuthenticationMethod,
-    CreateMeshLocalCertificateAuthority, MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND,
-    ManualDnsTaskPhase, NewAuthenticationCredential, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+    AcknowledgeExternalCertificateInstallation, AcknowledgeMeshLocalCertificateInstallation,
+    AcknowledgePublicCertificateInstallation, AcmeChallengeKind, AdvanceManualDnsTask,
+    AuthoritativeCommand, BootstrapMesh, BootstrapRecoveryIdentity, CertificateOrderCompletion,
+    CheckpointCertificateOrder, ClaimCertificateOrder, CommandContext, CommitSecretGeneration,
+    CompleteCertificateOrder, ConfigureAcme, ConfirmRecoveryBundleSaved,
+    CreateAuthenticationMethod, CreateMeshLocalCertificateAuthority, IssueMeshLocalCertificate,
+    MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND, ManualDnsTaskPhase,
+    NewAuthenticationCredential, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
     PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND, PartitionDatabase, ProvisionAcme,
     PublishExternalCertificate, QueueCertificateOrder, RecordName, RenewCertificateOrder,
     SecretGenerationReference,
@@ -34,6 +36,48 @@ use crate::{
 fn mesh_local_authority_is_atomic_immutable_and_bound_to_its_encrypted_key()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = Fixture::new()?;
+    let (command, stored) = create_mesh_local_authority(&mut fixture)?;
+    let issuance = issue_mesh_local_endpoint(&mut fixture, &stored)?;
+    assert_mesh_local_endpoint_is_selected(&fixture, &issuance)?;
+
+    let acknowledgement = fixture.apply(
+        5,
+        102,
+        &AuthoritativeCommand::AcknowledgeMeshLocalCertificateInstallation(
+            AcknowledgeMeshLocalCertificateInstallation {
+                issuance_id: issuance.issuance_id,
+                gateway_node_id: fixture.node,
+                gateway_incarnation: 1,
+                certificate: issuance.certificate,
+                bundle_digest: issuance.bundle_digest,
+                observed_issuance_revision: issuance.revision,
+            },
+        ),
+    )?;
+    assert_eq!(
+        acknowledgement.entity.kind,
+        EntityKind::MeshLocalCertificateIssuance
+    );
+    assert!(matches!(
+        fixture.apply(
+            6,
+            103,
+            &AuthoritativeCommand::CreateMeshLocalCertificateAuthority(Box::new(command))
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    Ok(())
+}
+
+fn create_mesh_local_authority(
+    fixture: &mut Fixture,
+) -> Result<
+    (
+        CreateMeshLocalCertificateAuthority,
+        MeshLocalCertificateAuthorityRecord,
+    ),
+    Box<dyn std::error::Error>,
+> {
     let authority_id = MeshLocalCertificateAuthorityId::from_bytes([116; 16])?;
     let recipients = [
         crate::test_support::node_wrapping_private_key()?.public_key(),
@@ -82,15 +126,73 @@ fn mesh_local_authority_is_atomic_immutable_and_bound_to_its_encrypted_key()
     assert_eq!(stored.certificate_der, certificate_der);
     assert_eq!(stored.created_by, fixture.administrator);
     assert_eq!(stored.revision, Revision::new(3));
+    Ok((command, stored))
+}
 
-    assert!(matches!(
-        fixture.apply(
-            4,
-            101,
-            &AuthoritativeCommand::CreateMeshLocalCertificateAuthority(Box::new(command))
-        ),
-        Err(RepositoryError::InvalidCommand)
-    ));
+fn issue_mesh_local_endpoint(
+    fixture: &mut Fixture,
+    authority: &MeshLocalCertificateAuthorityRecord,
+) -> Result<MeshLocalCertificateIssuanceRecord, Box<dyn std::error::Error>> {
+    let issuance_id = MeshLocalCertificateIssuanceId::from_bytes([118; 16])?;
+    let endpoint_id = PublicCertificateId::from_bytes([119; 16])?;
+    let recipients = [
+        crate::test_support::node_wrapping_private_key()?.public_key(),
+        fixture.recovery_key.public_key(),
+    ];
+    let (endpoint_secret, endpoint_envelopes) = encrypt_secret(
+        SecretContext::new(
+            PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+            endpoint_id.as_bytes(),
+            1,
+        )?,
+        b"mesh-local endpoint certificate bundle",
+        &recipients,
+        &mut SecretRandom(120),
+    )?;
+    fixture.apply(
+        4,
+        101,
+        &AuthoritativeCommand::IssueMeshLocalCertificate(Box::new(IssueMeshLocalCertificate {
+            issuance_id,
+            authority_id: authority.authority_id,
+            authority_generation: 1,
+            authority_certificate_digest: authority.certificate_digest,
+            certificate_id: endpoint_id,
+            generation: 1,
+            certificate_names: BoundedItems::new(vec!["files.mesh.test".to_owned()], 256)?,
+            certificate: Box::new(CommitSecretGeneration {
+                secret: endpoint_secret.parts(),
+                recipients: endpoint_envelopes
+                    .iter()
+                    .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
+                    .collect(),
+            }),
+            bundle_digest: [121; 32],
+            public_key_fingerprint: [122; 32],
+            not_before: UnixMicros::new(100),
+            not_after: UnixMicros::new(9_000),
+        })),
+    )?;
+    let issuance = fixture
+        .repository
+        .mesh_local_certificate_issuance(issuance_id)?
+        .ok_or("mesh-local issuance missing")?;
+    assert_eq!(issuance.certificate_names, ["files.mesh.test"]);
+    Ok(issuance)
+}
+
+fn assert_mesh_local_endpoint_is_selected(
+    fixture: &Fixture,
+    issuance: &MeshLocalCertificateIssuanceRecord,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let selected = fixture
+        .repository
+        .latest_public_certificate()?
+        .ok_or("mesh-local certificate not selected")?;
+    assert_eq!(
+        selected.source,
+        PublicCertificateSource::MeshLocalIssuance(issuance.issuance_id)
+    );
     Ok(())
 }
 

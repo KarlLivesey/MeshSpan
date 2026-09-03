@@ -230,6 +230,9 @@ fn selection_key(selection: PublicCertificateSelection) -> (i64, u8, [u8; 16]) {
         PublicCertificateSource::ExternalPublication(publication_id) => {
             (selection.completed_at.get(), 2, publication_id.as_bytes())
         }
+        PublicCertificateSource::MeshLocalIssuance(issuance_id) => {
+            (selection.completed_at.get(), 3, issuance_id.as_bytes())
+        }
     }
 }
 

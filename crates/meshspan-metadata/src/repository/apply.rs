@@ -661,6 +661,8 @@ fn is_certificate_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::PublishExternalCertificate(_)
             | AuthoritativeCommand::AcknowledgeExternalCertificateInstallation(_)
             | AuthoritativeCommand::CreateMeshLocalCertificateAuthority(_)
+            | AuthoritativeCommand::IssueMeshLocalCertificate(_)
+            | AuthoritativeCommand::AcknowledgeMeshLocalCertificateInstallation(_)
     )
 }
 
@@ -793,6 +795,12 @@ fn execute_certificate_command(
         }
         AuthoritativeCommand::CreateMeshLocalCertificateAuthority(value) => {
             mesh_local_certificate::create(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::IssueMeshLocalCertificate(value) => {
+            mesh_local_certificate::issue(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::AcknowledgeMeshLocalCertificateInstallation(value) => {
+            mesh_local_certificate::acknowledge_installation(transaction, context, *value, revision)
         }
         _ => Err(RepositoryError::InvalidCommand),
     }
@@ -1330,6 +1338,8 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::PublishExternalCertificate(_) => 123,
         AuthoritativeCommand::AcknowledgeExternalCertificateInstallation(_) => 124,
         AuthoritativeCommand::CreateMeshLocalCertificateAuthority(_) => 125,
+        AuthoritativeCommand::IssueMeshLocalCertificate(_) => 126,
+        AuthoritativeCommand::AcknowledgeMeshLocalCertificateInstallation(_) => 127,
     }
 }
 

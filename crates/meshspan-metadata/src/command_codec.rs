@@ -7,6 +7,7 @@ mod acme;
 mod authentication;
 mod availability_cell;
 mod bootstrap;
+mod certificate_name;
 mod decoder;
 mod encoder;
 mod enrolment;
