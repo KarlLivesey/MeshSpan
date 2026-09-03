@@ -3,6 +3,8 @@
 import { createSignal, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 
+import { AdministrationNavigation } from "../administration/AdministrationNavigation";
+
 import { CreatePrincipalForm } from "./CreatePrincipalForm";
 import { createGroupMembershipDirectory } from "./group-membership-model";
 import { GroupMembershipPanel } from "./GroupMembershipPanel";
@@ -64,15 +66,7 @@ export function IdentityAdministrationPanel(
           it belongs.
         </p>
       </header>
-      <nav class="administration-nav" aria-label="Administration sections">
-        <a aria-current="page" href="/admin/identities">
-          People and groups
-        </a>
-        <a href="/admin/volumes">Volumes</a>
-        <a href="/admin/storage-folders">Storage folders</a>
-        <a href="/admin/topology">Mesh topology</a>
-        <a href="/admin/operations">Operations</a>
-      </nav>
+      <AdministrationNavigation current="identities" />
       <CreatePrincipalForm create={create} />
       <div class="principal-columns">
         <PrincipalList directory={users} kind="user" />

@@ -55,7 +55,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -488,7 +489,8 @@ select {
 }
 
 input:hover,
-select:hover {
+select:hover,
+textarea:hover {
   border-color: var(--ink-soft);
 }
 
@@ -529,6 +531,73 @@ select:hover {
 .operation-administration {
   display: grid;
   gap: var(--space-3xl);
+}
+
+.certificate-administration {
+  display: grid;
+  gap: var(--space-3xl);
+  container-type: inline-size;
+}
+
+.certificate-administration .administration-nav {
+  margin-bottom: 0;
+}
+
+.certificate-provision {
+  display: grid;
+  gap: var(--space-xl);
+  padding: var(--space-xl);
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+}
+
+.certificate-names-field,
+.certificate-directory-field {
+  max-width: 48rem;
+}
+
+.certificate-names-field textarea {
+  resize: vertical;
+}
+
+.certificate-challenge-fields {
+  display: grid;
+  gap: var(--space-lg);
+  margin: 0;
+  padding: var(--space-lg);
+  border: 1px solid var(--line);
+}
+
+.certificate-challenge-fields legend {
+  padding-inline: var(--space-sm);
+  font-weight: 750;
+}
+
+.certificate-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-lg);
+}
+
+.manual-dns-card code {
+  overflow-wrap: anywhere;
+  color: var(--ink-soft);
+}
+
+.state-publish {
+  border-color: var(--signal);
+  color: var(--signal);
+}
+
+.state-remove {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+@container (max-width: 40rem) {
+  .certificate-provider-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .topology-administration {

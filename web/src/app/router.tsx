@@ -2,6 +2,7 @@
 
 import { createRouter } from "@solidjs/router";
 
+import { CertificateAdministrationPage } from "./CertificateAdministrationPage";
 import { HomePage } from "./HomePage";
 import { IdentityAdministrationPage } from "./IdentityAdministrationPage";
 import { OperationAdministrationPage } from "./OperationAdministrationPage";
@@ -26,6 +27,7 @@ export const AppRouter = createRouter({
     { component: HomePage, path: "/" },
     { component: SignInPage, path: "/sign-in" },
     { component: SecurityPage, path: "/security" },
+    { component: CertificateAdministrationPage, path: "/admin/certificates" },
     { component: IdentityAdministrationPage, path: "/admin/identities" },
     { component: OperationAdministrationPage, path: "/admin/operations" },
     {

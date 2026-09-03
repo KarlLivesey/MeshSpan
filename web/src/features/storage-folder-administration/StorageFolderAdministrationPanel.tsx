@@ -2,6 +2,7 @@
 
 import type { JSX } from "@solidjs/web";
 
+import { AdministrationNavigation } from "../administration/AdministrationNavigation";
 import { RegisterStorageFolderForm } from "./RegisterStorageFolderForm";
 import { StorageFolderList } from "./StorageFolderList";
 import {
@@ -33,15 +34,7 @@ export function StorageFolderAdministrationPanel(
           encrypted storage private beneath each path.
         </p>
       </header>
-      <nav class="administration-nav" aria-label="Administration sections">
-        <a href="/admin/identities">People and groups</a>
-        <a href="/admin/volumes">Volumes</a>
-        <a aria-current="page" href="/admin/storage-folders">
-          Storage folders
-        </a>
-        <a href="/admin/topology">Mesh topology</a>
-        <a href="/admin/operations">Operations</a>
-      </nav>
+      <AdministrationNavigation current="storage-folders" />
       <RegisterStorageFolderForm register={register} />
       <StorageFolderList directory={directory} />
     </div>

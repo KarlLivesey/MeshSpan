@@ -2,6 +2,7 @@
 
 import type { JSX } from "@solidjs/web";
 
+import { AdministrationNavigation } from "../administration/AdministrationNavigation";
 import {
   createOperationDirectory,
   type OperationAdministrationClient,
@@ -24,15 +25,7 @@ export function OperationAdministrationPanel(
           success is shown only after MeshSpan commits it.
         </p>
       </header>
-      <nav class="administration-nav" aria-label="Administration sections">
-        <a href="/admin/identities">People and groups</a>
-        <a href="/admin/volumes">Volumes</a>
-        <a href="/admin/storage-folders">Storage folders</a>
-        <a href="/admin/topology">Mesh topology</a>
-        <a aria-current="page" href="/admin/operations">
-          Operations
-        </a>
-      </nav>
+      <AdministrationNavigation current="operations" />
       <OperationList directory={directory} />
     </div>
   );
