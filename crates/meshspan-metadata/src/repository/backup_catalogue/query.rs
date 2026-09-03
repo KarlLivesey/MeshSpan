@@ -8,9 +8,10 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use super::super::RepositoryError;
 use super::{
-    BackupCopyRecord, BackupCopyState, BackupDestinationRecord, BackupDestinationState,
-    MetadataBackupRecord, MetadataBackupState,
+    BackupCopyRecord, BackupCopyState, BackupDestinationCursor, BackupDestinationRecord,
+    BackupDestinationState, MetadataBackupRecord, MetadataBackupState,
 };
+use crate::repository::{Page, PageLimit};
 use crate::{BackupDestinationBinding, BackupFailureRelationship};
 
 const DESTINATION_REGISTERED_TARGET: i64 = 1;
@@ -79,6 +80,37 @@ pub(in crate::repository) fn copy(
         )
         .optional()
         .map_err(Into::into)
+}
+
+pub(in crate::repository) fn active_destinations(
+    connection: &Connection,
+    after: Option<BackupDestinationCursor>,
+    limit: PageLimit,
+) -> Result<Page<BackupDestinationRecord, BackupDestinationCursor>, RepositoryError> {
+    let lower = after.map_or([0; 16], |cursor| cursor.destination_id.as_bytes());
+    let sql_limit = i64::try_from(limit.get().saturating_add(1))
+        .map_err(|_| RepositoryError::InvalidPageLimit)?;
+    let mut statement = connection.prepare(
+        "SELECT destination_id, display_name, canonical_name, destination_kind, target_id,
+                remote_mesh_id, provider_instance_id, provider_generation,
+                failure_relationship, failure_evidence_digest, state, created_at, revision
+         FROM backup_destinations
+         WHERE state = ?1 AND destination_id > ?2
+         ORDER BY destination_id LIMIT ?3",
+    )?;
+    let rows = statement.query_map(
+        params![DESTINATION_ACTIVE, lower.as_slice(), sql_limit],
+        decode_destination,
+    )?;
+    let mut items = Vec::with_capacity(limit.get().saturating_add(1));
+    for row in rows {
+        items.push(row?);
+    }
+    let next = (items.len() > limit.get()).then(|| BackupDestinationCursor {
+        destination_id: items[limit.get() - 1].destination_id,
+    });
+    items.truncate(limit.get());
+    Ok(Page { items, next })
 }
 
 fn decode_backup(row: &Row<'_>) -> rusqlite::Result<MetadataBackupRecord> {

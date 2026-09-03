@@ -191,8 +191,8 @@ pub use backup::{
     restore_partition_backup,
 };
 pub use backup_catalogue::{
-    BackupCopyRecord, BackupCopyState, BackupDestinationRecord, BackupDestinationState,
-    MetadataBackupRecord, MetadataBackupState,
+    BackupCopyRecord, BackupCopyState, BackupDestinationCursor, BackupDestinationRecord,
+    BackupDestinationState, MetadataBackupRecord, MetadataBackupState,
 };
 pub use backup_run::{MetadataBackupRun, MetadataBackupRunClaimRecord, MetadataBackupRunState};
 pub use backup_schedule::MetadataBackupSchedule;
@@ -2168,6 +2168,19 @@ impl AuthoritativeRepository {
         destination_id: meshspan_domain::BackupDestinationId,
     ) -> Result<Option<BackupDestinationRecord>, RepositoryError> {
         backup_catalogue::destination(self.database.connection(), destination_id)
+    }
+
+    /// Returns one bounded keyset page of destinations eligible for new encrypted copies.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid bounds and fails closed for malformed destination records.
+    pub fn active_backup_destinations(
+        &self,
+        after: Option<BackupDestinationCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<BackupDestinationRecord, BackupDestinationCursor>, RepositoryError> {
+        backup_catalogue::active_destinations(self.database.connection(), after, limit)
     }
 
     /// Returns one exact provider copy and its read-after-write state.

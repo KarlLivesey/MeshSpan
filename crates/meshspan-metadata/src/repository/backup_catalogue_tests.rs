@@ -10,7 +10,7 @@ use tempfile::{TempDir, tempdir};
 use super::tests::{mark_test_recovery_verified, protected_bootstrap};
 use super::{
     AuthoritativeRepository, BackupCopyState, BackupDestinationState, EntityKind, LogPosition,
-    MetadataBackupState,
+    MetadataBackupState, PageLimit,
 };
 use crate::{
     AuthoritativeCommand, BackupDestinationBinding, BackupFailureRelationship, BootstrapMesh,
@@ -28,6 +28,61 @@ struct Fixture {
     mesh: MeshId,
     node: NodeId,
     target: TargetId,
+}
+
+#[test]
+fn active_destinations_page_without_returning_paused_entries()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture()?;
+    for (identity, enabled, log_index, expected_revision) in [
+        (30_u8, true, 3_u64, 2_u64),
+        (31, false, 4, 3),
+        (32, true, 5, 4),
+    ] {
+        fixture.repository.apply_committed(
+            LogPosition {
+                index: log_index,
+                term: 1,
+            },
+            context(
+                identity,
+                fixture.administrator,
+                identity + 10,
+                i64::from(identity),
+                expected_revision,
+            )?,
+            &AuthoritativeCommand::ConfigureBackupDestination(ConfigureBackupDestination {
+                destination_id: BackupDestinationId::from_bytes([identity; 16])?,
+                name: RecordName::new(&format!("Backup destination {identity}"))?,
+                binding: BackupDestinationBinding::RegisteredTarget {
+                    target_id: fixture.target,
+                    target_generation: 1,
+                },
+                failure_relationship: BackupFailureRelationship::Unknown,
+                failure_evidence_digest: [identity + 20; 32],
+                enabled,
+            }),
+        )?;
+    }
+
+    let first = fixture
+        .repository
+        .active_backup_destinations(None, PageLimit::new(1)?)?;
+    assert_eq!(first.items.len(), 1);
+    assert_eq!(
+        first.items[0].destination_id,
+        BackupDestinationId::from_bytes([30; 16])?
+    );
+    let second = fixture
+        .repository
+        .active_backup_destinations(first.next, PageLimit::new(1)?)?;
+    assert_eq!(second.items.len(), 1);
+    assert_eq!(
+        second.items[0].destination_id,
+        BackupDestinationId::from_bytes([32; 16])?
+    );
+    assert_eq!(second.next, None);
+    Ok(())
 }
 
 #[test]
