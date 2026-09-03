@@ -1315,8 +1315,11 @@ dependencies = [
 name = "meshspan-dns"
 version = "0.1.0"
 dependencies = [
+ "hmac",
+ "sha2",
  "thiserror",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]

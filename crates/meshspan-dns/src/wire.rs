@@ -49,7 +49,7 @@ impl DnsName {
         &self.0
     }
 
-    fn encode(&self, output: &mut Vec<u8>) -> Result<(), DnsWireError> {
+    pub(crate) fn encode(&self, output: &mut Vec<u8>) -> Result<(), DnsWireError> {
         for label in self.0.split('.') {
             output.push(u8::try_from(label.len()).map_err(|_| DnsWireError::InvalidName)?);
             output.extend_from_slice(label.as_bytes());
