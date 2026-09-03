@@ -525,6 +525,59 @@ export type BeginUploadResponse = {
 };
 
 /**
+ * CertificateStatusResponse
+ *
+ * Current certificate status; `certificate` is `null` before a source is configured.
+ */
+export type CertificateStatusResponse = {
+  /**
+   * Current secret-free certificate state, or `null` when HTTPS has no configured identity.
+   */
+  certificate: {
+    /**
+     * Current encrypted delivery generation represented exactly outside JavaScript numbers.
+     */
+    delivery_generation: string;
+    /**
+     * Gateways which acknowledged live selection of the current generation.
+     */
+    installed_gateway_count: number;
+    /**
+     * Exclusive certificate validity end as epoch microseconds.
+     */
+    not_after_epoch_micros: number;
+    /**
+     * Inclusive certificate validity start as epoch microseconds.
+     */
+    not_before_epoch_micros: number;
+    /**
+     * Gateways included in the current encrypted delivery generation.
+     */
+    required_gateway_count: number;
+    /**
+     * Certificate authority family.
+     */
+    source: "acme" | "external" | "mesh_local";
+    /**
+     * Stable source identity as canonical UUID text.
+     */
+    source_id: string;
+    /**
+     * Authoritative source revision represented exactly outside JavaScript numbers.
+     */
+    source_revision: string;
+    /**
+     * Derived state at the response's authority-agreed observation time.
+     */
+    state: "active" | "distributing" | "not_yet_valid" | "expired";
+  } | null;
+  /**
+   * Authority-agreed time used for validity classification.
+   */
+  observed_at_epoch_micros: number;
+};
+
+/**
  * CommitUploadRequest
  *
  * Explicit final publication request for one complete checkpoint.
@@ -5345,6 +5398,45 @@ export type ProvisionMeshLocalCertificateResponses = {
 
 export type ProvisionMeshLocalCertificateResponse2 =
   ProvisionMeshLocalCertificateResponses[keyof ProvisionMeshLocalCertificateResponses];
+
+export type GetCertificateStatusData = {
+  body?: never;
+  path?: never;
+  query?: never;
+  url: "/admin/certificates/status";
+};
+
+export type GetCertificateStatusErrors = {
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Certificate authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type GetCertificateStatusError =
+  GetCertificateStatusErrors[keyof GetCertificateStatusErrors];
+
+export type GetCertificateStatusResponses = {
+  /**
+   * Current secret-free certificate status
+   */
+  200: CertificateStatusResponse;
+};
+
+export type GetCertificateStatusResponse =
+  GetCertificateStatusResponses[keyof GetCertificateStatusResponses];
 
 export type ListGroupsData = {
   body?: never;

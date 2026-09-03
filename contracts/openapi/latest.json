@@ -1100,6 +1100,135 @@
         "title": "UploadStatusResponse",
         "type": "object"
       },
+      "CertificateStatusResponse": {
+        "additionalProperties": false,
+        "description": "Current certificate status; `certificate` is `null` before a source is configured.",
+        "properties": {
+          "certificate": {
+            "additionalProperties": false,
+            "description": "Current secret-free certificate state, or `null` when HTTPS has no configured identity.",
+            "properties": {
+              "delivery_generation": {
+                "description": "Current encrypted delivery generation represented exactly outside JavaScript numbers.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^[1-9][0-9]{0,19}$",
+                "type": "string"
+              },
+              "installed_gateway_count": {
+                "description": "Gateways which acknowledged live selection of the current generation.",
+                "maximum": 1000000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "not_after_epoch_micros": {
+                "description": "Exclusive certificate validity end as epoch microseconds.",
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "not_before_epoch_micros": {
+                "description": "Inclusive certificate validity start as epoch microseconds.",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "required_gateway_count": {
+                "description": "Gateways included in the current encrypted delivery generation.",
+                "maximum": 1000000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "source": {
+                "description": "Certificate authority family.",
+                "oneOf": [
+                  {
+                    "const": "acme",
+                    "description": "`MeshSpan`'s automatic ACME lifecycle.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "external",
+                    "description": "An authenticated external issuer integration.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "mesh_local",
+                    "description": "`MeshSpan`'s self-contained local trust authority.",
+                    "type": "string"
+                  }
+                ]
+              },
+              "source_id": {
+                "description": "Stable source identity as canonical UUID text.",
+                "maxLength": 36,
+                "minLength": 36,
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              "source_revision": {
+                "description": "Authoritative source revision represented exactly outside JavaScript numbers.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^[1-9][0-9]{0,19}$",
+                "type": "string"
+              },
+              "state": {
+                "description": "Derived state at the response's authority-agreed observation time.",
+                "oneOf": [
+                  {
+                    "const": "active",
+                    "description": "The certificate is valid and every intended gateway acknowledged it.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "distributing",
+                    "description": "The certificate is valid but at least one intended gateway has not acknowledged it.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "not_yet_valid",
+                    "description": "The certificate's validity window has not opened.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "expired",
+                    "description": "The certificate validity window has ended.",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "source",
+              "source_id",
+              "delivery_generation",
+              "not_before_epoch_micros",
+              "not_after_epoch_micros",
+              "required_gateway_count",
+              "installed_gateway_count",
+              "state",
+              "source_revision"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "observed_at_epoch_micros": {
+            "description": "Authority-agreed time used for validity classification.",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "observed_at_epoch_micros",
+          "certificate"
+        ],
+        "title": "CertificateStatusResponse",
+        "type": "object"
+      },
       "CommitUploadRequest": {
         "additionalProperties": false,
         "description": "Explicit final publication request for one complete checkpoint.",
@@ -11719,6 +11848,145 @@
         "summary": "Issue and distribute an HTTPS certificate from the self-contained mesh-local authority",
         "x-meshspan-access": "system-manager-csrf",
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/admin/certificates/status": {
+      "get": {
+        "operationId": "getCertificateStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CertificateStatusResponse"
+                }
+              }
+            },
+            "description": "Current secret-free certificate status",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Certificate authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read current HTTPS certificate validity and gateway delivery progress",
+        "x-meshspan-access": "system-manager"
       }
     },
     "/admin/groups": {

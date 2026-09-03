@@ -9,7 +9,8 @@ use serde_json::Value;
 
 use crate::validation::{CompiledValidator, compile, validate, validator_from};
 use crate::{
-    BoundaryError, ProvisionCertificateRequest, ProvisionCertificateResponse,
+    BoundaryError, CertificateOperationalState, CertificateStatusResponse,
+    ProvisionCertificateRequest, ProvisionCertificateResponse,
     ProvisionMeshLocalCertificateRequest, ProvisionMeshLocalCertificateResponse,
     PublishExternalCertificateRequest, PublishExternalCertificateResponse, schema,
 };
@@ -20,6 +21,7 @@ static EXTERNAL_REQUEST: OnceLock<Result<CompiledValidator, String>> = OnceLock:
 static EXTERNAL_RESPONSE: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
 static LOCAL_REQUEST: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
 static LOCAL_RESPONSE: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
+static STATUS_RESPONSE: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
 
 /// Maximum accepted bytes for certificate provisioning, including protected provider settings.
 pub const MAX_PROVISION_CERTIFICATE_BYTES: usize = 64 * 1_024;
@@ -160,6 +162,59 @@ pub fn encode_provision_mesh_local_certificate_response(
         .then_some(())
         .ok_or(BoundaryError::EncodeMismatch)?;
     serde_json::to_vec(&value).map_err(|_| BoundaryError::EncodeMismatch)
+}
+
+/// Validates and encodes one secret-free certificate health projection.
+///
+/// # Errors
+///
+/// Refuses to emit malformed source, lifetime, generation or gateway counts.
+pub fn encode_certificate_status_response(
+    response: &CertificateStatusResponse,
+) -> Result<Vec<u8>, BoundaryError> {
+    let value = serde_json::to_value(response).map_err(|_| BoundaryError::EncodeMismatch)?;
+    validate(
+        validator_from(
+            STATUS_RESPONSE
+                .get_or_init(|| compile(&schema::response_schema::<CertificateStatusResponse>())),
+        )?,
+        &value,
+    )?;
+    if response
+        .certificate
+        .as_ref()
+        .is_some_and(|certificate| !valid_certificate_status(response, certificate))
+    {
+        return Err(BoundaryError::EncodeMismatch);
+    }
+    serde_json::to_vec(&value).map_err(|_| BoundaryError::EncodeMismatch)
+}
+
+fn valid_certificate_status(
+    response: &CertificateStatusResponse,
+    certificate: &crate::CurrentCertificateStatus,
+) -> bool {
+    let valid_shape = certificate.required_gateway_count > 0
+        && certificate.installed_gateway_count <= certificate.required_gateway_count
+        && certificate.not_after_epoch_micros > certificate.not_before_epoch_micros
+        && certificate.delivery_generation.value().is_some()
+        && certificate.source_revision.value().is_some();
+    let observed = response.observed_at_epoch_micros;
+    let valid_state = match certificate.state {
+        CertificateOperationalState::Active => {
+            observed >= certificate.not_before_epoch_micros
+                && observed < certificate.not_after_epoch_micros
+                && certificate.installed_gateway_count == certificate.required_gateway_count
+        }
+        CertificateOperationalState::Distributing => {
+            observed >= certificate.not_before_epoch_micros
+                && observed < certificate.not_after_epoch_micros
+                && certificate.installed_gateway_count < certificate.required_gateway_count
+        }
+        CertificateOperationalState::NotYetValid => observed < certificate.not_before_epoch_micros,
+        CertificateOperationalState::Expired => observed >= certificate.not_after_epoch_micros,
+    };
+    valid_shape && valid_state
 }
 
 fn validate_request_value(value: &Value) -> Result<(), BoundaryError> {

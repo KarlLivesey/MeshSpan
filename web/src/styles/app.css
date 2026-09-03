@@ -584,6 +584,21 @@ textarea:hover {
   color: var(--ink-soft);
 }
 
+.certificate-status-card {
+  min-height: 8rem;
+}
+
+.state-distributing,
+.state-not_yet_valid {
+  border-color: var(--signal);
+  color: var(--signal);
+}
+
+.state-expired {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
 .state-publish {
   border-color: var(--signal);
   color: var(--signal);

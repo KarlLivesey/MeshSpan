@@ -4,9 +4,11 @@ import type { JSX } from "@solidjs/web";
 
 import { AdministrationNavigation } from "../administration/AdministrationNavigation";
 import { CertificateProvisioningForm } from "./CertificateProvisioningForm";
+import { CertificateStatusCard } from "./CertificateStatusCard";
 import { ManualDnsTaskList } from "./ManualDnsTaskList";
 import {
   createManualDnsTaskDirectory,
+  createCertificateStatusResource,
   type CertificateAdministrationClient,
 } from "./model";
 
@@ -17,7 +19,9 @@ export function CertificateAdministrationPanel(
   }>,
 ): JSX.Element {
   const directory = createManualDnsTaskDirectory(() => props.client);
+  const status = createCertificateStatusResource(() => props.client);
   void directory.loadInitial();
+  void status.load();
 
   return (
     <div class="certificate-administration">
@@ -30,6 +34,7 @@ export function CertificateAdministrationPanel(
         </p>
       </header>
       <AdministrationNavigation current="certificates" />
+      <CertificateStatusCard resource={status} />
       <CertificateProvisioningForm
         client={props.client}
         csrfToken={props.csrfToken}

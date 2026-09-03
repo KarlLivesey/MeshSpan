@@ -123,6 +123,29 @@ pub struct PublicCertificateRolloutSummary {
     pub order_revision: Revision,
 }
 
+/// Current certificate lifetime and exact gateway-delivery progress.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PublicCertificateStatusRecord {
+    /// Selected immutable certificate source and encrypted delivery generation.
+    pub selection: PublicCertificateSelection,
+    /// Inclusive certificate validity start.
+    pub not_before: UnixMicros,
+    /// Exclusive certificate validity end.
+    pub not_after: UnixMicros,
+    /// Gateways represented in the selected encrypted delivery generation.
+    pub required_gateway_count: u64,
+    /// Gateways which durably acknowledged that exact delivery generation.
+    pub installed_gateway_count: u64,
+}
+
+impl PublicCertificateStatusRecord {
+    /// Whether every intended gateway has selected the current generation.
+    #[must_use]
+    pub const fn rollout_complete(self) -> bool {
+        self.required_gateway_count == self.installed_gateway_count
+    }
+}
+
 pub(super) fn configure(
     transaction: &Transaction<'_>,
     context: CommandContext,
@@ -562,6 +585,43 @@ impl AuthoritativeRepository {
         ))
     }
 
+    /// Returns the current public certificate with exact delivery progress.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed lifetime, recipient or acknowledgement evidence.
+    pub fn public_certificate_status(
+        &self,
+    ) -> Result<Option<PublicCertificateStatusRecord>, RepositoryError> {
+        let Some(selection) = self.latest_public_certificate()? else {
+            return Ok(None);
+        };
+        let (source_kind, source_id, not_before, not_after) =
+            certificate_source_status(self.database.connection(), selection.source)?;
+        let required_gateway_count =
+            certificate_recipient_count(self.database.connection(), selection.certificate)?;
+        let installed_gateway_count = certificate_installation_count(
+            self.database.connection(),
+            source_kind,
+            source_id,
+            selection,
+        )?;
+        if not_before.get() < 0
+            || not_after <= not_before
+            || required_gateway_count == 0
+            || installed_gateway_count > required_gateway_count
+        {
+            return Err(RepositoryError::CorruptState);
+        }
+        Ok(Some(PublicCertificateStatusRecord {
+            selection,
+            not_before,
+            not_after,
+            required_gateway_count,
+            installed_gateway_count,
+        }))
+    }
+
     /// Returns one gateway's exact certificate-installation proof.
     ///
     /// # Errors
@@ -713,6 +773,105 @@ fn existing_installation(
 
 fn parse_count(value: i64) -> Result<u64, RepositoryError> {
     u64::try_from(value).map_err(|_| RepositoryError::CorruptState)
+}
+
+fn certificate_source_status(
+    connection: &rusqlite::Connection,
+    source: PublicCertificateSource,
+) -> Result<(i64, [u8; 16], UnixMicros, UnixMicros), RepositoryError> {
+    let (kind, id, lifetime) = match source {
+        PublicCertificateSource::AcmeOrder(id) => {
+            let lifetime = connection.query_row(
+                "SELECT certificate_not_before, certificate_not_after
+                 FROM certificate_orders WHERE order_id = ?1",
+                [id.as_bytes().as_slice()],
+                decode_certificate_lifetime,
+            )?;
+            (
+                super::public_certificate_delivery::ACME_SOURCE,
+                id.as_bytes(),
+                lifetime,
+            )
+        }
+        PublicCertificateSource::ExternalPublication(id) => {
+            let lifetime = connection.query_row(
+                "SELECT not_before, not_after FROM external_certificate_publications
+                 WHERE publication_id = ?1",
+                [id.as_bytes().as_slice()],
+                decode_certificate_lifetime,
+            )?;
+            (
+                super::public_certificate_delivery::EXTERNAL_SOURCE,
+                id.as_bytes(),
+                lifetime,
+            )
+        }
+        PublicCertificateSource::MeshLocalIssuance(id) => {
+            let lifetime = connection.query_row(
+                "SELECT not_before, not_after FROM mesh_local_certificate_issuances
+                 WHERE issuance_id = ?1",
+                [id.as_bytes().as_slice()],
+                decode_certificate_lifetime,
+            )?;
+            (
+                super::public_certificate_delivery::MESH_LOCAL_SOURCE,
+                id.as_bytes(),
+                lifetime,
+            )
+        }
+    };
+    Ok((
+        kind,
+        id,
+        UnixMicros::new(lifetime.0),
+        UnixMicros::new(lifetime.1),
+    ))
+}
+
+fn decode_certificate_lifetime(row: &Row<'_>) -> rusqlite::Result<(i64, i64)> {
+    Ok((row.get(0)?, row.get(1)?))
+}
+
+fn certificate_recipient_count(
+    connection: &rusqlite::Connection,
+    certificate: SecretGenerationReference,
+) -> Result<u64, RepositoryError> {
+    let count = connection.query_row(
+        "SELECT count(DISTINCT r.owner_id) FROM secret_recipient_envelopes e
+         JOIN secret_wrapping_recipients r
+           ON r.key_fingerprint = e.recipient_key_fingerprint
+         WHERE e.secret_kind = ?1 AND e.secret_id = ?2 AND e.secret_generation = ?3
+           AND r.recipient_kind = 1",
+        params![
+            i64::from(PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND),
+            certificate.secret_id.as_slice(),
+            to_i64(certificate.generation)?,
+        ],
+        |row| row.get::<_, i64>(0),
+    )?;
+    parse_count(count)
+}
+
+fn certificate_installation_count(
+    connection: &rusqlite::Connection,
+    source_kind: i64,
+    source_id: [u8; 16],
+    selection: PublicCertificateSelection,
+) -> Result<u64, RepositoryError> {
+    let count = connection.query_row(
+        "SELECT count(*) FROM public_certificate_delivery_installations
+         WHERE source_kind = ?1 AND source_id = ?2 AND certificate_secret_id = ?3
+           AND certificate_secret_generation = ?4 AND bundle_digest = ?5",
+        params![
+            source_kind,
+            source_id.as_slice(),
+            selection.certificate.secret_id.as_slice(),
+            to_i64(selection.certificate.generation)?,
+            selection.bundle_digest.as_slice(),
+        ],
+        |row| row.get::<_, i64>(0),
+    )?;
+    parse_count(count)
 }
 
 struct CompletionValues {

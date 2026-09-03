@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use crate::{
-    BoundaryError, CertificateChallenge, CertificateGeneration, ExternalCertificatePublicationId,
-    MeshLocalCertificateAuthorityId, MeshLocalCertificateIssuanceId, OperationId,
-    ProvisionMeshLocalCertificateResponse, PublicCertificateId, PublishExternalCertificateResponse,
-    decode_provision_certificate_request, decode_provision_mesh_local_certificate_request,
-    decode_publish_external_certificate_request, encode_provision_mesh_local_certificate_response,
+    BoundaryError, CertificateChallenge, CertificateGeneration, CertificateOperationalState,
+    CertificateStatusResponse, CertificateStatusSource, CurrentCertificateStatus,
+    ExternalCertificatePublicationId, MeshLocalCertificateAuthorityId,
+    MeshLocalCertificateIssuanceId, OperationId, ProvisionMeshLocalCertificateResponse,
+    PublicCertificateId, PublishExternalCertificateResponse, decode_provision_certificate_request,
+    decode_provision_mesh_local_certificate_request, decode_publish_external_certificate_request,
+    encode_certificate_status_response, encode_provision_mesh_local_certificate_response,
     encode_publish_external_certificate_response,
 };
 
@@ -40,6 +42,36 @@ fn provisioning_accepts_every_challenge_family_and_redacts_credentials()
             assert_eq!(format!("{api_token:?}"), "ProtectedText([redacted])");
         }
     }
+    Ok(())
+}
+
+#[test]
+fn certificate_status_rejects_contradictory_operational_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut response = CertificateStatusResponse {
+        observed_at_epoch_micros: 50,
+        certificate: Some(CurrentCertificateStatus {
+            source: CertificateStatusSource::Acme,
+            source_id: "00000000-0000-4000-8000-000000000001".to_owned(),
+            delivery_generation: CertificateGeneration::from_value(2).ok_or("generation")?,
+            not_before_epoch_micros: 10,
+            not_after_epoch_micros: 100,
+            required_gateway_count: 3,
+            installed_gateway_count: 3,
+            state: CertificateOperationalState::Active,
+            source_revision: CertificateGeneration::from_value(7).ok_or("revision")?,
+        }),
+    };
+    assert!(encode_certificate_status_response(&response).is_ok());
+    response
+        .certificate
+        .as_mut()
+        .ok_or("certificate")?
+        .installed_gateway_count = 2;
+    assert!(matches!(
+        encode_certificate_status_response(&response),
+        Err(BoundaryError::EncodeMismatch)
+    ));
     Ok(())
 }
 

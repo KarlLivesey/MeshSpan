@@ -10,6 +10,38 @@ const RESPONSE_HEADERS = {
   "MeshSpan-API-Version": "latest",
 };
 
+describe("generated certificate-status client", () => {
+  it("validates current certificate delivery health", async () => {
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: async (input) => {
+        expect(requestUrl(input)).toBe(
+          "https://node.example/api/latest/admin/certificates/status",
+        );
+        return Promise.resolve(jsonResponse(certificateStatus()));
+      },
+    });
+    const status = await client.getCertificateStatus();
+    expect(status.certificate?.state).toBe("distributing");
+    expect(status.certificate?.delivery_generation).toBe("2");
+  });
+
+  it("rejects unknown certificate-status response fields", async () => {
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: async () =>
+        Promise.resolve(
+          jsonResponse({
+            ...certificateStatus(),
+            private_key: "must-not-pass",
+          }),
+        ),
+    });
+
+    await expect(client.getCertificateStatus()).rejects.toThrow();
+  });
+});
+
 describe("generated certificate-administration client", () => {
   it("validates provisioning and follows only its manual-DNS continuation", async () => {
     const requests: Readonly<{ body: string | null; url: string }>[] = [];
@@ -86,6 +118,23 @@ function manualDnsTask() {
 
 function operationId(): string {
   return "00000000-0000-4000-8000-000000000003";
+}
+
+function certificateStatus(): Record<string, unknown> {
+  return {
+    certificate: {
+      delivery_generation: "2",
+      installed_gateway_count: 2,
+      not_after_epoch_micros: 1_800_000_000_000_000,
+      not_before_epoch_micros: 1_700_000_000_000_000,
+      required_gateway_count: 3,
+      source: "acme",
+      source_id: "00000000-0000-4000-8000-000000000002",
+      source_revision: "7",
+      state: "distributing",
+    },
+    observed_at_epoch_micros: 1_700_000_100_000_000,
+  };
 }
 
 function responseBody(call: number): unknown {

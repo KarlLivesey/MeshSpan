@@ -41,6 +41,48 @@ pub fn authenticate_system_manager<A>(
 where
     A: SystemManagerAuthority,
 {
+    authenticate_system_manager_request(
+        authority,
+        gateway,
+        headers,
+        now,
+        BrowserRequestProtection::Mutation,
+    )
+}
+
+/// Authenticates a system-manager read without requiring mutation-only CSRF evidence.
+///
+/// # Errors
+///
+/// Rejects ambiguous credentials, stale authority and non-managers.
+pub fn authenticate_system_manager_read<A>(
+    authority: &A,
+    gateway: GatewaySessionIdentity,
+    headers: &HeaderMap,
+    now: UnixMicros,
+) -> Result<IdentityAdministrator, SystemManagerAuthenticationError>
+where
+    A: SystemManagerAuthority,
+{
+    authenticate_system_manager_request(
+        authority,
+        gateway,
+        headers,
+        now,
+        BrowserRequestProtection::Read,
+    )
+}
+
+fn authenticate_system_manager_request<A>(
+    authority: &A,
+    gateway: GatewaySessionIdentity,
+    headers: &HeaderMap,
+    now: UnixMicros,
+    protection: BrowserRequestProtection,
+) -> Result<IdentityAdministrator, SystemManagerAuthenticationError>
+where
+    A: SystemManagerAuthority,
+{
     let has_authorization = headers.contains_key(AUTHORIZATION);
     if has_authorization && headers.contains_key(COOKIE) {
         return Err(SystemManagerAuthenticationError::Rejected);
@@ -57,7 +99,7 @@ where
     let capability = BrowserSessionAuthenticator::new(authority, gateway)
         .authenticate(
             headers,
-            BrowserRequestProtection::Mutation,
+            protection,
             meshspan_domain::AssuranceLevel::SingleFactor,
             now,
         )

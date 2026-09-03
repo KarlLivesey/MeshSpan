@@ -5,8 +5,9 @@ use std::sync::{Arc, Mutex};
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, Request, StatusCode};
 use meshspan_api_contract::{
-    AcmeConfigurationId, CertificateOrderId, ProvisionCertificateRequest,
-    ProvisionCertificateResponse, decode_provision_certificate_request,
+    AcmeConfigurationId, CertificateOrderId, CertificateStatusResponse,
+    ProvisionCertificateRequest, ProvisionCertificateResponse,
+    decode_provision_certificate_request,
 };
 use meshspan_domain::{PrincipalId, UnixMicros};
 use tower::ServiceExt;
@@ -60,6 +61,38 @@ async fn authenticates_then_returns_one_validated_durable_result()
     Ok(())
 }
 
+#[tokio::test]
+async fn certificate_status_authenticates_before_returning_secret_free_health()
+-> Result<(), Box<dyn std::error::Error>> {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let rejected = router(Arc::clone(&calls))?
+        .oneshot(Request::get("/api/latest/admin/certificates/status").body(Body::empty())?)
+        .await?;
+    assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        calls.lock().map_err(|_| "calls")?.as_slice(),
+        ["authenticate"]
+    );
+    calls.lock().map_err(|_| "calls")?.clear();
+
+    let response = router(Arc::clone(&calls))?
+        .oneshot(
+            Request::get("/api/latest/admin/certificates/status")
+                .header("x-test-auth", "yes")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response: CertificateStatusResponse =
+        serde_json::from_slice(&to_bytes(response.into_body(), 16_384).await?)?;
+    assert!(response.certificate.is_none());
+    assert_eq!(
+        calls.lock().map_err(|_| "calls")?.as_slice(),
+        ["authenticate", "status"]
+    );
+    Ok(())
+}
+
 fn router(
     calls: Arc<Mutex<Vec<&'static str>>>,
 ) -> Result<axum::Router, crate::CertificateProvisioningApiError> {
@@ -71,6 +104,20 @@ struct FakeController {
 }
 
 impl CertificateProvisioningController for FakeController {
+    fn status(
+        &self,
+        headers: &HeaderMap,
+        now: UnixMicros,
+    ) -> Result<CertificateStatusResponse, CertificateProvisioningError> {
+        self.authenticate(headers, now)?;
+        self.record("status")?;
+        Ok(CertificateStatusResponse {
+            observed_at_epoch_micros: u64::try_from(now.get())
+                .map_err(|_| CertificateProvisioningError::Failed)?,
+            certificate: None,
+        })
+    }
+
     fn authenticate(
         &self,
         headers: &HeaderMap,

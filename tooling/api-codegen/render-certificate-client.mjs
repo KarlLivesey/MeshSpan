@@ -10,7 +10,8 @@ export function renderCertificateRequestTypes() {
 
 /** Renders certificate-administration client operations. */
 export function renderCertificateClientInterface() {
-  return `listManualDnsTasks(
+  return `getCertificateStatus(): Promise<CertificateStatusResponse>;
+  listManualDnsTasks(
     request?: ListManualDnsTasksRequest,
   ): Promise<ListManualDnsTasksResponse>;
   listNextManualDnsTasks(
@@ -24,7 +25,15 @@ export function renderCertificateClientInterface() {
 
 /** Renders certificate-administration client implementations. */
 export function renderCertificateClientMethods(routes) {
-  return `async listManualDnsTasks(request = {}): Promise<ListManualDnsTasksResponse> {
+  return `async getCertificateStatus(): Promise<CertificateStatusResponse> {
+      return requestJson(
+        context,
+        ${JSON.stringify(routes.getCertificateStatus.route)},
+        { method: ${JSON.stringify(routes.getCertificateStatus.method)} },
+        zGetCertificateStatusResponse,
+      );
+    },
+    async listManualDnsTasks(request = {}): Promise<ListManualDnsTasksResponse> {
       const query = zListManualDnsTasksQuery.parse(request);
       return requestJson(
         context,

@@ -8,10 +8,11 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::{Request, State};
 use axum::http::{HeaderValue, Response, StatusCode};
-use axum::routing::post;
+use axum::routing::{get, post};
 use meshspan_api_contract::{
     ApiErrorCode, BoundaryError, MAX_PROVISION_CERTIFICATE_BYTES,
-    decode_provision_certificate_request, encode_provision_certificate_response, generate_openapi,
+    decode_provision_certificate_request, encode_certificate_status_response,
+    encode_provision_certificate_response, generate_openapi,
 };
 use thiserror::Error;
 
@@ -49,10 +50,38 @@ where
     let document = generate_openapi()?;
     Ok(Router::new()
         .route("/api/latest/admin/certificates/acme", post(provision::<C>))
+        .route("/api/latest/admin/certificates/status", get(status::<C>))
         .with_state(ApiState {
             controller: Arc::new(Mutex::new(controller)),
             schema_digest: HeaderValue::from_str(document.digest())?,
         }))
+}
+
+async fn status<C>(State(state): State<ApiState<C>>, request: Request) -> Response<Body>
+where
+    C: CertificateProvisioningController,
+{
+    let request_id = request_identifier();
+    let Some(now) = current_time() else {
+        return failed(&state, request_id);
+    };
+    let controller = Arc::clone(&state.controller);
+    let headers = request.headers().clone();
+    match tokio::task::spawn_blocking(move || {
+        controller
+            .lock()
+            .map_err(|_| CertificateProvisioningError::Unavailable)?
+            .status(&headers, now)
+    })
+    .await
+    {
+        Ok(Ok(response)) => match encode_certificate_status_response(&response) {
+            Ok(body) => json_response(StatusCode::OK, body, state.schema_digest),
+            Err(_) => failed(&state, request_id),
+        },
+        Ok(Err(error)) => service_error(&state, error, request_id),
+        Err(_) => failed(&state, request_id),
+    }
 }
 
 async fn provision<C>(State(state): State<ApiState<C>>, request: Request) -> Response<Body>
