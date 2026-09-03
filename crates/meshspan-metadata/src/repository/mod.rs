@@ -7,6 +7,9 @@ mod access_query;
 mod acknowledgement_policy;
 #[cfg(test)]
 mod acknowledgement_policy_tests;
+mod acme;
+#[cfg(test)]
+mod acme_tests;
 mod apply;
 mod authentication_method;
 mod authentication_method_creation;
@@ -153,6 +156,7 @@ pub use access_query::{
 pub use acknowledgement_policy::{
     AcknowledgementPolicyCursor, AcknowledgementPolicyRecord, VolumeAcknowledgementPolicy,
 };
+pub use acme::{CertificateOrderClaim, CertificateOrderRecord, CertificateOrderState};
 pub use authentication_method::{
     ApiKeyAuthentication, AuthenticationMethodRevocationReplay, PasskeyVerificationMaterial,
     RecoveryCodeVerificationMaterial, SmbVerificationMaterial, TotpVerificationMaterial,

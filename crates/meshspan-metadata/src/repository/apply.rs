@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use super::receipt::{decode_receipt, encode_result, result_digest, validate_position};
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError,
-    acknowledgement_policy, authentication_method, authentication_method_creation,
+    acknowledgement_policy, acme, authentication_method, authentication_method_creation,
     authentication_policy, availability_cell, bootstrap, cleanup_attestation, cleanup_completion,
     cleanup_inventory, cleanup_permit, cleanup_reclamation, cluster, component,
     federation_actor_attestation, federation_assignment, federation_grant,
@@ -635,6 +635,11 @@ fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::AssignVolumeAcknowledgementPolicy(_)
             | AuthoritativeCommand::PublishSmbExport(_)
             | AuthoritativeCommand::WithdrawSmbExport(_)
+            | AuthoritativeCommand::ConfigureAcme(_)
+            | AuthoritativeCommand::QueueCertificateOrder(_)
+            | AuthoritativeCommand::ClaimCertificateOrder(_)
+            | AuthoritativeCommand::RenewCertificateOrder(_)
+            | AuthoritativeCommand::CompleteCertificateOrder(_)
             | AuthoritativeCommand::RegisterNodeWrappingKey(_)
             | AuthoritativeCommand::CommitSecretGeneration(_)
             | AuthoritativeCommand::ConfirmRecoveryBundleSaved(_)
@@ -702,6 +707,21 @@ fn execute_infrastructure_command(
         }
         AuthoritativeCommand::WithdrawSmbExport(value) => {
             smb_export_configuration::withdraw(transaction, value, revision)
+        }
+        AuthoritativeCommand::ConfigureAcme(value) => {
+            acme::configure(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::QueueCertificateOrder(value) => {
+            acme::queue(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::ClaimCertificateOrder(value) => {
+            acme::claim(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::RenewCertificateOrder(value) => {
+            acme::renew(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::CompleteCertificateOrder(value) => {
+            acme::complete(transaction, context, *value, revision)
         }
         AuthoritativeCommand::RegisterNodeWrappingKey(value) => {
             node_wrapping_key::register(transaction, context, *value, revision)
@@ -1248,6 +1268,11 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::BeginStorageScopeDrain(_) => 111,
         AuthoritativeCommand::FenceStorageNodeDrainMembership(_) => 112,
         AuthoritativeCommand::CompleteStorageScopeDrain(_) => 113,
+        AuthoritativeCommand::ConfigureAcme(_) => 114,
+        AuthoritativeCommand::QueueCertificateOrder(_) => 115,
+        AuthoritativeCommand::ClaimCertificateOrder(_) => 116,
+        AuthoritativeCommand::RenewCertificateOrder(_) => 117,
+        AuthoritativeCommand::CompleteCertificateOrder(_) => 118,
     }
 }
 

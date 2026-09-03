@@ -2,13 +2,14 @@
 
 use meshspan_contracts::{BoundedItems, ShardIdentity, ShardReceipt};
 use meshspan_domain::{
-    AcknowledgementPolicyId, ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId,
-    AuthenticationMethodId, AuthenticationService, AvailabilityCellId, ComponentInstanceId,
-    DurationMicros, EntropyError, FailureScenario, FailureTerm, FaultGroupClassId, FaultGroupId,
-    GrantId, GroupId, HostId, LocalityPolicyId, LocalityRequirementId, MeshId, NamespaceCommitId,
-    NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PrincipalId, ProtectionPolicyId,
-    ProtectionScenarioId, RandomSource, RecoveryCodeId, Revision, Rights, RoleId, SessionId,
-    SmbExportId, TargetId, UnixMicros, VolumeId, WorkId,
+    AcknowledgementPolicyId, AcmeConfigurationId, ActivationPolicyId, ApiKeyId, AssuranceLevel,
+    AuditEventId, AuthenticationMethodId, AuthenticationService, AvailabilityCellId,
+    CertificateOrderId, ComponentInstanceId, DurationMicros, EntropyError, FailureScenario,
+    FailureTerm, FaultGroupClassId, FaultGroupId, GrantId, GroupId, HostId, LocalityPolicyId,
+    LocalityRequirementId, MeshId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId,
+    OperationId, OwnerSetId, PrincipalId, ProtectionPolicyId, ProtectionScenarioId, RandomSource,
+    RecoveryCodeId, Revision, Rights, RoleId, SessionId, SmbExportId, TargetId, UnixMicros,
+    VolumeId, WorkId,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -19,24 +20,27 @@ use sha2::{Digest, Sha256};
 use super::*;
 use crate::{
     AcknowledgementCellRequirement, AcknowledgementCellRole, AcknowledgementConsistencyClass,
-    AddGroupMember, AssignVolumeAcknowledgementPolicy, AssignVolumeLocalityPolicy,
-    AssignVolumeProtectionPolicy, AttestStorageTargetDrain, BeginStorageScopeDrain,
-    BeginStorageTargetDrain, BootstrapMesh, BootstrapRecoveryIdentity, ClaimMaintenanceWork,
+    AcmeChallengeKind, AddGroupMember, AssignVolumeAcknowledgementPolicy,
+    AssignVolumeLocalityPolicy, AssignVolumeProtectionPolicy, AttestStorageTargetDrain,
+    BeginStorageScopeDrain, BeginStorageTargetDrain, BootstrapMesh, BootstrapRecoveryIdentity,
+    CertificateOrderCompletion, ClaimCertificateOrder, ClaimMaintenanceWork,
     CommitConvergedVolumeHead, CommitRebalanceScanPage, CommitScrubPass, CommitSecretGeneration,
-    CommitShardRepair, CommitTargetReconciliation, CompleteMaintenanceWork,
-    CompleteStorageScopeDrain, ConvergedHeadEvidence, CreateAcknowledgementPolicy,
-    CreateActivationPolicy, CreateAuthenticationMethod, CreateAvailabilityCell, CreateComponent,
-    CreateFaultGroup, CreateGroup, CreateLocalityPolicy, CreateProtectionPolicy, CreateUser,
-    CreateVolume, FenceStorageNodeDrainMembership, GrantInheritance, GrantPermission,
-    GrantPermissionWithActivation, IssueAuthenticationSession, LocalityRequirementConfiguration,
-    MaintenanceWorkCompletion, NewAuthenticationCredential, NewRecoveryCode, PermissionScope,
-    ProtectionScenarioConfiguration, PublishSmbExport, QueueMaintenanceWork, RebalanceScanCursor,
-    RecordName, RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember,
+    CommitShardRepair, CommitTargetReconciliation, CompleteCertificateOrder,
+    CompleteMaintenanceWork, CompleteStorageScopeDrain, ConfigureAcme, ConvergedHeadEvidence,
+    CreateAcknowledgementPolicy, CreateActivationPolicy, CreateAuthenticationMethod,
+    CreateAvailabilityCell, CreateComponent, CreateFaultGroup, CreateGroup, CreateLocalityPolicy,
+    CreateProtectionPolicy, CreateUser, CreateVolume, FenceStorageNodeDrainMembership,
+    GrantInheritance, GrantPermission, GrantPermissionWithActivation, IssueAuthenticationSession,
+    LocalityRequirementConfiguration, MaintenanceWorkCompletion, NewAuthenticationCredential,
+    NewRecoveryCode, PermissionScope, ProtectionScenarioConfiguration, PublishSmbExport,
+    QueueCertificateOrder, QueueMaintenanceWork, RebalanceScanCursor, RecordName,
+    RegisterNodeWrappingKey, RegisterStorageTarget, RemoveGroupMember, RenewCertificateOrder,
     RenewMaintenanceWork, RevokeAuthenticationMethod, RevokeAuthenticationSession,
-    SessionAuthenticationFactor, SessionClientLabel, SetHostAvailabilityCellMembership,
-    SetHostFaultGroupMembership, SetTargetAvailabilityCellMembership, SmbExportGatewaySelection,
-    StepUpAuthenticationSession, StorageUsageLimit, StrongFallbackMode, TotpAlgorithm,
-    VOLUME_CONTENT_KEY_SECRET_KIND, WithdrawSmbExport,
+    SecretGenerationReference, SessionAuthenticationFactor, SessionClientLabel,
+    SetHostAvailabilityCellMembership, SetHostFaultGroupMembership,
+    SetTargetAvailabilityCellMembership, SmbExportGatewaySelection, StepUpAuthenticationSession,
+    StorageUsageLimit, StrongFallbackMode, TotpAlgorithm, VOLUME_CONTENT_KEY_SECRET_KIND,
+    WithdrawSmbExport,
 };
 
 #[test]
@@ -619,6 +623,90 @@ fn smb_export_commands_round_trip_gateway_selection_and_audit_reason()
         AuthoritativeCommand::WithdrawSmbExport(WithdrawSmbExport {
             export_id,
             reason: "No longer published".to_owned(),
+        }),
+    ] {
+        assert_round_trip(context, command)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn acme_commands_round_trip_configuration_claims_and_both_outcomes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let config_id = AcmeConfigurationId::from_bytes([100; 16])?;
+    let order_id = CertificateOrderId::from_bytes([101; 16])?;
+    let account_key = SecretGenerationReference {
+        secret_id: [102; 16],
+        generation: 2,
+    };
+    let settings = SecretGenerationReference {
+        secret_id: [103; 16],
+        generation: 3,
+    };
+    let claim = ClaimCertificateOrder {
+        order_id,
+        claim_generation: 4,
+        worker_node_id: NodeId::from_bytes([104; 16])?,
+        worker_incarnation: 5,
+        fence: 6,
+        lease_expires_at: UnixMicros::new(700),
+    };
+    for command in [
+        AuthoritativeCommand::ConfigureAcme(ConfigureAcme {
+            config_id,
+            directory_url: "https://acme.example.test/directory".to_owned(),
+            account_key,
+            challenge_kind: AcmeChallengeKind::Dns01,
+            challenge_settings: Some(settings),
+            certificate_names: BoundedItems::new(
+                vec![
+                    "files.example.test".to_owned(),
+                    "www.example.test".to_owned(),
+                ],
+                256,
+            )?,
+        }),
+        AuthoritativeCommand::QueueCertificateOrder(QueueCertificateOrder {
+            order_id,
+            config_id,
+            next_attempt_at: UnixMicros::new(100),
+        }),
+        AuthoritativeCommand::ClaimCertificateOrder(claim),
+        AuthoritativeCommand::RenewCertificateOrder(RenewCertificateOrder {
+            order_id,
+            claim_generation: claim.claim_generation,
+            worker_node_id: claim.worker_node_id,
+            worker_incarnation: claim.worker_incarnation,
+            fence: claim.fence,
+            lease_expires_at: UnixMicros::new(800),
+        }),
+        AuthoritativeCommand::CompleteCertificateOrder(CompleteCertificateOrder {
+            order_id,
+            claim_generation: claim.claim_generation,
+            worker_node_id: claim.worker_node_id,
+            worker_incarnation: claim.worker_incarnation,
+            fence: claim.fence,
+            outcome: CertificateOrderCompletion::Retry {
+                failure_digest: [105; 32],
+                retry_at: UnixMicros::new(900),
+            },
+        }),
+        AuthoritativeCommand::CompleteCertificateOrder(CompleteCertificateOrder {
+            order_id,
+            claim_generation: claim.claim_generation,
+            worker_node_id: claim.worker_node_id,
+            worker_incarnation: claim.worker_incarnation,
+            fence: claim.fence,
+            outcome: CertificateOrderCompletion::Issued {
+                certificate: SecretGenerationReference {
+                    secret_id: [106; 16],
+                    generation: 7,
+                },
+                not_before: UnixMicros::new(600),
+                not_after: UnixMicros::new(1_000),
+                result_digest: [107; 32],
+            },
         }),
     ] {
         assert_round_trip(context, command)?;

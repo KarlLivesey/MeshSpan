@@ -130,6 +130,10 @@ pub enum EntityKind {
     AcknowledgementPolicy = 47,
     /// Durable repair, scrub, drain, rebalance or reconciliation work.
     MaintenanceWork = 48,
+    /// Immutable ACME account, challenge and requested-name configuration.
+    AcmeConfiguration = 49,
+    /// Durable single-worker-fenced public certificate order.
+    CertificateOrder = 50,
 }
 
 impl EntityKind {
@@ -183,6 +187,8 @@ impl EntityKind {
             46 => Ok(Self::LocalityPolicy),
             47 => Ok(Self::AcknowledgementPolicy),
             48 => Ok(Self::MaintenanceWork),
+            49 => Ok(Self::AcmeConfiguration),
+            50 => Ok(Self::CertificateOrder),
             _ => Err(RepositoryError::CorruptState),
         }
     }

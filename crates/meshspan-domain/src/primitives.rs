@@ -163,6 +163,14 @@ define_identifier!(
 define_identifier!(GroupId, "Stable identity of one group principal.");
 define_identifier!(VolumeId, "Stable identity of one volume.");
 define_identifier!(SmbExportId, "Stable identity of one published SMB export.");
+define_identifier!(
+    AcmeConfigurationId,
+    "Stable identity of one public-certificate ACME configuration."
+);
+define_identifier!(
+    CertificateOrderId,
+    "Stable identity of one durable public-certificate order."
+);
 define_identifier!(ObjectId, "Stable identity of one namespace object.");
 define_identifier!(
     BranchId,

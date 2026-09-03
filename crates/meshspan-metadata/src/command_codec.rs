@@ -3,6 +3,7 @@
 //! Bounded canonical bytes for authoritative commands carried by consensus.
 
 mod acknowledgement_policy;
+mod acme;
 mod authentication;
 mod availability_cell;
 mod bootstrap;
@@ -103,6 +104,9 @@ fn encode_command(
     encoder: &mut Encoder,
     command: &AuthoritativeCommand,
 ) -> Result<(), MetadataCommandCodecError> {
+    if acme::encode_command(encoder, command)? {
+        return Ok(());
+    }
     if maintenance_work::encode_command(encoder, command)? {
         return Ok(());
     }
@@ -203,6 +207,9 @@ fn decode_command(
     decoder: &mut Decoder<'_>,
 ) -> Result<AuthoritativeCommand, MetadataCommandCodecError> {
     let kind = decoder.u16()?;
+    if acme::is_command_kind(kind) {
+        return acme::decode_command(kind, decoder);
+    }
     if maintenance_work::is_command_kind(kind) {
         return maintenance_work::decode_command(kind, decoder);
     }
