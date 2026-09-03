@@ -47,8 +47,9 @@ use crate::{
     RevokeFederationGrantAssignmentActivation,
 };
 use crate::{
-    ConfigureBackupDestination, ConfigureMetadataBackupSchedule, QueueMetadataBackupRun,
-    RecordBackupCopy, RecordMetadataBackup, VerifyBackupCopy,
+    ClaimMetadataBackupRun, CompleteMetadataBackupRun, ConfigureBackupDestination,
+    ConfigureMetadataBackupSchedule, MetadataBackupRunCompletion, QueueMetadataBackupRun,
+    RecordBackupCopy, RecordMetadataBackup, RenewMetadataBackupRun, VerifyBackupCopy,
 };
 use crate::{IssueFederationStorageAllocation, RevokeFederationStorageAllocation};
 use crate::{
@@ -260,6 +261,12 @@ pub enum AuthoritativeCommand {
     ConfigureMetadataBackupSchedule(ConfigureMetadataBackupSchedule),
     /// Materialises one exact due automatic metadata-backup occurrence.
     QueueMetadataBackupRun(QueueMetadataBackupRun),
+    /// Fences one node as the sole producer for a queued backup occurrence.
+    ClaimMetadataBackupRun(ClaimMetadataBackupRun),
+    /// Extends one unchanged live backup producer claim.
+    RenewMetadataBackupRun(RenewMetadataBackupRun),
+    /// Terminates one run as protected or explicitly incomplete.
+    CompleteMetadataBackupRun(CompleteMetadataBackupRun),
     /// Admits one exact encrypted partition backup generation.
     RecordMetadataBackup(RecordMetadataBackup),
     /// Records one provider-confirmed encrypted backup copy.
@@ -458,6 +465,9 @@ impl AuthoritativeCommand {
             Self::ConfigureBackupDestination(value) => value.update_digest(digest),
             Self::ConfigureMetadataBackupSchedule(value) => value.update_digest(digest),
             Self::QueueMetadataBackupRun(value) => value.update_digest(digest),
+            Self::ClaimMetadataBackupRun(value) => value.update_digest(digest),
+            Self::RenewMetadataBackupRun(value) => value.update_digest(digest),
+            Self::CompleteMetadataBackupRun(value) => value.update_digest(digest),
             Self::RecordMetadataBackup(value) => value.update_digest(digest),
             Self::RecordBackupCopy(value) => value.update_digest(digest),
             Self::VerifyBackupCopy(value) => value.update_digest(digest),
@@ -3395,6 +3405,41 @@ digest_simple_record!(
     }
 );
 digest_simple_record!(
+    ClaimMetadataBackupRun,
+    b"claim-metadata-backup-run",
+    |value, digest| {
+        digest.identifier(value.backup_id.as_bytes());
+        update_backup_claim_digest(value.claim, digest);
+        digest.signed(value.lease_expires_at.get());
+    }
+);
+digest_simple_record!(
+    RenewMetadataBackupRun,
+    b"renew-metadata-backup-run",
+    |value, digest| {
+        digest.identifier(value.backup_id.as_bytes());
+        update_backup_claim_digest(value.claim, digest);
+        digest.signed(value.lease_expires_at.get());
+    }
+);
+digest_simple_record!(
+    CompleteMetadataBackupRun,
+    b"complete-metadata-backup-run",
+    |value, digest| {
+        digest.identifier(value.backup_id.as_bytes());
+        match value.outcome {
+            MetadataBackupRunCompletion::Protected { result_digest } => {
+                digest.byte(1);
+                digest.bytes(&result_digest);
+            }
+            MetadataBackupRunCompletion::Incomplete { result_digest } => {
+                digest.byte(2);
+                digest.bytes(&result_digest);
+            }
+        }
+    }
+);
+digest_simple_record!(
     RecordMetadataBackup,
     b"record-metadata-backup",
     |value, digest| {
@@ -3410,6 +3455,7 @@ digest_simple_record!(
         digest.bytes(&value.manifest_digest);
         digest.unsigned(value.encrypted_byte_length);
         digest.bytes(&value.encrypted_digest);
+        update_backup_claim_digest(value.claim, digest);
         digest.identifier(value.initial_copy.destination_id.as_bytes());
         digest.unsigned(value.initial_copy.provider_generation);
         digest.bytes(value.initial_copy.object_reference.as_bytes());
@@ -3417,6 +3463,13 @@ digest_simple_record!(
         digest.bytes(&value.initial_copy.copy_digest);
     }
 );
+
+fn update_backup_claim_digest(value: crate::MetadataBackupRunClaim, digest: &mut CanonicalDigest) {
+    digest.unsigned(value.claim_generation);
+    digest.identifier(value.worker_node_id.as_bytes());
+    digest.unsigned(value.worker_incarnation);
+    digest.unsigned(value.fence);
+}
 digest_simple_record!(RecordBackupCopy, b"record-backup-copy", |value, digest| {
     digest.identifier(value.backup_id.as_bytes());
     digest.identifier(value.destination_id.as_bytes());

@@ -11,7 +11,8 @@ use meshspan_domain::{
 };
 use meshspan_metadata::{
     AuthoritativeCommand, BackupCopyRecord, BackupCopyState, CommandContext, CommandReceipt,
-    EntityKind, InitialBackupCopy, MetadataBackupRecord, MetadataBackupState, RecordMetadataBackup,
+    EntityKind, InitialBackupCopy, MetadataBackupRecord, MetadataBackupRunClaim,
+    MetadataBackupState, RecordMetadataBackup,
 };
 use sha2::{Digest, Sha256};
 
@@ -39,6 +40,7 @@ impl PublicationStep {
 pub(super) fn record_backup(
     evidence: BackupFileEvidence,
     receipt: &BackupObjectReceipt,
+    claim: MetadataBackupRunClaim,
 ) -> RecordMetadataBackup {
     RecordMetadataBackup {
         backup_id: evidence.source.backup_id,
@@ -53,6 +55,7 @@ pub(super) fn record_backup(
         manifest_digest: evidence.source.catalogue_digest(),
         encrypted_byte_length: evidence.byte_length,
         encrypted_digest: evidence.digest,
+        claim,
         initial_copy: InitialBackupCopy {
             destination_id: receipt.object.destination_id,
             provider_generation: receipt.object.provider_generation,

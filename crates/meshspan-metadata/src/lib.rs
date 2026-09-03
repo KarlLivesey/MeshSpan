@@ -53,9 +53,11 @@ pub use acme_command::{
     RenewCertificateOrder, SecretGenerationReference,
 };
 pub use backup_command::{
-    BackupDestinationBinding, BackupFailureRelationship, ConfigureBackupDestination,
-    ConfigureMetadataBackupSchedule, InitialBackupCopy, MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES,
-    QueueMetadataBackupRun, RecordBackupCopy, RecordMetadataBackup, VerifyBackupCopy,
+    BackupDestinationBinding, BackupFailureRelationship, ClaimMetadataBackupRun,
+    CompleteMetadataBackupRun, ConfigureBackupDestination, ConfigureMetadataBackupSchedule,
+    InitialBackupCopy, MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES, MetadataBackupRunClaim,
+    MetadataBackupRunCompletion, QueueMetadataBackupRun, RecordBackupCopy, RecordMetadataBackup,
+    RenewMetadataBackupRun, VerifyBackupCopy,
 };
 pub use command::{
     ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
@@ -223,7 +225,8 @@ pub use repository::{
     MaintenanceEffectReference, MaintenanceWorkClaim, MaintenanceWorkCursor, MaintenanceWorkRecord,
     MaintenanceWorkState, ManualDnsTaskCursor, ManualDnsTaskRecord, ManualDnsTaskState,
     MeshLocalCertificateAuthorityRecord, MeshLocalCertificateIssuanceRecord, MeshRecoveryAuthority,
-    MetadataBackupRecord, MetadataBackupState, NamespaceCursor, NamespaceRecord,
+    MetadataBackupRecord, MetadataBackupRun, MetadataBackupRunClaimRecord, MetadataBackupRunState,
+    MetadataBackupSchedule, MetadataBackupState, NamespaceCursor, NamespaceRecord,
     NodeActivationCandidate, NodeActivationRecord, NodeEnrolmentRecord, NodeWrappingKeyRecord,
     ObjectOwnerCursor, ObjectOwnerRecord, OnlineCertificateAuthorityRecord, Page, PageLimit,
     PartitionBackupManifest, PartitionConsensusPersistence, PartitionSnapshotManifest,
