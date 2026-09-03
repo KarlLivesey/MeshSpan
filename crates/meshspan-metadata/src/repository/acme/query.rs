@@ -14,8 +14,8 @@ use super::{
     ORDER_QUEUED, SecretGenerationReference, decode_order_inner, exact, positive,
     validate_configuration,
 };
-use crate::PartitionDatabase;
 use crate::repository::{Page, PageLimit, RepositoryError};
+use crate::{PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PartitionDatabase};
 
 /// Complete immutable configuration required to execute one certificate order.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -409,6 +409,11 @@ pub(super) fn latest_public_certificate(
     {
         return Err(RepositoryError::CorruptState);
     }
+    let certificate = super::super::secret_generation::latest_reference(
+        database,
+        PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+        certificate,
+    )?;
     Ok(Some(PublicCertificateSelection {
         source: PublicCertificateSource::AcmeOrder(order_id),
         certificate,

@@ -453,34 +453,18 @@ pub(super) fn acknowledge_installation(
         value.gateway_incarnation,
     )?;
     validate_installation_order(transaction, value)?;
-    if let Some(existing) =
-        existing_installation(transaction, value.order_id, value.gateway_node_id)?
-    {
-        if existing.gateway_incarnation == value.gateway_incarnation
-            && existing.certificate == value.certificate
-            && existing.bundle_digest == value.bundle_digest
-        {
-            return Ok(order_entity(value.order_id));
-        }
-        return Err(RepositoryError::InvalidCommand);
-    }
-    transaction.execute(
-        "INSERT INTO public_certificate_installations(
-            order_id, gateway_node_id, gateway_incarnation, certificate_secret_kind,
-            certificate_secret_id, certificate_secret_generation, bundle_digest, installed_at,
-            revision
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![
-            value.order_id.as_bytes().as_slice(),
-            value.gateway_node_id.as_bytes().as_slice(),
-            to_i64(value.gateway_incarnation)?,
-            i64::from(PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND),
-            value.certificate.secret_id.as_slice(),
-            to_i64(value.certificate.generation)?,
-            value.bundle_digest.as_slice(),
-            context.occurred_at.get(),
-            to_i64(revision.get())?,
-        ],
+    super::public_certificate_delivery::record(
+        transaction,
+        super::public_certificate_delivery::ACME_SOURCE,
+        value.order_id.as_bytes(),
+        super::public_certificate_delivery::DeliveryInstallation {
+            gateway_node_id: value.gateway_node_id,
+            gateway_incarnation: value.gateway_incarnation,
+            certificate: value.certificate,
+            bundle_digest: value.bundle_digest,
+            installed_at: context.occurred_at,
+            revision,
+        },
     )?;
     Ok(order_entity(value.order_id))
 }
@@ -588,22 +572,7 @@ impl AuthoritativeRepository {
         order_id: CertificateOrderId,
         gateway_node_id: NodeId,
     ) -> Result<Option<PublicCertificateInstallationRecord>, RepositoryError> {
-        self.database
-            .connection()
-            .query_row(
-                "SELECT order_id, gateway_node_id, gateway_incarnation,
-                        certificate_secret_id, certificate_secret_generation, bundle_digest,
-                        installed_at, revision
-                 FROM public_certificate_installations
-                 WHERE order_id = ?1 AND gateway_node_id = ?2",
-                params![
-                    order_id.as_bytes().as_slice(),
-                    gateway_node_id.as_bytes().as_slice()
-                ],
-                decode_installation,
-            )
-            .optional()
-            .map_err(RepositoryError::from)
+        existing_installation(self.database.connection(), order_id, gateway_node_id)
     }
 
     /// Counts exact installation proofs against the immutable gateway-recipient set.
@@ -631,6 +600,11 @@ impl AuthoritativeRepository {
             secret_id: exact(secret_id)?,
             generation: positive(generation)?,
         };
+        let certificate = super::secret_generation::latest_reference(
+            &self.database,
+            PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+            certificate,
+        )?;
         let bundle_digest = exact(digest)?;
         let required: i64 = connection.query_row(
             "SELECT count(DISTINCT r.owner_id) FROM secret_recipient_envelopes e
@@ -646,10 +620,11 @@ impl AuthoritativeRepository {
             |row| row.get(0),
         )?;
         let installed: i64 = connection.query_row(
-            "SELECT count(*) FROM public_certificate_installations
-             WHERE order_id = ?1 AND certificate_secret_id = ?2
-               AND certificate_secret_generation = ?3 AND bundle_digest = ?4",
+            "SELECT count(*) FROM public_certificate_delivery_installations
+             WHERE source_kind = ?1 AND source_id = ?2 AND certificate_secret_id = ?3
+               AND certificate_secret_generation = ?4 AND bundle_digest = ?5",
             params![
+                super::public_certificate_delivery::ACME_SOURCE,
                 order_id.as_bytes().as_slice(),
                 certificate.secret_id.as_slice(),
                 to_i64(certificate.generation)?,
@@ -689,78 +664,50 @@ fn validate_installation_order(
     let matches = transaction.query_row(
         "SELECT EXISTS(
             SELECT 1 FROM certificate_orders o
-            JOIN secret_recipient_envelopes e
-              ON e.secret_kind = ?1
-             AND e.secret_id = o.certificate_secret_id
-             AND e.secret_generation = o.certificate_secret_generation
-            JOIN secret_wrapping_recipients r
-              ON r.key_fingerprint = e.recipient_key_fingerprint
-            WHERE o.order_id = ?2 AND o.state = ?3
-              AND o.certificate_secret_id = ?4 AND o.certificate_secret_generation = ?5
-              AND o.result_digest = ?6 AND o.revision = ?7
-              AND r.recipient_kind = 1 AND r.owner_id = ?8
+            WHERE o.order_id = ?1 AND o.state = ?2
+              AND o.certificate_secret_id = ?3
+              AND o.result_digest = ?4 AND o.revision = ?5
          )",
         params![
-            i64::from(PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND),
             value.order_id.as_bytes().as_slice(),
             ORDER_COMPLETE,
             value.certificate.secret_id.as_slice(),
-            to_i64(value.certificate.generation)?,
             value.bundle_digest.as_slice(),
             to_i64(value.observed_order_revision.get())?,
-            value.gateway_node_id.as_bytes().as_slice(),
         ],
         |row| row.get::<_, i64>(0),
     )?;
-    if matches == 1 {
-        Ok(())
-    } else {
-        Err(RepositoryError::InvalidCommand)
+    if matches != 1 {
+        return Err(RepositoryError::InvalidCommand);
     }
+    super::public_certificate_delivery::validate_latest_recipient(
+        transaction,
+        value.gateway_node_id,
+        value.certificate,
+    )
 }
 
 fn existing_installation(
-    transaction: &Transaction<'_>,
+    transaction: &rusqlite::Connection,
     order_id: CertificateOrderId,
     gateway_node_id: NodeId,
 ) -> Result<Option<PublicCertificateInstallationRecord>, RepositoryError> {
-    transaction
-        .query_row(
-            "SELECT order_id, gateway_node_id, gateway_incarnation,
-                    certificate_secret_id, certificate_secret_generation, bundle_digest,
-                    installed_at, revision
-             FROM public_certificate_installations
-             WHERE order_id = ?1 AND gateway_node_id = ?2",
-            params![
-                order_id.as_bytes().as_slice(),
-                gateway_node_id.as_bytes().as_slice()
-            ],
-            decode_installation,
-        )
-        .optional()
-        .map_err(RepositoryError::from)
-}
-
-fn decode_installation(row: &Row<'_>) -> rusqlite::Result<PublicCertificateInstallationRecord> {
-    decode_installation_inner(row).map_err(|_| rusqlite::Error::InvalidQuery)
-}
-
-fn decode_installation_inner(
-    row: &Row<'_>,
-) -> Result<PublicCertificateInstallationRecord, RepositoryError> {
-    Ok(PublicCertificateInstallationRecord {
-        order_id: CertificateOrderId::from_bytes(exact(row.get(0)?)?)
-            .map_err(|_| RepositoryError::CorruptState)?,
-        gateway_node_id: NodeId::from_bytes(exact(row.get(1)?)?)
-            .map_err(|_| RepositoryError::CorruptState)?,
-        gateway_incarnation: positive(row.get(2)?)?,
-        certificate: SecretGenerationReference {
-            secret_id: exact(row.get(3)?)?,
-            generation: positive(row.get(4)?)?,
-        },
-        bundle_digest: exact(row.get(5)?)?,
-        installed_at: UnixMicros::new(row.get(6)?),
-        revision: Revision::new(positive(row.get(7)?)?),
+    super::public_certificate_delivery::existing(
+        transaction,
+        super::public_certificate_delivery::ACME_SOURCE,
+        order_id.as_bytes(),
+        gateway_node_id,
+    )
+    .map(|value| {
+        value.map(|value| PublicCertificateInstallationRecord {
+            order_id,
+            gateway_node_id: value.gateway_node_id,
+            gateway_incarnation: value.gateway_incarnation,
+            certificate: value.certificate,
+            bundle_digest: value.bundle_digest,
+            installed_at: value.installed_at,
+            revision: value.revision,
+        })
     })
 }
 

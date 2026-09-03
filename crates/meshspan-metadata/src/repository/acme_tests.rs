@@ -69,6 +69,119 @@ fn mesh_local_authority_is_atomic_immutable_and_bound_to_its_encrypted_key()
     Ok(())
 }
 
+#[test]
+fn recipient_redistribution_advances_delivery_without_reissuing_certificate()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    let (_, authority) = create_mesh_local_authority(&mut fixture)?;
+    let issuance = issue_mesh_local_endpoint(&mut fixture, &authority)?;
+    let generation_one_acknowledgement = AcknowledgeMeshLocalCertificateInstallation {
+        issuance_id: issuance.issuance_id,
+        gateway_node_id: fixture.node,
+        gateway_incarnation: 1,
+        certificate: issuance.certificate,
+        bundle_digest: issuance.bundle_digest,
+        observed_issuance_revision: issuance.revision,
+    };
+    fixture.apply(
+        5,
+        102,
+        &AuthoritativeCommand::AcknowledgeMeshLocalCertificateInstallation(
+            generation_one_acknowledgement,
+        ),
+    )?;
+
+    let authority_delivery = redistributed_secret(
+        MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND,
+        authority.authority_key.secret_id,
+        2,
+        &fixture,
+        123,
+    )?;
+    fixture.apply(
+        6,
+        103,
+        &AuthoritativeCommand::CommitSecretGeneration(authority_delivery),
+    )?;
+    let certificate_delivery = redistributed_secret(
+        PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+        issuance.certificate.secret_id,
+        2,
+        &fixture,
+        124,
+    )?;
+    fixture.apply(
+        7,
+        104,
+        &AuthoritativeCommand::CommitSecretGeneration(certificate_delivery),
+    )?;
+
+    let reloaded_authority = fixture
+        .repository
+        .mesh_local_certificate_authority()?
+        .ok_or("mesh-local authority missing")?;
+    assert_eq!(reloaded_authority.generation, 1);
+    assert_eq!(reloaded_authority.authority_key.generation, 2);
+    let selected = fixture
+        .repository
+        .latest_public_certificate()?
+        .ok_or("mesh-local certificate missing")?;
+    assert_eq!(
+        selected.source,
+        PublicCertificateSource::MeshLocalIssuance(issuance.issuance_id)
+    );
+    assert_eq!(selected.certificate.generation, 2);
+    assert_eq!(selected.source_revision, issuance.revision);
+
+    fixture.apply(
+        8,
+        105,
+        &AuthoritativeCommand::AcknowledgeMeshLocalCertificateInstallation(
+            AcknowledgeMeshLocalCertificateInstallation {
+                certificate: selected.certificate,
+                ..generation_one_acknowledgement
+            },
+        ),
+    )?;
+    let installation_count: i64 = fixture.repository.database.connection().query_row(
+        "SELECT count(*) FROM public_certificate_delivery_installations
+         WHERE source_kind = 3 AND source_id = ?1 AND gateway_node_id = ?2",
+        params![
+            issuance.issuance_id.as_bytes().as_slice(),
+            fixture.node.as_bytes().as_slice(),
+        ],
+        |row| row.get(0),
+    )?;
+    assert_eq!(installation_count, 2);
+    Ok(())
+}
+
+fn redistributed_secret(
+    kind: u16,
+    secret_id: [u8; 16],
+    generation: u64,
+    fixture: &Fixture,
+    seed: u8,
+) -> Result<CommitSecretGeneration, Box<dyn std::error::Error>> {
+    let recipients = [
+        crate::test_support::node_wrapping_private_key()?.public_key(),
+        fixture.recovery_key.public_key(),
+    ];
+    let (secret, envelopes) = encrypt_secret(
+        SecretContext::new(kind, secret_id, generation)?,
+        b"unchanged secret material",
+        &recipients,
+        &mut SecretRandom(seed),
+    )?;
+    Ok(CommitSecretGeneration {
+        secret: secret.parts(),
+        recipients: envelopes
+            .iter()
+            .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
+            .collect(),
+    })
+}
+
 fn create_mesh_local_authority(
     fixture: &mut Fixture,
 ) -> Result<
@@ -1000,6 +1113,130 @@ fn certificate_order_is_retried_reclaimed_and_stale_workers_are_fenced()
 fn gateway_installation_requires_exact_issued_recipient_and_is_idempotent()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = Fixture::new()?;
+    let (order_id, certificate, order_revision) = issued_acme_certificate(&mut fixture)?;
+    let selected = fixture
+        .repository
+        .latest_public_certificate()?
+        .ok_or("public certificate selection missing")?;
+    assert_eq!(
+        selected.source,
+        PublicCertificateSource::AcmeOrder(order_id)
+    );
+    assert_eq!(selected.certificate, certificate);
+    assert_eq!(selected.bundle_digest, [52; 32]);
+    assert_eq!(selected.configured_by, fixture.administrator);
+    assert_eq!(selected.completed_at, UnixMicros::new(12));
+    assert_eq!(selected.source_revision, order_revision);
+    let acknowledgement = AcknowledgePublicCertificateInstallation {
+        order_id,
+        gateway_node_id: fixture.node,
+        gateway_incarnation: 1,
+        certificate,
+        bundle_digest: [52; 32],
+        observed_order_revision: order_revision,
+    };
+    fixture.apply(
+        7,
+        13,
+        &AuthoritativeCommand::AcknowledgePublicCertificateInstallation(acknowledgement),
+    )?;
+    let installation = fixture
+        .repository
+        .public_certificate_installation(order_id, fixture.node)?
+        .ok_or("gateway installation missing")?;
+    assert_eq!(installation.gateway_incarnation, 1);
+    assert_eq!(installation.certificate, certificate);
+    assert_eq!(installation.bundle_digest, [52; 32]);
+    assert_eq!(installation.installed_at, UnixMicros::new(13));
+    let summary = fixture
+        .repository
+        .public_certificate_rollout_summary(order_id)?;
+    assert_eq!(summary.required_gateway_count, 1);
+    assert_eq!(summary.installed_gateway_count, 1);
+    assert!(summary.complete);
+
+    fixture.apply(
+        8,
+        14,
+        &AuthoritativeCommand::AcknowledgePublicCertificateInstallation(acknowledgement),
+    )?;
+    let mut substituted = acknowledgement;
+    substituted.bundle_digest = [53; 32];
+    assert!(matches!(
+        fixture.apply(
+            9,
+            15,
+            &AuthoritativeCommand::AcknowledgePublicCertificateInstallation(substituted)
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn acme_rollout_reopens_for_a_redistributed_delivery_generation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    let (order_id, certificate, order_revision) = issued_acme_certificate(&mut fixture)?;
+    let acknowledgement = AcknowledgePublicCertificateInstallation {
+        order_id,
+        gateway_node_id: fixture.node,
+        gateway_incarnation: 1,
+        certificate,
+        bundle_digest: [52; 32],
+        observed_order_revision: order_revision,
+    };
+    fixture.apply(
+        7,
+        13,
+        &AuthoritativeCommand::AcknowledgePublicCertificateInstallation(acknowledgement),
+    )?;
+    let redistributed = redistributed_secret(
+        PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+        certificate.secret_id,
+        2,
+        &fixture,
+        54,
+    )?;
+    fixture.apply(
+        8,
+        16,
+        &AuthoritativeCommand::CommitSecretGeneration(redistributed),
+    )?;
+    let redistributed_selection = fixture
+        .repository
+        .latest_public_certificate()?
+        .ok_or("redistributed certificate selection missing")?;
+    assert_eq!(redistributed_selection.source_revision, order_revision);
+    assert_eq!(redistributed_selection.certificate.generation, 2);
+    let summary = fixture
+        .repository
+        .public_certificate_rollout_summary(order_id)?;
+    assert_eq!(summary.certificate.generation, 2);
+    assert_eq!(summary.installed_gateway_count, 0);
+    assert!(!summary.complete);
+    fixture.apply(
+        9,
+        17,
+        &AuthoritativeCommand::AcknowledgePublicCertificateInstallation(
+            AcknowledgePublicCertificateInstallation {
+                certificate: redistributed_selection.certificate,
+                ..acknowledgement
+            },
+        ),
+    )?;
+    let summary = fixture
+        .repository
+        .public_certificate_rollout_summary(order_id)?;
+    assert_eq!(summary.installed_gateway_count, 1);
+    assert!(summary.complete);
+    Ok(())
+}
+
+fn issued_acme_certificate(
+    fixture: &mut Fixture,
+) -> Result<(CertificateOrderId, SecretGenerationReference, Revision), Box<dyn std::error::Error>> {
     let config_id = AcmeConfigurationId::from_bytes([50; 16])?;
     let order_id = CertificateOrderId::from_bytes([51; 16])?;
     fixture.apply(
@@ -1042,64 +1279,11 @@ fn gateway_installation_requires_exact_issued_recipient_and_is_idempotent()
         .repository
         .certificate_order(order_id)?
         .ok_or("completed order missing")?;
-    let certificate = complete.certificate.ok_or("certificate missing")?;
-    let selected = fixture
-        .repository
-        .latest_public_certificate()?
-        .ok_or("public certificate selection missing")?;
-    assert_eq!(
-        selected.source,
-        PublicCertificateSource::AcmeOrder(order_id)
-    );
-    assert_eq!(selected.certificate, certificate);
-    assert_eq!(selected.bundle_digest, [52; 32]);
-    assert_eq!(selected.configured_by, fixture.administrator);
-    assert_eq!(selected.completed_at, UnixMicros::new(12));
-    assert_eq!(selected.source_revision, complete.revision);
-    let acknowledgement = AcknowledgePublicCertificateInstallation {
+    Ok((
         order_id,
-        gateway_node_id: fixture.node,
-        gateway_incarnation: 1,
-        certificate,
-        bundle_digest: [52; 32],
-        observed_order_revision: complete.revision,
-    };
-    fixture.apply(
-        7,
-        13,
-        &AuthoritativeCommand::AcknowledgePublicCertificateInstallation(acknowledgement),
-    )?;
-    let installation = fixture
-        .repository
-        .public_certificate_installation(order_id, fixture.node)?
-        .ok_or("gateway installation missing")?;
-    assert_eq!(installation.gateway_incarnation, 1);
-    assert_eq!(installation.certificate, certificate);
-    assert_eq!(installation.bundle_digest, [52; 32]);
-    assert_eq!(installation.installed_at, UnixMicros::new(13));
-    let summary = fixture
-        .repository
-        .public_certificate_rollout_summary(order_id)?;
-    assert_eq!(summary.required_gateway_count, 1);
-    assert_eq!(summary.installed_gateway_count, 1);
-    assert!(summary.complete);
-
-    fixture.apply(
-        8,
-        14,
-        &AuthoritativeCommand::AcknowledgePublicCertificateInstallation(acknowledgement),
-    )?;
-    let mut substituted = acknowledgement;
-    substituted.bundle_digest = [53; 32];
-    assert!(matches!(
-        fixture.apply(
-            9,
-            15,
-            &AuthoritativeCommand::AcknowledgePublicCertificateInstallation(substituted)
-        ),
-        Err(RepositoryError::InvalidCommand)
-    ));
-    Ok(())
+        complete.certificate.ok_or("certificate missing")?,
+        complete.revision,
+    ))
 }
 
 #[test]

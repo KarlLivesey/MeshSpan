@@ -105,6 +105,7 @@ mod passkey_registration_tests;
 mod protection_policy;
 #[cfg(test)]
 mod protection_policy_tests;
+mod public_certificate_delivery;
 mod query;
 mod quorum_plan;
 mod reachability;

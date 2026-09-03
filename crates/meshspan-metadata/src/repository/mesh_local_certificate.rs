@@ -184,28 +184,19 @@ pub(super) fn acknowledge_installation(
         value.gateway_incarnation,
     )?;
     validate_installation(transaction, value)?;
-    let inserted = transaction.execute(
-        "INSERT INTO mesh_local_certificate_installations(
-            issuance_id, gateway_node_id, gateway_incarnation, certificate_secret_kind,
-            certificate_secret_id, certificate_secret_generation, bundle_digest,
-            installed_at, revision
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-         ON CONFLICT(issuance_id, gateway_node_id) DO NOTHING",
-        params![
-            value.issuance_id.as_bytes().as_slice(),
-            value.gateway_node_id.as_bytes().as_slice(),
-            to_i64(value.gateway_incarnation)?,
-            i64::from(PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND),
-            value.certificate.secret_id.as_slice(),
-            to_i64(value.certificate.generation)?,
-            value.bundle_digest.as_slice(),
-            context.occurred_at.get(),
-            to_i64(revision.get())?,
-        ],
+    super::public_certificate_delivery::record(
+        transaction,
+        super::public_certificate_delivery::MESH_LOCAL_SOURCE,
+        value.issuance_id.as_bytes(),
+        super::public_certificate_delivery::DeliveryInstallation {
+            gateway_node_id: value.gateway_node_id,
+            gateway_incarnation: value.gateway_incarnation,
+            certificate: value.certificate,
+            bundle_digest: value.bundle_digest,
+            installed_at: context.occurred_at,
+            revision,
+        },
     )?;
-    if inserted == 0 && !installation_matches(transaction, value)? {
-        return Err(RepositoryError::InvalidCommand);
-    }
     Ok(issuance_entity(value.issuance_id))
 }
 
@@ -218,7 +209,8 @@ impl AuthoritativeRepository {
     pub fn mesh_local_certificate_authority(
         &self,
     ) -> Result<Option<MeshLocalCertificateAuthorityRecord>, RepositoryError> {
-        self.database
+        let record = self
+            .database
             .connection()
             .query_row(
                 "SELECT authority_id, generation, certificate_der, certificate_digest,
@@ -228,8 +220,17 @@ impl AuthoritativeRepository {
                 [],
                 decode,
             )
-            .optional()
-            .map_err(RepositoryError::from)
+            .optional()?;
+        record
+            .map(|mut record| {
+                record.authority_key = super::secret_generation::latest_reference(
+                    &self.database,
+                    MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND,
+                    record.authority_key,
+                )?;
+                Ok(record)
+            })
+            .transpose()
     }
 
     /// Returns one immutable mesh-local endpoint issuance and all canonical names.
@@ -309,12 +310,17 @@ pub(super) fn latest_public_certificate(
     };
     let issuance_id = MeshLocalCertificateIssuanceId::from_bytes(exact(stored.0)?)
         .map_err(|_| RepositoryError::CorruptState)?;
+    let original_certificate = SecretGenerationReference {
+        secret_id: exact(stored.1)?,
+        generation: positive(stored.2)?,
+    };
     let selection = PublicCertificateSelection {
         source: PublicCertificateSource::MeshLocalIssuance(issuance_id),
-        certificate: SecretGenerationReference {
-            secret_id: exact(stored.1)?,
-            generation: positive(stored.2)?,
-        },
+        certificate: super::secret_generation::latest_reference(
+            database,
+            PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+            original_certificate,
+        )?,
         bundle_digest: exact(stored.3)?,
         configured_by: PrincipalId::from_bytes(exact(stored.4)?)
             .map_err(|_| RepositoryError::CorruptState)?,
@@ -418,54 +424,25 @@ fn validate_installation(
     let matches = transaction.query_row(
         "SELECT EXISTS(
             SELECT 1 FROM mesh_local_certificate_issuances i
-            JOIN secret_recipient_envelopes e
-              ON e.secret_kind = ?1 AND e.secret_id = i.certificate_secret_id
-             AND e.secret_generation = i.certificate_secret_generation
-            JOIN secret_wrapping_recipients r ON r.key_fingerprint = e.recipient_key_fingerprint
-            WHERE i.issuance_id = ?2 AND i.certificate_secret_id = ?3
-              AND i.certificate_secret_generation = ?4 AND i.bundle_digest = ?5
-              AND i.revision = ?6 AND r.recipient_kind = 1 AND r.owner_id = ?7
+            WHERE i.issuance_id = ?1 AND i.certificate_secret_id = ?2
+              AND i.bundle_digest = ?3 AND i.revision = ?4
          )",
         params![
-            i64::from(PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND),
             value.issuance_id.as_bytes().as_slice(),
             value.certificate.secret_id.as_slice(),
-            to_i64(value.certificate.generation)?,
             value.bundle_digest.as_slice(),
             to_i64(value.observed_issuance_revision.get())?,
-            value.gateway_node_id.as_bytes().as_slice(),
         ],
         |row| row.get::<_, i64>(0),
     )?;
-    if matches == 1 {
-        Ok(())
-    } else {
-        Err(RepositoryError::InvalidCommand)
+    if matches != 1 {
+        return Err(RepositoryError::InvalidCommand);
     }
-}
-
-fn installation_matches(
-    transaction: &Transaction<'_>,
-    value: AcknowledgeMeshLocalCertificateInstallation,
-) -> Result<bool, RepositoryError> {
-    let matches = transaction.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM mesh_local_certificate_installations
-            WHERE issuance_id = ?1 AND gateway_node_id = ?2 AND gateway_incarnation = ?3
-              AND certificate_secret_id = ?4 AND certificate_secret_generation = ?5
-              AND bundle_digest = ?6
-         )",
-        params![
-            value.issuance_id.as_bytes().as_slice(),
-            value.gateway_node_id.as_bytes().as_slice(),
-            to_i64(value.gateway_incarnation)?,
-            value.certificate.secret_id.as_slice(),
-            to_i64(value.certificate.generation)?,
-            value.bundle_digest.as_slice(),
-        ],
-        |row| row.get::<_, i64>(0),
-    )?;
-    Ok(matches == 1)
+    super::public_certificate_delivery::validate_latest_recipient(
+        transaction,
+        value.gateway_node_id,
+        value.certificate,
+    )
 }
 
 fn decode(row: &Row<'_>) -> rusqlite::Result<MeshLocalCertificateAuthorityRecord> {
