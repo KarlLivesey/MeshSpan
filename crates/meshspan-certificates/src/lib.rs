@@ -6,6 +6,7 @@
 //! current `RustCrypto` P-256, so enabling an `rcgen` crypto provider cannot silently change the
 //! dependency graph or choose a different cryptographic backend.
 
+mod external_request;
 mod public_bundle;
 
 use p256::ecdsa::signature::{SignatureEncoding as _, Signer as _, Verifier as _};
@@ -18,6 +19,7 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+pub use external_request::ExternalCertificateRequestKey;
 pub use public_bundle::{PublicCertificateBundle, PublicCertificateBundleError};
 
 const KEY_BYTES: usize = 32;
@@ -399,6 +401,9 @@ pub enum CertificateError {
     /// A persisted certificate/key pair was absent or internally inconsistent.
     #[error("certificate authority material is invalid")]
     CertificateMaterial,
+    /// The requested public-certificate name set or PKCS#10 request is invalid.
+    #[error("external certificate request is invalid")]
+    CertificateRequest,
     /// X.509 parameter validation or DER construction failed.
     #[error("certificate construction failed")]
     Certificate(#[from] rcgen::Error),
