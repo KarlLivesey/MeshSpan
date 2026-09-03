@@ -83,6 +83,7 @@ source/advisory policy automation arrive before a release artefact is built.
 | `tokio`                                  |           1.53.1 | `MIT`                      |
 | `tower`                                  |            0.5.3 | `MIT`                      |
 | `x25519-dalek`                           |            3.0.0 | `BSD-3-Clause`             |
+| `x509-parser`                            |           0.18.1 | `MIT OR Apache-2.0`        |
 | `zeroize`                                |            1.9.0 | `Apache-2.0 OR MIT`        |
 
 The workspace `sync_wrapper` package is a clean-room, narrow compatibility implementation for the
@@ -220,6 +221,11 @@ the first implementation.
 | `zeroize`          | Best-effort erasure for owned secret buffers                                   |
 | `secrecy`          | Types that prevent accidental secret formatting/logging                        |
 | `rcgen`            | Internal node certificates and certificate requests                            |
+| `x509-parser`      | Bounded SAN, public-key and lifetime inspection of untrusted external chains   |
+
+`x509-parser` is consumed under its MIT option. Its complete enabled dependency graph passes the
+allow-only local licence gate; certificate signature paths and authority trust remain verified by
+Rustls rather than by enabling a second cryptographic provider in the parser.
 
 The independently extractable `GPL-2.0-only` `meshspan-passkey` crate owns the
 bounded WebAuthn relying-party parser and validation state machine. It initially

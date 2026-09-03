@@ -7,6 +7,7 @@
 //! dependency graph or choose a different cryptographic backend.
 
 mod external_request;
+mod external_response;
 mod public_bundle;
 
 use p256::ecdsa::signature::{SignatureEncoding as _, Signer as _, Verifier as _};
@@ -20,6 +21,10 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 pub use external_request::ExternalCertificateRequestKey;
+pub use external_response::{
+    ExternalCertificateResponseError, ValidatedExternalCertificateResponse,
+    validate_external_certificate_response,
+};
 pub use public_bundle::{PublicCertificateBundle, PublicCertificateBundleError};
 
 const KEY_BYTES: usize = 32;
@@ -226,6 +231,34 @@ impl CertificateAuthority {
             certificate_der,
             private_key: key.private_key,
         })
+    }
+
+    /// Issues a local-CA server certificate for an existing external-request key and DNS-name set.
+    ///
+    /// This supports the mesh-local HTTPS path and deterministic external-authority test fixtures
+    /// without exporting or replacing the endpoint's private key.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid DNS-name set or an X.509 construction failure.
+    pub fn issue_public_endpoint(
+        &self,
+        dns_names: &[String],
+        request_key: &ExternalCertificateRequestKey,
+    ) -> Result<Vec<u8>, CertificateError> {
+        external_request::validate_dns_names(dns_names)?;
+        let key = request_key.signing_key();
+        let mut parameters = CertificateParams::new(dns_names.to_vec())?;
+        parameters.distinguished_name = DistinguishedName::new();
+        parameters
+            .key_usages
+            .push(KeyUsagePurpose::DigitalSignature);
+        parameters
+            .extended_key_usages
+            .push(ExtendedKeyUsagePurpose::ServerAuth);
+        parameters.serial_number = Some(key.serial_number());
+        parameters.key_identifier_method = key.identifier();
+        Ok(parameters.signed_by(key, &self.issuer)?.der().to_vec())
     }
 
     /// Creates a rotatable online authority signed by this offline root.

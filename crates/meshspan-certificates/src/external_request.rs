@@ -80,9 +80,13 @@ impl ExternalCertificateRequestKey {
             .push(ExtendedKeyUsagePurpose::ServerAuth);
         Ok(parameters.serialize_request(&self.key)?.der().to_vec())
     }
+
+    pub(super) const fn signing_key(&self) -> &RustCryptoKey {
+        &self.key
+    }
 }
 
-fn validate_dns_names(dns_names: &[String]) -> Result<(), CertificateError> {
+pub(crate) fn validate_dns_names(dns_names: &[String]) -> Result<(), CertificateError> {
     if dns_names.is_empty() || dns_names.len() > MAXIMUM_DNS_NAMES {
         return Err(CertificateError::CertificateRequest);
     }
