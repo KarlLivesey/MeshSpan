@@ -9,17 +9,20 @@ use meshspan_metadata::{PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, SecretGenerationR
 use meshspan_secret_envelope::SecretContext;
 use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+use rustls::server::{ClientHello, ResolvesServerCert};
+use rustls::sign::CertifiedKey;
 use thiserror::Error;
 
 use crate::volume_key_loading::load_secret_generation;
 use crate::{SecretGenerationAuthority, SecretGenerationDecryptor, SecretGenerationLoadingError};
 
-const HTTP_1_1_ALPN: &[u8] = b"http/1.1";
+pub(crate) const HTTP_1_1_ALPN: &[u8] = b"http/1.1";
 
 /// One cryptographically validated certificate generation ready for an HTTPS listener.
 pub struct LoadedPublicCertificate {
     generation: SecretGenerationReference,
     bundle_digest: [u8; 32],
+    certified_key: Arc<CertifiedKey>,
     server_config: Arc<ServerConfig>,
 }
 
@@ -40,6 +43,10 @@ impl LoadedPublicCertificate {
     #[must_use]
     pub fn server_config(&self) -> Arc<ServerConfig> {
         Arc::clone(&self.server_config)
+    }
+
+    pub(crate) fn certified_key(&self) -> Arc<CertifiedKey> {
+        Arc::clone(&self.certified_key)
     }
 }
 
@@ -93,18 +100,40 @@ where
             .collect();
         let private_key = PrivatePkcs8KeyDer::from(bundle.private_key_pkcs8().to_vec()).into();
         let provider = Arc::new(meshspan_rustls_provider::provider());
+        let certified_key = Arc::new(
+            CertifiedKey::from_der(certificate_chain, private_key, provider.as_ref())
+                .map_err(|_| PublicCertificateLoadingError::Failed)?,
+        );
         let mut server_config = ServerConfig::builder_with_provider(provider)
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(|_| PublicCertificateLoadingError::Failed)?
             .with_no_client_auth()
-            .with_single_cert(certificate_chain, private_key)
-            .map_err(|_| PublicCertificateLoadingError::Failed)?;
+            .with_cert_resolver(Arc::new(SingleCertificateResolver {
+                certified_key: Arc::clone(&certified_key),
+            }));
         server_config.alpn_protocols = vec![HTTP_1_1_ALPN.to_vec()];
         Ok(LoadedPublicCertificate {
             generation,
             bundle_digest,
+            certified_key,
             server_config: Arc::new(server_config),
         })
+    }
+}
+
+struct SingleCertificateResolver {
+    certified_key: Arc<CertifiedKey>,
+}
+
+impl std::fmt::Debug for SingleCertificateResolver {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SingleCertificateResolver([redacted])")
+    }
+}
+
+impl ResolvesServerCert for SingleCertificateResolver {
+    fn resolve(&self, _client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        Some(Arc::clone(&self.certified_key))
     }
 }
 

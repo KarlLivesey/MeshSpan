@@ -170,6 +170,9 @@ mod protected_recovery_code_issuance;
 mod public_certificate_loading;
 #[cfg(test)]
 mod public_certificate_loading_tests;
+mod public_certificate_rotation;
+#[cfg(test)]
+mod public_certificate_rotation_tests;
 mod public_contract_api;
 #[cfg(test)]
 mod public_contract_api_tests;
@@ -482,6 +485,10 @@ pub use protected_api_key_issuance::ProtectedApiKeyIssuanceController;
 pub use protected_recovery_code_issuance::ProtectedRecoveryCodeIssuanceController;
 pub use public_certificate_loading::{
     LoadedPublicCertificate, PublicCertificateLoadingError, PublicCertificateLoadingService,
+};
+pub use public_certificate_rotation::{
+    InstalledPublicCertificate, PublicCertificateInstallOutcome, PublicCertificateRotationError,
+    RotatingHttpsIdentity,
 };
 pub use public_contract_api::{
     PublicContractApiError, ReadinessSource, public_contract_api_router,
