@@ -53,6 +53,7 @@ source/advisory policy automation arrive before a release artefact is built.
 | `hmac`                                   |           0.13.0 | `MIT OR Apache-2.0`        |
 | `md-5`                                   |           0.11.0 | `MIT OR Apache-2.0`        |
 | `md4`                                    |           0.11.0 | `MIT OR Apache-2.0`        |
+| `meshspan-backup` (workspace)            |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-otp` (workspace)               |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-protobuf` (workspace)          |            0.1.0 | `GPL-2.0-only`             |
 | `meshspan-passkey` (workspace)           |            0.1.0 | `GPL-2.0-only`             |
