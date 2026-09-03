@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_domain::{
-    BackupDestinationId, BackupId, ComponentInstanceId, MeshId, PartitionId, Revision, TargetId,
+    BackupDestinationId, BackupId, ComponentInstanceId, DurationMicros, MeshId, PartitionId,
+    Revision, TargetId, UnixMicros,
 };
 
 use super::MetadataCommandCodecError;
@@ -9,14 +10,16 @@ use super::decoder::Decoder;
 use super::encoder::Encoder;
 use crate::{
     BackupDestinationBinding, BackupFailureRelationship, ConfigureBackupDestination,
-    MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES, RecordBackupCopy, RecordMetadataBackup, RecordName,
-    VerifyBackupCopy,
+    ConfigureMetadataBackupSchedule, MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES, QueueMetadataBackupRun,
+    RecordBackupCopy, RecordMetadataBackup, RecordName, VerifyBackupCopy,
 };
 
 pub(super) const CONFIGURE_BACKUP_DESTINATION: u16 = 63;
 pub(super) const RECORD_METADATA_BACKUP: u16 = 64;
 pub(super) const RECORD_BACKUP_COPY: u16 = 65;
 pub(super) const VERIFY_BACKUP_COPY: u16 = 66;
+pub(super) const CONFIGURE_METADATA_BACKUP_SCHEDULE: u16 = 67;
+pub(super) const QUEUE_METADATA_BACKUP_RUN: u16 = 68;
 const MAXIMUM_NAME_BYTES: usize = 128;
 
 pub(super) const fn is_command_kind(kind: u16) -> bool {
@@ -26,6 +29,8 @@ pub(super) const fn is_command_kind(kind: u16) -> bool {
             | RECORD_METADATA_BACKUP
             | RECORD_BACKUP_COPY
             | VERIFY_BACKUP_COPY
+            | CONFIGURE_METADATA_BACKUP_SCHEDULE
+            | QUEUE_METADATA_BACKUP_RUN
     )
 }
 
@@ -36,6 +41,12 @@ pub(super) fn encode_command(
     match command {
         crate::AuthoritativeCommand::ConfigureBackupDestination(value) => {
             encode_destination(encoder, value)?;
+        }
+        crate::AuthoritativeCommand::ConfigureMetadataBackupSchedule(value) => {
+            encode_schedule(encoder, *value)?;
+        }
+        crate::AuthoritativeCommand::QueueMetadataBackupRun(value) => {
+            encode_run(encoder, *value)?;
         }
         crate::AuthoritativeCommand::RecordMetadataBackup(value) => {
             encode_backup(encoder, *value)?;
@@ -57,6 +68,11 @@ pub(super) fn decode_command(
         CONFIGURE_BACKUP_DESTINATION => {
             decode_destination(decoder).map(crate::AuthoritativeCommand::ConfigureBackupDestination)
         }
+        CONFIGURE_METADATA_BACKUP_SCHEDULE => decode_schedule(decoder)
+            .map(crate::AuthoritativeCommand::ConfigureMetadataBackupSchedule),
+        QUEUE_METADATA_BACKUP_RUN => {
+            decode_run(decoder).map(crate::AuthoritativeCommand::QueueMetadataBackupRun)
+        }
         RECORD_METADATA_BACKUP => {
             decode_backup(decoder).map(crate::AuthoritativeCommand::RecordMetadataBackup)
         }
@@ -68,6 +84,64 @@ pub(super) fn decode_command(
         }
         _ => Err(MetadataCommandCodecError::Unsupported),
     }
+}
+
+fn encode_schedule(
+    encoder: &mut Encoder,
+    value: ConfigureMetadataBackupSchedule,
+) -> Result<(), MetadataCommandCodecError> {
+    validate_schedule(value)?;
+    encoder.u16(CONFIGURE_METADATA_BACKUP_SCHEDULE)?;
+    encoder.identifier(value.partition_id.as_bytes())?;
+    encoder.u64(value.expected_schedule_sequence)?;
+    encoder.u64(value.interval.get())?;
+    encoder.u16(value.retained_generations)?;
+    encoder.u8(value.minimum_verified_copies)?;
+    encoder.u8(value.minimum_independent_copies)?;
+    encoder.bool(value.enabled)?;
+    encoder.i64(value.next_due_at.get())
+}
+
+fn decode_schedule(
+    decoder: &mut Decoder<'_>,
+) -> Result<ConfigureMetadataBackupSchedule, MetadataCommandCodecError> {
+    let value = ConfigureMetadataBackupSchedule {
+        partition_id: PartitionId::from_bytes(decoder.identifier()?)?,
+        expected_schedule_sequence: decoder.u64()?,
+        interval: DurationMicros::new(decoder.u64()?),
+        retained_generations: decoder.u16()?,
+        minimum_verified_copies: decoder.u8()?,
+        minimum_independent_copies: decoder.u8()?,
+        enabled: decoder.bool()?,
+        next_due_at: UnixMicros::new(decoder.i64()?),
+    };
+    validate_schedule(value)?;
+    Ok(value)
+}
+
+fn encode_run(
+    encoder: &mut Encoder,
+    value: QueueMetadataBackupRun,
+) -> Result<(), MetadataCommandCodecError> {
+    validate_run(value)?;
+    encoder.u16(QUEUE_METADATA_BACKUP_RUN)?;
+    encoder.identifier(value.backup_id.as_bytes())?;
+    encoder.identifier(value.partition_id.as_bytes())?;
+    encoder.u64(value.expected_schedule_sequence)?;
+    encoder.i64(value.scheduled_for.get())
+}
+
+fn decode_run(
+    decoder: &mut Decoder<'_>,
+) -> Result<QueueMetadataBackupRun, MetadataCommandCodecError> {
+    let value = QueueMetadataBackupRun {
+        backup_id: BackupId::from_bytes(decoder.identifier()?)?,
+        partition_id: PartitionId::from_bytes(decoder.identifier()?)?,
+        expected_schedule_sequence: decoder.u64()?,
+        scheduled_for: UnixMicros::new(decoder.i64()?),
+    };
+    validate_run(value)?;
+    Ok(value)
 }
 
 fn encode_destination(
@@ -285,6 +359,28 @@ fn validate_copy(value: &RecordBackupCopy) -> Result<(), MetadataCommandCodecErr
 
 fn validate_generation(value: u64) -> Result<(), MetadataCommandCodecError> {
     if value == 0 {
+        Err(MetadataCommandCodecError::Invalid)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_schedule(
+    value: ConfigureMetadataBackupSchedule,
+) -> Result<(), MetadataCommandCodecError> {
+    if value.interval.get() == 0
+        || value.retained_generations == 0
+        || value.minimum_verified_copies == 0
+        || value.minimum_independent_copies > value.minimum_verified_copies
+    {
+        Err(MetadataCommandCodecError::Invalid)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_run(value: QueueMetadataBackupRun) -> Result<(), MetadataCommandCodecError> {
+    if value.expected_schedule_sequence == 0 {
         Err(MetadataCommandCodecError::Invalid)
     } else {
         Ok(())

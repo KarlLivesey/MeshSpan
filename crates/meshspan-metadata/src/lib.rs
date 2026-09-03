@@ -54,8 +54,8 @@ pub use acme_command::{
 };
 pub use backup_command::{
     BackupDestinationBinding, BackupFailureRelationship, ConfigureBackupDestination,
-    MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES, RecordBackupCopy, RecordMetadataBackup,
-    VerifyBackupCopy,
+    ConfigureMetadataBackupSchedule, MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES, QueueMetadataBackupRun,
+    RecordBackupCopy, RecordMetadataBackup, VerifyBackupCopy,
 };
 pub use command::{
     ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,

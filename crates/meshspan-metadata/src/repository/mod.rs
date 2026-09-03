@@ -30,6 +30,9 @@ mod backup;
 mod backup_catalogue;
 #[cfg(test)]
 mod backup_catalogue_tests;
+mod backup_schedule;
+#[cfg(test)]
+mod backup_schedule_tests;
 mod bootstrap;
 #[cfg(test)]
 mod bootstrap_appliance_tests;
@@ -188,6 +191,7 @@ pub use backup_catalogue::{
     BackupCopyRecord, BackupCopyState, BackupDestinationRecord, BackupDestinationState,
     MetadataBackupRecord, MetadataBackupState,
 };
+pub use backup_schedule::{MetadataBackupRun, MetadataBackupSchedule};
 pub use cleanup_attestation::{VersionCleanupAttestationProgress, VersionCleanupParticipant};
 pub use cleanup_completion::{VersionCleanupCompletion, VersionCleanupItemCompletion};
 pub use cleanup_inventory::{
@@ -2175,6 +2179,45 @@ impl AuthoritativeRepository {
         backup_catalogue::copy(self.database.connection(), backup_id, destination_id)
     }
 
+    /// Returns the current automatic metadata-backup policy for this partition.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the immutable policy history and current head disagree.
+    pub fn metadata_backup_schedule(
+        &self,
+    ) -> Result<Option<MetadataBackupSchedule>, RepositoryError> {
+        backup_schedule::load(self.database.connection(), self.database.partition_id())
+    }
+
+    /// Returns the current schedule only when it is enabled and due at `now`.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored policy state is malformed or contradictory.
+    pub fn due_metadata_backup_schedule(
+        &self,
+        now: meshspan_domain::UnixMicros,
+    ) -> Result<Option<MetadataBackupSchedule>, RepositoryError> {
+        backup_schedule::due(
+            self.database.connection(),
+            self.database.partition_id(),
+            now,
+        )
+    }
+
+    /// Returns one exact materialised automatic backup run.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when stored run identity or lifecycle state is malformed.
+    pub fn metadata_backup_run(
+        &self,
+        backup_id: meshspan_domain::BackupId,
+    ) -> Result<Option<MetadataBackupRun>, RepositoryError> {
+        backup_schedule::run(self.database.connection(), backup_id)
+    }
+
     /// Creates a complete state-machine snapshot bound to one proved quorum plan.
     ///
     /// # Errors
@@ -2263,6 +2306,9 @@ pub enum RepositoryError {
     /// A snapshot schedule's immutable configuration sequence is stale.
     #[error("expected snapshot schedule sequence is stale")]
     StaleSnapshotSchedule,
+    /// An automatic metadata-backup policy sequence or due instant is stale.
+    #[error("expected metadata backup schedule is stale")]
+    StaleMetadataBackupSchedule,
     /// A command violates a semantic precondition.
     #[error("authoritative command is invalid")]
     InvalidCommand,
@@ -2306,6 +2352,7 @@ impl RepositoryError {
             | Self::StaleAuthenticationPolicy
             | Self::StaleSnapshot
             | Self::StaleSnapshotSchedule
+            | Self::StaleMetadataBackupSchedule
             | Self::InvalidCommand
             | Self::CapacityExceeded => true,
             Self::Sqlite(rusqlite::Error::SqliteFailure(error, _)) => {
