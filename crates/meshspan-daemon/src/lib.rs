@@ -166,6 +166,9 @@ mod metadata_backup_completion_tests;
 mod metadata_backup_dispatcher;
 #[cfg(test)]
 mod metadata_backup_dispatcher_tests;
+mod metadata_backup_placement;
+#[cfg(test)]
+mod metadata_backup_placement_tests;
 mod metadata_forwarding;
 mod multi_factor_session;
 mod namespace_mutation_api;
@@ -554,6 +557,11 @@ pub use metadata_backup_completion::{
 pub use metadata_backup_dispatcher::{
     MetadataBackupDispatchAuthority, MetadataBackupDispatchError, MetadataBackupDispatchOutcome,
     MetadataBackupDispatcher,
+};
+pub use metadata_backup_placement::{
+    MetadataBackupDestinationWriter, MetadataBackupPlacementAuthority,
+    MetadataBackupPlacementError, MetadataBackupPlacementInput, MetadataBackupPlacementPage,
+    MetadataBackupPlacementService,
 };
 pub use namespace_mutation_api::{
     NativeNamespaceMutationApiError, NativeNamespaceMutationController,
