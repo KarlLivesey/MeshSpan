@@ -6,10 +6,9 @@ use meshspan_domain::{
     BackupDestinationId, BackupId, ComponentInstanceId, MeshId, PartitionId, Revision, TargetId,
 };
 
-use crate::RecordName;
+pub use meshspan_contracts::MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES;
 
-/// Maximum provider-owned object reference retained in replicated metadata.
-pub const MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES: usize = 2_048;
+use crate::RecordName;
 
 /// Replaceable destination selected for one encrypted backup copy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

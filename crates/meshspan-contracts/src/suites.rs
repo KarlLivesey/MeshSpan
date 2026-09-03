@@ -5,10 +5,10 @@
 use std::fmt::Debug;
 
 use crate::{
-    AccessConnector, AdministrationClient, AuthenticationHandler, CertificateChallenge,
-    CodingScheme, ComponentLifecycle, ConformanceCase, ConformanceFailure, ConsensusEngine,
-    ContractKind, HarnessError, MetadataRepository, ObservabilitySink, PlacementPolicy,
-    StorageProvider, run_conformance_cases, verify_descriptor,
+    AccessConnector, AdministrationClient, AuthenticationHandler, BackupProvider,
+    CertificateChallenge, CodingScheme, ComponentLifecycle, ConformanceCase, ConformanceFailure,
+    ConsensusEngine, ContractKind, HarnessError, MetadataRepository, ObservabilitySink,
+    PlacementPolicy, StorageProvider, run_conformance_cases, verify_descriptor,
 };
 
 fn run_component_cases<Input, Output, Failure, Component, Factory, Handler>(
@@ -83,6 +83,12 @@ where
         move |input| execute(&mut component, input)
     })
 }
+typed_suite!(
+    run_backup_provider_suite,
+    BackupProvider,
+    ContractKind::BackupProvider,
+    "Runs exact vectors against fresh encrypted-backup-provider implementations."
+);
 typed_suite!(
     run_access_connector_suite,
     AccessConnector,

@@ -11,6 +11,8 @@ use meshspan_domain::{OperationId, Revision, UnixMicros};
 pub enum ContractKind {
     /// Storage-folder or future storage backend.
     StorageProvider,
+    /// Encrypted metadata-backup destination.
+    BackupProvider,
     /// Public filesystem access protocol adapter.
     AccessConnector,
     /// Public administration API client.
