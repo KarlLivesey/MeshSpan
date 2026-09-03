@@ -5,6 +5,7 @@ use meshspan_domain::{
     ExternalCertificatePublicationId, NodeId, PublicCertificateId, Revision, UnixMicros,
 };
 
+use super::certificate_name::{MAXIMUM_DNS_NAME_BYTES, valid_dns_name};
 use super::decoder::Decoder;
 use super::encoder::Encoder;
 use super::{MetadataCommandCodecError, secret_generation};
@@ -15,7 +16,6 @@ use crate::{
 
 pub(super) const PUBLISH_EXTERNAL_CERTIFICATE: u16 = 58;
 pub(super) const ACKNOWLEDGE_EXTERNAL_CERTIFICATE_INSTALLATION: u16 = 59;
-const MAXIMUM_DNS_NAME_BYTES: usize = 253;
 
 pub(super) fn encode_command(
     encoder: &mut Encoder,
@@ -169,32 +169,4 @@ fn validate_installation(
     } else {
         Ok(())
     }
-}
-
-fn valid_dns_name(value: &str) -> bool {
-    let name = value.strip_prefix("*.").unwrap_or(value);
-    !name.is_empty()
-        && value.len() <= MAXIMUM_DNS_NAME_BYTES
-        && name.is_ascii()
-        && name.contains('.')
-        && name.split('.').all(valid_dns_label)
-        && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'.' | b'*')
-        })
-}
-
-fn valid_dns_label(label: &str) -> bool {
-    !label.is_empty()
-        && label.len() <= 63
-        && label
-            .as_bytes()
-            .first()
-            .is_some_and(u8::is_ascii_alphanumeric)
-        && label
-            .as_bytes()
-            .last()
-            .is_some_and(u8::is_ascii_alphanumeric)
-        && label
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }

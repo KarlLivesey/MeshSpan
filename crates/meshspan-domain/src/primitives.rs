@@ -172,6 +172,14 @@ define_identifier!(
     "Stable identity of one automated external-certificate publication."
 );
 define_identifier!(
+    MeshLocalCertificateAuthorityId,
+    "Stable identity of one mesh-local HTTPS certificate authority."
+);
+define_identifier!(
+    MeshLocalCertificateIssuanceId,
+    "Stable identity of one mesh-local HTTPS certificate issuance."
+);
+define_identifier!(
     AcmeConfigurationId,
     "Stable identity of one public-certificate ACME configuration."
 );

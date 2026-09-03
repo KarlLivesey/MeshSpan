@@ -15,10 +15,10 @@ use super::{
     external_certificate, federation_actor_attestation, federation_assignment, federation_grant,
     federation_mutation_admission, federation_quarantine, federation_relationship,
     federation_storage_allocation, federation_succession, identity, locality_policy,
-    maintenance_work, manual_dns_task, namespace, node_wrapping_key, protection_policy,
-    recovery_authority, retention, root_delegation, routing, secret_generation, session,
-    smb_export_configuration, snapshot_schedule, storage_target, tags, topology, user_snapshot,
-    version_cleanup, volume_head,
+    maintenance_work, manual_dns_task, mesh_local_certificate, namespace, node_wrapping_key,
+    protection_policy, recovery_authority, retention, root_delegation, routing, secret_generation,
+    session, smb_export_configuration, snapshot_schedule, storage_target, tags, topology,
+    user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -660,6 +660,9 @@ fn is_certificate_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::AcknowledgePublicCertificateInstallation(_)
             | AuthoritativeCommand::PublishExternalCertificate(_)
             | AuthoritativeCommand::AcknowledgeExternalCertificateInstallation(_)
+            | AuthoritativeCommand::CreateMeshLocalCertificateAuthority(_)
+            | AuthoritativeCommand::IssueMeshLocalCertificate(_)
+            | AuthoritativeCommand::AcknowledgeMeshLocalCertificateInstallation(_)
     )
 }
 
@@ -789,6 +792,15 @@ fn execute_certificate_command(
         }
         AuthoritativeCommand::AcknowledgeExternalCertificateInstallation(value) => {
             external_certificate::acknowledge_installation(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::CreateMeshLocalCertificateAuthority(value) => {
+            mesh_local_certificate::create(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::IssueMeshLocalCertificate(value) => {
+            mesh_local_certificate::issue(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::AcknowledgeMeshLocalCertificateInstallation(value) => {
+            mesh_local_certificate::acknowledge_installation(transaction, context, *value, revision)
         }
         _ => Err(RepositoryError::InvalidCommand),
     }
@@ -1325,6 +1337,9 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::ProvisionAcme(_) => 122,
         AuthoritativeCommand::PublishExternalCertificate(_) => 123,
         AuthoritativeCommand::AcknowledgeExternalCertificateInstallation(_) => 124,
+        AuthoritativeCommand::CreateMeshLocalCertificateAuthority(_) => 125,
+        AuthoritativeCommand::IssueMeshLocalCertificate(_) => 126,
+        AuthoritativeCommand::AcknowledgeMeshLocalCertificateInstallation(_) => 127,
     }
 }
 

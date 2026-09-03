@@ -4,8 +4,8 @@ use std::sync::Mutex;
 
 use meshspan_certificates::{CertificateAuthority, PublicCertificateBundle};
 use meshspan_domain::{
-    CertificateOrderId, EntropyError, NodeId, OperationId, PrincipalId, RandomSource, Revision,
-    UnixMicros,
+    CertificateOrderId, EntropyError, MeshLocalCertificateIssuanceId, NodeId, OperationId,
+    PrincipalId, RandomSource, Revision, UnixMicros,
 };
 use meshspan_metadata::{
     ApplyDisposition, AuthoritativeCommand, CommandContext, CommandReceipt, EntityKind,
@@ -15,7 +15,7 @@ use meshspan_metadata::{
 use meshspan_secret_envelope::{SecretContext, encrypt_secret};
 
 use crate::{
-    LocalWrappingKey, PublicCertificateInstallationAuthority,
+    LoadedPublicCertificate, LocalWrappingKey, PublicCertificateInstallationAuthority,
     PublicCertificateInstallationAuthorityError, PublicCertificateInstallationRequest,
     PublicCertificateInstallationService, PublicCertificateLoadingService, RotatingHttpsIdentity,
     SecretGenerationAuthority, SecretGenerationAuthorityError,
@@ -24,13 +24,90 @@ use crate::{
 #[test]
 fn live_installation_is_acknowledged_once_and_ambiguous_retry_resolves_exactly()
 -> Result<(), Box<dyn std::error::Error>> {
-    let directory = tempfile::tempdir()?;
-    let local = LocalWrappingKey::open_or_create(&directory.path().join("node.key"))?;
     let order_id = CertificateOrderId::from_bytes([1; 16])?;
     let reference = SecretGenerationReference {
         secret_id: order_id.as_bytes(),
         generation: 1,
     };
+    let (loaded, bundle_digest) = loaded_certificate(reference)?;
+    let identity = RotatingHttpsIdentity::new(Revision::new(9), &loaded)?;
+    let acknowledgements = AcknowledgementAuthority::default();
+    let service = PublicCertificateInstallationService::new(&acknowledgements);
+    let request = PublicCertificateInstallationRequest {
+        source: PublicCertificateSource::AcmeOrder(order_id),
+        source_revision: Revision::new(10),
+        gateway_node_id: NodeId::from_bytes([2; 16])?,
+        gateway_incarnation: 3,
+        actor_principal_id: PrincipalId::from_bytes([4; 16])?,
+        now: UnixMicros::new(500),
+    };
+
+    let committed = service.install_and_acknowledge(&identity, &loaded, request)?;
+    assert_eq!(committed.certificate, reference);
+    assert_eq!(committed.bundle_digest, bundle_digest);
+    assert_eq!(committed.acknowledgement_revision, Revision::new(11));
+    assert_eq!(
+        identity
+            .current()?
+            .ok_or("installed identity missing")?
+            .revision,
+        Revision::new(10)
+    );
+    assert_eq!(acknowledgements.commit_count(), 1);
+    let command = acknowledgements.command()?;
+    let AuthoritativeCommand::AcknowledgePublicCertificateInstallation(command) = command else {
+        return Err("wrong acknowledgement command".into());
+    };
+    assert_eq!(command.gateway_node_id, request.gateway_node_id);
+    assert_eq!(command.gateway_incarnation, request.gateway_incarnation);
+    assert_eq!(command.certificate, reference);
+    assert_eq!(command.bundle_digest, bundle_digest);
+
+    assert_eq!(
+        service.install_and_acknowledge(&identity, &loaded, request)?,
+        committed
+    );
+    assert_eq!(acknowledgements.commit_count(), 1);
+    Ok(())
+}
+
+#[test]
+fn mesh_local_installation_uses_its_exact_issuance_acknowledgement()
+-> Result<(), Box<dyn std::error::Error>> {
+    let issuance_id = MeshLocalCertificateIssuanceId::from_bytes([21; 16])?;
+    let reference = SecretGenerationReference {
+        secret_id: [22; 16],
+        generation: 3,
+    };
+    let (loaded, _) = loaded_certificate(reference)?;
+    let identity = RotatingHttpsIdentity::new(Revision::new(9), &loaded)?;
+    let acknowledgements = AcknowledgementAuthority::default();
+    PublicCertificateInstallationService::new(&acknowledgements).install_and_acknowledge(
+        &identity,
+        &loaded,
+        PublicCertificateInstallationRequest {
+            source: PublicCertificateSource::MeshLocalIssuance(issuance_id),
+            source_revision: Revision::new(10),
+            gateway_node_id: NodeId::from_bytes([2; 16])?,
+            gateway_incarnation: 3,
+            actor_principal_id: PrincipalId::from_bytes([4; 16])?,
+            now: UnixMicros::new(500),
+        },
+    )?;
+    let command = acknowledgements.command()?;
+    let AuthoritativeCommand::AcknowledgeMeshLocalCertificateInstallation(command) = command else {
+        return Err("wrong mesh-local acknowledgement command".into());
+    };
+    assert_eq!(command.issuance_id, issuance_id);
+    assert_eq!(command.certificate, reference);
+    Ok(())
+}
+
+fn loaded_certificate(
+    reference: SecretGenerationReference,
+) -> Result<(LoadedPublicCertificate, [u8; 32]), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let local = LocalWrappingKey::open_or_create(&directory.path().join("node.key"))?;
     let authority = CertificateAuthority::new()?;
     let issued = authority.issue_node("files.example.test")?;
     let bundle = PublicCertificateBundle::new(
@@ -55,45 +132,7 @@ fn live_installation_is_acknowledged_once_and_ambiguous_retry_resolves_exactly()
     };
     let loaded =
         PublicCertificateLoadingService::new(SecretAuthority(record), &local).load(reference)?;
-    let identity = RotatingHttpsIdentity::new(Revision::new(9), &loaded)?;
-    let acknowledgements = AcknowledgementAuthority::default();
-    let service = PublicCertificateInstallationService::new(&acknowledgements);
-    let request = PublicCertificateInstallationRequest {
-        source: PublicCertificateSource::AcmeOrder(order_id),
-        source_revision: Revision::new(10),
-        gateway_node_id: NodeId::from_bytes([2; 16])?,
-        gateway_incarnation: 3,
-        actor_principal_id: PrincipalId::from_bytes([4; 16])?,
-        now: UnixMicros::new(500),
-    };
-
-    let committed = service.install_and_acknowledge(&identity, &loaded, request)?;
-    assert_eq!(committed.certificate, reference);
-    assert_eq!(committed.bundle_digest, bundle.digest());
-    assert_eq!(committed.acknowledgement_revision, Revision::new(11));
-    assert_eq!(
-        identity
-            .current()?
-            .ok_or("installed identity missing")?
-            .revision,
-        Revision::new(10)
-    );
-    assert_eq!(acknowledgements.commit_count(), 1);
-    let command = acknowledgements.command()?;
-    let AuthoritativeCommand::AcknowledgePublicCertificateInstallation(command) = command else {
-        return Err("wrong acknowledgement command".into());
-    };
-    assert_eq!(command.gateway_node_id, request.gateway_node_id);
-    assert_eq!(command.gateway_incarnation, request.gateway_incarnation);
-    assert_eq!(command.certificate, reference);
-    assert_eq!(command.bundle_digest, bundle.digest());
-
-    assert_eq!(
-        service.install_and_acknowledge(&identity, &loaded, request)?,
-        committed
-    );
-    assert_eq!(acknowledgements.commit_count(), 1);
-    Ok(())
+    Ok((loaded, bundle.digest()))
 }
 
 struct SecretAuthority(SecretGenerationRecord);
@@ -151,8 +190,19 @@ impl PublicCertificateInstallationAuthority for &AcknowledgementAuthority {
         context: CommandContext,
         command: &AuthoritativeCommand,
     ) -> Result<CommandReceipt, PublicCertificateInstallationAuthorityError> {
-        let order_id = match command {
-            AuthoritativeCommand::AcknowledgePublicCertificateInstallation(value) => value.order_id,
+        let entity = match command {
+            AuthoritativeCommand::AcknowledgePublicCertificateInstallation(value) => {
+                EntityReference {
+                    kind: EntityKind::CertificateOrder,
+                    id: value.order_id.as_bytes(),
+                }
+            }
+            AuthoritativeCommand::AcknowledgeMeshLocalCertificateInstallation(value) => {
+                EntityReference {
+                    kind: EntityKind::MeshLocalCertificateIssuance,
+                    id: value.issuance_id.as_bytes(),
+                }
+            }
             _ => return Err(PublicCertificateInstallationAuthorityError::Failed),
         };
         let receipt = CommandReceipt {
@@ -163,10 +213,7 @@ impl PublicCertificateInstallationAuthority for &AcknowledgementAuthority {
             committed_revision: Revision::new(11),
             committed_position: LogPosition { index: 11, term: 1 },
             applied_position: LogPosition { index: 11, term: 1 },
-            entity: EntityReference {
-                kind: EntityKind::CertificateOrder,
-                id: order_id.as_bytes(),
-            },
+            entity,
         };
         let mut state = self
             .state

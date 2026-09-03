@@ -571,8 +571,10 @@ impl AuthoritativeRepository {
     ) -> Result<Option<PublicCertificateSelection>, RepositoryError> {
         let acme = query::latest_public_certificate(&self.database)?;
         let external = super::external_certificate::latest_public_certificate(&self.database)?;
+        let local = super::mesh_local_certificate::latest_public_certificate(&self.database)?;
         Ok(super::external_certificate::newest_selection(
-            acme, external,
+            super::external_certificate::newest_selection(acme, external),
+            local,
         ))
     }
 

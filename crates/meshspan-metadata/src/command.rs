@@ -34,10 +34,12 @@ use crate::{
     RevokeFederationSuccessorDesignation, RotateFederationTrustIdentity,
 };
 use crate::{
-    AcknowledgeExternalCertificateInstallation, AcknowledgePublicCertificateInstallation,
-    AcmeChallengeKind, AdvanceManualDnsTask, CertificateOrderCompletion,
-    CheckpointCertificateOrder, ClaimCertificateOrder, CompleteCertificateOrder, ConfigureAcme,
-    ProvisionAcme, PublishExternalCertificate, QueueCertificateOrder, RenewCertificateOrder,
+    AcknowledgeExternalCertificateInstallation, AcknowledgeMeshLocalCertificateInstallation,
+    AcknowledgePublicCertificateInstallation, AcmeChallengeKind, AdvanceManualDnsTask,
+    CertificateOrderCompletion, CheckpointCertificateOrder, ClaimCertificateOrder,
+    CompleteCertificateOrder, ConfigureAcme, CreateMeshLocalCertificateAuthority,
+    IssueMeshLocalCertificate, ProvisionAcme, PublishExternalCertificate, QueueCertificateOrder,
+    RenewCertificateOrder,
 };
 use crate::{
     ActivateFederationGrantAssignment, CreateFederationGrantAssignment, IssueFederationGrant,
@@ -242,6 +244,12 @@ pub enum AuthoritativeCommand {
     PublishExternalCertificate(Box<PublishExternalCertificate>),
     /// Records one gateway's exact live externally issued certificate generation.
     AcknowledgeExternalCertificateInstallation(AcknowledgeExternalCertificateInstallation),
+    /// Creates the first encrypted mesh-local HTTPS signing authority and public trust anchor.
+    CreateMeshLocalCertificateAuthority(Box<CreateMeshLocalCertificateAuthority>),
+    /// Publishes one endpoint generation signed by the current mesh-local authority.
+    IssueMeshLocalCertificate(Box<IssueMeshLocalCertificate>),
+    /// Records one gateway's exact live mesh-local endpoint generation.
+    AcknowledgeMeshLocalCertificateInstallation(AcknowledgeMeshLocalCertificateInstallation),
     /// Registers one node-local public key for encrypted secret generations.
     RegisterNodeWrappingKey(RegisterNodeWrappingKey),
     /// Commits one encrypted secret generation and every exact recipient envelope atomically.
@@ -426,6 +434,11 @@ impl AuthoritativeCommand {
             Self::AcknowledgePublicCertificateInstallation(value) => value.update_digest(digest),
             Self::PublishExternalCertificate(value) => value.update_digest(digest),
             Self::AcknowledgeExternalCertificateInstallation(value) => value.update_digest(digest),
+            Self::CreateMeshLocalCertificateAuthority(value) => value.update_digest(digest),
+            Self::IssueMeshLocalCertificate(value) => value.update_digest(digest),
+            Self::AcknowledgeMeshLocalCertificateInstallation(value) => {
+                value.update_digest(digest);
+            }
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
             Self::CommitSecretGeneration(value) => value.update_digest(digest),
             Self::IssueJoinGrant(value) => value.update_digest(digest),
@@ -684,6 +697,9 @@ pub const PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND: u16 = 7;
 
 /// Encrypted private key for one in-flight externally issued certificate request.
 pub const PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND: u16 = 8;
+
+/// Encrypted private key for one mesh-local HTTPS certificate authority generation.
+pub const MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND: u16 = 9;
 
 /// Exact durable local outcome accepted as the source of a converged-head transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3887,6 +3903,53 @@ digest_simple_record!(
         digest.unsigned(value.certificate.generation);
         digest.bytes(&value.bundle_digest);
         digest.unsigned(value.observed_publication_revision.get());
+    }
+);
+digest_simple_record!(
+    CreateMeshLocalCertificateAuthority,
+    b"create-mesh-local-certificate-authority",
+    |value, digest| {
+        digest.identifier(value.authority_id.as_bytes());
+        digest.unsigned(value.generation);
+        digest.bytes(&value.certificate_der);
+        value.authority_key.update_digest(digest);
+        digest.bytes(&value.certificate_digest);
+        digest.signed(value.not_before.get());
+        digest.signed(value.not_after.get());
+    }
+);
+digest_simple_record!(
+    IssueMeshLocalCertificate,
+    b"issue-mesh-local-certificate",
+    |value, digest| {
+        digest.identifier(value.issuance_id.as_bytes());
+        digest.identifier(value.authority_id.as_bytes());
+        digest.unsigned(value.authority_generation);
+        digest.bytes(&value.authority_certificate_digest);
+        digest.identifier(value.certificate_id.as_bytes());
+        digest.unsigned(value.generation);
+        digest.unsigned(value.certificate_names.len() as u64);
+        for name in value.certificate_names.as_slice() {
+            digest.bytes(name.as_bytes());
+        }
+        value.certificate.update_digest(digest);
+        digest.bytes(&value.bundle_digest);
+        digest.bytes(&value.public_key_fingerprint);
+        digest.signed(value.not_before.get());
+        digest.signed(value.not_after.get());
+    }
+);
+digest_simple_record!(
+    AcknowledgeMeshLocalCertificateInstallation,
+    b"acknowledge-mesh-local-certificate-installation",
+    |value, digest| {
+        digest.identifier(value.issuance_id.as_bytes());
+        digest.identifier(value.gateway_node_id.as_bytes());
+        digest.unsigned(value.gateway_incarnation);
+        digest.identifier(value.certificate.secret_id);
+        digest.unsigned(value.certificate.generation);
+        digest.bytes(&value.bundle_digest);
+        digest.unsigned(value.observed_issuance_revision.get());
     }
 );
 digest_simple_record!(

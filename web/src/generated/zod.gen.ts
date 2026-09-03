@@ -4083,6 +4083,71 @@ export const zProvisionCertificateResponse = z
   .strict();
 
 /**
+ * ProvisionMeshLocalCertificateRequest
+ *
+ * Exact-retry request for an automatically trusted mesh-local HTTPS identity.
+ */
+export const zProvisionMeshLocalCertificateRequest = z
+  .strictObject({
+    certificate_names: z.array(z.string()).min(1).max(256),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * ProvisionMeshLocalCertificateResponse
+ *
+ * Secret-free result of one mesh-local HTTPS certificate issuance.
+ */
+export const zProvisionMeshLocalCertificateResponse = z
+  .strictObject({
+    authority_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    certificate_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    certificate_names: z.array(z.string()).min(1).max(256),
+    generation: z
+      .string()
+      .min(1)
+      .max(20)
+      .regex(/^[1-9][0-9]{0,19}$/),
+    issuance_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    not_after_epoch_micros: z.int().gte(1).lte(9007199254740991),
+    not_before_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    public_key_fingerprint: z
+      .string()
+      .length(64)
+      .regex(/^[0-9a-f]{64}$/),
+    revision: z.int().gte(1).lte(9007199254740991),
+    trust_anchor_pem: z.string().min(64).max(32768),
+  })
+  .strict();
+
+/**
  * PublishExternalCertificateRequest
  *
  * Exact-retry automated publication of a certificate issued outside `MeshSpan`.
@@ -5467,6 +5532,27 @@ export const zPublishExternalCertificateBody =
  */
 export const zPublishExternalCertificateResponse2 =
   zPublishExternalCertificateResponse;
+
+/**
+ * Mesh-local certificate provisioning
+ */
+export const zProvisionMeshLocalCertificateBody =
+  zProvisionMeshLocalCertificateRequest;
+
+export const zProvisionMeshLocalCertificateHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Encrypted certificate generation durably issued or exactly replayed
+ */
+export const zProvisionMeshLocalCertificateResponse2 =
+  zProvisionMeshLocalCertificateResponse;
 
 export const zListGroupsQuery = z
   .object({

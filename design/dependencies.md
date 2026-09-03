@@ -71,6 +71,7 @@ source/advisory policy automation arrive before a release artefact is built.
 | `sha2`                                   |           0.11.0 | `MIT OR Apache-2.0`        |
 | `subtle`                                 |            2.6.1 | `BSD-3-Clause`             |
 | `thiserror`                              |           2.0.20 | `MIT OR Apache-2.0`        |
+| `time`                                   |           0.3.55 | `MIT OR Apache-2.0`        |
 | `unicode-normalization`                  |           0.1.25 | `MIT OR Apache-2.0`        |
 | `tempfile` (test only)                   |           3.27.0 | `MIT OR Apache-2.0`        |
 | `bytes`                                  |           1.12.1 | `MIT`                      |
@@ -91,6 +92,10 @@ static exclusivity proof consumed by current Axum and Tower. The upstream packag
 Apache-2.0-only, so it cannot ship in a `GPL-2.0-only` combined artefact. Cargo patches the exact
 transitive package name to MeshSpan's allocation-free implementation; its unsafe surface is limited
 to the documented pinned projection and `Sync` proof and is exercised by the normal local gate.
+
+`time` is named directly only where certificate construction requires exact validity windows.
+It was already present through current `rcgen`; making the edge explicit adds no package to the
+resolved graph and prevents locally issued certificates from inheriting `rcgen`'s broad defaults.
 
 The workspace `meshspan-rustls-provider` package is the narrow, independently extractable
 `GPL-2.0-only` Rustls provider boundary. It uses the current stable RustCrypto AES, AES-GCM,

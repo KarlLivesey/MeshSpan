@@ -7,6 +7,7 @@ mod acme;
 mod authentication;
 mod availability_cell;
 mod bootstrap;
+mod certificate_name;
 mod decoder;
 mod encoder;
 mod enrolment;
@@ -15,6 +16,7 @@ mod fault_group;
 mod identity;
 mod locality_policy;
 mod maintenance_work;
+mod mesh_local_certificate;
 mod namespace;
 mod node_wrapping_key;
 mod protection_policy;
@@ -105,13 +107,7 @@ fn encode_command(
     encoder: &mut Encoder,
     command: &AuthoritativeCommand,
 ) -> Result<(), MetadataCommandCodecError> {
-    if acme::encode_command(encoder, command)? {
-        return Ok(());
-    }
-    if external_certificate::encode_command(encoder, command)? {
-        return Ok(());
-    }
-    if maintenance_work::encode_command(encoder, command)? {
+    if encode_extension_command(encoder, command)? {
         return Ok(());
     }
     match command {
@@ -207,6 +203,26 @@ fn encode_command(
     }
 }
 
+/// Dispatches command families which own their complete tag space and payload encoding.
+fn encode_extension_command(
+    encoder: &mut Encoder,
+    command: &AuthoritativeCommand,
+) -> Result<bool, MetadataCommandCodecError> {
+    if acme::encode_command(encoder, command)? {
+        return Ok(true);
+    }
+    if external_certificate::encode_command(encoder, command)? {
+        return Ok(true);
+    }
+    if mesh_local_certificate::encode_command(encoder, command)? {
+        return Ok(true);
+    }
+    if maintenance_work::encode_command(encoder, command)? {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 fn decode_command(
     decoder: &mut Decoder<'_>,
 ) -> Result<AuthoritativeCommand, MetadataCommandCodecError> {
@@ -216,6 +232,9 @@ fn decode_command(
     }
     if external_certificate::is_command_kind(kind) {
         return external_certificate::decode_command(kind, decoder);
+    }
+    if mesh_local_certificate::is_command_kind(kind) {
+        return mesh_local_certificate::decode_command(kind, decoder);
     }
     if maintenance_work::is_command_kind(kind) {
         return maintenance_work::decode_command(kind, decoder);

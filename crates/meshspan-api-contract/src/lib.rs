@@ -103,14 +103,18 @@ pub use authentication_method_listing_validation::{
 pub use certificate_administration::{
     AcmeConfigurationId, CertificateChainPem, CertificateChallenge, CertificateGeneration,
     CertificateOrderId, ExternalCertificatePrivateKeyPem, ExternalCertificatePublicationId,
-    ProtectedText, ProvisionCertificateRequest, ProvisionCertificateResponse, PublicCertificateId,
-    PublishExternalCertificateRequest, PublishExternalCertificateResponse, Rfc2136TsigAlgorithm,
+    MeshLocalCertificateAuthorityId, MeshLocalCertificateIssuanceId, ProtectedText,
+    ProvisionCertificateRequest, ProvisionCertificateResponse,
+    ProvisionMeshLocalCertificateRequest, ProvisionMeshLocalCertificateResponse,
+    PublicCertificateId, PublishExternalCertificateRequest, PublishExternalCertificateResponse,
+    Rfc2136TsigAlgorithm,
 };
 pub use certificate_administration_validation::{
-    MAX_PROVISION_CERTIFICATE_BYTES, MAX_PUBLISH_EXTERNAL_CERTIFICATE_BYTES,
-    decode_provision_certificate_request, decode_publish_external_certificate_request,
-    encode_provision_certificate_response, encode_publish_external_certificate_response,
-    validate_provision_certificate_request_value,
+    MAX_PROVISION_CERTIFICATE_BYTES, MAX_PROVISION_MESH_LOCAL_CERTIFICATE_BYTES,
+    MAX_PUBLISH_EXTERNAL_CERTIFICATE_BYTES, decode_provision_certificate_request,
+    decode_provision_mesh_local_certificate_request, decode_publish_external_certificate_request,
+    encode_provision_certificate_response, encode_provision_mesh_local_certificate_response,
+    encode_publish_external_certificate_response, validate_provision_certificate_request_value,
 };
 pub use directory_listing::{
     DirectoryCursor, DirectoryEntryKind, FileVersionId, ListDirectoryQuery, ListDirectoryResponse,

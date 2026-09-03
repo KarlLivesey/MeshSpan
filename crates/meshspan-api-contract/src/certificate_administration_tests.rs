@@ -2,8 +2,10 @@
 
 use crate::{
     BoundaryError, CertificateChallenge, CertificateGeneration, ExternalCertificatePublicationId,
-    OperationId, PublicCertificateId, PublishExternalCertificateResponse,
-    decode_provision_certificate_request, decode_publish_external_certificate_request,
+    MeshLocalCertificateAuthorityId, MeshLocalCertificateIssuanceId, OperationId,
+    ProvisionMeshLocalCertificateResponse, PublicCertificateId, PublishExternalCertificateResponse,
+    decode_provision_certificate_request, decode_provision_mesh_local_certificate_request,
+    decode_publish_external_certificate_request, encode_provision_mesh_local_certificate_response,
     encode_publish_external_certificate_response,
 };
 
@@ -148,4 +150,55 @@ fn external_publication_request() -> serde_json::Value {
             "-----END PRIVATE KEY-----\n"
         )
     })
+}
+
+#[test]
+fn mesh_local_request_and_response_are_canonical_and_secret_free()
+-> Result<(), Box<dyn std::error::Error>> {
+    let value = serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000001",
+        "certificate_names": ["files.example.test", "node.files.example.test"]
+    });
+    let request = decode_provision_mesh_local_certificate_request(&serde_json::to_vec(&value)?)?;
+    let operation_id = request.operation_id;
+    let response = ProvisionMeshLocalCertificateResponse {
+        operation_id,
+        authority_id: MeshLocalCertificateAuthorityId::from_uuid_bytes([
+            2, 2, 2, 2, 2, 2, 0x82, 2, 0x82, 2, 2, 2, 2, 2, 2, 2,
+        ])
+        .ok_or("authority")?,
+        issuance_id: MeshLocalCertificateIssuanceId::from_uuid_bytes([
+            3, 3, 3, 3, 3, 3, 0x83, 3, 0x83, 3, 3, 3, 3, 3, 3, 3,
+        ])
+        .ok_or("issuance")?,
+        certificate_id: PublicCertificateId::from_uuid_bytes([
+            4, 4, 4, 4, 4, 4, 0x84, 4, 0x84, 4, 4, 4, 4, 4, 4, 4,
+        ])
+        .ok_or("certificate")?,
+        generation: CertificateGeneration::from_value(1).ok_or("generation")?,
+        certificate_names: request.certificate_names,
+        trust_anchor_pem: concat!(
+            "-----BEGIN CERTIFICATE-----\n",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",
+            "-----END CERTIFICATE-----\n"
+        )
+        .to_owned(),
+        public_key_fingerprint: "a".repeat(64),
+        not_before_epoch_micros: 1,
+        not_after_epoch_micros: 2,
+        revision: 3,
+    };
+    let encoded = encode_provision_mesh_local_certificate_response(&response)?;
+    let text = std::str::from_utf8(&encoded)?;
+    assert!(text.contains("BEGIN CERTIFICATE"));
+    assert!(!text.contains("PRIVATE KEY"));
+
+    let mut reversed = value;
+    reversed["certificate_names"] =
+        serde_json::json!(["node.files.example.test", "files.example.test"]);
+    assert!(matches!(
+        decode_provision_mesh_local_certificate_request(&serde_json::to_vec(&reversed)?),
+        Err(BoundaryError::DecodeMismatch)
+    ));
+    Ok(())
 }

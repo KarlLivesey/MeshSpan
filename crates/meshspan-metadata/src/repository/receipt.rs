@@ -136,6 +136,10 @@ pub enum EntityKind {
     CertificateOrder = 50,
     /// Immutable automated external-certificate publication.
     ExternalCertificatePublication = 51,
+    /// Immutable mesh-local HTTPS certificate authority.
+    MeshLocalCertificateAuthority = 52,
+    /// Immutable mesh-local HTTPS endpoint issuance.
+    MeshLocalCertificateIssuance = 53,
 }
 
 impl EntityKind {
@@ -192,6 +196,8 @@ impl EntityKind {
             49 => Ok(Self::AcmeConfiguration),
             50 => Ok(Self::CertificateOrder),
             51 => Ok(Self::ExternalCertificatePublication),
+            52 => Ok(Self::MeshLocalCertificateAuthority),
+            53 => Ok(Self::MeshLocalCertificateIssuance),
             _ => Err(RepositoryError::CorruptState),
         }
     }

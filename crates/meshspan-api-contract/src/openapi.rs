@@ -34,10 +34,11 @@ use crate::{
     ListProtectionPoliciesResponse, ListStorageDrainsResponse, ListStorageFoldersResponse,
     ListTopologyNodesResponse, ListTopologyTargetsResponse, ListUploadRangesResponse,
     ListVolumePermissionGrantsResponse, ListVolumesResponse, OperationStatusResponse,
-    ProvisionCertificateRequest, ProvisionCertificateResponse, PublishExternalCertificateRequest,
-    PublishExternalCertificateResponse, PublishSmbExportRequest, PublishSmbExportResponse,
-    RegisterStorageFolderRequest, RegisterStorageFolderResponse, RemoveGroupMemberRequest,
-    RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
+    ProvisionCertificateRequest, ProvisionCertificateResponse,
+    ProvisionMeshLocalCertificateRequest, ProvisionMeshLocalCertificateResponse,
+    PublishExternalCertificateRequest, PublishExternalCertificateResponse, PublishSmbExportRequest,
+    PublishSmbExportResponse, RegisterStorageFolderRequest, RegisterStorageFolderResponse,
+    RemoveGroupMemberRequest, RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
     RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
     RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, RevokePermissionGrantRequest,
     RevokePermissionGrantResponse, SetAvailabilityCellMembershipResponse,
@@ -171,6 +172,12 @@ fn components() -> Value {
             schema_response::<CreatePrincipalResponse>("CreatePrincipalResponse"),
             schema_request::<ProvisionCertificateRequest>("ProvisionCertificateRequest"),
             schema_response::<ProvisionCertificateResponse>("ProvisionCertificateResponse"),
+            schema_request::<ProvisionMeshLocalCertificateRequest>(
+                "ProvisionMeshLocalCertificateRequest",
+            ),
+            schema_response::<ProvisionMeshLocalCertificateResponse>(
+                "ProvisionMeshLocalCertificateResponse",
+            ),
             schema_request::<PublishExternalCertificateRequest>(
                 "PublishExternalCertificateRequest",
             ),
@@ -490,6 +497,10 @@ fn administration_paths() -> Vec<(String, Value)> {
                 publish_external_certificate_path(),
             ),
             (
+                "/admin/certificates/local".to_owned(),
+                provision_mesh_local_certificate_path(),
+            ),
+            (
                 "/admin/certificate-tasks/manual-dns".to_owned(),
                 manual_dns_tasks_path(),
             ),
@@ -540,6 +551,30 @@ fn publish_external_certificate_path() -> Value {
                 "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
                 "409": json_response("Operation or generation conflicts with committed state", "#/components/schemas/ApiError"),
                 "413": json_response("Publication body exceeds its bound", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Certificate authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn provision_mesh_local_certificate_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "provisionMeshLocalCertificate",
+            "summary": "Issue and distribute an HTTPS certificate from the self-contained mesh-local authority",
+            "x-meshspan-access": "system-manager-csrf",
+            "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+            "parameters": [optional_csrf_parameter()],
+            "requestBody": json_request("Mesh-local certificate provisioning", "#/components/schemas/ProvisionMeshLocalCertificateRequest"),
+            "responses": {
+                "201": json_response("Encrypted certificate generation durably issued or exactly replayed", "#/components/schemas/ProvisionMeshLocalCertificateResponse"),
+                "400": json_response("Invalid certificate request", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "409": json_response("Operation conflicts with committed state", "#/components/schemas/ApiError"),
+                "413": json_response("Request body exceeds its bound", "#/components/schemas/ApiError"),
                 "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
                 "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
                 "503": json_response("Certificate authority temporarily unavailable", "#/components/schemas/ApiError")

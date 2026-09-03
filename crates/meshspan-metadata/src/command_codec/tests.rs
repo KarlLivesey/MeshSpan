@@ -8,9 +8,10 @@ use meshspan_domain::{
     CertificateOrderId, ComponentInstanceId, DurationMicros, EntropyError,
     ExternalCertificatePublicationId, FailureScenario, FailureTerm, FaultGroupClassId,
     FaultGroupId, GrantId, GroupId, HostId, LocalityPolicyId, LocalityRequirementId, MeshId,
-    NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PrincipalId,
-    ProtectionPolicyId, ProtectionScenarioId, PublicCertificateId, RandomSource, RecoveryCodeId,
-    Revision, Rights, RoleId, SessionId, SmbExportId, TargetId, UnixMicros, VolumeId, WorkId,
+    MeshLocalCertificateAuthorityId, MeshLocalCertificateIssuanceId, NamespaceCommitId, NodeId,
+    ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PrincipalId, ProtectionPolicyId,
+    ProtectionScenarioId, PublicCertificateId, RandomSource, RecoveryCodeId, Revision, Rights,
+    RoleId, SessionId, SmbExportId, TargetId, UnixMicros, VolumeId, WorkId,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -21,20 +22,22 @@ use sha2::{Digest, Sha256};
 use super::*;
 use crate::{
     ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
-    AcknowledgeExternalCertificateInstallation, AcknowledgePublicCertificateInstallation,
-    AcknowledgementCellRequirement, AcknowledgementCellRole, AcknowledgementConsistencyClass,
-    AcmeChallengeKind, AddGroupMember, AdvanceManualDnsTask, AssignVolumeAcknowledgementPolicy,
-    AssignVolumeLocalityPolicy, AssignVolumeProtectionPolicy, AttestStorageTargetDrain,
-    BeginStorageScopeDrain, BeginStorageTargetDrain, BootstrapMesh, BootstrapRecoveryIdentity,
-    CertificateOrderCompletion, CheckpointCertificateOrder, ClaimCertificateOrder,
-    ClaimMaintenanceWork, CommitConvergedVolumeHead, CommitRebalanceScanPage, CommitScrubPass,
-    CommitSecretGeneration, CommitShardRepair, CommitTargetReconciliation,
-    CompleteCertificateOrder, CompleteMaintenanceWork, CompleteStorageScopeDrain, ConfigureAcme,
-    ConvergedHeadEvidence, CreateAcknowledgementPolicy, CreateActivationPolicy,
-    CreateAuthenticationMethod, CreateAvailabilityCell, CreateComponent, CreateFaultGroup,
-    CreateGroup, CreateLocalityPolicy, CreateProtectionPolicy, CreateUser, CreateVolume,
+    AcknowledgeExternalCertificateInstallation, AcknowledgeMeshLocalCertificateInstallation,
+    AcknowledgePublicCertificateInstallation, AcknowledgementCellRequirement,
+    AcknowledgementCellRole, AcknowledgementConsistencyClass, AcmeChallengeKind, AddGroupMember,
+    AdvanceManualDnsTask, AssignVolumeAcknowledgementPolicy, AssignVolumeLocalityPolicy,
+    AssignVolumeProtectionPolicy, AttestStorageTargetDrain, BeginStorageScopeDrain,
+    BeginStorageTargetDrain, BootstrapMesh, BootstrapRecoveryIdentity, CertificateOrderCompletion,
+    CheckpointCertificateOrder, ClaimCertificateOrder, ClaimMaintenanceWork,
+    CommitConvergedVolumeHead, CommitRebalanceScanPage, CommitScrubPass, CommitSecretGeneration,
+    CommitShardRepair, CommitTargetReconciliation, CompleteCertificateOrder,
+    CompleteMaintenanceWork, CompleteStorageScopeDrain, ConfigureAcme, ConvergedHeadEvidence,
+    CreateAcknowledgementPolicy, CreateActivationPolicy, CreateAuthenticationMethod,
+    CreateAvailabilityCell, CreateComponent, CreateFaultGroup, CreateGroup, CreateLocalityPolicy,
+    CreateMeshLocalCertificateAuthority, CreateProtectionPolicy, CreateUser, CreateVolume,
     FenceStorageNodeDrainMembership, GrantInheritance, GrantPermission,
-    GrantPermissionWithActivation, IssueAuthenticationSession, LocalityRequirementConfiguration,
+    GrantPermissionWithActivation, IssueAuthenticationSession, IssueMeshLocalCertificate,
+    LocalityRequirementConfiguration, MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND,
     MaintenanceWorkCompletion, ManualDnsTaskPhase, NewAuthenticationCredential, NewRecoveryCode,
     PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PermissionScope, ProtectionScenarioConfiguration,
     ProvisionAcme, PublishExternalCertificate, PublishSmbExport, QueueCertificateOrder,
@@ -918,6 +921,81 @@ fn external_certificate_publication_round_trips_bundle_and_installation_evidence
                 },
                 bundle_digest: [115; 32],
                 observed_publication_revision: Revision::new(14),
+            },
+        ),
+    )?;
+    Ok(())
+}
+
+#[test]
+fn mesh_local_certificate_authority_round_trips_exact_encrypted_material()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let authority_id = MeshLocalCertificateAuthorityId::from_bytes([119; 16])?;
+    let reference = SecretGenerationReference {
+        secret_id: authority_id.as_bytes(),
+        generation: 1,
+    };
+    let recipient = WrappingPrivateKey::from_bytes([120; 32])?.public_key();
+    let certificate_der = vec![0x30, 2, 1, 0];
+    let authority_certificate_digest = Sha256::digest(&certificate_der).into();
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::CreateMeshLocalCertificateAuthority(Box::new(
+            CreateMeshLocalCertificateAuthority {
+                authority_id,
+                generation: 1,
+                certificate_digest: authority_certificate_digest,
+                certificate_der,
+                authority_key: codec_secret_generation(
+                    MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND,
+                    reference,
+                    &[recipient],
+                    121,
+                )?,
+                not_before: UnixMicros::new(600),
+                not_after: UnixMicros::new(1_000),
+            },
+        )),
+    )?;
+    let issuance_id = MeshLocalCertificateIssuanceId::from_bytes([122; 16])?;
+    let certificate_id = PublicCertificateId::from_bytes([123; 16])?;
+    let certificate = SecretGenerationReference {
+        secret_id: certificate_id.as_bytes(),
+        generation: 1,
+    };
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::IssueMeshLocalCertificate(Box::new(IssueMeshLocalCertificate {
+            issuance_id,
+            authority_id,
+            authority_generation: 1,
+            authority_certificate_digest,
+            certificate_id,
+            generation: 1,
+            certificate_names: BoundedItems::new(vec!["files.mesh.test".to_owned()], 256)?,
+            certificate: codec_secret_generation(
+                PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+                certificate,
+                &[recipient],
+                124,
+            )?,
+            bundle_digest: [125; 32],
+            public_key_fingerprint: [126; 32],
+            not_before: UnixMicros::new(600),
+            not_after: UnixMicros::new(900),
+        })),
+    )?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::AcknowledgeMeshLocalCertificateInstallation(
+            AcknowledgeMeshLocalCertificateInstallation {
+                issuance_id,
+                gateway_node_id: NodeId::from_bytes([127; 16])?,
+                gateway_incarnation: 4,
+                certificate,
+                bundle_digest: [125; 32],
+                observed_issuance_revision: Revision::new(20),
             },
         ),
     )?;

@@ -16,6 +16,7 @@ p256.workspace = true
 rcgen.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+time.workspace = true
 zeroize.workspace = true
 x509-parser.workspace = true
 

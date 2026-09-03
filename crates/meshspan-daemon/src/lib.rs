@@ -148,6 +148,12 @@ mod manual_dns_task_administration_api_tests;
 mod manual_dns_task_authority;
 #[cfg(test)]
 mod manual_dns_task_authority_tests;
+mod mesh_local_certificate_api;
+#[cfg(test)]
+mod mesh_local_certificate_api_tests;
+mod mesh_local_certificate_provisioning;
+#[cfg(test)]
+mod mesh_local_certificate_provisioning_tests;
 mod metadata_forwarding;
 mod multi_factor_session;
 mod namespace_mutation_api;
@@ -335,6 +341,7 @@ mod storage_provider_opening_tests;
 mod storage_target_registration;
 #[cfg(test)]
 mod storage_target_registration_tests;
+mod system_manager_authentication;
 mod topology_administration;
 #[cfg(test)]
 mod topology_administration_api_tests;
@@ -512,6 +519,14 @@ pub use local_node_identity::{LocalNodeIdentity, LocalNodeIdentityError};
 pub use local_passkey_ceremony_key::{LocalPasskeyCeremonyKey, LocalPasskeyCeremonyKeyError};
 pub use local_totp_ceremony_key::{LocalTotpCeremonyKey, LocalTotpCeremonyKeyError};
 pub use local_wrapping_key::{LocalWrappingKey, LocalWrappingKeyError};
+pub use mesh_local_certificate_api::{
+    MeshLocalCertificateApiError, mesh_local_certificate_api_router,
+};
+pub use mesh_local_certificate_provisioning::{
+    MeshLocalAuthorityCommit, MeshLocalCertificateAuthorityError, MeshLocalCertificateCommit,
+    MeshLocalCertificateProvisioningAuthority, MeshLocalCertificateProvisioningController,
+    MeshLocalCertificateProvisioningError, MeshLocalCertificateProvisioningService,
+};
 pub use namespace_mutation_api::{
     NativeNamespaceMutationApiError, NativeNamespaceMutationController,
     NativeNamespaceMutationError, NativeNamespaceMutationService,
@@ -702,6 +717,9 @@ pub use storage_target_registration::{
     RegisteredStorageTarget, StorageTargetRegistrationAuthority,
     StorageTargetRegistrationAuthorityError, StorageTargetRegistrationError,
     StorageTargetRegistrationService,
+};
+pub use system_manager_authentication::{
+    SystemManagerAuthenticationError, SystemManagerAuthority, authenticate_system_manager,
 };
 pub use topology_administration::{
     TopologyAdministrationApiError, TopologyAdministrationAuthority,

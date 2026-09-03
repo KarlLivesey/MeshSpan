@@ -81,11 +81,12 @@ pub use primitives::{
     FaultGroupId, FederationAssignmentId, FederationGrantId, FederationRelationshipId,
     FederationStorageAllocationId, FederationSuccessionId, FileVersionId, GrantId, GroupId,
     HandleId, HostId, IdentifierError, JoinGrantId, LocalityPolicyId, LocalityRequirementId,
-    LockId, MeshId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId,
-    PartitionId, PrincipalId, ProtectionPolicyId, ProtectionScenarioId, ProtectionTermId,
-    PublicCertificateId, QuarantineId, QuorumPlanId, RecoveryCodeId, Revision, RevisionError,
-    RoleId, ScopeId, SessionId, SmbExportId, SnapshotId, SnapshotScheduleId, StageId,
-    StoragePolicyBindingId, TagId, TargetId, UnixMicros, UploadId, VolumeId, WorkId,
+    LockId, MeshId, MeshLocalCertificateAuthorityId, MeshLocalCertificateIssuanceId,
+    NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PartitionId,
+    PrincipalId, ProtectionPolicyId, ProtectionScenarioId, ProtectionTermId, PublicCertificateId,
+    QuarantineId, QuorumPlanId, RecoveryCodeId, Revision, RevisionError, RoleId, ScopeId,
+    SessionId, SmbExportId, SnapshotId, SnapshotScheduleId, StageId, StoragePolicyBindingId, TagId,
+    TargetId, UnixMicros, UploadId, VolumeId, WorkId,
 };
 pub use recovery_code::{
     ENCODED_RECOVERY_CODE_LENGTH, RecoveryCodeBundle, RecoveryCodeBundleError,

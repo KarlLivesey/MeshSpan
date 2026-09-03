@@ -52,6 +52,14 @@ public_identifier!(
     "Stable identity of one automated external-certificate publication."
 );
 public_identifier!(
+    MeshLocalCertificateAuthorityId,
+    "Stable identity of the mesh-local HTTPS trust authority."
+);
+public_identifier!(
+    MeshLocalCertificateIssuanceId,
+    "Stable identity of one mesh-local HTTPS certificate issuance."
+);
+public_identifier!(
     PublicCertificateId,
     "Stable identity of one public-certificate generation."
 );
@@ -277,6 +285,51 @@ pub struct PublishExternalCertificateResponse {
     #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
     pub not_after_epoch_micros: u64,
     /// Authoritative revision containing the encrypted generation.
+    #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
+    pub revision: u64,
+}
+
+/// Exact-retry request for an automatically trusted mesh-local HTTPS identity.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProvisionMeshLocalCertificateRequest {
+    /// Client-generated identity binding exact retries.
+    pub operation_id: OperationId,
+    /// Sorted, unique lower-case DNS names requested on the endpoint certificate.
+    #[schemars(length(min = 1, max = 256))]
+    pub certificate_names: Vec<String>,
+}
+
+/// Secret-free result of one mesh-local HTTPS certificate issuance.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProvisionMeshLocalCertificateResponse {
+    /// Exact idempotency identity whose result was committed or resolved.
+    pub operation_id: OperationId,
+    /// Immutable mesh-local trust-authority identity.
+    pub authority_id: MeshLocalCertificateAuthorityId,
+    /// Immutable issuance identity.
+    pub issuance_id: MeshLocalCertificateIssuanceId,
+    /// Immutable public-certificate identity.
+    pub certificate_id: PublicCertificateId,
+    /// Monotonic mesh-local endpoint generation.
+    pub generation: CertificateGeneration,
+    /// Canonical DNS names bound to the leaf certificate.
+    #[schemars(length(min = 1, max = 256))]
+    pub certificate_names: Vec<String>,
+    /// Public trust anchor in PEM form; no private material is returned.
+    #[schemars(length(min = 64, max = 32_768))]
+    pub trust_anchor_pem: String,
+    /// Lower-case SHA-256 fingerprint of the leaf subject public key.
+    #[schemars(length(equal = 64), pattern(r"^[0-9a-f]{64}$"))]
+    pub public_key_fingerprint: String,
+    /// Inclusive leaf validity start as epoch microseconds.
+    #[schemars(range(min = 0, max = 9_007_199_254_740_991_u64))]
+    pub not_before_epoch_micros: u64,
+    /// Exclusive leaf validity end as epoch microseconds.
+    #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
+    pub not_after_epoch_micros: u64,
+    /// Authoritative revision containing the encrypted endpoint generation.
     #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
     pub revision: u64,
 }

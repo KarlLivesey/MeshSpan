@@ -487,6 +487,8 @@ Requirements: DAT-007–014, OPS-004, OPS-005, TST-006.
 Build:
 
 - ACME HTTP-01 and DNS-01 with fenced single-worker orders;
+- a self-contained mesh-local CA, downloadable public trust anchor and automatic
+  encrypted gateway certificate issuance for installations without a domain;
 - per-node encrypted certificate/private-key distribution and rotation;
 - operational health, protection, capacity, security and audit panels;
 - native artefacts for accepted platforms and a minimal container image;
@@ -506,7 +508,7 @@ Exit evidence:
 - dependency/toolchain update candidates run the complete applicable automated
   suite before acceptance.
 
-Requirements: PKI-001–007, PER-003–007, REL-001, REL-003, TST-007.
+Requirements: PKI-001–010, PER-003–007, REL-001, REL-003, TST-007.
 
 ## Stage 11 — minimal useful product proof
 
