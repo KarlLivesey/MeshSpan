@@ -21,7 +21,10 @@ use crate::{
 
 pub use order_checkpoint::CertificateOrderCheckpointRecord;
 pub(super) use order_checkpoint::checkpoint;
-pub use query::{AcmeConfigurationRecord, DueCertificateOrderCursor};
+pub use query::{
+    AcmeConfigurationRecord, CertificateRenewalCandidate, DueCertificateOrderCursor,
+    DueCertificateRenewalCursor,
+};
 
 const ORDER_QUEUED: i64 = 1;
 const ORDER_CLAIMED: i64 = 2;
@@ -441,6 +444,26 @@ impl AuthoritativeRepository {
     ) -> Result<super::Page<CertificateOrderRecord, DueCertificateOrderCursor>, RepositoryError>
     {
         query::due_orders(&self.database, now, after, limit)
+    }
+
+    /// Returns latest completed certificate generations whose renewal window has opened.
+    ///
+    /// A configuration with a queued or claimed replacement is excluded, so concurrent schedulers
+    /// cannot create a renewal storm. Only the latest completed order per configuration is visible.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid limits and fails closed for malformed persisted certificate state.
+    pub fn due_certificate_renewals(
+        &self,
+        renew_by: UnixMicros,
+        after: Option<&DueCertificateRenewalCursor>,
+        limit: super::PageLimit,
+    ) -> Result<
+        super::Page<CertificateRenewalCandidate, DueCertificateRenewalCursor>,
+        RepositoryError,
+    > {
+        query::due_renewals(&self.database, renew_by, after, limit)
     }
 
     /// Returns one exact ACME order and its current live claim.
