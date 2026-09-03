@@ -2,9 +2,6 @@
 
 //! DNS-01 adapter over a narrow replaceable TXT publication boundary.
 
-use std::collections::BTreeMap;
-use std::sync::RwLock;
-
 use meshspan_contracts::{
     CertificateChallenge, CertificateChallengeKind, CertificateChallengeReceipt,
     CertificateChallengeRequest, ComponentConfiguration, ComponentLifecycle, ComponentObservation,
@@ -17,15 +14,21 @@ use crate::Dns01Payload;
 use crate::component::Lifecycle;
 use crate::http01::{descriptor, validate_request};
 
-/// Provider-confirmed identity of one exact TXT publication.
+/// Deterministic provider identity of one exact fenced TXT publication.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DnsTxtReceipt {
-    /// Provider-owned opaque generation or change identity digest.
+    /// Provider-owned stable digest recoverable from configuration, request and order epoch.
     pub provider_digest: [u8; 32],
 }
 
-/// Small synchronous boundary implemented by RFC 2136, Cloudflare and automation adapters.
+/// Small asynchronous boundary implemented by RFC 2136, Cloudflare and automation adapters.
 pub trait DnsTxtProvider {
+    /// Reconstructs the stable receipt for an exact fenced publication without external I/O.
+    ///
+    /// This makes a durably checkpointed challenge resumable after daemon restart. Provider
+    /// identity and public scope may be included, but secret material must never enter the digest.
+    fn receipt(&self, name: &str, value: &[u8], order_epoch: u64) -> DnsTxtReceipt;
+
     /// Idempotently publishes an exact TXT value under the supplied order fence.
     ///
     /// # Errors
@@ -68,7 +71,6 @@ pub trait DnsTxtProvider {
 pub struct Dns01Challenge<P> {
     lifecycle: Lifecycle,
     provider: P,
-    provider_receipts: RwLock<BTreeMap<[u8; 32], DnsTxtReceipt>>,
 }
 
 impl<P> Dns01Challenge<P> {
@@ -77,7 +79,6 @@ impl<P> Dns01Challenge<P> {
         Self {
             lifecycle: Lifecycle::default(),
             provider,
-            provider_receipts: RwLock::new(BTreeMap::new()),
         }
     }
 
@@ -117,6 +118,11 @@ impl<P: DnsTxtProvider + Send + Sync> CertificateChallenge for Dns01Challenge<P>
         validate_request(request, CertificateChallengeKind::Dns01)?;
         let payload =
             Dns01Payload::decode(&request.challenge).map_err(|_| ContractError::InvalidInput)?;
+        let expected = self.provider.receipt(
+            payload.record_name(),
+            payload.record_value(),
+            request.order_epoch,
+        );
         let provider = self
             .provider
             .publish_txt(
@@ -125,11 +131,10 @@ impl<P: DnsTxtProvider + Send + Sync> CertificateChallenge for Dns01Challenge<P>
                 request.order_epoch,
             )
             .await?;
+        if provider != expected {
+            return Err(ContractError::Unavailable);
+        }
         let receipt = Self::receipt(request, &payload, provider);
-        self.provider_receipts
-            .write()
-            .map_err(|_| ContractError::Unavailable)?
-            .insert(receipt.publication_digest, provider);
         Ok(receipt)
     }
 
@@ -144,13 +149,11 @@ impl<P: DnsTxtProvider + Send + Sync> CertificateChallenge for Dns01Challenge<P>
         if receipt.order_epoch != request.order_epoch {
             return Err(ContractError::Stale);
         }
-        let provider = self
-            .provider_receipts
-            .read()
-            .map_err(|_| ContractError::Unavailable)?
-            .get(&receipt.publication_digest)
-            .copied()
-            .ok_or(ContractError::Stale)?;
+        let provider = self.provider.receipt(
+            payload.record_name(),
+            payload.record_value(),
+            request.order_epoch,
+        );
         if Self::receipt(request, &payload, provider) != receipt {
             return Err(ContractError::Stale);
         }
@@ -170,23 +173,17 @@ impl<P: DnsTxtProvider + Send + Sync> CertificateChallenge for Dns01Challenge<P>
         if receipt.order_epoch != request.order_epoch {
             return Err(ContractError::Stale);
         }
-        let provider = self
-            .provider_receipts
-            .read()
-            .map_err(|_| ContractError::Unavailable)?
-            .get(&receipt.publication_digest)
-            .copied()
-            .ok_or(ContractError::Stale)?;
+        let provider = self.provider.receipt(
+            payload.record_name(),
+            payload.record_value(),
+            request.order_epoch,
+        );
         if Self::receipt(request, &payload, provider) != receipt {
             return Err(ContractError::Stale);
         }
         self.provider
             .remove_txt(payload.record_name(), payload.record_value(), provider)
             .await?;
-        self.provider_receipts
-            .write()
-            .map_err(|_| ContractError::Unavailable)?
-            .remove(&receipt.publication_digest);
         Ok(())
     }
 }
