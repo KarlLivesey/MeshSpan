@@ -42,6 +42,7 @@ import type {
   CreateVolumePermissionGrantResponse,
   CreateVolumeRequest,
   CreateVolumeResponse,
+  CertificateStatusResponse,
   CurrentSessionResponse,
   DeleteObjectRequest,
   DeleteObjectResponse,
@@ -142,6 +143,7 @@ import {
   zDeleteObjectBody,
   zDeleteObjectPath,
   zDeleteObjectResponse2,
+  zGetCertificateStatusResponse,
   zGetCurrentSessionResponse,
   zGetHealthResponse,
   zGetObjectPath,
@@ -402,6 +404,7 @@ export interface MeshSpanFetchClient {
     request: StepUpCurrentSessionRequestWritable,
     csrfToken: string,
   ): Promise<CreateSessionResult>;
+  getCertificateStatus(): Promise<CertificateStatusResponse>;
   listManualDnsTasks(
     request?: ListManualDnsTasksRequest,
   ): Promise<ListManualDnsTasksResponse>;
@@ -804,6 +807,14 @@ export function createMeshSpanFetchClient(
         csrfToken: readCsrfToken(response.headers),
         session: response.body,
       };
+    },
+    async getCertificateStatus(): Promise<CertificateStatusResponse> {
+      return requestJson(
+        context,
+        "/admin/certificates/status",
+        { method: "GET" },
+        zGetCertificateStatusResponse,
+      );
     },
     async listManualDnsTasks(
       request = {},

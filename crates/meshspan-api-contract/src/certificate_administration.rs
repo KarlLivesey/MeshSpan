@@ -333,3 +333,72 @@ pub struct ProvisionMeshLocalCertificateResponse {
     #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
     pub revision: u64,
 }
+
+/// Authority which produced the currently selected HTTPS certificate.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CertificateStatusSource {
+    /// `MeshSpan`'s automatic ACME lifecycle.
+    Acme,
+    /// An authenticated external issuer integration.
+    External,
+    /// `MeshSpan`'s self-contained local trust authority.
+    MeshLocal,
+}
+
+/// Plain-language operational state of the selected HTTPS certificate.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CertificateOperationalState {
+    /// The certificate is valid and every intended gateway acknowledged it.
+    Active,
+    /// The certificate is valid but at least one intended gateway has not acknowledged it.
+    Distributing,
+    /// The certificate's validity window has not opened.
+    NotYetValid,
+    /// The certificate validity window has ended.
+    Expired,
+}
+
+/// Current secret-free HTTPS certificate and gateway-delivery status.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CurrentCertificateStatus {
+    /// Certificate authority family.
+    pub source: CertificateStatusSource,
+    /// Stable source identity as canonical UUID text.
+    #[schemars(
+        length(equal = 36),
+        pattern(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    )]
+    pub source_id: String,
+    /// Current encrypted delivery generation represented exactly outside JavaScript numbers.
+    pub delivery_generation: CertificateGeneration,
+    /// Inclusive certificate validity start as epoch microseconds.
+    #[schemars(range(min = 0, max = 9_007_199_254_740_991_u64))]
+    pub not_before_epoch_micros: u64,
+    /// Exclusive certificate validity end as epoch microseconds.
+    #[schemars(range(min = 1, max = 9_007_199_254_740_991_u64))]
+    pub not_after_epoch_micros: u64,
+    /// Gateways included in the current encrypted delivery generation.
+    #[schemars(range(max = 1_000_000_u64))]
+    pub required_gateway_count: u64,
+    /// Gateways which acknowledged live selection of the current generation.
+    #[schemars(range(max = 1_000_000_u64))]
+    pub installed_gateway_count: u64,
+    /// Derived state at the response's authority-agreed observation time.
+    pub state: CertificateOperationalState,
+    /// Authoritative source revision represented exactly outside JavaScript numbers.
+    pub source_revision: CertificateGeneration,
+}
+
+/// Current certificate status; `certificate` is `null` before a source is configured.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CertificateStatusResponse {
+    /// Authority-agreed time used for validity classification.
+    #[schemars(range(min = 0, max = 9_007_199_254_740_991_u64))]
+    pub observed_at_epoch_micros: u64,
+    /// Current secret-free certificate state, or `null` when HTTPS has no configured identity.
+    pub certificate: Option<CurrentCertificateStatus>,
+}

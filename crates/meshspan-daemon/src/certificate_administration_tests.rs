@@ -94,6 +94,15 @@ impl MockAuthority {
 }
 
 impl CertificateProvisioningAuthority for MockAuthority {
+    fn public_certificate_status(
+        &self,
+    ) -> Result<
+        Option<meshspan_metadata::PublicCertificateStatusRecord>,
+        CertificateProvisioningAuthorityError,
+    > {
+        Ok(None)
+    }
+
     fn resolve_certificate_provisioning(
         &self,
         operation_id: OperationId,

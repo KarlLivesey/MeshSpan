@@ -3,14 +3,50 @@
 import { createSignal, type Accessor } from "solid-js";
 
 import type {
+  CertificateStatusResponse,
   ListManualDnsTasksResponse,
   MeshSpanFetchClient,
 } from "../../generated";
 
 export type CertificateAdministrationClient = Pick<
   MeshSpanFetchClient,
-  "listManualDnsTasks" | "listNextManualDnsTasks" | "provisionCertificate"
+  | "getCertificateStatus"
+  | "listManualDnsTasks"
+  | "listNextManualDnsTasks"
+  | "provisionCertificate"
 >;
+
+export type CertificateStatusResource = Readonly<{
+  error: Accessor<string | undefined>;
+  load: () => Promise<void>;
+  loading: Accessor<boolean>;
+  value: Accessor<CertificateStatusResponse | undefined>;
+}>;
+
+export function createCertificateStatusResource(
+  client: Accessor<CertificateAdministrationClient>,
+): CertificateStatusResource {
+  const [value, setValue] = createSignal<CertificateStatusResponse | undefined>(
+    undefined,
+    { ownedWrite: true },
+  );
+  const [loading, setLoading] = createSignal(true, { ownedWrite: true });
+  const [error, setError] = createSignal<string | undefined>(undefined, {
+    ownedWrite: true,
+  });
+  const load = async (): Promise<void> => {
+    setLoading(true);
+    setError();
+    try {
+      setValue(await client().getCertificateStatus());
+    } catch {
+      setError("MeshSpan could not read the current certificate status.");
+    } finally {
+      setLoading(false);
+    }
+  };
+  return { error, load, loading, value };
+}
 
 export type ManualDnsTask = ListManualDnsTasksResponse["tasks"][number];
 

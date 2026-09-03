@@ -10,23 +10,24 @@ use crate::{
     ApiError, AssignVolumePlacementPolicyRequest, AssignVolumePlacementPolicyResponse,
     AssignVolumeProtectionPolicyRequest, AssignVolumeProtectionPolicyResponse,
     BeginStorageDrainRequest, BeginStorageDrainResponse, BeginUploadRequest, BeginUploadResponse,
-    CommitUploadRequest, CommitUploadResponse, ConfirmRecoveryBundleRequest,
-    ConfirmRecoveryBundleResponse, CreateAcknowledgementPolicyRequest,
-    CreateAcknowledgementPolicyResponse, CreateApiKeyRequest, CreateApiKeyResponse,
-    CreateAvailabilityCellRequest, CreateAvailabilityCellResponse, CreateDirectoryRequest,
-    CreateDirectoryResponse, CreateFaultGroupRequest, CreateFaultGroupResponse, CreateGroupRequest,
-    CreateLocalityPolicyRequest, CreateLocalityPolicyResponse, CreateMeshSetupRequest,
-    CreateMeshSetupResponse, CreateNodeJoinGrantRequest, CreateNodeJoinGrantResponse,
-    CreatePasskeyChallengeRequest, CreatePasskeyChallengeResponse,
-    CreatePasskeyRegistrationChallengeRequest, CreatePasskeyRegistrationChallengeResponse,
-    CreatePasskeyRegistrationRequest, CreatePasskeyRegistrationResponse, CreatePrincipalResponse,
-    CreateProtectionPolicyRequest, CreateProtectionPolicyResponse, CreateRecoveryCodesRequest,
-    CreateRecoveryCodesResponse, CreateSessionRequest, CreateSessionResponse,
-    CreateTotpRegistrationChallengeRequest, CreateTotpRegistrationChallengeResponse,
-    CreateTotpRegistrationRequest, CreateTotpRegistrationResponse, CreateUserRequest,
-    CreateVolumePermissionGrantRequest, CreateVolumePermissionGrantResponse, CreateVolumeRequest,
-    CreateVolumeResponse, CurrentSessionResponse, DeleteObjectRequest, DeleteObjectResponse,
-    EnrolNodeRequest, EnrolNodeResponse, GetObjectResponse, HealthResponse, JoinMeshSetupRequest,
+    CertificateStatusResponse, CommitUploadRequest, CommitUploadResponse,
+    ConfirmRecoveryBundleRequest, ConfirmRecoveryBundleResponse,
+    CreateAcknowledgementPolicyRequest, CreateAcknowledgementPolicyResponse, CreateApiKeyRequest,
+    CreateApiKeyResponse, CreateAvailabilityCellRequest, CreateAvailabilityCellResponse,
+    CreateDirectoryRequest, CreateDirectoryResponse, CreateFaultGroupRequest,
+    CreateFaultGroupResponse, CreateGroupRequest, CreateLocalityPolicyRequest,
+    CreateLocalityPolicyResponse, CreateMeshSetupRequest, CreateMeshSetupResponse,
+    CreateNodeJoinGrantRequest, CreateNodeJoinGrantResponse, CreatePasskeyChallengeRequest,
+    CreatePasskeyChallengeResponse, CreatePasskeyRegistrationChallengeRequest,
+    CreatePasskeyRegistrationChallengeResponse, CreatePasskeyRegistrationRequest,
+    CreatePasskeyRegistrationResponse, CreatePrincipalResponse, CreateProtectionPolicyRequest,
+    CreateProtectionPolicyResponse, CreateRecoveryCodesRequest, CreateRecoveryCodesResponse,
+    CreateSessionRequest, CreateSessionResponse, CreateTotpRegistrationChallengeRequest,
+    CreateTotpRegistrationChallengeResponse, CreateTotpRegistrationRequest,
+    CreateTotpRegistrationResponse, CreateUserRequest, CreateVolumePermissionGrantRequest,
+    CreateVolumePermissionGrantResponse, CreateVolumeRequest, CreateVolumeResponse,
+    CurrentSessionResponse, DeleteObjectRequest, DeleteObjectResponse, EnrolNodeRequest,
+    EnrolNodeResponse, GetObjectResponse, HealthResponse, JoinMeshSetupRequest,
     JoinMeshSetupResponse, ListAcknowledgementPoliciesResponse, ListAuthenticationMethodsResponse,
     ListAvailabilityCellsResponse, ListDirectoryResponse, ListFaultGroupMembershipsResponse,
     ListFaultGroupsResponse, ListGroupMembershipsResponse, ListLocalityPoliciesResponse,
@@ -172,6 +173,7 @@ fn components() -> Value {
             schema_response::<CreatePrincipalResponse>("CreatePrincipalResponse"),
             schema_request::<ProvisionCertificateRequest>("ProvisionCertificateRequest"),
             schema_response::<ProvisionCertificateResponse>("ProvisionCertificateResponse"),
+            schema_response::<CertificateStatusResponse>("CertificateStatusResponse"),
             schema_request::<ProvisionMeshLocalCertificateRequest>(
                 "ProvisionMeshLocalCertificateRequest",
             ),
@@ -489,6 +491,10 @@ fn administration_paths() -> Vec<(String, Value)> {
         .chain(administration_topology_paths())
         .chain([
             (
+                "/admin/certificates/status".to_owned(),
+                certificate_status_path(),
+            ),
+            (
                 "/admin/certificates/acme".to_owned(),
                 provision_certificate_path(),
             ),
@@ -511,6 +517,23 @@ fn administration_paths() -> Vec<(String, Value)> {
             ),
         ])
         .collect()
+}
+
+fn certificate_status_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "getCertificateStatus",
+            "summary": "Read current HTTPS certificate validity and gateway delivery progress",
+            "x-meshspan-access": "system-manager",
+            "responses": {
+                "200": json_response("Current secret-free certificate status", "#/components/schemas/CertificateStatusResponse"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Certificate authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn provision_certificate_path() -> Value {

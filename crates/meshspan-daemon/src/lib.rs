@@ -720,6 +720,7 @@ pub use storage_target_registration::{
 };
 pub use system_manager_authentication::{
     SystemManagerAuthenticationError, SystemManagerAuthority, authenticate_system_manager,
+    authenticate_system_manager_read,
 };
 pub use topology_administration::{
     TopologyAdministrationApiError, TopologyAdministrationAuthority,

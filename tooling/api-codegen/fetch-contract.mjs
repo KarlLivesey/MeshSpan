@@ -100,6 +100,7 @@ function readAdministrationRoutes(operations) {
       operations,
       "createVolumePermissionGrant",
     ),
+    getCertificateStatus: requireOperation(operations, "getCertificateStatus"),
     listGroups: requireOperation(operations, "listGroups"),
     listFaultGroups: requireOperation(operations, "listFaultGroups"),
     listFaultGroupMemberships: requireOperation(

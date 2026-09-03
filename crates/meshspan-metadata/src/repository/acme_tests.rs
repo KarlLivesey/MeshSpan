@@ -1140,6 +1140,13 @@ fn gateway_installation_requires_exact_issued_recipient_and_is_idempotent()
         13,
         &AuthoritativeCommand::AcknowledgePublicCertificateInstallation(acknowledgement),
     )?;
+    let status = fixture
+        .repository
+        .public_certificate_status()?
+        .ok_or("certificate status missing")?;
+    assert_eq!(status.not_before, UnixMicros::new(1));
+    assert_eq!(status.not_after, UnixMicros::new(1_000));
+    assert!(status.rollout_complete());
     let installation = fixture
         .repository
         .public_certificate_installation(order_id, fixture.node)?
@@ -1216,6 +1223,12 @@ fn acme_rollout_reopens_for_a_redistributed_delivery_generation()
     assert_eq!(summary.certificate.generation, 2);
     assert_eq!(summary.installed_gateway_count, 0);
     assert!(!summary.complete);
+    let status = fixture
+        .repository
+        .public_certificate_status()?
+        .ok_or("redistributed certificate status missing")?;
+    assert_eq!(status.selection.certificate.generation, 2);
+    assert!(!status.rollout_complete());
     fixture.apply(
         9,
         17,
@@ -1231,6 +1244,13 @@ fn acme_rollout_reopens_for_a_redistributed_delivery_generation()
         .public_certificate_rollout_summary(order_id)?;
     assert_eq!(summary.installed_gateway_count, 1);
     assert!(summary.complete);
+    assert!(
+        fixture
+            .repository
+            .public_certificate_status()?
+            .ok_or("completed certificate status missing")?
+            .rollout_complete()
+    );
     Ok(())
 }
 

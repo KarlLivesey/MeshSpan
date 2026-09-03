@@ -534,6 +534,53 @@ export const zBeginUploadResponse = z
   .strict();
 
 /**
+ * CertificateStatusResponse
+ *
+ * Current certificate status; `certificate` is `null` before a source is configured.
+ */
+export const zCertificateStatusResponse = z
+  .strictObject({
+    certificate: z
+      .strictObject({
+        delivery_generation: z
+          .string()
+          .min(1)
+          .max(20)
+          .regex(/^[1-9][0-9]{0,19}$/),
+        installed_gateway_count: z.int().gte(0).lte(1000000),
+        not_after_epoch_micros: z.int().gte(1).lte(9007199254740991),
+        not_before_epoch_micros: z.int().gte(0).lte(9007199254740991),
+        required_gateway_count: z.int().gte(0).lte(1000000),
+        source: z.union([
+          z.literal("acme"),
+          z.literal("external"),
+          z.literal("mesh_local"),
+        ]),
+        source_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        source_revision: z
+          .string()
+          .min(1)
+          .max(20)
+          .regex(/^[1-9][0-9]{0,19}$/),
+        state: z.union([
+          z.literal("active"),
+          z.literal("distributing"),
+          z.literal("not_yet_valid"),
+          z.literal("expired"),
+        ]),
+      })
+      .strict()
+      .nullable(),
+    observed_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+  })
+  .strict();
+
+/**
  * CommitUploadRequest
  *
  * Explicit final publication request for one complete checkpoint.
@@ -5553,6 +5600,11 @@ export const zProvisionMeshLocalCertificateHeaders = z
  */
 export const zProvisionMeshLocalCertificateResponse2 =
   zProvisionMeshLocalCertificateResponse;
+
+/**
+ * Current secret-free certificate status
+ */
+export const zGetCertificateStatusResponse = zCertificateStatusResponse;
 
 export const zListGroupsQuery = z
   .object({

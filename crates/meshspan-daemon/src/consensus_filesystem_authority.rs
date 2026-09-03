@@ -173,6 +173,17 @@ impl MeshLocalCertificateProvisioningAuthority for ConsensusAuthenticationAuthor
 }
 
 impl CertificateProvisioningAuthority for ConsensusAuthenticationAuthority {
+    fn public_certificate_status(
+        &self,
+    ) -> Result<
+        Option<meshspan_metadata::PublicCertificateStatusRecord>,
+        CertificateProvisioningAuthorityError,
+    > {
+        self.reader()
+            .public_certificate_status()
+            .map_err(|error| map_provisioning_repository_error(&error))
+    }
+
     fn resolve_certificate_provisioning(
         &self,
         operation_id: meshspan_domain::OperationId,

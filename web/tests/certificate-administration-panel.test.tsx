@@ -31,6 +31,7 @@ describe("certificate administration panel", () => {
       CertificateAdministrationClient["listManualDnsTasks"]
     >(async () => ({ next_page_url: null, tasks: [manualDnsTask()] }));
     mount({
+      getCertificateStatus: async () => certificateStatus(),
       listManualDnsTasks,
       listNextManualDnsTasks: async () => ({
         next_page_url: null,
@@ -56,6 +57,7 @@ describe("certificate administration panel", () => {
       "_acme-challenge.files.example.test",
     );
     expect(document.body.textContent).toContain("challenge_value");
+    expect(document.body.textContent).toContain("Installed on 2 of 3 gateways");
   });
 });
 
@@ -73,6 +75,23 @@ function mount(client: CertificateAdministrationClient): void {
       root,
     ),
   );
+}
+
+function certificateStatus() {
+  return {
+    certificate: {
+      delivery_generation: "2",
+      installed_gateway_count: 2,
+      not_after_epoch_micros: 1_800_000_000_000_000,
+      not_before_epoch_micros: 1_700_000_000_000_000,
+      required_gateway_count: 3,
+      source: "acme" as const,
+      source_id: "00000000-0000-4000-8000-000000000002",
+      source_revision: "7",
+      state: "distributing" as const,
+    },
+    observed_at_epoch_micros: 1_700_000_100_000_000,
+  };
 }
 
 function manualDnsTask() {
