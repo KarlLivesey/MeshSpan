@@ -37,7 +37,8 @@ use crate::{
     AcknowledgeExternalCertificateInstallation, AcknowledgePublicCertificateInstallation,
     AcmeChallengeKind, AdvanceManualDnsTask, CertificateOrderCompletion,
     CheckpointCertificateOrder, ClaimCertificateOrder, CompleteCertificateOrder, ConfigureAcme,
-    ProvisionAcme, PublishExternalCertificate, QueueCertificateOrder, RenewCertificateOrder,
+    CreateMeshLocalCertificateAuthority, ProvisionAcme, PublishExternalCertificate,
+    QueueCertificateOrder, RenewCertificateOrder,
 };
 use crate::{
     ActivateFederationGrantAssignment, CreateFederationGrantAssignment, IssueFederationGrant,
@@ -242,6 +243,8 @@ pub enum AuthoritativeCommand {
     PublishExternalCertificate(Box<PublishExternalCertificate>),
     /// Records one gateway's exact live externally issued certificate generation.
     AcknowledgeExternalCertificateInstallation(AcknowledgeExternalCertificateInstallation),
+    /// Creates the first encrypted mesh-local HTTPS signing authority and public trust anchor.
+    CreateMeshLocalCertificateAuthority(Box<CreateMeshLocalCertificateAuthority>),
     /// Registers one node-local public key for encrypted secret generations.
     RegisterNodeWrappingKey(RegisterNodeWrappingKey),
     /// Commits one encrypted secret generation and every exact recipient envelope atomically.
@@ -426,6 +429,7 @@ impl AuthoritativeCommand {
             Self::AcknowledgePublicCertificateInstallation(value) => value.update_digest(digest),
             Self::PublishExternalCertificate(value) => value.update_digest(digest),
             Self::AcknowledgeExternalCertificateInstallation(value) => value.update_digest(digest),
+            Self::CreateMeshLocalCertificateAuthority(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
             Self::CommitSecretGeneration(value) => value.update_digest(digest),
             Self::IssueJoinGrant(value) => value.update_digest(digest),
@@ -684,6 +688,9 @@ pub const PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND: u16 = 7;
 
 /// Encrypted private key for one in-flight externally issued certificate request.
 pub const PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND: u16 = 8;
+
+/// Encrypted private key for one mesh-local HTTPS certificate authority generation.
+pub const MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND: u16 = 9;
 
 /// Exact durable local outcome accepted as the source of a converged-head transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3887,6 +3894,19 @@ digest_simple_record!(
         digest.unsigned(value.certificate.generation);
         digest.bytes(&value.bundle_digest);
         digest.unsigned(value.observed_publication_revision.get());
+    }
+);
+digest_simple_record!(
+    CreateMeshLocalCertificateAuthority,
+    b"create-mesh-local-certificate-authority",
+    |value, digest| {
+        digest.identifier(value.authority_id.as_bytes());
+        digest.unsigned(value.generation);
+        digest.bytes(&value.certificate_der);
+        value.authority_key.update_digest(digest);
+        digest.bytes(&value.certificate_digest);
+        digest.signed(value.not_before.get());
+        digest.signed(value.not_after.get());
     }
 );
 digest_simple_record!(

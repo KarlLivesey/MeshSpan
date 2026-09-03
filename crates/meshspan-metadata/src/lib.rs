@@ -37,6 +37,7 @@ mod local_setup_tests;
 mod local_target;
 #[cfg(test)]
 mod local_target_tests;
+mod mesh_local_certificate_command;
 mod migration;
 mod name;
 mod repository;
@@ -72,14 +73,14 @@ pub use command::{
     CreateVolumeSnapshot, DetachTag, FenceStorageNodeDrainMembership, FreezeScopeHandoff,
     GrantInheritance, GrantPermission, GrantPermissionWithActivation, InstallScopeRouteProjection,
     IssueAuthenticationSession, IssueJoinGrant, IssueVersionCleanupPermit, JoinRoles,
-    LocalityRequirementConfiguration, MaintenanceWorkCompletion, NamespaceObjectKind,
-    NewAuthenticationCredential, NewRecoveryCode, ONLINE_AUTHORITY_KEY_SECRET_KIND,
-    PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND,
-    PermissionScope, PrincipalLifecycleState, ProposeVersionCleanup,
-    ProtectionScenarioConfiguration, PublishSmbExport, QueueMaintenanceWork, RebalanceScanCursor,
-    RegisterCleanupAttestationKey, RegisterNodeWrappingKey, RegisterRoutingSigner,
-    RegisterStorageTarget, RemoveGroupMember, RemoveVolumeSnapshotRoot, RenewMaintenanceWork,
-    ReplaceObjectOwners, RepositoryCommandError, RequestVolumeSnapshotExpiry,
+    LocalityRequirementConfiguration, MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND,
+    MaintenanceWorkCompletion, NamespaceObjectKind, NewAuthenticationCredential, NewRecoveryCode,
+    ONLINE_AUTHORITY_KEY_SECRET_KIND, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+    PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND, PermissionScope, PrincipalLifecycleState,
+    ProposeVersionCleanup, ProtectionScenarioConfiguration, PublishSmbExport, QueueMaintenanceWork,
+    RebalanceScanCursor, RegisterCleanupAttestationKey, RegisterNodeWrappingKey,
+    RegisterRoutingSigner, RegisterStorageTarget, RemoveGroupMember, RemoveVolumeSnapshotRoot,
+    RenewMaintenanceWork, ReplaceObjectOwners, RepositoryCommandError, RequestVolumeSnapshotExpiry,
     RestoreVolumeSnapshot, RetentionReclaimMode, RevokeAccessActivation,
     RevokeAuthenticationMethod, RevokeAuthenticationSession, RevokePermissionGrant,
     RouteAttestation, RunSnapshotSchedule, STORAGE_PERMIT_KEY_SECRET_KIND,
@@ -174,6 +175,9 @@ pub use local_setup::{
 pub use local_target::{
     LocalTargetDisposition, LocalTargetError, LocalTargetRecord, LocalTargetState, NewLocalTarget,
 };
+pub use mesh_local_certificate_command::{
+    CreateMeshLocalCertificateAuthority, MAXIMUM_MESH_LOCAL_CA_CERTIFICATE_BYTES,
+};
 pub use migration::MetadataStoreError;
 pub use name::{RecordName, RecordNameError};
 pub use repository::{
@@ -209,16 +213,17 @@ pub use repository::{
     LocalityRequirementRecord, LogPosition, MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME,
     MaintenanceEffectReference, MaintenanceWorkClaim, MaintenanceWorkCursor, MaintenanceWorkRecord,
     MaintenanceWorkState, ManualDnsTaskCursor, ManualDnsTaskRecord, ManualDnsTaskState,
-    MeshRecoveryAuthority, NamespaceCursor, NamespaceRecord, NodeActivationCandidate,
-    NodeActivationRecord, NodeEnrolmentRecord, NodeWrappingKeyRecord, ObjectOwnerCursor,
-    ObjectOwnerRecord, OnlineCertificateAuthorityRecord, Page, PageLimit, PartitionBackupManifest,
-    PartitionConsensusPersistence, PartitionSnapshotManifest, PasskeyRegistrationProfile,
-    PasskeyRegistrationReplay, PasskeySessionReplay, PasskeyVerificationMaterial,
-    PermissionGrantRecord, PermissionGrantRevocationRecord, PreservedVote, PrincipalCursor,
-    PrincipalKind, PrincipalRecord, ProtectionPolicyCursor, ProtectionPolicyRecord,
-    ProtectionScenarioRecord, ProtectionTermRecord, PublicCertificateInstallationRecord,
-    PublicCertificateRolloutSummary, PublicCertificateSelection, PublicCertificateSource,
-    ReadyMaintenanceWork, ReadyMaintenanceWorkPage, RebalanceScanProgress, RecoveryBundleState,
+    MeshLocalCertificateAuthorityRecord, MeshRecoveryAuthority, NamespaceCursor, NamespaceRecord,
+    NodeActivationCandidate, NodeActivationRecord, NodeEnrolmentRecord, NodeWrappingKeyRecord,
+    ObjectOwnerCursor, ObjectOwnerRecord, OnlineCertificateAuthorityRecord, Page, PageLimit,
+    PartitionBackupManifest, PartitionConsensusPersistence, PartitionSnapshotManifest,
+    PasskeyRegistrationProfile, PasskeyRegistrationReplay, PasskeySessionReplay,
+    PasskeyVerificationMaterial, PermissionGrantRecord, PermissionGrantRevocationRecord,
+    PreservedVote, PrincipalCursor, PrincipalKind, PrincipalRecord, ProtectionPolicyCursor,
+    ProtectionPolicyRecord, ProtectionScenarioRecord, ProtectionTermRecord,
+    PublicCertificateInstallationRecord, PublicCertificateRolloutSummary,
+    PublicCertificateSelection, PublicCertificateSource, ReadyMaintenanceWork,
+    ReadyMaintenanceWorkPage, RebalanceScanProgress, RecoveryBundleState,
     RecoveryCodeVerificationMaterial, RepositoryConformanceCheck, RepositoryConformanceReport,
     RepositoryConformanceVector, RepositoryError, RetainedNamespaceRoot,
     RetainedNamespaceRootCursor, RetainedNamespaceRootPage, RetainedNamespaceRootSource,

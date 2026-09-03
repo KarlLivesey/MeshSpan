@@ -4,8 +4,9 @@ use meshspan_acme::{AcmeChallengePreference, AcmeOrderMachine, AcmeOrderRequest}
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     AcmeConfigurationId, ApiKeyId, AuditEventId, AuthenticationMethodId, CertificateOrderId,
-    EntropyError, ExternalCertificatePublicationId, HostId, MeshId, NodeId, OperationId,
-    PartitionId, PrincipalId, PublicCertificateId, RandomSource, Revision, RoleId, UnixMicros,
+    EntropyError, ExternalCertificatePublicationId, HostId, MeshId,
+    MeshLocalCertificateAuthorityId, NodeId, OperationId, PartitionId, PrincipalId,
+    PublicCertificateId, RandomSource, Revision, RoleId, UnixMicros,
 };
 use meshspan_secret_envelope::{SecretContext, WrappingPrivateKey, encrypt_secret};
 use rusqlite::params;
@@ -21,12 +22,77 @@ use crate::{
     AcmeChallengeKind, AdvanceManualDnsTask, AuthoritativeCommand, BootstrapMesh,
     BootstrapRecoveryIdentity, CertificateOrderCompletion, CheckpointCertificateOrder,
     ClaimCertificateOrder, CommandContext, CommitSecretGeneration, CompleteCertificateOrder,
-    ConfigureAcme, ConfirmRecoveryBundleSaved, CreateAuthenticationMethod, ManualDnsTaskPhase,
-    NewAuthenticationCredential, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+    ConfigureAcme, ConfirmRecoveryBundleSaved, CreateAuthenticationMethod,
+    CreateMeshLocalCertificateAuthority, MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND,
+    ManualDnsTaskPhase, NewAuthenticationCredential, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
     PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND, PartitionDatabase, ProvisionAcme,
     PublishExternalCertificate, QueueCertificateOrder, RecordName, RenewCertificateOrder,
     SecretGenerationReference,
 };
+
+#[test]
+fn mesh_local_authority_is_atomic_immutable_and_bound_to_its_encrypted_key()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    let authority_id = MeshLocalCertificateAuthorityId::from_bytes([116; 16])?;
+    let recipients = [
+        crate::test_support::node_wrapping_private_key()?.public_key(),
+        fixture.recovery_key.public_key(),
+    ];
+    let (secret, envelopes) = encrypt_secret(
+        SecretContext::new(
+            MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND,
+            authority_id.as_bytes(),
+            1,
+        )?,
+        b"mesh-local certificate authority key",
+        &recipients,
+        &mut SecretRandom(117),
+    )?;
+    let certificate_der = vec![0x30, 1, 2, 3];
+    let command = CreateMeshLocalCertificateAuthority {
+        authority_id,
+        generation: 1,
+        certificate_digest: Sha256::digest(&certificate_der).into(),
+        certificate_der: certificate_der.clone(),
+        authority_key: Box::new(CommitSecretGeneration {
+            secret: secret.parts(),
+            recipients: envelopes
+                .iter()
+                .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
+                .collect(),
+        }),
+        not_before: UnixMicros::new(1),
+        not_after: UnixMicros::new(10_000),
+    };
+    let receipt = fixture.apply(
+        3,
+        100,
+        &AuthoritativeCommand::CreateMeshLocalCertificateAuthority(Box::new(command.clone())),
+    )?;
+    assert_eq!(
+        receipt.entity.kind,
+        EntityKind::MeshLocalCertificateAuthority
+    );
+    let stored = fixture
+        .repository
+        .mesh_local_certificate_authority()?
+        .ok_or("mesh-local authority missing")?;
+    assert_eq!(stored.authority_id, authority_id);
+    assert_eq!(stored.certificate_der, certificate_der);
+    assert_eq!(stored.created_by, fixture.administrator);
+    assert_eq!(stored.revision, Revision::new(3));
+
+    assert!(matches!(
+        fixture.apply(
+            4,
+            101,
+            &AuthoritativeCommand::CreateMeshLocalCertificateAuthority(Box::new(command))
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    Ok(())
+}
 
 #[test]
 fn external_certificate_publication_is_atomic_monotonic_and_gateway_bound()

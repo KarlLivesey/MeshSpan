@@ -8,9 +8,10 @@ use meshspan_domain::{
     CertificateOrderId, ComponentInstanceId, DurationMicros, EntropyError,
     ExternalCertificatePublicationId, FailureScenario, FailureTerm, FaultGroupClassId,
     FaultGroupId, GrantId, GroupId, HostId, LocalityPolicyId, LocalityRequirementId, MeshId,
-    NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId, OperationId, OwnerSetId, PrincipalId,
-    ProtectionPolicyId, ProtectionScenarioId, PublicCertificateId, RandomSource, RecoveryCodeId,
-    Revision, Rights, RoleId, SessionId, SmbExportId, TargetId, UnixMicros, VolumeId, WorkId,
+    MeshLocalCertificateAuthorityId, NamespaceCommitId, NodeId, ObjectId, ObjectRevisionId,
+    OperationId, OwnerSetId, PrincipalId, ProtectionPolicyId, ProtectionScenarioId,
+    PublicCertificateId, RandomSource, RecoveryCodeId, Revision, Rights, RoleId, SessionId,
+    SmbExportId, TargetId, UnixMicros, VolumeId, WorkId,
 };
 use meshspan_secret_envelope::{
     SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
@@ -32,10 +33,11 @@ use crate::{
     CompleteCertificateOrder, CompleteMaintenanceWork, CompleteStorageScopeDrain, ConfigureAcme,
     ConvergedHeadEvidence, CreateAcknowledgementPolicy, CreateActivationPolicy,
     CreateAuthenticationMethod, CreateAvailabilityCell, CreateComponent, CreateFaultGroup,
-    CreateGroup, CreateLocalityPolicy, CreateProtectionPolicy, CreateUser, CreateVolume,
-    FenceStorageNodeDrainMembership, GrantInheritance, GrantPermission,
+    CreateGroup, CreateLocalityPolicy, CreateMeshLocalCertificateAuthority, CreateProtectionPolicy,
+    CreateUser, CreateVolume, FenceStorageNodeDrainMembership, GrantInheritance, GrantPermission,
     GrantPermissionWithActivation, IssueAuthenticationSession, LocalityRequirementConfiguration,
-    MaintenanceWorkCompletion, ManualDnsTaskPhase, NewAuthenticationCredential, NewRecoveryCode,
+    MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND, MaintenanceWorkCompletion,
+    ManualDnsTaskPhase, NewAuthenticationCredential, NewRecoveryCode,
     PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PermissionScope, ProtectionScenarioConfiguration,
     ProvisionAcme, PublishExternalCertificate, PublishSmbExport, QueueCertificateOrder,
     QueueMaintenanceWork, RebalanceScanCursor, RecordName, RegisterNodeWrappingKey,
@@ -920,6 +922,39 @@ fn external_certificate_publication_round_trips_bundle_and_installation_evidence
                 observed_publication_revision: Revision::new(14),
             },
         ),
+    )?;
+    Ok(())
+}
+
+#[test]
+fn mesh_local_certificate_authority_round_trips_exact_encrypted_material()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let authority_id = MeshLocalCertificateAuthorityId::from_bytes([119; 16])?;
+    let reference = SecretGenerationReference {
+        secret_id: authority_id.as_bytes(),
+        generation: 1,
+    };
+    let recipient = WrappingPrivateKey::from_bytes([120; 32])?.public_key();
+    let certificate_der = vec![0x30, 2, 1, 0];
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::CreateMeshLocalCertificateAuthority(Box::new(
+            CreateMeshLocalCertificateAuthority {
+                authority_id,
+                generation: 1,
+                certificate_digest: Sha256::digest(&certificate_der).into(),
+                certificate_der,
+                authority_key: codec_secret_generation(
+                    MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND,
+                    reference,
+                    &[recipient],
+                    121,
+                )?,
+                not_before: UnixMicros::new(600),
+                not_after: UnixMicros::new(1_000),
+            },
+        )),
     )?;
     Ok(())
 }

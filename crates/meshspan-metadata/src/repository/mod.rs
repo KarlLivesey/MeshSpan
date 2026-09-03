@@ -91,6 +91,7 @@ mod maintenance_work_tests;
 mod manual_dns_task;
 mod membership;
 mod mesh_identity;
+mod mesh_local_certificate;
 mod namespace;
 mod node_wrapping_key;
 #[cfg(test)]
@@ -230,6 +231,7 @@ pub use maintenance_work::{
 };
 pub use manual_dns_task::{ManualDnsTaskCursor, ManualDnsTaskRecord, ManualDnsTaskState};
 pub use membership::AuthoritativeMembership;
+pub use mesh_local_certificate::MeshLocalCertificateAuthorityRecord;
 pub use meshspan_domain::AuthenticationService;
 pub use node_wrapping_key::NodeWrappingKeyRecord;
 pub use operation_status::{
