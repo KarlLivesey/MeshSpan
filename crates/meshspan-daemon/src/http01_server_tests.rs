@@ -34,7 +34,7 @@ async fn real_plain_http_listener_serves_only_exact_unexpired_challenges()
         expires_at: UnixMicros::new(now.get() + 60_000_000),
         order_epoch: 9,
     };
-    challenges.publish(&request)?;
+    challenges.publish(&request).await?;
     let server = Http01Server::bind(
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         challenges,

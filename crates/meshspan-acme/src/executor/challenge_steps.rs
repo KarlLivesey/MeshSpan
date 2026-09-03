@@ -18,7 +18,7 @@ where
     S: AcmeJwsSigner,
     C: CertificateChallenge,
 {
-    pub(super) fn publish_challenge(
+    pub(super) async fn publish_challenge(
         &mut self,
         dns_name: &str,
         wildcard: bool,
@@ -34,8 +34,8 @@ where
             order_epoch,
             execution,
         )?;
-        let receipt = self.challenge.publish(&request)?;
-        if self.challenge.is_visible(&request, receipt)? {
+        let receipt = self.challenge.publish(&request).await?;
+        if self.challenge.is_visible(&request, receipt).await? {
             Ok(AcmeStepOutcome::Advanced(
                 AcmeMachineEvent::ChallengePublished {
                     publication_digest: receipt.publication_digest,
@@ -46,7 +46,7 @@ where
         }
     }
 
-    pub(super) fn cleanup_challenge(
+    pub(super) async fn cleanup_challenge(
         &mut self,
         dns_name: &str,
         wildcard: bool,
@@ -71,7 +71,7 @@ where
             order_epoch,
             publication_digest,
         };
-        self.challenge.cleanup(&request, receipt)?;
+        self.challenge.cleanup(&request, receipt).await?;
         Ok(AcmeStepOutcome::Advanced(
             AcmeMachineEvent::ChallengeCleaned,
         ))

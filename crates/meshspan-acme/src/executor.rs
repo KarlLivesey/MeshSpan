@@ -141,7 +141,10 @@ where
                 wildcard,
                 challenge,
                 order_epoch,
-            } => self.publish_challenge(dns_name, *wildcard, challenge, *order_epoch, execution),
+            } => {
+                self.publish_challenge(dns_name, *wildcard, challenge, *order_epoch, execution)
+                    .await
+            }
             AcmeMachineAction::NotifyChallenge {
                 url,
                 nonce,
@@ -161,14 +164,17 @@ where
                 challenge,
                 publication_digest,
                 order_epoch,
-            } => self.cleanup_challenge(
-                dns_name,
-                *wildcard,
-                challenge,
-                *publication_digest,
-                *order_epoch,
-                execution,
-            ),
+            } => {
+                self.cleanup_challenge(
+                    dns_name,
+                    *wildcard,
+                    challenge,
+                    *publication_digest,
+                    *order_epoch,
+                    execution,
+                )
+                .await
+            }
             AcmeMachineAction::FinalizeOrder {
                 url,
                 nonce,

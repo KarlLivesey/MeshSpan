@@ -281,7 +281,7 @@ impl DnsTxtProvider for RecordingDns {
         name: &str,
         value: &[u8],
         order_epoch: u64,
-    ) -> Result<DnsTxtReceipt, ContractError> {
+    ) -> impl Future<Output = Result<DnsTxtReceipt, ContractError>> + Send {
         let mut digest = Sha256::new();
         digest.update(name.as_bytes());
         digest.update(value);
@@ -292,7 +292,7 @@ impl DnsTxtProvider for RecordingDns {
         self.name = Some(name.to_owned());
         self.value = Some(value.to_vec());
         self.receipt = Some(receipt);
-        Ok(receipt)
+        std::future::ready(Ok(receipt))
     }
 
     fn is_txt_visible(
@@ -300,10 +300,10 @@ impl DnsTxtProvider for RecordingDns {
         name: &str,
         value: &[u8],
         receipt: DnsTxtReceipt,
-    ) -> Result<bool, ContractError> {
-        Ok(self.name.as_deref() == Some(name)
+    ) -> impl Future<Output = Result<bool, ContractError>> + Send {
+        std::future::ready(Ok(self.name.as_deref() == Some(name)
             && self.value.as_deref() == Some(value)
-            && self.receipt == Some(receipt))
+            && self.receipt == Some(receipt)))
     }
 
     fn remove_txt(
@@ -311,14 +311,17 @@ impl DnsTxtProvider for RecordingDns {
         name: &str,
         value: &[u8],
         receipt: DnsTxtReceipt,
-    ) -> Result<(), ContractError> {
-        if self.is_txt_visible(name, value, receipt)? {
+    ) -> impl Future<Output = Result<(), ContractError>> + Send {
+        let visible = self.name.as_deref() == Some(name)
+            && self.value.as_deref() == Some(value)
+            && self.receipt == Some(receipt);
+        if visible {
             self.name = None;
             self.value = None;
             self.receipt = None;
-            Ok(())
+            std::future::ready(Ok(()))
         } else {
-            Err(ContractError::Stale)
+            std::future::ready(Err(ContractError::Stale))
         }
     }
 }
