@@ -85,7 +85,7 @@ impl<A, O> CloudflareDnsProvider<A, O> {
         observer: O,
         ttl_seconds: u32,
     ) -> Result<Self, ContractError> {
-        if !(1..=MAXIMUM_TTL_SECONDS).contains(&ttl_seconds) {
+        if ttl_seconds != 1 && !(60..=MAXIMUM_TTL_SECONDS).contains(&ttl_seconds) {
             return Err(ContractError::InvalidInput);
         }
         Ok(Self {
