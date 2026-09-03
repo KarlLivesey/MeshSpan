@@ -46,7 +46,7 @@ pub use acme_command::{
     AcknowledgePublicCertificateInstallation, AcmeChallengeKind, AdvanceManualDnsTask,
     CertificateOrderCompletion, CheckpointCertificateOrder, ClaimCertificateOrder,
     CompleteCertificateOrder, ConfigureAcme, MAXIMUM_CERTIFICATE_ORDER_CHECKPOINT_BYTES,
-    MAXIMUM_MANUAL_DNS_VALUE_BYTES, ManualDnsTaskPhase, QueueCertificateOrder,
+    MAXIMUM_MANUAL_DNS_VALUE_BYTES, ManualDnsTaskPhase, ProvisionAcme, QueueCertificateOrder,
     RenewCertificateOrder, SecretGenerationReference,
 };
 pub use command::{

@@ -15,8 +15,8 @@ use crate::{
     ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
     AcknowledgePublicCertificateInstallation, AcmeChallengeKind, CertificateOrderCompletion,
     ClaimCertificateOrder, CommandContext, CompleteCertificateOrder, ConfigureAcme,
-    PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, QueueCertificateOrder, RenewCertificateOrder,
-    SecretGenerationReference,
+    PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, ProvisionAcme, QueueCertificateOrder,
+    RenewCertificateOrder, SecretGenerationReference,
 };
 
 pub use order_checkpoint::CertificateOrderCheckpointRecord;
@@ -168,6 +168,66 @@ pub(super) fn configure(
         )?;
     }
     Ok(config_entity(value.config_id))
+}
+
+pub(super) fn provision(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    value: &ProvisionAcme,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    if value.initial_order.config_id != value.configuration.config_id
+        || value.initial_order.next_attempt_at < context.occurred_at
+    {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    require_matching_generation(
+        &value.account_key_generation,
+        ACME_ACCOUNT_KEY_SECRET_KIND,
+        value.configuration.account_key,
+    )?;
+    match (
+        value.configuration.challenge_settings,
+        value.challenge_settings_generation.as_deref(),
+    ) {
+        (None, None) => {}
+        (Some(reference), Some(generation)) => {
+            require_matching_generation(
+                generation,
+                ACME_CHALLENGE_SETTINGS_SECRET_KIND,
+                reference,
+            )?;
+        }
+        _ => return Err(RepositoryError::InvalidCommand),
+    }
+
+    super::secret_generation::commit(
+        transaction,
+        context,
+        &value.account_key_generation,
+        revision,
+    )?;
+    if let Some(settings) = &value.challenge_settings_generation {
+        super::secret_generation::commit(transaction, context, settings, revision)?;
+    }
+    configure(transaction, context, &value.configuration, revision)?;
+    queue(transaction, context, value.initial_order, revision)
+}
+
+fn require_matching_generation(
+    generation: &crate::CommitSecretGeneration,
+    expected_kind: u16,
+    expected: SecretGenerationReference,
+) -> Result<(), RepositoryError> {
+    let context = generation.secret.context;
+    if context.kind() == expected_kind
+        && context.id() == expected.secret_id
+        && context.generation() == expected.generation
+    {
+        Ok(())
+    } else {
+        Err(RepositoryError::InvalidCommand)
+    }
 }
 
 pub(super) fn queue(

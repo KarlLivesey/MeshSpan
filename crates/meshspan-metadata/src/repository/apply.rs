@@ -617,26 +617,40 @@ fn execute_maintenance_work_command(
 }
 
 fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
+    is_certificate_command(command)
+        || matches!(
+            command,
+            AuthoritativeCommand::CreateComponent(_)
+                | AuthoritativeCommand::ConfigureComponent(_)
+                | AuthoritativeCommand::AssignComponent(_)
+                | AuthoritativeCommand::RegisterStorageTarget(_)
+                | AuthoritativeCommand::CreateFaultGroup(_)
+                | AuthoritativeCommand::SetHostFaultGroupMembership(_)
+                | AuthoritativeCommand::CreateProtectionPolicy(_)
+                | AuthoritativeCommand::AssignVolumeProtectionPolicy(_)
+                | AuthoritativeCommand::CreateAvailabilityCell(_)
+                | AuthoritativeCommand::SetHostAvailabilityCellMembership(_)
+                | AuthoritativeCommand::SetTargetAvailabilityCellMembership(_)
+                | AuthoritativeCommand::CreateLocalityPolicy(_)
+                | AuthoritativeCommand::AssignVolumeLocalityPolicy(_)
+                | AuthoritativeCommand::CreateAcknowledgementPolicy(_)
+                | AuthoritativeCommand::AssignVolumeAcknowledgementPolicy(_)
+                | AuthoritativeCommand::PublishSmbExport(_)
+                | AuthoritativeCommand::WithdrawSmbExport(_)
+                | AuthoritativeCommand::RegisterNodeWrappingKey(_)
+                | AuthoritativeCommand::CommitSecretGeneration(_)
+                | AuthoritativeCommand::ConfirmRecoveryBundleSaved(_)
+                | AuthoritativeCommand::IssueJoinGrant(_)
+                | AuthoritativeCommand::ConsumeJoinGrant(_)
+                | AuthoritativeCommand::ActivateNode(_)
+        )
+}
+
+fn is_certificate_command(command: &AuthoritativeCommand) -> bool {
     matches!(
         command,
-        AuthoritativeCommand::CreateComponent(_)
-            | AuthoritativeCommand::ConfigureComponent(_)
-            | AuthoritativeCommand::AssignComponent(_)
-            | AuthoritativeCommand::RegisterStorageTarget(_)
-            | AuthoritativeCommand::CreateFaultGroup(_)
-            | AuthoritativeCommand::SetHostFaultGroupMembership(_)
-            | AuthoritativeCommand::CreateProtectionPolicy(_)
-            | AuthoritativeCommand::AssignVolumeProtectionPolicy(_)
-            | AuthoritativeCommand::CreateAvailabilityCell(_)
-            | AuthoritativeCommand::SetHostAvailabilityCellMembership(_)
-            | AuthoritativeCommand::SetTargetAvailabilityCellMembership(_)
-            | AuthoritativeCommand::CreateLocalityPolicy(_)
-            | AuthoritativeCommand::AssignVolumeLocalityPolicy(_)
-            | AuthoritativeCommand::CreateAcknowledgementPolicy(_)
-            | AuthoritativeCommand::AssignVolumeAcknowledgementPolicy(_)
-            | AuthoritativeCommand::PublishSmbExport(_)
-            | AuthoritativeCommand::WithdrawSmbExport(_)
-            | AuthoritativeCommand::ConfigureAcme(_)
+        AuthoritativeCommand::ConfigureAcme(_)
+            | AuthoritativeCommand::ProvisionAcme(_)
             | AuthoritativeCommand::QueueCertificateOrder(_)
             | AuthoritativeCommand::ClaimCertificateOrder(_)
             | AuthoritativeCommand::RenewCertificateOrder(_)
@@ -644,12 +658,6 @@ fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::AdvanceManualDnsTask(_)
             | AuthoritativeCommand::CompleteCertificateOrder(_)
             | AuthoritativeCommand::AcknowledgePublicCertificateInstallation(_)
-            | AuthoritativeCommand::RegisterNodeWrappingKey(_)
-            | AuthoritativeCommand::CommitSecretGeneration(_)
-            | AuthoritativeCommand::ConfirmRecoveryBundleSaved(_)
-            | AuthoritativeCommand::IssueJoinGrant(_)
-            | AuthoritativeCommand::ConsumeJoinGrant(_)
-            | AuthoritativeCommand::ActivateNode(_)
     )
 }
 
@@ -660,6 +668,9 @@ fn execute_infrastructure_command(
     command: &AuthoritativeCommand,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
+    if is_certificate_command(command) {
+        return execute_certificate_command(transaction, context, command, revision);
+    }
     match command {
         AuthoritativeCommand::CreateComponent(value) => {
             component::create(transaction, context, value, revision)
@@ -712,8 +723,43 @@ fn execute_infrastructure_command(
         AuthoritativeCommand::WithdrawSmbExport(value) => {
             smb_export_configuration::withdraw(transaction, value, revision)
         }
+        AuthoritativeCommand::RegisterNodeWrappingKey(value) => {
+            node_wrapping_key::register(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::CommitSecretGeneration(value) => {
+            secret_generation::commit(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::ConfirmRecoveryBundleSaved(value) => {
+            recovery_authority::confirm_saved(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::IssueJoinGrant(value) => {
+            recovery_authority::require_verified(transaction)?;
+            cluster::issue_join_grant(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::ConsumeJoinGrant(value) => {
+            recovery_authority::require_verified(transaction)?;
+            cluster::consume_join_grant(transaction, partition_id, context, value, revision)
+        }
+        AuthoritativeCommand::ActivateNode(value) => {
+            recovery_authority::require_verified(transaction)?;
+            cluster::activate_node(transaction, context, value, revision)
+        }
+        _ => Err(RepositoryError::InvalidCommand),
+    }
+}
+
+fn execute_certificate_command(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    match command {
         AuthoritativeCommand::ConfigureAcme(value) => {
             acme::configure(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::ProvisionAcme(value) => {
+            acme::provision(transaction, context, value, revision)
         }
         AuthoritativeCommand::QueueCertificateOrder(value) => {
             acme::queue(transaction, context, *value, revision)
@@ -735,27 +781,6 @@ fn execute_infrastructure_command(
         }
         AuthoritativeCommand::AcknowledgePublicCertificateInstallation(value) => {
             acme::acknowledge_installation(transaction, context, *value, revision)
-        }
-        AuthoritativeCommand::RegisterNodeWrappingKey(value) => {
-            node_wrapping_key::register(transaction, context, *value, revision)
-        }
-        AuthoritativeCommand::CommitSecretGeneration(value) => {
-            secret_generation::commit(transaction, context, value, revision)
-        }
-        AuthoritativeCommand::ConfirmRecoveryBundleSaved(value) => {
-            recovery_authority::confirm_saved(transaction, context, *value, revision)
-        }
-        AuthoritativeCommand::IssueJoinGrant(value) => {
-            recovery_authority::require_verified(transaction)?;
-            cluster::issue_join_grant(transaction, context, *value, revision)
-        }
-        AuthoritativeCommand::ConsumeJoinGrant(value) => {
-            recovery_authority::require_verified(transaction)?;
-            cluster::consume_join_grant(transaction, partition_id, context, value, revision)
-        }
-        AuthoritativeCommand::ActivateNode(value) => {
-            recovery_authority::require_verified(transaction)?;
-            cluster::activate_node(transaction, context, value, revision)
         }
         _ => Err(RepositoryError::InvalidCommand),
     }
@@ -1289,6 +1314,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::AcknowledgePublicCertificateInstallation(_) => 119,
         AuthoritativeCommand::CheckpointCertificateOrder(_) => 120,
         AuthoritativeCommand::AdvanceManualDnsTask(_) => 121,
+        AuthoritativeCommand::ProvisionAcme(_) => 122,
     }
 }
 

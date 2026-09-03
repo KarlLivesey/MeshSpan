@@ -6,12 +6,14 @@ use meshspan_domain::{AcmeConfigurationId, CertificateOrderId, NodeId, UnixMicro
 use super::MetadataCommandCodecError;
 use super::decoder::Decoder;
 use super::encoder::Encoder;
+use super::secret_generation;
 use crate::{
+    ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
     AcknowledgePublicCertificateInstallation, AcmeChallengeKind, AdvanceManualDnsTask,
     CertificateOrderCompletion, CheckpointCertificateOrder, ClaimCertificateOrder,
     CompleteCertificateOrder, ConfigureAcme, MAXIMUM_CERTIFICATE_ORDER_CHECKPOINT_BYTES,
     MAXIMUM_MANUAL_DNS_VALUE_BYTES, ManualDnsTaskPhase, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
-    QueueCertificateOrder, RenewCertificateOrder, SecretGenerationReference,
+    ProvisionAcme, QueueCertificateOrder, RenewCertificateOrder, SecretGenerationReference,
 };
 
 pub(super) const CONFIGURE_ACME: u16 = 49;
@@ -22,6 +24,7 @@ pub(super) const COMPLETE_CERTIFICATE_ORDER: u16 = 53;
 pub(super) const ACKNOWLEDGE_PUBLIC_CERTIFICATE_INSTALLATION: u16 = 54;
 pub(super) const CHECKPOINT_CERTIFICATE_ORDER: u16 = 55;
 pub(super) const ADVANCE_MANUAL_DNS_TASK: u16 = 56;
+pub(super) const PROVISION_ACME: u16 = 57;
 
 const MAXIMUM_DIRECTORY_URL_BYTES: usize = 2_048;
 const MAXIMUM_CERTIFICATE_NAMES: usize = 256;
@@ -32,6 +35,7 @@ pub(super) fn encode_command(
     command: &crate::AuthoritativeCommand,
 ) -> Result<bool, MetadataCommandCodecError> {
     match command {
+        crate::AuthoritativeCommand::ProvisionAcme(value) => encode_provision(encoder, value)?,
         crate::AuthoritativeCommand::ConfigureAcme(value) => encode_configure(encoder, value)?,
         crate::AuthoritativeCommand::QueueCertificateOrder(value) => encode_queue(encoder, *value)?,
         crate::AuthoritativeCommand::ClaimCertificateOrder(value) => encode_claim(encoder, *value)?,
@@ -64,6 +68,7 @@ pub(super) const fn is_command_kind(kind: u16) -> bool {
             | ACKNOWLEDGE_PUBLIC_CERTIFICATE_INSTALLATION
             | CHECKPOINT_CERTIFICATE_ORDER
             | ADVANCE_MANUAL_DNS_TASK
+            | PROVISION_ACME
     )
 }
 
@@ -72,6 +77,9 @@ pub(super) fn decode_command(
     decoder: &mut Decoder<'_>,
 ) -> Result<crate::AuthoritativeCommand, MetadataCommandCodecError> {
     match kind {
+        PROVISION_ACME => decode_provision(decoder)
+            .map(Box::new)
+            .map(crate::AuthoritativeCommand::ProvisionAcme),
         CONFIGURE_ACME => decode_configure(decoder).map(crate::AuthoritativeCommand::ConfigureAcme),
         QUEUE_CERTIFICATE_ORDER => {
             decode_queue(decoder).map(crate::AuthoritativeCommand::QueueCertificateOrder)
@@ -95,6 +103,69 @@ pub(super) fn decode_command(
             .map(crate::AuthoritativeCommand::AcknowledgePublicCertificateInstallation),
         _ => Err(MetadataCommandCodecError::Unsupported),
     }
+}
+
+fn encode_provision(
+    encoder: &mut Encoder,
+    value: &ProvisionAcme,
+) -> Result<(), MetadataCommandCodecError> {
+    validate_provision(value)?;
+    encoder.u16(PROVISION_ACME)?;
+    encode_configuration_payload(encoder, &value.configuration)?;
+    secret_generation::encode_payload(encoder, &value.account_key_generation)?;
+    encoder.bool(value.challenge_settings_generation.is_some())?;
+    if let Some(settings) = &value.challenge_settings_generation {
+        secret_generation::encode_payload(encoder, settings)?;
+    }
+    encode_queue_payload(encoder, value.initial_order)
+}
+
+fn decode_provision(decoder: &mut Decoder<'_>) -> Result<ProvisionAcme, MetadataCommandCodecError> {
+    let configuration = decode_configuration_payload(decoder)?;
+    let account_key_generation = Box::new(secret_generation::decode_payload(decoder)?);
+    let challenge_settings_generation = decoder
+        .bool()?
+        .then(|| secret_generation::decode_payload(decoder))
+        .transpose()?
+        .map(Box::new);
+    let initial_order = decode_queue_payload(decoder)?;
+    let value = ProvisionAcme {
+        configuration,
+        account_key_generation,
+        challenge_settings_generation,
+        initial_order,
+    };
+    validate_provision(&value)?;
+    Ok(value)
+}
+
+fn validate_provision(value: &ProvisionAcme) -> Result<(), MetadataCommandCodecError> {
+    validate_configuration(&value.configuration)?;
+    secret_generation::validate(&value.account_key_generation)?;
+    if let Some(settings) = &value.challenge_settings_generation {
+        secret_generation::validate(settings)?;
+    }
+    let account = &value.account_key_generation.secret.context;
+    let account_reference = value.configuration.account_key;
+    if account.kind() != ACME_ACCOUNT_KEY_SECRET_KIND
+        || account.id() != account_reference.secret_id
+        || account.generation() != account_reference.generation
+        || value.initial_order.config_id != value.configuration.config_id
+    {
+        return Err(MetadataCommandCodecError::Invalid);
+    }
+    match (
+        value.configuration.challenge_settings,
+        value.challenge_settings_generation.as_deref(),
+    ) {
+        (None, None) => {}
+        (Some(reference), Some(generation))
+            if generation.secret.context.kind() == ACME_CHALLENGE_SETTINGS_SECRET_KIND
+                && generation.secret.context.id() == reference.secret_id
+                && generation.secret.context.generation() == reference.generation => {}
+        _ => return Err(MetadataCommandCodecError::Invalid),
+    }
+    Ok(())
 }
 
 fn encode_manual_dns_task(
@@ -272,6 +343,13 @@ fn encode_configure(
 ) -> Result<(), MetadataCommandCodecError> {
     validate_configuration(value)?;
     encoder.u16(CONFIGURE_ACME)?;
+    encode_configuration_payload(encoder, value)
+}
+
+fn encode_configuration_payload(
+    encoder: &mut Encoder,
+    value: &ConfigureAcme,
+) -> Result<(), MetadataCommandCodecError> {
     encoder.identifier(value.config_id.as_bytes())?;
     encoder.text(&value.directory_url, MAXIMUM_DIRECTORY_URL_BYTES)?;
     encode_secret(encoder, value.account_key)?;
@@ -288,6 +366,12 @@ fn encode_configure(
 }
 
 fn decode_configure(decoder: &mut Decoder<'_>) -> Result<ConfigureAcme, MetadataCommandCodecError> {
+    decode_configuration_payload(decoder)
+}
+
+fn decode_configuration_payload(
+    decoder: &mut Decoder<'_>,
+) -> Result<ConfigureAcme, MetadataCommandCodecError> {
     let config_id = AcmeConfigurationId::from_bytes(decoder.identifier()?)?;
     let directory_url = decoder.text(MAXIMUM_DIRECTORY_URL_BYTES)?;
     let account_key = decode_secret(decoder)?;
@@ -322,12 +406,25 @@ fn encode_queue(
     value: QueueCertificateOrder,
 ) -> Result<(), MetadataCommandCodecError> {
     encoder.u16(QUEUE_CERTIFICATE_ORDER)?;
+    encode_queue_payload(encoder, value)
+}
+
+fn encode_queue_payload(
+    encoder: &mut Encoder,
+    value: QueueCertificateOrder,
+) -> Result<(), MetadataCommandCodecError> {
     encoder.identifier(value.order_id.as_bytes())?;
     encoder.identifier(value.config_id.as_bytes())?;
     encoder.i64(value.next_attempt_at.get())
 }
 
 fn decode_queue(
+    decoder: &mut Decoder<'_>,
+) -> Result<QueueCertificateOrder, MetadataCommandCodecError> {
+    decode_queue_payload(decoder)
+}
+
+fn decode_queue_payload(
     decoder: &mut Decoder<'_>,
 ) -> Result<QueueCertificateOrder, MetadataCommandCodecError> {
     Ok(QueueCertificateOrder {
