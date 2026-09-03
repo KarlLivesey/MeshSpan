@@ -83,7 +83,7 @@ where
     ///
     /// Rejects elapsed bounds, inactive/substituted destinations, changed retry state, provider
     /// failures, unavailable consensus, malformed receipts and local source-file errors.
-    pub fn publish<P: BackupProvider>(
+    pub fn publish<P: BackupProvider + ?Sized>(
         &self,
         provider: &mut P,
         request: &BackupPublicationRequest<'_>,
@@ -148,7 +148,7 @@ where
         )
     }
 
-    fn store_and_admit<P: BackupProvider>(
+    fn store_and_admit<P: BackupProvider + ?Sized>(
         &self,
         provider: &mut P,
         request: &BackupPublicationRequest<'_>,
@@ -185,7 +185,7 @@ where
         self.load_copy(object)
     }
 
-    fn store_and_record_copy<P: BackupProvider>(
+    fn store_and_record_copy<P: BackupProvider + ?Sized>(
         &self,
         provider: &mut P,
         request: &BackupPublicationRequest<'_>,
@@ -217,7 +217,7 @@ where
             .and_then(|copy| validate_copy(copy, object))
     }
 
-    fn store<P: BackupProvider>(
+    fn store<P: BackupProvider + ?Sized>(
         provider: &mut P,
         request: &BackupPublicationRequest<'_>,
         object: BackupObjectIdentity,
@@ -257,7 +257,7 @@ where
         validate_copy(copy, object)
     }
 
-    fn verify_and_record<P: BackupProvider>(
+    fn verify_and_record<P: BackupProvider + ?Sized>(
         &self,
         provider: &P,
         request: &BackupPublicationRequest<'_>,
@@ -387,4 +387,7 @@ pub enum BackupPublicationError {
     /// A derived identifier was invalid.
     #[error("backup publication identifier is invalid")]
     Identifier(#[from] meshspan_domain::IdentifierError),
+    /// Runtime destination binding could not be resolved safely.
+    #[error("backup provider resolution failed")]
+    Resolution(#[from] crate::MetadataBackupProviderResolutionError),
 }

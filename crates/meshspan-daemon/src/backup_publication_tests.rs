@@ -24,7 +24,11 @@ use meshspan_metadata::{
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
-use crate::{BackupPublicationAuthority, BackupPublicationRequest, MetadataBackupPublisher};
+use crate::{
+    BackupPublicationAuthority, BackupPublicationRequest, MetadataBackupDestinationWriter,
+    MetadataBackupProviderResolutionError, MetadataBackupProviderResolver, MetadataBackupPublisher,
+    ResolvingMetadataBackupDestinationWriter,
+};
 
 #[test]
 fn publication_records_stores_verifies_and_replays_exact_copy()
@@ -71,6 +75,37 @@ fn publication_records_stores_verifies_and_replays_exact_copy()
     assert_eq!(provider.stores, 1);
     assert_eq!(provider.verifications.get(), 2);
     assert_eq!(authority.commit_count(), 2);
+    Ok(())
+}
+
+#[test]
+fn resolving_writer_selects_provider_before_publication() -> Result<(), Box<dyn std::error::Error>>
+{
+    let fixture = Fixture::new()?;
+    let directory = tempdir()?;
+    let encrypted = directory.path().join("backup.msb");
+    std::fs::write(&encrypted, fixture.bytes)?;
+    let destination_id = fixture.destination.destination_id;
+    let authority = MemoryAuthority::new(fixture.destination.clone());
+    let mut resolver = MemoryResolver {
+        expected: fixture.destination.clone(),
+        resolutions: 0,
+    };
+    let outcome = ResolvingMetadataBackupDestinationWriter::new(&authority, &mut resolver)
+        .publish_destination(
+            &fixture.destination,
+            &BackupPublicationRequest {
+                encrypted_source: &encrypted,
+                evidence: fixture.evidence,
+                destination_id,
+                claim: fixture.claim,
+                actor_principal_id: fixture.actor,
+                now: UnixMicros::new(20),
+                deadline: UnixMicros::new(100),
+            },
+        )?;
+    assert_eq!(outcome.copy.state, BackupCopyState::Verified);
+    assert_eq!(resolver.resolutions, 1);
     Ok(())
 }
 
@@ -454,6 +489,24 @@ impl BackupPublicationAuthority for MemoryAuthority {
             },
             entity: EntityReference { kind, id },
         })
+    }
+}
+
+struct MemoryResolver {
+    expected: BackupDestinationRecord,
+    resolutions: usize,
+}
+
+impl MetadataBackupProviderResolver for MemoryResolver {
+    fn resolve(
+        &mut self,
+        destination: &BackupDestinationRecord,
+    ) -> Result<Box<dyn BackupProvider>, MetadataBackupProviderResolutionError> {
+        if destination != &self.expected {
+            return Err(MetadataBackupProviderResolutionError::Stale);
+        }
+        self.resolutions += 1;
+        Ok(Box::new(MemoryProvider::default()))
     }
 }
 
