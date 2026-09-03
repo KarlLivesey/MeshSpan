@@ -6,6 +6,8 @@
 //! current `RustCrypto` P-256, so enabling an `rcgen` crypto provider cannot silently change the
 //! dependency graph or choose a different cryptographic backend.
 
+mod public_bundle;
+
 use p256::ecdsa::signature::{SignatureEncoding as _, Signer as _, Verifier as _};
 use p256::pkcs8::{DecodePrivateKey as _, EncodePrivateKey as _};
 use rcgen::{
@@ -15,6 +17,8 @@ use rcgen::{
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use zeroize::Zeroizing;
+
+pub use public_bundle::{PublicCertificateBundle, PublicCertificateBundleError};
 
 const KEY_BYTES: usize = 32;
 const KEY_GENERATION_ATTEMPTS: usize = 16;
