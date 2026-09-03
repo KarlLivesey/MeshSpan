@@ -1209,6 +1209,7 @@ dependencies = [
  "rcgen",
  "sha2",
  "thiserror",
+ "time",
  "x509-parser",
  "zeroize",
 ]
