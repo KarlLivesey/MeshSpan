@@ -19,6 +19,9 @@ mod dns_provider_settings_tests;
 mod executor;
 mod http01;
 mod jws;
+mod manual_dns01;
+#[cfg(test)]
+mod manual_dns01_tests;
 mod order_machine;
 mod rfc2136_provider;
 #[cfg(test)]
@@ -58,6 +61,9 @@ pub use executor::{
 };
 pub use http01::Http01Challenge;
 pub use jws::{AcmeAccountBinding, AcmeJwsSigner, AcmePublicJwk, AcmeSignedRequest};
+pub use manual_dns01::{
+    ManualDns01Challenge, ManualDnsTask, ManualDnsTaskAuthority, ManualDnsTaskPhase,
+};
 pub use order_machine::{
     AcmeChallengePreference, AcmeMachineAction, AcmeMachineError, AcmeMachineEvent,
     AcmeOrderMachine,
