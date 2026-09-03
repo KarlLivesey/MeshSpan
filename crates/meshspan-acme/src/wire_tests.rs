@@ -260,7 +260,10 @@ fn response(
     )
 }
 
-fn decode_json_field(value: &Value, field: &str) -> Result<Value, Box<dyn std::error::Error>> {
+pub(crate) fn decode_json_field(
+    value: &Value,
+    field: &str,
+) -> Result<Value, Box<dyn std::error::Error>> {
     let encoded = value
         .get(field)
         .and_then(Value::as_str)
