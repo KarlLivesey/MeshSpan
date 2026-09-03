@@ -66,7 +66,7 @@ fn provider(
         settings,
         MemoryApi(records.clone()),
         MemoryObserver(records),
-        30,
+        60,
     )?)
 }
 
