@@ -42,6 +42,9 @@ mod certificate_order_checkpointing_tests;
 mod certificate_order_completion;
 #[cfg(test)]
 mod certificate_order_completion_tests;
+mod certificate_order_driver;
+#[cfg(test)]
+mod certificate_order_driver_tests;
 mod certificate_order_execution;
 #[cfg(test)]
 mod certificate_order_execution_tests;
@@ -378,6 +381,10 @@ pub use certificate_order_completion::{
     CertificateOrderCompletionAuthority, CertificateOrderCompletionAuthorityError,
     CertificateOrderCompletionCommit, CertificateOrderCompletionError,
     CertificateOrderCompletionService, CertificateOrderIssuance,
+};
+pub use certificate_order_driver::{
+    CertificateOrderDriveOutcome, CertificateOrderDrivePolicy, CertificateOrderDriver,
+    CertificateOrderDriverError,
 };
 pub use certificate_order_execution::{
     CertificateOrderExecution, CertificateOrderExecutionError, CertificateOrderStepResult,
