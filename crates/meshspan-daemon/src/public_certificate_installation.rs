@@ -6,9 +6,9 @@ use meshspan_domain::{
     AuditEventId, NodeId, OperationId, PrincipalId, Revision, UnixMicros, uuid_v8,
 };
 use meshspan_metadata::{
-    AcknowledgeExternalCertificateInstallation, AcknowledgePublicCertificateInstallation,
-    AuthoritativeCommand, CommandContext, CommandReceipt, EntityKind, PublicCertificateSource,
-    SecretGenerationReference,
+    AcknowledgeExternalCertificateInstallation, AcknowledgeMeshLocalCertificateInstallation,
+    AcknowledgePublicCertificateInstallation, AuthoritativeCommand, CommandContext, CommandReceipt,
+    EntityKind, PublicCertificateSource, SecretGenerationReference,
 };
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -131,6 +131,18 @@ where
                     },
                 )
             }
+            PublicCertificateSource::MeshLocalIssuance(issuance_id) => {
+                AuthoritativeCommand::AcknowledgeMeshLocalCertificateInstallation(
+                    AcknowledgeMeshLocalCertificateInstallation {
+                        issuance_id,
+                        gateway_node_id: request.gateway_node_id,
+                        gateway_incarnation: request.gateway_incarnation,
+                        certificate: certificate.generation(),
+                        bundle_digest: certificate.bundle_digest(),
+                        observed_issuance_revision: request.source_revision,
+                    },
+                )
+            }
         };
         let operation_id = derived_id(OPERATION_ID_DOMAIN, certificate, request)?;
         let context = CommandContext {
@@ -237,6 +249,7 @@ const fn source_identity(source: PublicCertificateSource) -> (u8, [u8; 16]) {
         PublicCertificateSource::ExternalPublication(publication_id) => {
             (2, publication_id.as_bytes())
         }
+        PublicCertificateSource::MeshLocalIssuance(issuance_id) => (3, issuance_id.as_bytes()),
     }
 }
 
@@ -248,6 +261,10 @@ const fn source_entity(source: PublicCertificateSource) -> (EntityKind, [u8; 16]
         PublicCertificateSource::ExternalPublication(publication_id) => (
             EntityKind::ExternalCertificatePublication,
             publication_id.as_bytes(),
+        ),
+        PublicCertificateSource::MeshLocalIssuance(issuance_id) => (
+            EntityKind::MeshLocalCertificateIssuance,
+            issuance_id.as_bytes(),
         ),
     }
 }

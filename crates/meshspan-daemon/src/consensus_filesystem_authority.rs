@@ -19,16 +19,36 @@ use crate::{
     CertificateProvisioningAuthorityError, CertificateProvisioningCommit,
     ConsensusAuthenticationAuthority, ExternalCertificatePublisherAuthority,
     ExternalCertificatePublisherAuthorityError, ExternalCertificatePublisherCommit,
-    NodeWrappingKeyRegistrationAuthority, NodeWrappingKeyRegistrationAuthorityError,
-    OnlineAuthorityLoadingAuthority, PublicCertificateInstallationAuthority,
-    PublicCertificateInstallationAuthorityError, PublicCertificateSelectionAuthority,
-    PublicCertificateSelectionAuthorityError, RecoveryBundleVerificationAuthority,
-    RecoveryBundleVerificationAuthorityError, RecoveryBundleVerificationCommit,
-    SecretGenerationAuthority, SecretGenerationAuthorityError, StoragePermitAuthority,
-    StorageTargetRegistrationAuthority, StorageTargetRegistrationAuthorityError,
-    VolumeAdministrationAuthority, VolumeAdministrationAuthorityError, VolumeAdministrationCommit,
-    VolumeInventoryAuthority, VolumeInventoryAuthorityError, VolumeKeyAuthority,
+    MeshLocalAuthorityCommit, MeshLocalCertificateAuthorityError, MeshLocalCertificateCommit,
+    MeshLocalCertificateProvisioningAuthority, NodeWrappingKeyRegistrationAuthority,
+    NodeWrappingKeyRegistrationAuthorityError, OnlineAuthorityLoadingAuthority,
+    PublicCertificateInstallationAuthority, PublicCertificateInstallationAuthorityError,
+    PublicCertificateSelectionAuthority, PublicCertificateSelectionAuthorityError,
+    RecoveryBundleVerificationAuthority, RecoveryBundleVerificationAuthorityError,
+    RecoveryBundleVerificationCommit, SecretGenerationAuthority, SecretGenerationAuthorityError,
+    StoragePermitAuthority, StorageTargetRegistrationAuthority,
+    StorageTargetRegistrationAuthorityError, SystemManagerAuthenticationError,
+    SystemManagerAuthority, VolumeAdministrationAuthority, VolumeAdministrationAuthorityError,
+    VolumeAdministrationCommit, VolumeInventoryAuthority, VolumeInventoryAuthorityError,
+    VolumeKeyAuthority,
 };
+
+impl SystemManagerAuthority for ConsensusAuthenticationAuthority {
+    fn principal_is_system_manager(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+        now: meshspan_domain::UnixMicros,
+    ) -> Result<bool, SystemManagerAuthenticationError> {
+        self.reader()
+            .principal_is_system_manager(principal_id, now)
+            .map_err(|error| match error {
+                RepositoryError::Store(_) | RepositoryError::Sqlite(_) | RepositoryError::Io(_) => {
+                    SystemManagerAuthenticationError::Unavailable
+                }
+                _ => SystemManagerAuthenticationError::Failed,
+            })
+    }
+}
 
 impl ExternalCertificatePublisherAuthority for ConsensusAuthenticationAuthority {
     fn is_system_manager(
@@ -83,17 +103,76 @@ impl ExternalCertificatePublisherAuthority for ConsensusAuthenticationAuthority 
     }
 }
 
-impl CertificateProvisioningAuthority for ConsensusAuthenticationAuthority {
-    fn is_system_manager(
+impl MeshLocalCertificateProvisioningAuthority for ConsensusAuthenticationAuthority {
+    fn mesh_local_authority(
         &self,
-        principal_id: meshspan_domain::PrincipalId,
-        now: meshspan_domain::UnixMicros,
-    ) -> Result<bool, CertificateProvisioningAuthorityError> {
+    ) -> Result<
+        Option<meshspan_metadata::MeshLocalCertificateAuthorityRecord>,
+        MeshLocalCertificateAuthorityError,
+    > {
         self.reader()
-            .principal_is_system_manager(principal_id, now)
-            .map_err(|error| map_provisioning_repository_error(&error))
+            .mesh_local_certificate_authority()
+            .map_err(|error| map_mesh_local_repository_error(&error))
     }
 
+    fn next_mesh_local_generation(&self) -> Result<u64, MeshLocalCertificateAuthorityError> {
+        self.reader()
+            .next_mesh_local_certificate_generation()
+            .map_err(|error| map_mesh_local_repository_error(&error))
+    }
+
+    fn resolve_mesh_local_certificate(
+        &self,
+        operation_id: meshspan_domain::OperationId,
+    ) -> Result<Option<MeshLocalCertificateCommit>, MeshLocalCertificateAuthorityError> {
+        self.reader()
+            .resolve_operation(operation_id)
+            .map_err(|error| map_mesh_local_repository_error(&error))?
+            .map(|receipt| mesh_local_certificate_commit(self.reader(), receipt))
+            .transpose()
+    }
+
+    fn mesh_local_secret_recipients(
+        &self,
+    ) -> Result<Vec<meshspan_secret_envelope::WrappingPublicKey>, MeshLocalCertificateAuthorityError>
+    {
+        self.reader()
+            .volume_key_recipients()
+            .map_err(|error| map_mesh_local_repository_error(&error))
+    }
+
+    fn commit_or_resolve_mesh_local_authority(
+        &mut self,
+        context: CommandContext,
+        command: &AuthoritativeCommand,
+    ) -> Result<MeshLocalAuthorityCommit, MeshLocalCertificateAuthorityError> {
+        let expected_digest = command.request_digest(context);
+        let receipt = self
+            .commit_authoritative(context, command)
+            .map_err(map_mesh_local_authority_error)?;
+        if receipt.request_digest != expected_digest {
+            return Err(MeshLocalCertificateAuthorityError::Conflict);
+        }
+        mesh_local_authority_commit(self.reader(), receipt)
+    }
+
+    fn commit_or_resolve_mesh_local_certificate(
+        &mut self,
+        context: CommandContext,
+        command: &AuthoritativeCommand,
+    ) -> Result<MeshLocalCertificateCommit, MeshLocalCertificateAuthorityError> {
+        let expected_digest = command.request_digest(context);
+        let receipt = self
+            .commit_authoritative(context, command)
+            .map_err(map_mesh_local_authority_error)?;
+        if receipt.request_digest != expected_digest {
+            return Err(MeshLocalCertificateAuthorityError::Conflict);
+        }
+        mesh_local_certificate_commit(self.reader(), receipt)
+    }
+}
+
+impl CertificateProvisioningAuthority for ConsensusAuthenticationAuthority {
     fn resolve_certificate_provisioning(
         &self,
         operation_id: meshspan_domain::OperationId,
@@ -644,6 +723,57 @@ fn external_certificate_commit(
     })
 }
 
+fn mesh_local_authority_commit(
+    repository: &meshspan_metadata::AuthoritativeRepository,
+    receipt: meshspan_metadata::CommandReceipt,
+) -> Result<MeshLocalAuthorityCommit, MeshLocalCertificateAuthorityError> {
+    if receipt.entity.kind != EntityKind::MeshLocalCertificateAuthority {
+        return Err(MeshLocalCertificateAuthorityError::Conflict);
+    }
+    let authority_id =
+        meshspan_domain::MeshLocalCertificateAuthorityId::from_bytes(receipt.entity.id)
+            .map_err(|_| MeshLocalCertificateAuthorityError::Failed)?;
+    let authority = repository
+        .mesh_local_certificate_authority()
+        .map_err(|error| map_mesh_local_repository_error(&error))?
+        .filter(|authority| authority.authority_id == authority_id)
+        .ok_or(MeshLocalCertificateAuthorityError::Failed)?;
+    if authority.revision != receipt.committed_revision {
+        return Err(MeshLocalCertificateAuthorityError::Failed);
+    }
+    Ok(MeshLocalAuthorityCommit {
+        request_digest: receipt.request_digest,
+        result_digest: receipt.result_digest,
+        committed_revision: receipt.committed_revision,
+        authority,
+    })
+}
+
+fn mesh_local_certificate_commit(
+    repository: &meshspan_metadata::AuthoritativeRepository,
+    receipt: meshspan_metadata::CommandReceipt,
+) -> Result<MeshLocalCertificateCommit, MeshLocalCertificateAuthorityError> {
+    if receipt.entity.kind != EntityKind::MeshLocalCertificateIssuance {
+        return Err(MeshLocalCertificateAuthorityError::Conflict);
+    }
+    let issuance_id =
+        meshspan_domain::MeshLocalCertificateIssuanceId::from_bytes(receipt.entity.id)
+            .map_err(|_| MeshLocalCertificateAuthorityError::Failed)?;
+    let issuance = repository
+        .mesh_local_certificate_issuance(issuance_id)
+        .map_err(|error| map_mesh_local_repository_error(&error))?
+        .ok_or(MeshLocalCertificateAuthorityError::Failed)?;
+    if issuance.revision != receipt.committed_revision {
+        return Err(MeshLocalCertificateAuthorityError::Failed);
+    }
+    Ok(MeshLocalCertificateCommit {
+        request_digest: receipt.request_digest,
+        result_digest: receipt.result_digest,
+        committed_revision: receipt.committed_revision,
+        issuance,
+    })
+}
+
 fn volume_owners(
     repository: &meshspan_metadata::AuthoritativeRepository,
     root_object_id: meshspan_domain::ObjectId,
@@ -747,6 +877,23 @@ fn map_external_publisher_authority_error(
     }
 }
 
+fn map_mesh_local_authority_error(
+    error: MetadataAuthorityRequestError,
+) -> MeshLocalCertificateAuthorityError {
+    match error {
+        MetadataAuthorityRequestError::NotLeader { .. }
+        | MetadataAuthorityRequestError::Unavailable => {
+            MeshLocalCertificateAuthorityError::Unavailable
+        }
+        MetadataAuthorityRequestError::Conflict | MetadataAuthorityRequestError::Rejected => {
+            MeshLocalCertificateAuthorityError::Conflict
+        }
+        MetadataAuthorityRequestError::Unsupported | MetadataAuthorityRequestError::Failed => {
+            MeshLocalCertificateAuthorityError::Failed
+        }
+    }
+}
+
 fn map_recovery_authority_error(
     error: MetadataAuthorityRequestError,
 ) -> RecoveryBundleVerificationAuthorityError {
@@ -835,6 +982,18 @@ fn map_external_publisher_repository_error(
             ExternalCertificatePublisherAuthorityError::Unavailable
         }
         _ => ExternalCertificatePublisherAuthorityError::Failed,
+    }
+}
+
+fn map_mesh_local_repository_error(error: &RepositoryError) -> MeshLocalCertificateAuthorityError {
+    match error {
+        RepositoryError::OperationConflict
+        | RepositoryError::StaleRevision
+        | RepositoryError::InvalidCommand => MeshLocalCertificateAuthorityError::Conflict,
+        RepositoryError::Store(_) | RepositoryError::Sqlite(_) | RepositoryError::Io(_) => {
+            MeshLocalCertificateAuthorityError::Unavailable
+        }
+        _ => MeshLocalCertificateAuthorityError::Failed,
     }
 }
 

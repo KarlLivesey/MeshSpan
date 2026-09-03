@@ -19,7 +19,8 @@ use crate::{
     CertificateProvisioningAuthorityError, CertificateProvisioningCommit,
     CertificateProvisioningController, CertificateProvisioningError,
     CertificateProvisioningService, GatewaySessionIdentity, IdentityAdministrator,
-    NativeApiKeyAuthority, NativeApiKeyAuthorityError,
+    NativeApiKeyAuthority, NativeApiKeyAuthorityError, SystemManagerAuthenticationError,
+    SystemManagerAuthority,
 };
 
 #[test]
@@ -93,14 +94,6 @@ impl MockAuthority {
 }
 
 impl CertificateProvisioningAuthority for MockAuthority {
-    fn is_system_manager(
-        &self,
-        _principal_id: PrincipalId,
-        _now: UnixMicros,
-    ) -> Result<bool, CertificateProvisioningAuthorityError> {
-        Ok(true)
-    }
-
     fn resolve_certificate_provisioning(
         &self,
         operation_id: OperationId,
@@ -167,6 +160,16 @@ impl CertificateProvisioningAuthority for MockAuthority {
             .map_err(|_| CertificateProvisioningAuthorityError::Failed)? =
             Some((context.operation_id, commit.clone()));
         Ok(commit)
+    }
+}
+
+impl SystemManagerAuthority for MockAuthority {
+    fn principal_is_system_manager(
+        &self,
+        _principal_id: PrincipalId,
+        _now: UnixMicros,
+    ) -> Result<bool, SystemManagerAuthenticationError> {
+        Ok(true)
     }
 }
 

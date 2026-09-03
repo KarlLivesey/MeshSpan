@@ -3,9 +3,8 @@
 //! Manager-authorised atomic public-certificate provisioning.
 
 use axum::http::HeaderMap;
-use axum::http::header::{AUTHORIZATION, COOKIE};
 use meshspan_api_contract::{ProvisionCertificateRequest, ProvisionCertificateResponse};
-use meshspan_domain::{OperationId, PrincipalId, RandomSource, UnixMicros};
+use meshspan_domain::{OperationId, RandomSource, UnixMicros};
 use meshspan_metadata::{
     AcmeConfigurationRecord, AuthoritativeCommand, CertificateOrderRecord, CommandContext,
 };
@@ -13,9 +12,8 @@ use meshspan_secret_envelope::WrappingPublicKey;
 use thiserror::Error;
 
 use crate::{
-    BrowserRequestProtection, BrowserSessionAuthenticator, BrowserSessionAuthority,
-    FileApiAuthenticationError, GatewaySessionIdentity, IdentityAdministrator,
-    NativeApiKeyAuthenticator, NativeApiKeyAuthority,
+    GatewaySessionIdentity, IdentityAdministrator, SystemManagerAuthenticationError,
+    SystemManagerAuthority, authenticate_system_manager,
 };
 
 mod provisioning_evidence;
@@ -40,20 +38,7 @@ pub struct CertificateProvisioningCommit {
 }
 
 /// Replicated reads and consensus mutation needed by certificate provisioning.
-pub trait CertificateProvisioningAuthority:
-    BrowserSessionAuthority + NativeApiKeyAuthority
-{
-    /// Reports current system-manager authority.
-    ///
-    /// # Errors
-    ///
-    /// Fails closed when the current role projection is unavailable or malformed.
-    fn is_system_manager(
-        &self,
-        principal_id: PrincipalId,
-        now: UnixMicros,
-    ) -> Result<bool, CertificateProvisioningAuthorityError>;
-
+pub trait CertificateProvisioningAuthority: SystemManagerAuthority {
     /// Resolves one prior provisioning operation.
     ///
     /// # Errors
@@ -139,47 +124,8 @@ where
         headers: &HeaderMap,
         now: UnixMicros,
     ) -> Result<IdentityAdministrator, CertificateProvisioningError> {
-        let has_authorization = headers.contains_key(AUTHORIZATION);
-        if has_authorization && headers.contains_key(COOKIE) {
-            return Err(CertificateProvisioningError::Unauthenticated);
-        }
-        if has_authorization {
-            let principal_id = NativeApiKeyAuthenticator::new(&self.authority, self.gateway)
-                .authenticate_principal(headers, now)
-                .map_err(map_file_authentication_error)?;
-            return self
-                .authority
-                .is_system_manager(principal_id, now)
-                .map_err(map_authority_error)?
-                .then_some(IdentityAdministrator { principal_id, now })
-                .ok_or(CertificateProvisioningError::Forbidden);
-        }
-        let capability = BrowserSessionAuthenticator::new(&self.authority, self.gateway)
-            .authenticate(
-                headers,
-                BrowserRequestProtection::Mutation,
-                meshspan_domain::AssuranceLevel::SingleFactor,
-                now,
-            )
-            .map_err(|error| match error {
-                crate::BrowserAuthenticationError::Rejected => {
-                    CertificateProvisioningError::Unauthenticated
-                }
-                crate::BrowserAuthenticationError::Authority(
-                    crate::BrowserSessionAuthorityError::Unavailable,
-                ) => CertificateProvisioningError::Unavailable,
-                crate::BrowserAuthenticationError::InvalidGateway
-                | crate::BrowserAuthenticationError::Authority(
-                    crate::BrowserSessionAuthorityError::Failed,
-                ) => CertificateProvisioningError::Failed,
-            })?;
-        if !capability.is_system_manager() {
-            return Err(CertificateProvisioningError::Forbidden);
-        }
-        Ok(IdentityAdministrator {
-            principal_id: capability.principal_id,
-            now,
-        })
+        authenticate_system_manager(&self.authority, self.gateway, headers, now)
+            .map_err(map_authentication_error)
     }
 
     fn provision(
@@ -231,16 +177,14 @@ where
     }
 }
 
-fn map_file_authentication_error(
-    error: FileApiAuthenticationError,
+const fn map_authentication_error(
+    error: SystemManagerAuthenticationError,
 ) -> CertificateProvisioningError {
     match error {
-        FileApiAuthenticationError::Rejected => CertificateProvisioningError::Unauthenticated,
-        FileApiAuthenticationError::AuthorityUnavailable => {
-            CertificateProvisioningError::Unavailable
-        }
-        FileApiAuthenticationError::InvalidGateway
-        | FileApiAuthenticationError::AuthorityFailed => CertificateProvisioningError::Failed,
+        SystemManagerAuthenticationError::Rejected => CertificateProvisioningError::Unauthenticated,
+        SystemManagerAuthenticationError::Forbidden => CertificateProvisioningError::Forbidden,
+        SystemManagerAuthenticationError::Unavailable => CertificateProvisioningError::Unavailable,
+        SystemManagerAuthenticationError::Failed => CertificateProvisioningError::Failed,
     }
 }
 

@@ -72,13 +72,14 @@ use crate::{
     HeadlessDaemonConfigError, Http01Server, Http01ServerError, HttpsServer, HttpsServerError,
     IdentityAdministrationApiError, IdentityAdministrationService, JoinMeshSetupService,
     ManualDnsTaskAdministrationApiError, ManualDnsTaskAdministrationService,
-    NativeApiAuthenticator, NativeApiKeyAuthenticator, NativeFilesystemRuntime,
-    NativeFilesystemRuntimeConfiguration, NativeNamespaceMutationApiError,
-    NativeNamespaceMutationService, NativeStorageTarget, NativeUploadApiError, NativeUploadService,
-    NativeUploadServicePolicy, NodeActivationError, NodeActivationRequest, NodeActivationService,
-    NodeEnrolmentApiError, NodeEnrolmentService, NodeJoinGrantIssuanceApiError,
-    NodeJoinGrantIssuanceService, NodeWrappingKeyRegistrationService, ObjectStatApiError,
-    ObjectStatService, OperatingSystemRandom, OperationStatusApiError, OperationStatusService,
+    MeshLocalCertificateApiError, MeshLocalCertificateProvisioningService, NativeApiAuthenticator,
+    NativeApiKeyAuthenticator, NativeFilesystemRuntime, NativeFilesystemRuntimeConfiguration,
+    NativeNamespaceMutationApiError, NativeNamespaceMutationService, NativeStorageTarget,
+    NativeUploadApiError, NativeUploadService, NativeUploadServicePolicy, NodeActivationError,
+    NodeActivationRequest, NodeActivationService, NodeEnrolmentApiError, NodeEnrolmentService,
+    NodeJoinGrantIssuanceApiError, NodeJoinGrantIssuanceService,
+    NodeWrappingKeyRegistrationService, ObjectStatApiError, ObjectStatService,
+    OperatingSystemRandom, OperationStatusApiError, OperationStatusService,
     PasskeyChallengeApiError, PasskeyChallengeConfiguration, PasskeyChallengeConfigurationError,
     PasskeyChallengeService, PasskeyRegistrationApiError, PasskeyRegistrationConfiguration,
     PasskeyRegistrationConfigurationError, PasskeyRegistrationService, PasskeySessionService,
@@ -106,16 +107,16 @@ use crate::{
     execute_resumable_target_reconciliation, execute_scope_drain_action, execute_shard_repair,
     execute_target_drain_step, external_certificate_publisher_api_router, file_read_api_router,
     identity_administration_api_router, manual_dns_task_administration_api_router,
-    native_namespace_mutation_api_router, native_upload_api_router, node_enrolment_api_router,
-    node_join_grant_api_router, object_stat_api_router, operation_status_api_router,
-    passkey_challenge_api_router, passkey_registration_api_router,
-    permission_administration_api_router, public_contract_api_router,
-    recovery_bundle_verification_api_router, recovery_code_issuance_api_router,
-    revoke_current_session_api_router, session_api_router, setup_api_router_with_mutations,
-    smb_export_administration_api_router, step_up_current_session_api_router,
-    storage_drain_administration_api_router, storage_folder_administration_api_router,
-    topology_administration_api_router, totp_registration_api_router,
-    volume_administration_api_router, volume_inventory_api_router,
+    mesh_local_certificate_api_router, native_namespace_mutation_api_router,
+    native_upload_api_router, node_enrolment_api_router, node_join_grant_api_router,
+    object_stat_api_router, operation_status_api_router, passkey_challenge_api_router,
+    passkey_registration_api_router, permission_administration_api_router,
+    public_contract_api_router, recovery_bundle_verification_api_router,
+    recovery_code_issuance_api_router, revoke_current_session_api_router, session_api_router,
+    setup_api_router_with_mutations, smb_export_administration_api_router,
+    step_up_current_session_api_router, storage_drain_administration_api_router,
+    storage_folder_administration_api_router, topology_administration_api_router,
+    totp_registration_api_router, volume_administration_api_router, volume_inventory_api_router,
 };
 
 mod storage_folder_backend;
@@ -1373,29 +1374,12 @@ fn resource_administration_routes(
     storage_targets: Arc<Mutex<StorageTargetRuntime>>,
 ) -> Result<Router, DaemonProcessError> {
     Ok(Router::new()
-        .merge(certificate_provisioning_api_router(
-            CertificateProvisioningService::new(
-                open_authentication_authority(
-                    local_state,
-                    authority,
-                    Arc::clone(private_network),
-                    now,
-                )?,
-                gateway,
-                OperatingSystemRandom,
-            ),
-        )?)
-        .merge(external_certificate_publisher_api_router(
-            ExternalCertificatePublisherService::new(
-                open_authentication_authority(
-                    local_state,
-                    authority,
-                    Arc::clone(private_network),
-                    now,
-                )?,
-                gateway,
-                OperatingSystemRandom,
-            ),
+        .merge(certificate_administration_routes(
+            local_state,
+            authority,
+            gateway,
+            now,
+            private_network,
         )?)
         .merge(volume_administration_api_router(
             VolumeAdministrationService::new(
@@ -1461,6 +1445,53 @@ fn resource_administration_routes(
                     now,
                 )?,
                 gateway,
+            ),
+        )?))
+}
+
+fn certificate_administration_routes(
+    local_state: &DaemonLocalState,
+    authority: &MetadataAuthorityHandle,
+    gateway: GatewaySessionIdentity,
+    now: UnixMicros,
+    private_network: &Arc<PrivateConsensusRuntime>,
+) -> Result<Router, DaemonProcessError> {
+    Ok(Router::new()
+        .merge(certificate_provisioning_api_router(
+            CertificateProvisioningService::new(
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                gateway,
+                OperatingSystemRandom,
+            ),
+        )?)
+        .merge(external_certificate_publisher_api_router(
+            ExternalCertificatePublisherService::new(
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                gateway,
+                OperatingSystemRandom,
+            ),
+        )?)
+        .merge(mesh_local_certificate_api_router(
+            MeshLocalCertificateProvisioningService::new(
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                local_state.open_wrapping_key()?,
+                gateway,
+                OperatingSystemRandom,
             ),
         )?))
 }
@@ -3312,6 +3343,9 @@ pub enum DaemonProcessError {
     /// API-key-only external certificate publisher API construction failed.
     #[error("daemon external certificate publisher API failed")]
     ExternalCertificatePublisherApi(#[from] ExternalCertificatePublisherApiError),
+    /// Manager-only mesh-local certificate API construction failed.
+    #[error("daemon mesh-local certificate API failed")]
+    MeshLocalCertificateApi(#[from] MeshLocalCertificateApiError),
     /// Explicit SMB-export administration API construction failed.
     #[error("daemon SMB-export administration API failed")]
     SmbExportAdministrationApi(#[from] SmbExportAdministrationApiError),

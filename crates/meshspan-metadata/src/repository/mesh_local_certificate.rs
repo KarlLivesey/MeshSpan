@@ -260,6 +260,24 @@ impl AuthoritativeRepository {
             .map(|record| with_names(&self.database, record))
             .transpose()
     }
+
+    /// Returns the next endpoint generation after validating the persisted generation sequence.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the stored maximum cannot be represented or is no longer incrementable.
+    pub fn next_mesh_local_certificate_generation(&self) -> Result<u64, RepositoryError> {
+        let latest: Option<i64> = self.database.connection().query_row(
+            "SELECT max(generation) FROM mesh_local_certificate_issuances",
+            [],
+            |row| row.get(0),
+        )?;
+        latest.map_or(Ok(1), |value| {
+            positive(value)?
+                .checked_add(1)
+                .ok_or(RepositoryError::CapacityExceeded)
+        })
+    }
 }
 
 pub(super) fn latest_public_certificate(

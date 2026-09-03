@@ -10,6 +10,7 @@ use serde_json::Value;
 use crate::validation::{CompiledValidator, compile, validate, validator_from};
 use crate::{
     BoundaryError, ProvisionCertificateRequest, ProvisionCertificateResponse,
+    ProvisionMeshLocalCertificateRequest, ProvisionMeshLocalCertificateResponse,
     PublishExternalCertificateRequest, PublishExternalCertificateResponse, schema,
 };
 
@@ -17,11 +18,15 @@ static REQUEST: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
 static RESPONSE: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
 static EXTERNAL_REQUEST: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
 static EXTERNAL_RESPONSE: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
+static LOCAL_REQUEST: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
+static LOCAL_RESPONSE: OnceLock<Result<CompiledValidator, String>> = OnceLock::new();
 
 /// Maximum accepted bytes for certificate provisioning, including protected provider settings.
 pub const MAX_PROVISION_CERTIFICATE_BYTES: usize = 64 * 1_024;
 /// Maximum automated external publication body, including one protected private key.
 pub const MAX_PUBLISH_EXTERNAL_CERTIFICATE_BYTES: usize = 128 * 1_024;
+/// Maximum mesh-local certificate request; it contains names but never private material.
+pub const MAX_PROVISION_MESH_LOCAL_CERTIFICATE_BYTES: usize = 64 * 1_024;
 
 /// Decodes and structurally validates one hostile certificate-provisioning body.
 ///
@@ -119,6 +124,44 @@ pub fn encode_publish_external_certificate_response(
     serde_json::to_vec(&value).map_err(|_| BoundaryError::EncodeMismatch)
 }
 
+/// Decodes and structurally validates one hostile mesh-local certificate request.
+///
+/// # Errors
+///
+/// Rejects empty, oversized, malformed, schema-invalid or non-canonical input before crypto.
+pub fn decode_provision_mesh_local_certificate_request(
+    bytes: &[u8],
+) -> Result<ProvisionMeshLocalCertificateRequest, BoundaryError> {
+    if bytes.is_empty() || bytes.len() > MAX_PROVISION_MESH_LOCAL_CERTIFICATE_BYTES {
+        return Err(BoundaryError::BodyTooLarge {
+            limit: MAX_PROVISION_MESH_LOCAL_CERTIFICATE_BYTES,
+        });
+    }
+    let value = serde_json::from_slice(bytes).map_err(|_| BoundaryError::MalformedJson)?;
+    validate(local_request_validator()?, &value)?;
+    let request: ProvisionMeshLocalCertificateRequest =
+        serde_json::from_value(value).map_err(|_| BoundaryError::DecodeMismatch)?;
+    valid_canonical_names(&request.certificate_names)
+        .then_some(request)
+        .ok_or(BoundaryError::DecodeMismatch)
+}
+
+/// Validates and encodes one secret-free mesh-local certificate result.
+///
+/// # Errors
+///
+/// Refuses to emit malformed trust material or a response outside the Rust-authored contract.
+pub fn encode_provision_mesh_local_certificate_response(
+    response: &ProvisionMeshLocalCertificateResponse,
+) -> Result<Vec<u8>, BoundaryError> {
+    let value = serde_json::to_value(response).map_err(|_| BoundaryError::EncodeMismatch)?;
+    validate(local_response_validator()?, &value)?;
+    looks_like_trust_anchor(response.trust_anchor_pem.as_bytes())
+        .then_some(())
+        .ok_or(BoundaryError::EncodeMismatch)?;
+    serde_json::to_vec(&value).map_err(|_| BoundaryError::EncodeMismatch)
+}
+
 fn validate_request_value(value: &Value) -> Result<(), BoundaryError> {
     validate(request_validator::<ProvisionCertificateRequest>()?, value)
 }
@@ -147,6 +190,22 @@ fn external_response_validator() -> Result<&'static CompiledValidator, BoundaryE
     )
 }
 
+fn local_request_validator() -> Result<&'static CompiledValidator, BoundaryError> {
+    validator_from(LOCAL_REQUEST.get_or_init(|| {
+        compile(&schema::request_schema::<
+            ProvisionMeshLocalCertificateRequest,
+        >())
+    }))
+}
+
+fn local_response_validator() -> Result<&'static CompiledValidator, BoundaryError> {
+    validator_from(LOCAL_RESPONSE.get_or_init(|| {
+        compile(&schema::response_schema::<
+            ProvisionMeshLocalCertificateResponse,
+        >())
+    }))
+}
+
 fn valid_canonical_names(names: &[String]) -> bool {
     names.iter().all(|name| valid_dns_name(name)) && names.windows(2).all(|pair| pair[0] < pair[1])
 }
@@ -156,6 +215,11 @@ fn looks_like_certificate_chain(value: &[u8]) -> bool {
         && value
             .windows(b"-----END CERTIFICATE-----".len())
             .any(|candidate| candidate == b"-----END CERTIFICATE-----")
+}
+
+fn looks_like_trust_anchor(value: &[u8]) -> bool {
+    value.starts_with(b"-----BEGIN CERTIFICATE-----\n")
+        && value.ends_with(b"-----END CERTIFICATE-----\n")
 }
 
 fn valid_dns_name(value: &str) -> bool {

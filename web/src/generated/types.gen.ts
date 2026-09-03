@@ -3754,6 +3754,74 @@ export type ProvisionCertificateResponse = {
 };
 
 /**
+ * ProvisionMeshLocalCertificateRequest
+ *
+ * Exact-retry request for an automatically trusted mesh-local HTTPS identity.
+ */
+export type ProvisionMeshLocalCertificateRequest = {
+  /**
+   * Sorted, unique lower-case DNS names requested on the endpoint certificate.
+   */
+  certificate_names: Array<string>;
+  /**
+   * Client-generated identity binding exact retries.
+   */
+  operation_id: string;
+};
+
+/**
+ * ProvisionMeshLocalCertificateResponse
+ *
+ * Secret-free result of one mesh-local HTTPS certificate issuance.
+ */
+export type ProvisionMeshLocalCertificateResponse = {
+  /**
+   * Immutable mesh-local trust-authority identity.
+   */
+  authority_id: string;
+  /**
+   * Immutable public-certificate identity.
+   */
+  certificate_id: string;
+  /**
+   * Canonical DNS names bound to the leaf certificate.
+   */
+  certificate_names: Array<string>;
+  /**
+   * Monotonic mesh-local endpoint generation.
+   */
+  generation: string;
+  /**
+   * Immutable issuance identity.
+   */
+  issuance_id: string;
+  /**
+   * Exclusive leaf validity end as epoch microseconds.
+   */
+  not_after_epoch_micros: number;
+  /**
+   * Inclusive leaf validity start as epoch microseconds.
+   */
+  not_before_epoch_micros: number;
+  /**
+   * Exact idempotency identity whose result was committed or resolved.
+   */
+  operation_id: string;
+  /**
+   * Lower-case SHA-256 fingerprint of the leaf subject public key.
+   */
+  public_key_fingerprint: string;
+  /**
+   * Authoritative revision containing the encrypted endpoint generation.
+   */
+  revision: number;
+  /**
+   * Public trust anchor in PEM form; no private material is returned.
+   */
+  trust_anchor_pem: string;
+};
+
+/**
  * PublishExternalCertificateRequest
  *
  * Exact-retry automated publication of a certificate issued outside `MeshSpan`.
@@ -5213,6 +5281,70 @@ export type PublishExternalCertificateResponses = {
 
 export type PublishExternalCertificateResponse2 =
   PublishExternalCertificateResponses[keyof PublishExternalCertificateResponses];
+
+export type ProvisionMeshLocalCertificateData = {
+  /**
+   * Mesh-local certificate provisioning
+   */
+  body: ProvisionMeshLocalCertificateRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/admin/certificates/local";
+};
+
+export type ProvisionMeshLocalCertificateErrors = {
+  /**
+   * Invalid certificate request
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Operation conflicts with committed state
+   */
+  409: ApiError;
+  /**
+   * Request body exceeds its bound
+   */
+  413: ApiError;
+  /**
+   * Unsupported request media type
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Certificate authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ProvisionMeshLocalCertificateError =
+  ProvisionMeshLocalCertificateErrors[keyof ProvisionMeshLocalCertificateErrors];
+
+export type ProvisionMeshLocalCertificateResponses = {
+  /**
+   * Encrypted certificate generation durably issued or exactly replayed
+   */
+  201: ProvisionMeshLocalCertificateResponse;
+};
+
+export type ProvisionMeshLocalCertificateResponse2 =
+  ProvisionMeshLocalCertificateResponses[keyof ProvisionMeshLocalCertificateResponses];
 
 export type ListGroupsData = {
   body?: never;
