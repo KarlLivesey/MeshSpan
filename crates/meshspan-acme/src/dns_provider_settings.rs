@@ -114,8 +114,7 @@ impl CloudflareDnsSettings {
     /// Rejects non-canonical zone identities and invalid or excessive API tokens.
     pub fn new(zone_id: String, api_token: Vec<u8>) -> Result<Self, DnsProviderSettingsError> {
         if !valid_cloudflare_zone_id(&zone_id)
-            || !(16..=MAXIMUM_SECRET_BYTES).contains(&api_token.len())
-            || !api_token.is_ascii()
+            || !crate::rustls_http::valid_bearer_token(&api_token)
         {
             return Err(DnsProviderSettingsError::InvalidInput);
         }
@@ -157,10 +156,7 @@ impl WebhookDnsSettings {
     ///
     /// Rejects non-HTTPS endpoints and invalid or excessive bearer tokens.
     pub fn new(endpoint: String, bearer_token: Vec<u8>) -> Result<Self, DnsProviderSettingsError> {
-        if !valid_https_url(&endpoint)
-            || !(16..=MAXIMUM_SECRET_BYTES).contains(&bearer_token.len())
-            || !bearer_token.is_ascii()
-        {
+        if !valid_https_url(&endpoint) || !crate::rustls_http::valid_bearer_token(&bearer_token) {
             return Err(DnsProviderSettingsError::InvalidInput);
         }
         Ok(Self {
@@ -331,13 +327,7 @@ fn valid_cloudflare_zone_id(value: &str) -> bool {
 }
 
 fn valid_https_url(value: &str) -> bool {
-    value.starts_with("https://")
-        && value.len() > "https://".len()
-        && value.len() <= MAXIMUM_URL_BYTES
-        && !value.contains('#')
-        && !value
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    value.len() <= MAXIMUM_URL_BYTES && crate::wire::bounded_url(value).is_ok()
 }
 
 struct Decoder<'a> {
