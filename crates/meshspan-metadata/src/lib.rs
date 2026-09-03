@@ -2,6 +2,7 @@
 
 //! Strict SQLite-compatible persistence for authoritative partitions and node-local state.
 
+mod acme_command;
 mod authentication_integrity;
 mod command;
 mod command_codec;
@@ -41,7 +42,12 @@ mod repository;
 #[cfg(test)]
 mod test_support;
 
+pub use acme_command::{
+    AcmeChallengeKind, CertificateOrderCompletion, ClaimCertificateOrder, CompleteCertificateOrder,
+    ConfigureAcme, QueueCertificateOrder, RenewCertificateOrder, SecretGenerationReference,
+};
 pub use command::{
+    ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
     AUTHENTICATION_ROOT_KEY_SECRET_KIND, AbortScopeHandoff, AcknowledgementCellRequirement,
     AcknowledgementCellRole, AcknowledgementConsistencyClass, ActivateGrant, ActivateGroup,
     ActivateNode, ActivateScopeHandoff, AddGroupMember, AppendVersionCleanupItems, AssignComponent,
@@ -64,11 +70,11 @@ pub use command::{
     IssueAuthenticationSession, IssueJoinGrant, IssueVersionCleanupPermit, JoinRoles,
     LocalityRequirementConfiguration, MaintenanceWorkCompletion, NamespaceObjectKind,
     NewAuthenticationCredential, NewRecoveryCode, ONLINE_AUTHORITY_KEY_SECRET_KIND,
-    PermissionScope, PrincipalLifecycleState, ProposeVersionCleanup,
-    ProtectionScenarioConfiguration, PublishSmbExport, QueueMaintenanceWork, RebalanceScanCursor,
-    RegisterCleanupAttestationKey, RegisterNodeWrappingKey, RegisterRoutingSigner,
-    RegisterStorageTarget, RemoveGroupMember, RemoveVolumeSnapshotRoot, RenewMaintenanceWork,
-    ReplaceObjectOwners, RepositoryCommandError, RequestVolumeSnapshotExpiry,
+    PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PermissionScope, PrincipalLifecycleState,
+    ProposeVersionCleanup, ProtectionScenarioConfiguration, PublishSmbExport, QueueMaintenanceWork,
+    RebalanceScanCursor, RegisterCleanupAttestationKey, RegisterNodeWrappingKey,
+    RegisterRoutingSigner, RegisterStorageTarget, RemoveGroupMember, RemoveVolumeSnapshotRoot,
+    RenewMaintenanceWork, ReplaceObjectOwners, RepositoryCommandError, RequestVolumeSnapshotExpiry,
     RestoreVolumeSnapshot, RetentionReclaimMode, RevokeAccessActivation,
     RevokeAuthenticationMethod, RevokeAuthenticationSession, RevokePermissionGrant,
     RouteAttestation, RunSnapshotSchedule, STORAGE_PERMIT_KEY_SECRET_KIND,
@@ -172,7 +178,8 @@ pub use repository::{
     AuthenticationSessionReplayFactor, AuthoritativeMembership, AuthoritativeMetadataKernel,
     AuthoritativeOperationCursor, AuthoritativeOperationState, AuthoritativeOperationStatus,
     AuthoritativeRepository, AvailabilityCellCursor, AvailabilityCellRecord,
-    BrowserSessionAccessRequest, BrowserSessionProtection, CommandReceipt, ConsensusStoreError,
+    BrowserSessionAccessRequest, BrowserSessionProtection, CertificateOrderClaim,
+    CertificateOrderRecord, CertificateOrderState, CommandReceipt, ConsensusStoreError,
     ConvergedVolumeHead, DueStorageScrub, DueStorageScrubCursor, DueStorageScrubPage, EntityKind,
     EntityReference, FaultGroupCursor, FaultGroupMembershipCursor, FaultGroupMembershipRecord,
     FaultGroupRecord, FederatedActorAttestationRecord, FederatedMutationAdmissionReceipt,

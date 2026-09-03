@@ -34,6 +34,10 @@ use crate::{
     RevokeFederationSuccessorDesignation, RotateFederationTrustIdentity,
 };
 use crate::{
+    AcmeChallengeKind, CertificateOrderCompletion, ClaimCertificateOrder, CompleteCertificateOrder,
+    ConfigureAcme, QueueCertificateOrder, RenewCertificateOrder,
+};
+use crate::{
     ActivateFederationGrantAssignment, CreateFederationGrantAssignment, IssueFederationGrant,
     ReplaceFederationGrant, RevokeFederationGrant, RevokeFederationGrantAssignment,
     RevokeFederationGrantAssignmentActivation,
@@ -214,6 +218,16 @@ pub enum AuthoritativeCommand {
     PublishSmbExport(PublishSmbExport),
     /// Withdraws one exact SMB export while retaining its audit history.
     WithdrawSmbExport(WithdrawSmbExport),
+    /// Commits one immutable public-certificate configuration revision.
+    ConfigureAcme(ConfigureAcme),
+    /// Creates one durable ACME order for an exact configuration revision.
+    QueueCertificateOrder(QueueCertificateOrder),
+    /// Fences one node as the sole executor of an actionable ACME order.
+    ClaimCertificateOrder(ClaimCertificateOrder),
+    /// Extends one still-current ACME order claim.
+    RenewCertificateOrder(RenewCertificateOrder),
+    /// Commits an issued certificate generation or schedules a bounded retry.
+    CompleteCertificateOrder(CompleteCertificateOrder),
     /// Registers one node-local public key for encrypted secret generations.
     RegisterNodeWrappingKey(RegisterNodeWrappingKey),
     /// Commits one encrypted secret generation and every exact recipient envelope atomically.
@@ -387,6 +401,11 @@ impl AuthoritativeCommand {
             Self::CommitTargetReconciliation(value) => value.update_digest(digest),
             Self::PublishSmbExport(value) => value.update_digest(digest),
             Self::WithdrawSmbExport(value) => value.update_digest(digest),
+            Self::ConfigureAcme(value) => value.update_digest(digest),
+            Self::QueueCertificateOrder(value) => value.update_digest(digest),
+            Self::ClaimCertificateOrder(value) => value.update_digest(digest),
+            Self::RenewCertificateOrder(value) => value.update_digest(digest),
+            Self::CompleteCertificateOrder(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
             Self::CommitSecretGeneration(value) => value.update_digest(digest),
             Self::IssueJoinGrant(value) => value.update_digest(digest),
@@ -633,6 +652,15 @@ pub const AUTHENTICATION_ROOT_KEY_SECRET_KIND: u16 = 3;
 
 /// Secret-envelope kind reserved for the rotatable online node-certificate authority key.
 pub const ONLINE_AUTHORITY_KEY_SECRET_KIND: u16 = 4;
+
+/// Secret-envelope kind reserved for ACME account private keys.
+pub const ACME_ACCOUNT_KEY_SECRET_KIND: u16 = 5;
+
+/// Secret-envelope kind reserved for ACME DNS publisher credentials and settings.
+pub const ACME_CHALLENGE_SETTINGS_SECRET_KIND: u16 = 6;
+
+/// Secret-envelope kind reserved for validated public certificate/private-key bundles.
+pub const PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND: u16 = 7;
 
 /// Exact durable local outcome accepted as the source of a converged-head transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3657,6 +3685,94 @@ digest_simple_record!(
     |value, digest| {
         digest.identifier(value.export_id.as_bytes());
         digest.bytes(value.reason.as_bytes());
+    }
+);
+digest_simple_record!(ConfigureAcme, b"configure-acme", |value, digest| {
+    digest.identifier(value.config_id.as_bytes());
+    digest.bytes(value.directory_url.as_bytes());
+    digest.identifier(value.account_key.secret_id);
+    digest.unsigned(value.account_key.generation);
+    digest.byte(match value.challenge_kind {
+        AcmeChallengeKind::Http01 => 1,
+        AcmeChallengeKind::Dns01 => 2,
+    });
+    if let Some(settings) = value.challenge_settings {
+        digest.byte(1);
+        digest.identifier(settings.secret_id);
+        digest.unsigned(settings.generation);
+    } else {
+        digest.byte(0);
+    }
+    digest.unsigned(u64::try_from(value.certificate_names.len()).unwrap_or(u64::MAX));
+    for name in value.certificate_names.as_slice() {
+        digest.bytes(name.as_bytes());
+    }
+});
+digest_simple_record!(
+    QueueCertificateOrder,
+    b"queue-certificate-order",
+    |value, digest| {
+        digest.identifier(value.order_id.as_bytes());
+        digest.identifier(value.config_id.as_bytes());
+        digest.signed(value.next_attempt_at.get());
+    }
+);
+digest_simple_record!(
+    ClaimCertificateOrder,
+    b"claim-certificate-order",
+    |value, digest| {
+        digest.identifier(value.order_id.as_bytes());
+        digest.unsigned(value.claim_generation);
+        digest.identifier(value.worker_node_id.as_bytes());
+        digest.unsigned(value.worker_incarnation);
+        digest.unsigned(value.fence);
+        digest.signed(value.lease_expires_at.get());
+    }
+);
+digest_simple_record!(
+    RenewCertificateOrder,
+    b"renew-certificate-order",
+    |value, digest| {
+        digest.identifier(value.order_id.as_bytes());
+        digest.unsigned(value.claim_generation);
+        digest.identifier(value.worker_node_id.as_bytes());
+        digest.unsigned(value.worker_incarnation);
+        digest.unsigned(value.fence);
+        digest.signed(value.lease_expires_at.get());
+    }
+);
+digest_simple_record!(
+    CompleteCertificateOrder,
+    b"complete-certificate-order",
+    |value, digest| {
+        digest.identifier(value.order_id.as_bytes());
+        digest.unsigned(value.claim_generation);
+        digest.identifier(value.worker_node_id.as_bytes());
+        digest.unsigned(value.worker_incarnation);
+        digest.unsigned(value.fence);
+        match value.outcome {
+            CertificateOrderCompletion::Retry {
+                failure_digest,
+                retry_at,
+            } => {
+                digest.byte(1);
+                digest.bytes(&failure_digest);
+                digest.signed(retry_at.get());
+            }
+            CertificateOrderCompletion::Issued {
+                certificate,
+                not_before,
+                not_after,
+                result_digest,
+            } => {
+                digest.byte(2);
+                digest.identifier(certificate.secret_id);
+                digest.unsigned(certificate.generation);
+                digest.signed(not_before.get());
+                digest.signed(not_after.get());
+                digest.bytes(&result_digest);
+            }
+        }
     }
 );
 digest_simple_record!(
