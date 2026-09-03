@@ -219,7 +219,7 @@ impl Header {
     }
 }
 
-fn decode_name(bytes: &[u8], cursor: &mut usize) -> Result<DnsName, DnsWireError> {
+pub(crate) fn decode_name(bytes: &[u8], cursor: &mut usize) -> Result<DnsName, DnsWireError> {
     let mut labels = Vec::new();
     let mut scan = *cursor;
     let mut consumed = None;
@@ -258,21 +258,25 @@ fn exact_txt(rdata: &[u8], expected: &[u8]) -> bool {
         && rdata.get(1..) == Some(expected)
 }
 
-fn read_u16(bytes: &[u8], cursor: &mut usize) -> Result<u16, DnsWireError> {
+pub(crate) fn read_u16(bytes: &[u8], cursor: &mut usize) -> Result<u16, DnsWireError> {
     let value: [u8; 2] = take(bytes, cursor, 2)?
         .try_into()
         .map_err(|_| DnsWireError::InvalidMessage)?;
     Ok(u16::from_be_bytes(value))
 }
 
-fn read_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, DnsWireError> {
+pub(crate) fn read_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, DnsWireError> {
     let value: [u8; 4] = take(bytes, cursor, 4)?
         .try_into()
         .map_err(|_| DnsWireError::InvalidMessage)?;
     Ok(u32::from_be_bytes(value))
 }
 
-fn take<'a>(bytes: &'a [u8], cursor: &mut usize, length: usize) -> Result<&'a [u8], DnsWireError> {
+pub(crate) fn take<'a>(
+    bytes: &'a [u8],
+    cursor: &mut usize,
+    length: usize,
+) -> Result<&'a [u8], DnsWireError> {
     let value = take_at(bytes, *cursor, length)?;
     *cursor = cursor
         .checked_add(length)
