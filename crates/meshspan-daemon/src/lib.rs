@@ -38,6 +38,9 @@ mod authoritative_txt_observer;
 mod backup_publication;
 #[cfg(test)]
 mod backup_publication_tests;
+mod backup_restore_readiness;
+#[cfg(test)]
+mod backup_restore_readiness_tests;
 mod browser_authentication;
 mod browser_session;
 mod certificate_administration;
@@ -415,6 +418,10 @@ pub use authoritative_txt_observer::SystemAuthoritativeTxtObserver;
 pub use backup_publication::{
     BackupPublicationAuthority, BackupPublicationError, BackupPublicationOutcome,
     BackupPublicationRequest, MetadataBackupPublisher,
+};
+pub use backup_restore_readiness::{
+    BackupRestoreReadinessAuthority, BackupRestoreReadinessError, BackupRestoreReadinessEvidence,
+    BackupRestoreReadinessPaths, BackupRestoreReadinessRequest, MetadataBackupRestoreReadiness,
 };
 pub use browser_authentication::{
     BrowserAuthenticationError, BrowserSessionAuthenticator, BrowserSessionAuthority,
