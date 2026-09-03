@@ -34,9 +34,10 @@ use crate::{
     ListProtectionPoliciesResponse, ListStorageDrainsResponse, ListStorageFoldersResponse,
     ListTopologyNodesResponse, ListTopologyTargetsResponse, ListUploadRangesResponse,
     ListVolumePermissionGrantsResponse, ListVolumesResponse, OperationStatusResponse,
-    ProvisionCertificateRequest, ProvisionCertificateResponse, PublishSmbExportRequest,
-    PublishSmbExportResponse, RegisterStorageFolderRequest, RegisterStorageFolderResponse,
-    RemoveGroupMemberRequest, RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
+    ProvisionCertificateRequest, ProvisionCertificateResponse, PublishExternalCertificateRequest,
+    PublishExternalCertificateResponse, PublishSmbExportRequest, PublishSmbExportResponse,
+    RegisterStorageFolderRequest, RegisterStorageFolderResponse, RemoveGroupMemberRequest,
+    RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
     RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
     RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, RevokePermissionGrantRequest,
     RevokePermissionGrantResponse, SetAvailabilityCellMembershipResponse,
@@ -170,6 +171,12 @@ fn components() -> Value {
             schema_response::<CreatePrincipalResponse>("CreatePrincipalResponse"),
             schema_request::<ProvisionCertificateRequest>("ProvisionCertificateRequest"),
             schema_response::<ProvisionCertificateResponse>("ProvisionCertificateResponse"),
+            schema_request::<PublishExternalCertificateRequest>(
+                "PublishExternalCertificateRequest",
+            ),
+            schema_response::<PublishExternalCertificateResponse>(
+                "PublishExternalCertificateResponse",
+            ),
             schema_request::<CreateLocalityPolicyRequest>("CreateLocalityPolicyRequest"),
             schema_response::<CreateLocalityPolicyResponse>("CreateLocalityPolicyResponse"),
             schema_request::<CreateProtectionPolicyRequest>("CreateProtectionPolicyRequest"),
@@ -479,6 +486,10 @@ fn administration_paths() -> Vec<(String, Value)> {
                 provision_certificate_path(),
             ),
             (
+                "/admin/certificates/external".to_owned(),
+                publish_external_certificate_path(),
+            ),
+            (
                 "/admin/certificate-tasks/manual-dns".to_owned(),
                 manual_dns_tasks_path(),
             ),
@@ -506,6 +517,29 @@ fn provision_certificate_path() -> Value {
                 "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
                 "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
                 "409": json_response("Operation conflicts with committed state", "#/components/schemas/ApiError"),
+                "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Certificate authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
+}
+
+fn publish_external_certificate_path() -> Value {
+    json!({
+        "post": {
+            "operationId": "publishExternalCertificate",
+            "summary": "Publish an externally issued HTTPS certificate through protected automation",
+            "x-meshspan-access": "system-manager-api-key",
+            "x-meshspan-idempotency": "operation-id-generation-and-canonical-request-digest",
+            "requestBody": json_request("External certificate publication", "#/components/schemas/PublishExternalCertificateRequest"),
+            "responses": {
+                "201": json_response("Encrypted certificate generation durably published or exactly replayed", "#/components/schemas/PublishExternalCertificateResponse"),
+                "400": json_response("Invalid certificate publication", "#/components/schemas/ApiError"),
+                "401": json_response("API-key authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "409": json_response("Operation or generation conflicts with committed state", "#/components/schemas/ApiError"),
+                "413": json_response("Publication body exceeds its bound", "#/components/schemas/ApiError"),
                 "415": json_response("Unsupported request media type", "#/components/schemas/ApiError"),
                 "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
                 "503": json_response("Certificate authority temporarily unavailable", "#/components/schemas/ApiError")

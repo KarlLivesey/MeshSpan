@@ -3,7 +3,10 @@
 //! Complete ACME configuration reads and bounded actionable-order admission.
 
 use meshspan_contracts::BoundedItems;
-use meshspan_domain::{AcmeConfigurationId, CertificateOrderId, PrincipalId, Revision, UnixMicros};
+use meshspan_domain::{
+    AcmeConfigurationId, CertificateOrderId, ExternalCertificatePublicationId, PrincipalId,
+    Revision, UnixMicros,
+};
 use rusqlite::{OptionalExtension, params};
 
 use super::{
@@ -60,11 +63,20 @@ pub struct CertificateRenewalCandidate {
     pub revision: Revision,
 }
 
+/// Authoritative source of one public-certificate generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PublicCertificateSource {
+    /// `MeshSpan`'s fenced ACME order lifecycle issued the generation.
+    AcmeOrder(CertificateOrderId),
+    /// An authenticated external publisher supplied the generation.
+    ExternalPublication(ExternalCertificatePublicationId),
+}
+
 /// Latest completed public-certificate generation selected for gateway installation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PublicCertificateSelection {
-    /// Completed order which owns the encrypted bundle.
-    pub order_id: CertificateOrderId,
+    /// Durable issuance source which owns the encrypted bundle.
+    pub source: PublicCertificateSource,
     /// Exact encrypted bundle generation.
     pub certificate: SecretGenerationReference,
     /// Canonical digest of the decrypted certificate bundle.
@@ -73,8 +85,8 @@ pub struct PublicCertificateSelection {
     pub configured_by: PrincipalId,
     /// Completion instant used only for deterministic newest-generation selection.
     pub completed_at: UnixMicros,
-    /// Authoritative order revision observed by an installing gateway.
-    pub order_revision: Revision,
+    /// Authoritative source revision observed by an installing gateway.
+    pub source_revision: Revision,
 }
 
 /// Stable seek position in the automatic certificate-renewal index.
@@ -396,12 +408,12 @@ pub(super) fn latest_public_certificate(
         return Err(RepositoryError::CorruptState);
     }
     Ok(Some(PublicCertificateSelection {
-        order_id,
+        source: PublicCertificateSource::AcmeOrder(order_id),
         certificate,
         bundle_digest,
         configured_by,
         completed_at,
-        order_revision,
+        source_revision: order_revision,
     }))
 }
 

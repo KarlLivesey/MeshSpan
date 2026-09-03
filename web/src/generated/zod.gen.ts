@@ -4083,6 +4083,71 @@ export const zProvisionCertificateResponse = z
   .strict();
 
 /**
+ * PublishExternalCertificateRequest
+ *
+ * Exact-retry automated publication of a certificate issued outside `MeshSpan`.
+ */
+export const zPublishExternalCertificateRequest = z
+  .strictObject({
+    certificate_chain_pem: z.string().min(64).max(98304),
+    certificate_names: z.array(z.string()).min(1).max(256),
+    generation: z
+      .string()
+      .min(1)
+      .max(20)
+      .regex(/^[1-9][0-9]{0,19}$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    private_key_pkcs8_pem: z.string().min(64).max(16384),
+  })
+  .strict();
+
+/**
+ * PublishExternalCertificateResponse
+ *
+ * Secret-free durable result of one automated external-certificate publication.
+ */
+export const zPublishExternalCertificateResponse = z
+  .strictObject({
+    certificate_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    certificate_names: z.array(z.string()).min(1).max(256),
+    generation: z
+      .string()
+      .min(1)
+      .max(20)
+      .regex(/^[1-9][0-9]{0,19}$/),
+    not_after_epoch_micros: z.int().gte(1).lte(9007199254740991),
+    not_before_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    public_key_fingerprint: z
+      .string()
+      .length(64)
+      .regex(/^[0-9a-f]{64}$/),
+    publication_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    revision: z.int().gte(1).lte(9007199254740991),
+  })
+  .strict();
+
+/**
  * PublishSmbExportRequest
  *
  * Exact-retry request to publish one existing volume or folder explicitly.
@@ -5390,6 +5455,18 @@ export const zProvisionCertificateHeaders = z
  * Configuration and initial order durably committed or exactly replayed
  */
 export const zProvisionCertificateResponse2 = zProvisionCertificateResponse;
+
+/**
+ * External certificate publication
+ */
+export const zPublishExternalCertificateBody =
+  zPublishExternalCertificateRequest;
+
+/**
+ * Encrypted certificate generation durably published or exactly replayed
+ */
+export const zPublishExternalCertificateResponse2 =
+  zPublishExternalCertificateResponse;
 
 export const zListGroupsQuery = z
   .object({

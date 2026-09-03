@@ -164,6 +164,14 @@ define_identifier!(GroupId, "Stable identity of one group principal.");
 define_identifier!(VolumeId, "Stable identity of one volume.");
 define_identifier!(SmbExportId, "Stable identity of one published SMB export.");
 define_identifier!(
+    PublicCertificateId,
+    "Stable identity of one public certificate across every issuance source."
+);
+define_identifier!(
+    ExternalCertificatePublicationId,
+    "Stable identity of one automated external-certificate publication."
+);
+define_identifier!(
     AcmeConfigurationId,
     "Stable identity of one public-certificate ACME configuration."
 );

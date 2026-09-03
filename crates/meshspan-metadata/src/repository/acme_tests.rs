@@ -4,8 +4,8 @@ use meshspan_acme::{AcmeChallengePreference, AcmeOrderMachine, AcmeOrderRequest}
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     AcmeConfigurationId, ApiKeyId, AuditEventId, AuthenticationMethodId, CertificateOrderId,
-    EntropyError, HostId, MeshId, NodeId, OperationId, PartitionId, PrincipalId, RandomSource,
-    Revision, RoleId, UnixMicros,
+    EntropyError, ExternalCertificatePublicationId, HostId, MeshId, NodeId, OperationId,
+    PartitionId, PrincipalId, PublicCertificateId, RandomSource, Revision, RoleId, UnixMicros,
 };
 use meshspan_secret_envelope::{SecretContext, WrappingPrivateKey, encrypt_secret};
 use rusqlite::params;
@@ -13,19 +13,149 @@ use sha2::{Digest as _, Sha256};
 
 use super::{
     AuthoritativeRepository, CertificateOrderState, EntityKind, LogPosition, ManualDnsTaskState,
-    PageLimit, RepositoryError,
+    PageLimit, PublicCertificateSource, RepositoryError,
 };
 use crate::{
     ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
-    AcknowledgePublicCertificateInstallation, AcmeChallengeKind, AdvanceManualDnsTask,
-    AuthoritativeCommand, BootstrapMesh, BootstrapRecoveryIdentity, CertificateOrderCompletion,
-    CheckpointCertificateOrder, ClaimCertificateOrder, CommandContext, CommitSecretGeneration,
-    CompleteCertificateOrder, ConfigureAcme, ConfirmRecoveryBundleSaved,
-    CreateAuthenticationMethod, ManualDnsTaskPhase, NewAuthenticationCredential,
-    PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND,
-    PartitionDatabase, ProvisionAcme, QueueCertificateOrder, RecordName, RenewCertificateOrder,
+    AcknowledgeExternalCertificateInstallation, AcknowledgePublicCertificateInstallation,
+    AcmeChallengeKind, AdvanceManualDnsTask, AuthoritativeCommand, BootstrapMesh,
+    BootstrapRecoveryIdentity, CertificateOrderCompletion, CheckpointCertificateOrder,
+    ClaimCertificateOrder, CommandContext, CommitSecretGeneration, CompleteCertificateOrder,
+    ConfigureAcme, ConfirmRecoveryBundleSaved, CreateAuthenticationMethod, ManualDnsTaskPhase,
+    NewAuthenticationCredential, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+    PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND, PartitionDatabase, ProvisionAcme,
+    PublishExternalCertificate, QueueCertificateOrder, RecordName, RenewCertificateOrder,
     SecretGenerationReference,
 };
+
+#[test]
+fn external_certificate_publication_is_atomic_monotonic_and_gateway_bound()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    let publication_id = ExternalCertificatePublicationId::from_bytes([120; 16])?;
+    let certificate_id = PublicCertificateId::from_bytes([121; 16])?;
+    let command = external_publication(&fixture, publication_id, certificate_id, 7, 122)?;
+    let receipt = fixture.apply(
+        3,
+        100,
+        &AuthoritativeCommand::PublishExternalCertificate(Box::new(command.clone())),
+    )?;
+    assert_eq!(
+        receipt.entity.kind,
+        EntityKind::ExternalCertificatePublication
+    );
+    let stored = fixture
+        .repository
+        .external_certificate_publication(publication_id)?
+        .ok_or("publication missing")?;
+    assert_eq!(stored.certificate_id, certificate_id);
+    assert_eq!(stored.generation, 7);
+    assert_eq!(
+        stored.certificate_names,
+        command.certificate_names.as_slice()
+    );
+    assert_eq!(stored.publisher_principal_id, fixture.administrator);
+    assert_eq!(stored.revision, Revision::new(3));
+    let selected = fixture
+        .repository
+        .latest_public_certificate()?
+        .ok_or("external certificate was not selected")?;
+    assert_eq!(
+        selected.source,
+        PublicCertificateSource::ExternalPublication(publication_id)
+    );
+    assert_eq!(selected.certificate.secret_id, certificate_id.as_bytes());
+    assert_eq!(selected.source_revision, Revision::new(3));
+
+    let stale = external_publication(
+        &fixture,
+        ExternalCertificatePublicationId::from_bytes([126; 16])?,
+        PublicCertificateId::from_bytes([127; 16])?,
+        6,
+        123,
+    )?;
+    assert!(matches!(
+        fixture.apply(
+            4,
+            101,
+            &AuthoritativeCommand::PublishExternalCertificate(Box::new(stale))
+        ),
+        Err(RepositoryError::InvalidCommand | RepositoryError::StaleRevision)
+    ));
+
+    let certificate = SecretGenerationReference {
+        secret_id: certificate_id.as_bytes(),
+        generation: 7,
+    };
+    fixture.apply(
+        4,
+        102,
+        &AuthoritativeCommand::AcknowledgeExternalCertificateInstallation(
+            AcknowledgeExternalCertificateInstallation {
+                publication_id,
+                gateway_node_id: fixture.node,
+                gateway_incarnation: 1,
+                certificate,
+                bundle_digest: [123; 32],
+                observed_publication_revision: Revision::new(3),
+            },
+        ),
+    )?;
+    let installed = fixture
+        .repository
+        .external_certificate_installation(publication_id, fixture.node)?
+        .ok_or("installation missing")?;
+    assert_eq!(installed.certificate, certificate);
+    assert_eq!(installed.bundle_digest, [123; 32]);
+    Ok(())
+}
+
+fn external_publication(
+    fixture: &Fixture,
+    publication_id: ExternalCertificatePublicationId,
+    certificate_id: PublicCertificateId,
+    generation: u64,
+    seed: u8,
+) -> Result<PublishExternalCertificate, Box<dyn std::error::Error>> {
+    let recipients = [
+        crate::test_support::node_wrapping_private_key()?.public_key(),
+        fixture.recovery_key.public_key(),
+    ];
+    let (secret, envelopes) = encrypt_secret(
+        SecretContext::new(
+            PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
+            certificate_id.as_bytes(),
+            generation,
+        )?,
+        b"external certificate and private key bundle",
+        &recipients,
+        &mut SecretRandom(seed),
+    )?;
+    Ok(PublishExternalCertificate {
+        publication_id,
+        certificate_id,
+        generation,
+        certificate_names: BoundedItems::new(
+            vec![
+                "files.example.test".to_owned(),
+                "www.example.test".to_owned(),
+            ],
+            256,
+        )?,
+        certificate: Box::new(CommitSecretGeneration {
+            secret: secret.parts(),
+            recipients: envelopes
+                .iter()
+                .map(meshspan_secret_envelope::RecipientKeyEnvelope::parts)
+                .collect(),
+        }),
+        bundle_digest: [123; 32],
+        chain_digest: [124; 32],
+        public_key_fingerprint: [125; 32],
+        not_before: UnixMicros::new(1),
+        not_after: UnixMicros::new(10_000),
+    })
+}
 
 #[test]
 fn manual_dns_tasks_advance_and_replacement_fences_supersede_stale_work()
@@ -749,12 +879,15 @@ fn gateway_installation_requires_exact_issued_recipient_and_is_idempotent()
         .repository
         .latest_public_certificate()?
         .ok_or("public certificate selection missing")?;
-    assert_eq!(selected.order_id, order_id);
+    assert_eq!(
+        selected.source,
+        PublicCertificateSource::AcmeOrder(order_id)
+    );
     assert_eq!(selected.certificate, certificate);
     assert_eq!(selected.bundle_digest, [52; 32]);
     assert_eq!(selected.configured_by, fixture.administrator);
     assert_eq!(selected.completed_at, UnixMicros::new(12));
-    assert_eq!(selected.order_revision, complete.revision);
+    assert_eq!(selected.source_revision, complete.revision);
     let acknowledgement = AcknowledgePublicCertificateInstallation {
         order_id,
         gateway_node_id: fixture.node,

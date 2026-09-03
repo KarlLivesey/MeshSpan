@@ -107,6 +107,12 @@ mod daemon_local_state_tests;
 mod directory_listing_api;
 #[cfg(test)]
 mod directory_listing_api_tests;
+mod external_certificate_publisher;
+mod external_certificate_publisher_api;
+#[cfg(test)]
+mod external_certificate_publisher_api_tests;
+#[cfg(test)]
+mod external_certificate_publisher_tests;
 mod file_read_api;
 #[cfg(test)]
 mod file_read_api_tests;
@@ -475,6 +481,14 @@ pub use directory_listing_api::{
     DirectoryLister, DirectoryListingApiError, DirectoryListingController, DirectoryListingError,
     DirectoryListingService, FileApiFailure, NativeFileApiAuthenticator,
     NativeFileRequestProtection, directory_listing_api_router,
+};
+pub use external_certificate_publisher::{
+    ExternalCertificatePublisherAuthority, ExternalCertificatePublisherAuthorityError,
+    ExternalCertificatePublisherCommit, ExternalCertificatePublisherController,
+    ExternalCertificatePublisherError, ExternalCertificatePublisherService,
+};
+pub use external_certificate_publisher_api::{
+    ExternalCertificatePublisherApiError, external_certificate_publisher_api_router,
 };
 pub use file_read_api::{
     FileRangeReader, FileReadApiError, FileReadController, FileReadError, FileReadResult,

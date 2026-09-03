@@ -17,17 +17,71 @@ use crate::{
     AuthenticationRootAuthority, CertificateOrderCompletionAuthority,
     CertificateOrderCompletionAuthorityError, CertificateProvisioningAuthority,
     CertificateProvisioningAuthorityError, CertificateProvisioningCommit,
-    ConsensusAuthenticationAuthority, NodeWrappingKeyRegistrationAuthority,
-    NodeWrappingKeyRegistrationAuthorityError, OnlineAuthorityLoadingAuthority,
-    PublicCertificateInstallationAuthority, PublicCertificateInstallationAuthorityError,
-    PublicCertificateSelectionAuthority, PublicCertificateSelectionAuthorityError,
-    RecoveryBundleVerificationAuthority, RecoveryBundleVerificationAuthorityError,
-    RecoveryBundleVerificationCommit, SecretGenerationAuthority, SecretGenerationAuthorityError,
-    StoragePermitAuthority, StorageTargetRegistrationAuthority,
-    StorageTargetRegistrationAuthorityError, VolumeAdministrationAuthority,
-    VolumeAdministrationAuthorityError, VolumeAdministrationCommit, VolumeInventoryAuthority,
-    VolumeInventoryAuthorityError, VolumeKeyAuthority,
+    ConsensusAuthenticationAuthority, ExternalCertificatePublisherAuthority,
+    ExternalCertificatePublisherAuthorityError, ExternalCertificatePublisherCommit,
+    NodeWrappingKeyRegistrationAuthority, NodeWrappingKeyRegistrationAuthorityError,
+    OnlineAuthorityLoadingAuthority, PublicCertificateInstallationAuthority,
+    PublicCertificateInstallationAuthorityError, PublicCertificateSelectionAuthority,
+    PublicCertificateSelectionAuthorityError, RecoveryBundleVerificationAuthority,
+    RecoveryBundleVerificationAuthorityError, RecoveryBundleVerificationCommit,
+    SecretGenerationAuthority, SecretGenerationAuthorityError, StoragePermitAuthority,
+    StorageTargetRegistrationAuthority, StorageTargetRegistrationAuthorityError,
+    VolumeAdministrationAuthority, VolumeAdministrationAuthorityError, VolumeAdministrationCommit,
+    VolumeInventoryAuthority, VolumeInventoryAuthorityError, VolumeKeyAuthority,
 };
+
+impl ExternalCertificatePublisherAuthority for ConsensusAuthenticationAuthority {
+    fn is_system_manager(
+        &self,
+        principal_id: meshspan_domain::PrincipalId,
+        now: meshspan_domain::UnixMicros,
+    ) -> Result<bool, ExternalCertificatePublisherAuthorityError> {
+        self.reader()
+            .principal_is_system_manager(principal_id, now)
+            .map_err(|error| map_external_publisher_repository_error(&error))
+    }
+
+    fn resolve_external_certificate_publication(
+        &self,
+        operation_id: meshspan_domain::OperationId,
+    ) -> Result<
+        Option<ExternalCertificatePublisherCommit>,
+        ExternalCertificatePublisherAuthorityError,
+    > {
+        self.reader()
+            .resolve_operation(operation_id)
+            .map_err(|error| map_external_publisher_repository_error(&error))?
+            .map(|receipt| external_certificate_commit(self.reader(), receipt))
+            .transpose()
+    }
+
+    fn certificate_secret_recipients(
+        &self,
+    ) -> Result<
+        Vec<meshspan_secret_envelope::WrappingPublicKey>,
+        ExternalCertificatePublisherAuthorityError,
+    > {
+        self.reader()
+            .volume_key_recipients()
+            .map_err(|error| map_external_publisher_repository_error(&error))
+    }
+
+    fn commit_or_resolve_external_certificate_publication(
+        &mut self,
+        context: CommandContext,
+        command: &AuthoritativeCommand,
+    ) -> Result<ExternalCertificatePublisherCommit, ExternalCertificatePublisherAuthorityError>
+    {
+        let expected_digest = command.request_digest(context);
+        let receipt = self
+            .commit_authoritative(context, command)
+            .map_err(map_external_publisher_authority_error)?;
+        if receipt.request_digest != expected_digest {
+            return Err(ExternalCertificatePublisherAuthorityError::Conflict);
+        }
+        external_certificate_commit(self.reader(), receipt)
+    }
+}
 
 impl CertificateProvisioningAuthority for ConsensusAuthenticationAuthority {
     fn is_system_manager(
@@ -565,6 +619,31 @@ fn certificate_commit(
     })
 }
 
+fn external_certificate_commit(
+    repository: &meshspan_metadata::AuthoritativeRepository,
+    receipt: meshspan_metadata::CommandReceipt,
+) -> Result<ExternalCertificatePublisherCommit, ExternalCertificatePublisherAuthorityError> {
+    if receipt.entity.kind != EntityKind::ExternalCertificatePublication {
+        return Err(ExternalCertificatePublisherAuthorityError::Conflict);
+    }
+    let publication_id =
+        meshspan_domain::ExternalCertificatePublicationId::from_bytes(receipt.entity.id)
+            .map_err(|_| ExternalCertificatePublisherAuthorityError::Failed)?;
+    let publication = repository
+        .external_certificate_publication(publication_id)
+        .map_err(|error| map_external_publisher_repository_error(&error))?
+        .ok_or(ExternalCertificatePublisherAuthorityError::Failed)?;
+    if publication.revision != receipt.committed_revision {
+        return Err(ExternalCertificatePublisherAuthorityError::Failed);
+    }
+    Ok(ExternalCertificatePublisherCommit {
+        request_digest: receipt.request_digest,
+        result_digest: receipt.result_digest,
+        committed_revision: receipt.committed_revision,
+        publication,
+    })
+}
+
 fn volume_owners(
     repository: &meshspan_metadata::AuthoritativeRepository,
     root_object_id: meshspan_domain::ObjectId,
@@ -651,6 +730,23 @@ fn map_provisioning_authority_error(
     }
 }
 
+fn map_external_publisher_authority_error(
+    error: MetadataAuthorityRequestError,
+) -> ExternalCertificatePublisherAuthorityError {
+    match error {
+        MetadataAuthorityRequestError::NotLeader { .. }
+        | MetadataAuthorityRequestError::Unavailable => {
+            ExternalCertificatePublisherAuthorityError::Unavailable
+        }
+        MetadataAuthorityRequestError::Conflict | MetadataAuthorityRequestError::Rejected => {
+            ExternalCertificatePublisherAuthorityError::Conflict
+        }
+        MetadataAuthorityRequestError::Unsupported | MetadataAuthorityRequestError::Failed => {
+            ExternalCertificatePublisherAuthorityError::Failed
+        }
+    }
+}
+
 fn map_recovery_authority_error(
     error: MetadataAuthorityRequestError,
 ) -> RecoveryBundleVerificationAuthorityError {
@@ -725,6 +821,20 @@ fn map_provisioning_repository_error(
             CertificateProvisioningAuthorityError::Unavailable
         }
         _ => CertificateProvisioningAuthorityError::Failed,
+    }
+}
+
+fn map_external_publisher_repository_error(
+    error: &RepositoryError,
+) -> ExternalCertificatePublisherAuthorityError {
+    match error {
+        RepositoryError::OperationConflict
+        | RepositoryError::StaleRevision
+        | RepositoryError::InvalidCommand => ExternalCertificatePublisherAuthorityError::Conflict,
+        RepositoryError::Store(_) | RepositoryError::Sqlite(_) | RepositoryError::Io(_) => {
+            ExternalCertificatePublisherAuthorityError::Unavailable
+        }
+        _ => ExternalCertificatePublisherAuthorityError::Failed,
     }
 }
 

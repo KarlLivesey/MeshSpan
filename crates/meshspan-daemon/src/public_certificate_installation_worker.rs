@@ -132,8 +132,8 @@ where
             return Err(PublicCertificateInstallationWorkerError::Failed);
         }
         let request = PublicCertificateInstallationRequest {
-            order_id: selection.order_id,
-            order_revision: selection.order_revision,
+            source: selection.source,
+            source_revision: selection.source_revision,
             gateway_node_id: self.gateway_node_id,
             gateway_incarnation: self.gateway_incarnation,
             actor_principal_id: selection.configured_by,
