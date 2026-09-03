@@ -3,6 +3,7 @@
 //! Immutable ACME configuration and single-worker fenced certificate orders.
 
 mod order_checkpoint;
+mod query;
 
 use meshspan_domain::{AcmeConfigurationId, CertificateOrderId, NodeId, Revision, UnixMicros};
 use rusqlite::{OptionalExtension, Row, Transaction, params};
@@ -20,6 +21,7 @@ use crate::{
 
 pub use order_checkpoint::CertificateOrderCheckpointRecord;
 pub(super) use order_checkpoint::checkpoint;
+pub use query::{AcmeConfigurationRecord, DueCertificateOrderCursor};
 
 const ORDER_QUEUED: i64 = 1;
 const ORDER_CLAIMED: i64 = 2;
@@ -413,6 +415,34 @@ pub(super) fn acknowledge_installation(
 }
 
 impl AuthoritativeRepository {
+    /// Returns one complete immutable ACME configuration revision.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when persisted secret references, challenge settings, names or revision are
+    /// malformed.
+    pub fn acme_configuration(
+        &self,
+        config_id: AcmeConfigurationId,
+    ) -> Result<Option<AcmeConfigurationRecord>, RepositoryError> {
+        query::configuration(&self.database, config_id)
+    }
+
+    /// Returns a bounded stable page of queued or expired-claim certificate orders due now.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid limits and fails closed for malformed order or claim state.
+    pub fn due_certificate_orders(
+        &self,
+        now: UnixMicros,
+        after: Option<&DueCertificateOrderCursor>,
+        limit: super::PageLimit,
+    ) -> Result<super::Page<CertificateOrderRecord, DueCertificateOrderCursor>, RepositoryError>
+    {
+        query::due_orders(&self.database, now, after, limit)
+    }
+
     /// Returns one exact ACME order and its current live claim.
     ///
     /// # Errors
