@@ -327,7 +327,8 @@ mod tests {
         local_federation_storage_lifecycle_migration_digest,
         local_federation_storage_quota_migration_digest,
         local_federation_storage_scrub_migration_digest,
-        local_maintenance_scrub_progress_migration_digest, local_migration_digest,
+        local_maintenance_scrub_progress_migration_digest,
+        local_metadata_backup_staging_migration_digest, local_migration_digest,
         local_setup_operation_migration_digest, local_storage_target_registration_migration_digest,
         local_totp_registration_ceremony_migration_digest, migrate_local, migrate_local_through,
         migrate_partition, migrate_partition_through,
@@ -1113,6 +1114,14 @@ mod tests {
                 0x1d, 0x11, 0xf2, 0x39, 0x9c, 0x46, 0x7b, 0x5b, 0x95, 0xf6, 0xca, 0x7a, 0xd2, 0x95,
                 0x51, 0xad, 0xbb, 0xad, 0x20, 0x02, 0xef, 0x26, 0x97, 0xe5, 0x0a, 0x69, 0x80, 0x45,
                 0x34, 0xe4, 0x53, 0x2b,
+            ]
+        );
+        assert_eq!(
+            local_metadata_backup_staging_migration_digest(),
+            [
+                0xf9, 0xc1, 0xa5, 0xa5, 0xfe, 0x72, 0xad, 0xc6, 0x36, 0xde, 0x59, 0xb1, 0xaa, 0x06,
+                0x39, 0x7b, 0x67, 0xbd, 0x11, 0xfa, 0x33, 0x7f, 0x2f, 0x8b, 0x69, 0x90, 0x81, 0xc6,
+                0x30, 0x69, 0x26, 0x54,
             ]
         );
     }
