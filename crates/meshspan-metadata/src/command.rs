@@ -3726,6 +3726,7 @@ digest_simple_record!(ConfigureAcme, b"configure-acme", |value, digest| {
     }
 });
 digest_simple_record!(ProvisionAcme, b"provision-acme", |value, digest| {
+    digest.bytes(&value.intent_digest);
     value.configuration.update_digest(digest);
     value.account_key_generation.update_digest(digest);
     if let Some(settings) = &value.challenge_settings_generation {

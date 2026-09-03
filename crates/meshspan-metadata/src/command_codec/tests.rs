@@ -756,6 +756,7 @@ fn provision_acme_round_trips_as_one_command() -> Result<(), Box<dyn std::error:
     assert_round_trip(
         context,
         AuthoritativeCommand::ProvisionAcme(Box::new(ProvisionAcme {
+            intent_digest: [111; 32],
             configuration: ConfigureAcme {
                 config_id,
                 directory_url: "https://acme.example.test/directory".to_owned(),

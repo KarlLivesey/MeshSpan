@@ -36,6 +36,12 @@ mod authentication_root_loading;
 mod authentication_root_loading_tests;
 mod browser_authentication;
 mod browser_session;
+mod certificate_administration;
+mod certificate_administration_api;
+#[cfg(test)]
+mod certificate_administration_api_tests;
+#[cfg(test)]
+mod certificate_administration_tests;
 mod certificate_automation_service;
 mod certificate_order_checkpointing;
 #[cfg(test)]
@@ -390,6 +396,14 @@ pub use browser_authentication::{
 };
 pub use browser_session::{
     BrowserRequestProtection, BrowserSessionError, BrowserSessionEvidence, parse_browser_session,
+};
+pub use certificate_administration::{
+    CertificateProvisioningAuthority, CertificateProvisioningAuthorityError,
+    CertificateProvisioningCommit, CertificateProvisioningController, CertificateProvisioningError,
+    CertificateProvisioningService,
+};
+pub use certificate_administration_api::{
+    CertificateProvisioningApiError, certificate_provisioning_api_router,
 };
 pub use certificate_automation_service::{
     CertificateAutomationComponents, CertificateAutomationError, CertificateAutomationOutcome,

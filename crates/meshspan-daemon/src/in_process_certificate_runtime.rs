@@ -593,6 +593,7 @@ mod tests {
                     revision: Revision::new(2),
                 },
                 configuration: AcmeConfigurationRecord {
+                    provisioning_intent_digest: None,
                     config_id,
                     directory_url: "https://ca.example.test/directory".to_owned(),
                     account_key: SecretGenerationReference {

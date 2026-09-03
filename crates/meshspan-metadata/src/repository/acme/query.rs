@@ -29,6 +29,8 @@ pub struct AcmeConfigurationRecord {
     pub challenge_settings: Option<SecretGenerationReference>,
     /// Canonical, sorted, lower-case certificate names.
     pub certificate_names: Vec<String>,
+    /// Canonical public provisioning intent, absent for internal low-level configurations.
+    pub provisioning_intent_digest: Option<[u8; 32]>,
     /// Immutable authoritative configuration revision.
     pub revision: Revision,
 }
@@ -139,7 +141,7 @@ pub(super) fn configuration(
         .query_row(
             "SELECT directory_url, account_key_secret_id, account_key_secret_generation,
                     challenge_kind, challenge_settings_secret_id,
-                    challenge_settings_secret_generation, revision
+                    challenge_settings_secret_generation, provisioning_intent_digest, revision
              FROM acme_configurations WHERE config_id = ?1",
             [config_id.as_bytes().as_slice()],
             |row| {
@@ -150,7 +152,8 @@ pub(super) fn configuration(
                     row.get::<_, i64>(3)?,
                     row.get::<_, Option<Vec<u8>>>(4)?,
                     row.get::<_, Option<i64>>(5)?,
-                    row.get::<_, i64>(6)?,
+                    row.get::<_, Option<Vec<u8>>>(6)?,
+                    row.get::<_, i64>(7)?,
                 ))
             },
         )
@@ -182,7 +185,8 @@ pub(super) fn configuration(
         challenge_kind,
         challenge_settings,
         certificate_names,
-        revision: Revision::new(positive(stored.6)?),
+        provisioning_intent_digest: stored.6.map(exact).transpose()?,
+        revision: Revision::new(positive(stored.7)?),
     }))
 }
 

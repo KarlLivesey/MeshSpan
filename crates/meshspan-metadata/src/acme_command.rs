@@ -88,6 +88,8 @@ pub struct ConfigureAcme {
 /// Atomically commits protected ACME credentials, one immutable configuration and its first order.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProvisionAcme {
+    /// Non-secret digest of the complete canonical administrator intent, including credentials.
+    pub intent_digest: [u8; 32],
     /// Immutable public-certificate configuration.
     pub configuration: ConfigureAcme,
     /// Encrypted account private key referenced by `configuration`.

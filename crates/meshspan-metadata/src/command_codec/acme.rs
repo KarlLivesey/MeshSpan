@@ -111,6 +111,7 @@ fn encode_provision(
 ) -> Result<(), MetadataCommandCodecError> {
     validate_provision(value)?;
     encoder.u16(PROVISION_ACME)?;
+    encoder.fixed(&value.intent_digest)?;
     encode_configuration_payload(encoder, &value.configuration)?;
     secret_generation::encode_payload(encoder, &value.account_key_generation)?;
     encoder.bool(value.challenge_settings_generation.is_some())?;
@@ -121,6 +122,7 @@ fn encode_provision(
 }
 
 fn decode_provision(decoder: &mut Decoder<'_>) -> Result<ProvisionAcme, MetadataCommandCodecError> {
+    let intent_digest = decoder.fixed()?;
     let configuration = decode_configuration_payload(decoder)?;
     let account_key_generation = Box::new(secret_generation::decode_payload(decoder)?);
     let challenge_settings_generation = decoder
@@ -130,6 +132,7 @@ fn decode_provision(decoder: &mut Decoder<'_>) -> Result<ProvisionAcme, Metadata
         .map(Box::new);
     let initial_order = decode_queue_payload(decoder)?;
     let value = ProvisionAcme {
+        intent_digest,
         configuration,
         account_key_generation,
         challenge_settings_generation,
@@ -147,7 +150,8 @@ fn validate_provision(value: &ProvisionAcme) -> Result<(), MetadataCommandCodecE
     }
     let account = &value.account_key_generation.secret.context;
     let account_reference = value.configuration.account_key;
-    if account.kind() != ACME_ACCOUNT_KEY_SECRET_KIND
+    if value.intent_digest == [0; 32]
+        || account.kind() != ACME_ACCOUNT_KEY_SECRET_KIND
         || account.id() != account_reference.secret_id
         || account.generation() != account_reference.generation
         || value.initial_order.config_id != value.configuration.config_id

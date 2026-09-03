@@ -197,12 +197,14 @@ fn provisioning_atomically_commits_secrets_configuration_and_initial_order()
             )?,)?
             .is_some()
     );
+    let stored_configuration = fixture
+        .repository
+        .acme_configuration(config_id)?
+        .ok_or("configuration missing")?;
+    assert_eq!(stored_configuration.config_id, config_id);
     assert_eq!(
-        fixture
-            .repository
-            .acme_configuration(config_id)?
-            .map(|value| value.config_id),
-        Some(config_id),
+        stored_configuration.provisioning_intent_digest,
+        Some([126; 32])
     );
     assert_eq!(
         fixture
@@ -279,6 +281,7 @@ fn provision_command(
         certificate_names: BoundedItems::new(vec!["files.example.test".to_owned()], 256)?,
     };
     Ok(ProvisionAcme {
+        intent_digest: [126; 32],
         configuration: configuration.clone(),
         account_key_generation: account_generation,
         challenge_settings_generation: Some(settings_generation),

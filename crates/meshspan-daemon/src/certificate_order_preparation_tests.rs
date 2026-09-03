@@ -183,6 +183,7 @@ fn assignment(
             revision: Revision::new(10),
         },
         configuration: AcmeConfigurationRecord {
+            provisioning_intent_digest: None,
             config_id,
             directory_url: "https://acme.example.test/directory".to_owned(),
             account_key,

@@ -108,6 +108,7 @@ fn assignment(
             revision: Revision::new(6),
         },
         configuration: AcmeConfigurationRecord {
+            provisioning_intent_digest: None,
             config_id,
             directory_url: "https://ca.example.test/directory".to_owned(),
             account_key: SecretGenerationReference {

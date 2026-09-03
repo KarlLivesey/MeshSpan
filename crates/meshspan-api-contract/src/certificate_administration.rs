@@ -6,7 +6,7 @@ use std::fmt;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroize;
 
 use crate::OperationId;
 
@@ -58,8 +58,14 @@ pub struct ProtectedText(
 impl ProtectedText {
     /// Moves the value into zeroising storage without retaining another plaintext copy.
     #[must_use]
-    pub fn into_bytes(mut self) -> Zeroizing<Vec<u8>> {
-        Zeroizing::new(std::mem::take(&mut self.0).into_bytes())
+    pub fn into_bytes(mut self) -> Vec<u8> {
+        std::mem::take(&mut self.0).into_bytes()
+    }
+
+    /// Borrows bytes solely for canonical intent hashing before encryption.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
     }
 }
 

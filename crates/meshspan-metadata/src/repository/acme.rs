@@ -178,6 +178,7 @@ pub(super) fn provision(
 ) -> Result<EntityReference, RepositoryError> {
     if value.initial_order.config_id != value.configuration.config_id
         || value.initial_order.next_attempt_at < context.occurred_at
+        || value.intent_digest == [0; 32]
     {
         return Err(RepositoryError::InvalidCommand);
     }
@@ -211,6 +212,13 @@ pub(super) fn provision(
         super::secret_generation::commit(transaction, context, settings, revision)?;
     }
     configure(transaction, context, &value.configuration, revision)?;
+    transaction.execute(
+        "UPDATE acme_configurations SET provisioning_intent_digest = ?1 WHERE config_id = ?2",
+        params![
+            value.intent_digest.as_slice(),
+            value.configuration.config_id.as_bytes().as_slice()
+        ],
+    )?;
     queue(transaction, context, value.initial_order, revision)
 }
 
