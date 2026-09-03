@@ -147,6 +147,7 @@ impl CertificateProvisioningAuthority for MockAuthority {
                 challenge_settings: value.configuration.challenge_settings,
                 certificate_names: value.configuration.certificate_names.as_slice().to_vec(),
                 provisioning_intent_digest: Some(value.intent_digest),
+                configured_by: context.actor_principal_id,
                 revision,
             },
             order: CertificateOrderRecord {
