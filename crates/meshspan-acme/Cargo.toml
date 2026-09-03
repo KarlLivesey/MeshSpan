@@ -29,6 +29,7 @@ tokio-rustls.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+hmac.workspace = true
 meshspan-rustls-provider = { path = "../meshspan-rustls-provider" }
 meshspan-test-certificates = { path = "../meshspan-test-certificates" }
 

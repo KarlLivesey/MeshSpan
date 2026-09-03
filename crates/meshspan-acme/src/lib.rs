@@ -16,6 +16,8 @@ mod order_machine;
 mod rfc2136_provider;
 #[cfg(test)]
 mod rfc2136_provider_tests;
+#[cfg(test)]
+mod rfc2136_test_server;
 mod strict_json;
 mod transport;
 mod wire;
