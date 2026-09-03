@@ -127,6 +127,10 @@ mod local_totp_ceremony_key;
 mod local_wrapping_key;
 mod maintenance_authority;
 mod maintenance_dispatcher;
+mod manual_dns_task_administration;
+mod manual_dns_task_administration_api;
+#[cfg(test)]
+mod manual_dns_task_administration_api_tests;
 mod manual_dns_task_authority;
 #[cfg(test)]
 mod manual_dns_task_authority_tests;
@@ -244,6 +248,13 @@ pub use maintenance_authority::MaintenanceMetadataAuthority;
 pub use maintenance_dispatcher::{
     MaintenanceDispatchAssignment, MaintenanceDispatchBatch, MaintenanceDispatchError,
     MaintenanceDispatcher, MaintenanceWorkSource,
+};
+pub use manual_dns_task_administration::{
+    ManualDnsTaskAdministrationAuthority, ManualDnsTaskAdministrationController,
+    ManualDnsTaskAdministrationError, ManualDnsTaskAdministrationService,
+};
+pub use manual_dns_task_administration_api::{
+    ManualDnsTaskAdministrationApiError, manual_dns_task_administration_api_router,
 };
 pub use manual_dns_task_authority::{
     ConsensusManualDnsTaskAuthority, ManualDnsTaskCommitAuthority,

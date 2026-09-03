@@ -2852,6 +2852,63 @@ export type ListLocalityPoliciesResponse = {
 };
 
 /**
+ * ListManualDnsTasksResponse
+ *
+ * One bounded deadline-ordered page of current manual DNS work.
+ */
+export type ListManualDnsTasksResponse = {
+  /**
+   * Ready-to-follow same-origin URL, or null when the page is terminal.
+   */
+  next_page_url: string | null;
+  /**
+   * Tasks ordered by deadline, creation time and digest.
+   */
+  tasks: Array<{
+    /**
+     * Required operator action.
+     */
+    action: "publish" | "remove";
+    /**
+     * Original authoritative task creation instant.
+     */
+    created_at_epoch_micros: number;
+    /**
+     * Exclusive challenge deadline as epoch microseconds.
+     */
+    expires_at_epoch_micros: number;
+    /**
+     * Exact positive order fence represented without JavaScript precision loss.
+     */
+    order_fence: string;
+    /**
+     * Certificate order owning the task.
+     */
+    order_id: string;
+    /**
+     * Canonical TXT owner name without a trailing dot.
+     */
+    record_name: string;
+    /**
+     * Exact unquoted ACME TXT value.
+     */
+    record_value: string;
+    /**
+     * Current authoritative revision.
+     */
+    revision: number;
+    /**
+     * Lower-case SHA-256 identity of this exact fenced task.
+     */
+    task_digest: string;
+    /**
+     * Most recent authoritative task transition.
+     */
+    transitioned_at_epoch_micros: number;
+  }>;
+};
+
+/**
  * ListOperationsResponse
  *
  * One bounded reverse-chronological administrator operation page.
@@ -4817,6 +4874,52 @@ export type CreateAcknowledgementPolicyResponses = {
 
 export type CreateAcknowledgementPolicyResponse2 =
   CreateAcknowledgementPolicyResponses[keyof CreateAcknowledgementPolicyResponses];
+
+export type ListManualDnsTasksData = {
+  body?: never;
+  path?: never;
+  query?: {
+    cursor?: string;
+    limit?: number;
+  };
+  url: "/admin/certificate-tasks/manual-dns";
+};
+
+export type ListManualDnsTasksErrors = {
+  /**
+   * Invalid query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Certificate authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListManualDnsTasksError =
+  ListManualDnsTasksErrors[keyof ListManualDnsTasksErrors];
+
+export type ListManualDnsTasksResponses = {
+  /**
+   * One deadline-ordered manual DNS task page
+   */
+  200: ListManualDnsTasksResponse;
+};
+
+export type ListManualDnsTasksResponse2 =
+  ListManualDnsTasksResponses[keyof ListManualDnsTasksResponses];
 
 export type ListGroupsData = {
   body?: never;

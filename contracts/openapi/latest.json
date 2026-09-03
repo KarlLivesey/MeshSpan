@@ -6318,6 +6318,126 @@
         "title": "ListLocalityPoliciesResponse",
         "type": "object"
       },
+      "ListManualDnsTasksResponse": {
+        "additionalProperties": false,
+        "description": "One bounded deadline-ordered page of current manual DNS work.",
+        "properties": {
+          "next_page_url": {
+            "description": "Ready-to-follow same-origin URL, or null when the page is terminal.",
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^/api/latest/admin/certificate-tasks/manual-dns",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tasks": {
+            "description": "Tasks ordered by deadline, creation time and digest.",
+            "items": {
+              "additionalProperties": false,
+              "description": "One durable, currently actionable manual DNS task.",
+              "properties": {
+                "action": {
+                  "description": "Required operator action.",
+                  "oneOf": [
+                    {
+                      "const": "publish",
+                      "description": "Publish the exact TXT owner and value.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "remove",
+                      "description": "Remove only the exact TXT owner and value after issuance.",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "created_at_epoch_micros": {
+                  "description": "Original authoritative task creation instant.",
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "expires_at_epoch_micros": {
+                  "description": "Exclusive challenge deadline as epoch microseconds.",
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "order_fence": {
+                  "description": "Exact positive order fence represented without JavaScript precision loss.",
+                  "maxLength": 20,
+                  "minLength": 1,
+                  "pattern": "^[1-9][0-9]{0,19}$",
+                  "type": "string"
+                },
+                "order_id": {
+                  "description": "Certificate order owning the task.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "record_name": {
+                  "description": "Canonical TXT owner name without a trailing dot.",
+                  "maxLength": 253,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)+$",
+                  "type": "string"
+                },
+                "record_value": {
+                  "description": "Exact unquoted ACME TXT value.",
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9_-]+$",
+                  "type": "string"
+                },
+                "revision": {
+                  "description": "Current authoritative revision.",
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "task_digest": {
+                  "description": "Lower-case SHA-256 identity of this exact fenced task.",
+                  "maxLength": 64,
+                  "minLength": 64,
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "transitioned_at_epoch_micros": {
+                  "description": "Most recent authoritative task transition.",
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "task_digest",
+                "order_id",
+                "order_fence",
+                "record_name",
+                "record_value",
+                "action",
+                "expires_at_epoch_micros",
+                "created_at_epoch_micros",
+                "transitioned_at_epoch_micros",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "maxItems": 200,
+            "type": "array"
+          }
+        },
+        "required": [
+          "tasks",
+          "next_page_url"
+        ],
+        "title": "ListManualDnsTasksResponse",
+        "type": "object"
+      },
       "ListOperationsResponse": {
         "additionalProperties": false,
         "description": "One bounded reverse-chronological administrator operation page.",
@@ -10150,6 +10270,194 @@
         "summary": "Create one immutable write-acknowledgement policy",
         "x-meshspan-access": "system-manager-csrf",
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/admin/certificate-tasks/manual-dns": {
+      "get": {
+        "operationId": "listManualDnsTasks",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 1024,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListManualDnsTasksResponse"
+                }
+              }
+            },
+            "description": "One deadline-ordered manual DNS task page",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid query",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Certificate authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List exact manual DNS records awaiting publication or removal",
+        "x-meshspan-access": "system-manager"
       }
     },
     "/admin/groups": {

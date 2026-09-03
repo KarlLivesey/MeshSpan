@@ -30,18 +30,19 @@ use crate::{
     JoinMeshSetupResponse, ListAcknowledgementPoliciesResponse, ListAuthenticationMethodsResponse,
     ListAvailabilityCellsResponse, ListDirectoryResponse, ListFaultGroupMembershipsResponse,
     ListFaultGroupsResponse, ListGroupMembershipsResponse, ListLocalityPoliciesResponse,
-    ListOperationsResponse, ListPrincipalsResponse, ListProtectionPoliciesResponse,
-    ListStorageDrainsResponse, ListStorageFoldersResponse, ListTopologyNodesResponse,
-    ListTopologyTargetsResponse, ListUploadRangesResponse, ListVolumePermissionGrantsResponse,
-    ListVolumesResponse, OperationStatusResponse, PublishSmbExportRequest,
-    PublishSmbExportResponse, RegisterStorageFolderRequest, RegisterStorageFolderResponse,
-    RemoveGroupMemberRequest, RemoveGroupMemberResponse, RenameObjectRequest, RenameObjectResponse,
-    RevokeAuthenticationMethodRequest, RevokeAuthenticationMethodResponse,
-    RevokeCurrentSessionRequest, RevokeCurrentSessionResponse, RevokePermissionGrantRequest,
-    RevokePermissionGrantResponse, SetAvailabilityCellMembershipResponse,
-    SetFaultGroupMembershipRequest, SetFaultGroupMembershipResponse, SetupStatusResponse,
-    StepUpCurrentSessionRequest, StorageDrainSummary, UploadStatusResponse,
-    WithdrawSmbExportRequest, WithdrawSmbExportResponse, WriteUploadRangeResponse, schema,
+    ListManualDnsTasksResponse, ListOperationsResponse, ListPrincipalsResponse,
+    ListProtectionPoliciesResponse, ListStorageDrainsResponse, ListStorageFoldersResponse,
+    ListTopologyNodesResponse, ListTopologyTargetsResponse, ListUploadRangesResponse,
+    ListVolumePermissionGrantsResponse, ListVolumesResponse, OperationStatusResponse,
+    PublishSmbExportRequest, PublishSmbExportResponse, RegisterStorageFolderRequest,
+    RegisterStorageFolderResponse, RemoveGroupMemberRequest, RemoveGroupMemberResponse,
+    RenameObjectRequest, RenameObjectResponse, RevokeAuthenticationMethodRequest,
+    RevokeAuthenticationMethodResponse, RevokeCurrentSessionRequest, RevokeCurrentSessionResponse,
+    RevokePermissionGrantRequest, RevokePermissionGrantResponse,
+    SetAvailabilityCellMembershipResponse, SetFaultGroupMembershipRequest,
+    SetFaultGroupMembershipResponse, SetupStatusResponse, StepUpCurrentSessionRequest,
+    StorageDrainSummary, UploadStatusResponse, WithdrawSmbExportRequest, WithdrawSmbExportResponse,
+    WriteUploadRangeResponse, schema,
 };
 
 /// Repository path of the committed rolling `OpenAPI` document.
@@ -215,6 +216,7 @@ fn components() -> Value {
             schema_response::<ListFaultGroupsResponse>("ListFaultGroupsResponse"),
             schema_response::<ListGroupMembershipsResponse>("ListGroupMembershipsResponse"),
             schema_response::<ListLocalityPoliciesResponse>("ListLocalityPoliciesResponse"),
+            schema_response::<ListManualDnsTasksResponse>("ListManualDnsTasksResponse"),
             schema_response::<ListOperationsResponse>("ListOperationsResponse"),
             schema_response::<ListPrincipalsResponse>("ListPrincipalsResponse"),
             schema_response::<ListProtectionPoliciesResponse>("ListProtectionPoliciesResponse"),
@@ -470,6 +472,10 @@ fn administration_paths() -> Vec<(String, Value)> {
         .chain(administration_placement_paths())
         .chain(administration_topology_paths())
         .chain([
+            (
+                "/admin/certificate-tasks/manual-dns".to_owned(),
+                manual_dns_tasks_path(),
+            ),
             ("/admin/storage-drains".to_owned(), storage_drains_path()),
             (
                 "/admin/storage-drains/{drain_id}".to_owned(),
@@ -477,6 +483,25 @@ fn administration_paths() -> Vec<(String, Value)> {
             ),
         ])
         .collect()
+}
+
+fn manual_dns_tasks_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "listManualDnsTasks",
+            "summary": "List exact manual DNS records awaiting publication or removal",
+            "x-meshspan-access": "system-manager",
+            "parameters": [cursor_parameter(), operation_limit_parameter()],
+            "responses": {
+                "200": json_response("One deadline-ordered manual DNS task page", "#/components/schemas/ListManualDnsTasksResponse"),
+                "400": json_response("Invalid query", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Certificate authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn administration_identity_paths() -> [(String, Value); 6] {
