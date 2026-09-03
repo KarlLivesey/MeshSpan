@@ -249,12 +249,18 @@ plaintext. They derive and verify password-equivalent material for the same
 high-entropy, scoped and revocable MeshSpan API key, backed by Microsoft vectors;
 persisted verification material must remain encrypted at rest.
 
-No ACME library is selected yet. The current candidates each miss at least one
-mandatory constraint, most importantly first-class HTTP-01 plus DNS-01 control
-behind MeshSpan's cluster-wide certificate coordinator. The likely boundary is
-a small MeshSpan ACME state machine using the existing HTTPS/TLS/JSON stack and
-pluggable DNS publishers; this avoids a second hidden certificate authority or
-external daemon.
+MeshSpan owns its bounded ACME state machine using the existing HTTPS/TLS/JSON
+stack and pluggable asynchronous challenge publishers. This supplies HTTP-01 and
+DNS-01 behind the cluster-wide fenced certificate coordinator without a second
+hidden certificate authority or external daemon.
+
+Hickory DNS 0.26.1 was evaluated for RFC 2136. It is current, maintained,
+asynchronous and available under its MIT licence option, but its TSIG signer
+retains the shared key in an ordinary clonable `Vec<u8>` and explicitly leaves
+zeroisation as unfinished. MeshSpan therefore does not import that signer. The
+small `GPL-2.0-only` `meshspan-dns` crate owns the bounded authoritative-query
+and dynamic-update wire surface so TSIG key material can remain non-clonable and
+zeroising. This is an internal library boundary with no DNS daemon dependency.
 
 ### Erasure coding
 

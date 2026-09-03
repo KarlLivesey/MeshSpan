@@ -12,6 +12,7 @@ members = [
     "crates/meshspan-data-plane",
     "crates/meshspan-daemon",
     "crates/meshspan-domain",
+    "crates/meshspan-dns",
     "crates/meshspan-filesystem",
     "crates/meshspan-metadata",
     "crates/meshspan-otp",

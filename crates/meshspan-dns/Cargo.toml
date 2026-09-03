@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[package]
+name = "meshspan-dns"
+description = "Bounded authoritative DNS query and RFC 2136 primitives for MeshSpan"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true
