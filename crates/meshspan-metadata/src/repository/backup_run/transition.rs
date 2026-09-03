@@ -52,6 +52,31 @@ pub(super) fn finish_incomplete_claim(
     supersede(transaction, context, backup_id, claim, revision)
 }
 
+pub(super) fn finish_protected_claim(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    backup_id: BackupId,
+    result_digest: [u8; 32],
+    revision: Revision,
+) -> Result<(), RepositoryError> {
+    let claim = active_claim(transaction, backup_id)?.ok_or(RepositoryError::InvalidCommand)?;
+    let changed = transaction.execute(
+        "UPDATE metadata_backup_run_claims
+         SET state = ?1, finished_at = ?2, result_digest = ?3, revision = ?4
+         WHERE backup_id = ?5 AND claim_generation = ?6 AND state = ?7",
+        params![
+            super::CLAIM_COMPLETE,
+            context.occurred_at.get(),
+            result_digest.as_slice(),
+            to_i64(revision.get())?,
+            backup_id.as_bytes().as_slice(),
+            to_i64(claim.claim.claim_generation)?,
+            CLAIM_ACTIVE,
+        ],
+    )?;
+    exactly_one(changed)
+}
+
 pub(super) fn mark_backup_verified(
     transaction: &Transaction<'_>,
     context: CommandContext,
@@ -164,11 +189,12 @@ pub(super) fn update_run_revision(
 ) -> Result<(), RepositoryError> {
     let changed = transaction.execute(
         "UPDATE metadata_backup_runs SET revision = ?1
-         WHERE backup_id = ?2 AND state = ?3",
+         WHERE backup_id = ?2 AND state IN (?3, ?4)",
         params![
             to_i64(revision.get())?,
             backup_id.as_bytes().as_slice(),
             RUN_CLAIMED,
+            super::RUN_RECORDED,
         ],
     )?;
     exactly_one(changed)

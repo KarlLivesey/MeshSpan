@@ -67,15 +67,31 @@ fn dispatch_materialises_resumes_fences_and_surfaces_recorded_work()
         revision: Revision::new(4),
         ..run
     }));
-    authority.claim.set(None);
+    authority.claim.set(Some(MetadataBackupRunClaimRecord {
+        backup_id: run.backup_id,
+        claim: replacement_claim.claim,
+        lease_expires_at: UnixMicros::new(300),
+        revision: Revision::new(4),
+    }));
     let recorded = MetadataBackupDispatcher::new(&authority, &mut random, second_node, 1, actor)
         .dispatch(UnixMicros::new(210), DurationMicros::new(100))?;
     assert!(matches!(
         recorded,
-        MetadataBackupDispatchOutcome::AwaitingProtection { run: current }
-            if current.backup_id == run.backup_id
+        MetadataBackupDispatchOutcome::AwaitingProtection { run: current, claim }
+            if current.backup_id == run.backup_id && claim.claim == replacement_claim.claim
     ));
     assert_eq!(authority.commit_count.get(), 3);
+
+    let taken_over = MetadataBackupDispatcher::new(&authority, &mut random, first_node, 1, actor)
+        .dispatch(UnixMicros::new(300), DurationMicros::new(100))?;
+    assert!(matches!(
+        taken_over,
+        MetadataBackupDispatchOutcome::AwaitingProtection { run: current, claim }
+            if current.state == MetadataBackupRunState::Recorded
+                && claim.claim.claim_generation == 3
+                && claim.claim.worker_node_id == first_node
+    ));
+    assert_eq!(authority.commit_count.get(), 4);
     Ok(())
 }
 
@@ -184,7 +200,9 @@ impl MemoryAuthority {
             return Err(MetadataAuthorityRequestError::Rejected);
         }
         let revision = self.next_revision();
-        run.state = MetadataBackupRunState::Claimed;
+        if run.state != MetadataBackupRunState::Recorded {
+            run.state = MetadataBackupRunState::Claimed;
+        }
         run.revision = revision;
         self.run.set(Some(run));
         self.claim.set(Some(MetadataBackupRunClaimRecord {

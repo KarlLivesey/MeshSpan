@@ -17,7 +17,8 @@ use crate::{
 use query::{active_claim, latest_claim_generation, require_live_claim, run_head};
 use transition::{
     advance_schedule, completion_digest, exactly_one, finish_incomplete_claim,
-    mark_backup_incomplete, mark_backup_verified, supersede, update_run_revision, update_run_state,
+    finish_protected_claim, mark_backup_incomplete, mark_backup_verified, supersede,
+    update_run_revision, update_run_state,
 };
 
 const RUN_QUEUED: i64 = 1;
@@ -113,8 +114,10 @@ pub(super) fn claim(
     let run = run_head(transaction, command.backup_id)?;
     let active = active_claim(transaction, command.backup_id)?;
     match (run.state, active) {
-        (RUN_QUEUED, None) => {}
-        (RUN_CLAIMED, Some(current)) if current.lease_expires_at <= context.occurred_at => {
+        (RUN_QUEUED | RUN_RECORDED, None) => {}
+        (RUN_CLAIMED | RUN_RECORDED, Some(current))
+            if current.lease_expires_at <= context.occurred_at =>
+        {
             supersede(transaction, context, command.backup_id, current, revision)?;
         }
         _ => return Err(RepositoryError::InvalidCommand),
@@ -145,13 +148,17 @@ pub(super) fn claim(
             to_i64(revision.get())?,
         ],
     )?;
-    update_run_state(
-        transaction,
-        command.backup_id,
-        &[RUN_QUEUED, RUN_CLAIMED],
-        RUN_CLAIMED,
-        revision,
-    )?;
+    if run.state == RUN_RECORDED {
+        update_run_revision(transaction, command.backup_id, revision)?;
+    } else {
+        update_run_state(
+            transaction,
+            command.backup_id,
+            &[RUN_QUEUED, RUN_CLAIMED],
+            RUN_CLAIMED,
+            revision,
+        )?;
+    }
     Ok(run_entity(command.backup_id))
 }
 
@@ -201,18 +208,15 @@ pub(super) fn validate_admission(
 
 pub(super) fn mark_admitted(
     transaction: &Transaction<'_>,
-    context: CommandContext,
+    _context: CommandContext,
     command: &RecordMetadataBackup,
     revision: Revision,
 ) -> Result<(), RepositoryError> {
     let changed = transaction.execute(
         "UPDATE metadata_backup_run_claims
-         SET state = ?1, finished_at = ?2, result_digest = ?3, revision = ?4
-         WHERE backup_id = ?5 AND claim_generation = ?6 AND state = ?7",
+         SET revision = ?1
+         WHERE backup_id = ?2 AND claim_generation = ?3 AND state = ?4",
         params![
-            CLAIM_COMPLETE,
-            context.occurred_at.get(),
-            command.encrypted_digest.as_slice(),
             to_i64(revision.get())?,
             command.backup_id.as_bytes().as_slice(),
             to_i64(command.claim.claim_generation)?,
@@ -244,6 +248,13 @@ pub(super) fn complete(
         && evidence.independent_copies >= u64::from(run.minimum_independent_copies);
     let terminal_state = match command.outcome {
         MetadataBackupRunCompletion::Protected { .. } if run.state == RUN_RECORDED && protected => {
+            finish_protected_claim(
+                transaction,
+                context,
+                command.backup_id,
+                completion_digest(command.outcome),
+                revision,
+            )?;
             mark_backup_verified(transaction, context, command.backup_id, revision)?;
             RUN_PROTECTED
         }

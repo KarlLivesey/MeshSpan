@@ -103,6 +103,8 @@ pub enum MetadataBackupDispatchOutcome {
     AwaitingProtection {
         /// Current recorded run projection.
         run: MetadataBackupRun,
+        /// Sole live worker claim for remaining provider work.
+        claim: MetadataBackupRunClaimRecord,
     },
 }
 
@@ -244,12 +246,9 @@ where
         run: MetadataBackupRun,
     ) -> Result<MetadataBackupDispatchOutcome, MetadataBackupDispatchError> {
         match run.state {
-            MetadataBackupRunState::Recorded => {
-                Ok(MetadataBackupDispatchOutcome::AwaitingProtection { run })
-            }
-            MetadataBackupRunState::Queued | MetadataBackupRunState::Claimed => {
-                self.claim_run(now, lease_duration, run)
-            }
+            MetadataBackupRunState::Queued
+            | MetadataBackupRunState::Claimed
+            | MetadataBackupRunState::Recorded => self.claim_run(now, lease_duration, run),
             MetadataBackupRunState::Protected | MetadataBackupRunState::Incomplete => {
                 Err(MetadataBackupDispatchError::InvalidProjection)
             }
@@ -332,17 +331,19 @@ where
             .authority
             .metadata_backup_run_claim(run.backup_id)?
             .ok_or(MetadataBackupDispatchError::InvalidProjection)?;
+        let expected_state = if run.state == MetadataBackupRunState::Recorded {
+            MetadataBackupRunState::Recorded
+        } else {
+            MetadataBackupRunState::Claimed
+        };
         if current_run.backup_id != run.backup_id
-            || current_run.state != MetadataBackupRunState::Claimed
+            || current_run.state != expected_state
             || current_claim.claim != claim
             || current_claim.lease_expires_at != lease_expires_at
         {
             return Err(MetadataBackupDispatchError::InvalidProjection);
         }
-        Ok(MetadataBackupDispatchOutcome::Claimed {
-            run: current_run,
-            claim: current_claim,
-        })
+        self.resolve_live_claim(current_run, current_claim)
     }
 
     fn resolve_claim_race(
@@ -356,9 +357,6 @@ where
             .ok_or(MetadataBackupDispatchError::InvalidProjection)?;
         if current.backup_id != prior.backup_id {
             return Err(MetadataBackupDispatchError::InvalidProjection);
-        }
-        if current.state == MetadataBackupRunState::Recorded {
-            return Ok(MetadataBackupDispatchOutcome::AwaitingProtection { run: current });
         }
         let claim = self
             .authority
@@ -375,13 +373,21 @@ where
         run: MetadataBackupRun,
         claim: MetadataBackupRunClaimRecord,
     ) -> Result<MetadataBackupDispatchOutcome, MetadataBackupDispatchError> {
-        if run.state != MetadataBackupRunState::Claimed || claim.backup_id != run.backup_id {
+        if !matches!(
+            run.state,
+            MetadataBackupRunState::Claimed | MetadataBackupRunState::Recorded
+        ) || claim.backup_id != run.backup_id
+        {
             return Err(MetadataBackupDispatchError::InvalidProjection);
         }
         if claim.claim.worker_node_id == self.worker_node_id
             && claim.claim.worker_incarnation == self.worker_incarnation
         {
-            Ok(MetadataBackupDispatchOutcome::Claimed { run, claim })
+            if run.state == MetadataBackupRunState::Recorded {
+                Ok(MetadataBackupDispatchOutcome::AwaitingProtection { run, claim })
+            } else {
+                Ok(MetadataBackupDispatchOutcome::Claimed { run, claim })
+            }
         } else {
             Ok(MetadataBackupDispatchOutcome::Idle)
         }

@@ -159,15 +159,25 @@ fn record_and_verify_backup(
     assert_eq!(
         fixture
             .repository
+            .metadata_backup_run_claim(backup)?
+            .ok_or("placement claim missing after first copy")?
+            .claim,
+        claim
+    );
+    assert_eq!(
+        fixture
+            .repository
             .backup_copy(backup, destination)?
             .ok_or("copy missing")?
             .state,
         BackupCopyState::Stored
     );
 
+    replace_expired_placement_claim(fixture, backup)?;
+
     fixture.repository.apply_committed(
-        LogPosition { index: 8, term: 1 },
-        context(44, fixture.administrator, 45, 60, 7)?,
+        LogPosition { index: 9, term: 1 },
+        context(44, fixture.administrator, 45, 110, 8)?,
         &AuthoritativeCommand::VerifyBackupCopy(VerifyBackupCopy {
             backup_id: backup,
             destination_id: destination,
@@ -189,8 +199,8 @@ fn record_and_verify_backup(
     assert_eq!(evidence.verified_copies, 1);
     assert_eq!(evidence.independent_copies, 1);
     fixture.repository.apply_committed(
-        LogPosition { index: 9, term: 1 },
-        context(46, fixture.administrator, 47, 70, 8)?,
+        LogPosition { index: 10, term: 1 },
+        context(46, fixture.administrator, 47, 120, 9)?,
         &AuthoritativeCommand::CompleteMetadataBackupRun(CompleteMetadataBackupRun {
             backup_id: backup,
             outcome: MetadataBackupRunCompletion::Protected {
@@ -198,6 +208,37 @@ fn record_and_verify_backup(
             },
         }),
     )?;
+    assert_eq!(fixture.repository.metadata_backup_run_claim(backup)?, None);
+    Ok(())
+}
+
+fn replace_expired_placement_claim(
+    fixture: &mut Fixture,
+    backup: BackupId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let replacement_claim = MetadataBackupRunClaim {
+        claim_generation: 2,
+        worker_node_id: fixture.node,
+        worker_incarnation: 1,
+        fence: 43,
+    };
+    fixture.repository.apply_committed(
+        LogPosition { index: 8, term: 1 },
+        context(40, fixture.administrator, 41, 100, 7)?,
+        &AuthoritativeCommand::ClaimMetadataBackupRun(ClaimMetadataBackupRun {
+            backup_id: backup,
+            claim: replacement_claim,
+            lease_expires_at: UnixMicros::new(200),
+        }),
+    )?;
+    assert_eq!(
+        fixture
+            .repository
+            .metadata_backup_run_claim(backup)?
+            .ok_or("replacement placement claim missing")?
+            .claim,
+        replacement_claim
+    );
     Ok(())
 }
 
@@ -218,13 +259,13 @@ fn assert_protected_backup(
         .metadata_backup(backup)?
         .ok_or("backup missing")?;
     assert_eq!(stored_backup.state, MetadataBackupState::Verified);
-    assert_eq!(stored_backup.verified_at, Some(UnixMicros::new(70)));
+    assert_eq!(stored_backup.verified_at, Some(UnixMicros::new(120)));
     let stored_copy = fixture
         .repository
         .backup_copy(backup, destination)?
         .ok_or("copy missing")?;
     assert_eq!(stored_copy.state, BackupCopyState::Verified);
-    assert_eq!(stored_copy.verified_at, Some(UnixMicros::new(60)));
+    assert_eq!(stored_copy.verified_at, Some(UnixMicros::new(110)));
     assert_eq!(stored_copy.copy_digest, encrypted_digest);
     Ok(())
 }
