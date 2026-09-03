@@ -11,6 +11,7 @@ use meshspan_secret_envelope::{
     EncryptedSecret, EncryptedSecretParts, RecipientEnvelopeParts, RecipientKeyEnvelope,
     SecretContext,
 };
+use sha2::Digest;
 
 use crate::BackupError;
 
@@ -49,7 +50,12 @@ pub struct BackupSourceManifest {
 }
 
 impl BackupSourceManifest {
-    pub(crate) fn validate(self) -> Result<(), BackupError> {
+    /// Validates every exact source identity, position and digest field.
+    ///
+    /// # Errors
+    ///
+    /// Rejects impossible positions, empty evidence, zero revisions/schemas and invalid time.
+    pub fn validate(self) -> Result<(), BackupError> {
         let valid_position = (self.last_log_index == 0) == (self.last_log_term == 0);
         if !valid_position
             || self.state_revision == 0
@@ -61,6 +67,24 @@ impl BackupSourceManifest {
             return Err(BackupError::InvalidInput);
         }
         Ok(())
+    }
+
+    /// Returns the canonical domain-separated digest used by replicated backup catalogues.
+    #[must_use]
+    pub fn catalogue_digest(self) -> [u8; 32] {
+        let mut digest = sha2::Sha256::new();
+        digest.update(b"meshspan.backup-source-manifest.v1\0");
+        digest.update(self.backup_id.as_bytes());
+        digest.update(self.partition_id.as_bytes());
+        digest.update(self.mesh_id.as_bytes());
+        digest.update(self.last_log_index.to_be_bytes());
+        digest.update(self.last_log_term.to_be_bytes());
+        digest.update(self.state_revision.to_be_bytes());
+        digest.update(self.schema_version.to_be_bytes());
+        digest.update(self.byte_length.to_be_bytes());
+        digest.update(self.digest);
+        digest.update(self.created_at.get().to_be_bytes());
+        digest.finalize().into()
     }
 }
 

@@ -35,6 +35,9 @@ mod authentication_root_loading;
 #[cfg(test)]
 mod authentication_root_loading_tests;
 mod authoritative_txt_observer;
+mod backup_publication;
+#[cfg(test)]
+mod backup_publication_tests;
 mod browser_authentication;
 mod browser_session;
 mod certificate_administration;
@@ -409,6 +412,10 @@ pub use authentication_root_loading::{
     ProtectedTotpRegistrationSecretProtector,
 };
 pub use authoritative_txt_observer::SystemAuthoritativeTxtObserver;
+pub use backup_publication::{
+    BackupPublicationAuthority, BackupPublicationError, BackupPublicationOutcome,
+    BackupPublicationRequest, MetadataBackupPublisher,
+};
 pub use browser_authentication::{
     BrowserAuthenticationError, BrowserSessionAuthenticator, BrowserSessionAuthority,
     BrowserSessionAuthorityError, GatewaySessionIdentity,
