@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[package]
+name = "meshspan-acme"
+description = "Bounded ACME protocol and HTTP-01/DNS-01 challenge primitives for MeshSpan"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+meshspan-contracts = { path = "../meshspan-contracts" }
+meshspan-domain = { path = "../meshspan-domain" }
+sha2.workspace = true
+
+[lints]
+workspace = true
