@@ -81,6 +81,12 @@ impl<P> Dns01Challenge<P> {
         }
     }
 
+    /// Returns the composed provider, primarily for orderly shutdown and implementation probes.
+    #[must_use]
+    pub fn into_provider(self) -> P {
+        self.provider
+    }
+
     fn receipt(
         request: &CertificateChallengeRequest,
         payload: &Dns01Payload,

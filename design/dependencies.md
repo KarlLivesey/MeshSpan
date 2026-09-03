@@ -146,6 +146,9 @@ lockfile.
 | `quinn`           | Private QUIC streams and datagrams between mutually authenticated nodes          |
 | `rustls`          | Shared in-process TLS implementation for QUIC, HTTPS and certificate handling    |
 | `bytes`           | Bounded zero-copy-oriented network buffers                                       |
+| `hyper`           | In-process HTTP/1.1 server and ACME client protocol engine                       |
+| `hyper-util`      | Tokio IO adaptation for Hyper connections                                        |
+| `http-body-util`  | Bounded request bodies and streamed response-frame access                        |
 
 There is no OpenRaft or `raft-rs` runtime dependency. Their behaviour remains a
 reference and differential-test oracle for the standard-majority subset of the

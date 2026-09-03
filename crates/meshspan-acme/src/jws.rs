@@ -39,6 +39,18 @@ impl AcmePublicJwk {
         validate_coordinate(&y)?;
         Ok(Self { x, y })
     }
+
+    /// Returns the RFC 7638 SHA-256 thumbprint as canonical unpadded base64url.
+    #[must_use]
+    pub fn thumbprint(&self) -> String {
+        use sha2::{Digest as _, Sha256};
+
+        let canonical = format!(
+            "{{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"{}\",\"y\":\"{}\"}}",
+            self.x, self.y
+        );
+        encode_base64url(&Sha256::digest(canonical.as_bytes()))
+    }
 }
 
 /// Non-exporting signer for one ACME account generation.
@@ -156,7 +168,26 @@ fn validate_coordinate(value: &str) -> Result<(), AcmeProtocolError> {
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        || !matches!(value.as_bytes().last(), Some(b'A' | b'Q' | b'g' | b'w'))
+        || !matches!(
+            value.as_bytes().last(),
+            Some(
+                b'A' | b'E'
+                    | b'I'
+                    | b'M'
+                    | b'Q'
+                    | b'U'
+                    | b'Y'
+                    | b'c'
+                    | b'g'
+                    | b'k'
+                    | b'o'
+                    | b's'
+                    | b'w'
+                    | b'0'
+                    | b'4'
+                    | b'8'
+            )
+        )
     {
         Err(AcmeProtocolError::InvalidSigner)
     } else {

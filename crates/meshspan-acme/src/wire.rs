@@ -301,6 +301,16 @@ impl AcmeWire {
         Ok(nonce.to_owned())
     }
 
+    /// Accepts one successful response whose only required result is a fresh nonce.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unexpected statuses and missing, duplicate or malformed nonce headers.
+    pub fn nonce_response(response: &AcmeHttpResponse) -> Result<String, AcmeProtocolError> {
+        require_status(response, &[200, 204])?;
+        Self::replay_nonce(response)
+    }
+
     /// Reads the account resource URL from a successful account response.
     ///
     /// # Errors
@@ -311,6 +321,30 @@ impl AcmeWire {
         let value = response.headers.required("location")?;
         bounded_url(value)?;
         Ok(value.to_owned())
+    }
+
+    /// Reads a canonical resource URL from a successful creation response.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing, duplicate or non-HTTPS `Location` headers.
+    pub fn resource_location(response: &AcmeHttpResponse) -> Result<String, AcmeProtocolError> {
+        require_status(response, &[200, 201])?;
+        let value = response.headers.required("location")?;
+        bounded_url(value)?;
+        Ok(value.to_owned())
+    }
+
+    /// Accepts a successful challenge notification and returns its next nonce.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a non-200 response or missing, duplicate or malformed nonce.
+    pub fn challenge_acknowledgement(
+        response: &AcmeHttpResponse,
+    ) -> Result<String, AcmeProtocolError> {
+        require_status(response, &[200])?;
+        Self::replay_nonce(response)
     }
 
     /// Parses one successful order and validates every returned resource URL.
