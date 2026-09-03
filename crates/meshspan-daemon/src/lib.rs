@@ -42,6 +42,9 @@ mod certificate_order_checkpointing_tests;
 mod certificate_order_completion;
 #[cfg(test)]
 mod certificate_order_completion_tests;
+mod certificate_order_execution;
+#[cfg(test)]
+mod certificate_order_execution_tests;
 mod certificate_order_preparation;
 #[cfg(test)]
 mod certificate_order_preparation_tests;
@@ -366,6 +369,9 @@ pub use certificate_order_completion::{
     CertificateOrderCompletionAuthority, CertificateOrderCompletionAuthorityError,
     CertificateOrderCompletionCommit, CertificateOrderCompletionError,
     CertificateOrderCompletionService, CertificateOrderIssuance,
+};
+pub use certificate_order_execution::{
+    CertificateOrderExecution, CertificateOrderExecutionError, CertificateOrderStepResult,
 };
 pub use certificate_order_preparation::{
     CertificateOrderPreparationAuthority, CertificateOrderPreparationAuthorityError,
