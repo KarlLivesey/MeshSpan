@@ -33,6 +33,14 @@ fn expired_claim_is_taken_over_and_old_worker_is_fenced() -> Result<(), Box<dyn 
     queue_run(&mut fixture, backup)?;
     let first = claim(1, fixture.node, 21);
     apply_claim(&mut fixture, backup, first, 150, 4)?;
+    assert_eq!(
+        fixture
+            .repository
+            .unfinished_metadata_backup_run()?
+            .ok_or("unfinished run missing")?
+            .backup_id,
+        backup
+    );
 
     fixture.repository.apply_committed(
         LogPosition { index: 5, term: 1 },
@@ -115,6 +123,7 @@ fn incomplete_run_waits_for_claim_expiry_and_advances_from_completion()
     assert_eq!(run.state, MetadataBackupRunState::Incomplete);
     assert_eq!(run.completed_at, Some(UnixMicros::new(150)));
     assert_eq!(run.result_digest, Some([32; 32]));
+    assert_eq!(fixture.repository.unfinished_metadata_backup_run()?, None);
     assert_eq!(
         fixture
             .repository

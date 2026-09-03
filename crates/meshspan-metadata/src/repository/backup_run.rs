@@ -275,6 +275,13 @@ pub(super) fn live_claim(
     query::live_claim(connection, backup_id)
 }
 
+pub(super) fn unfinished(
+    connection: &rusqlite::Connection,
+    partition_id: PartitionId,
+) -> Result<Option<MetadataBackupRun>, RepositoryError> {
+    query::unfinished(connection, partition_id)
+}
+
 fn validate_lease(now: UnixMicros, expires_at: UnixMicros) -> Result<(), RepositoryError> {
     let lifetime = expires_at
         .get()
