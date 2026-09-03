@@ -4,6 +4,7 @@
 
 mod access;
 mod authority;
+mod backup;
 mod common;
 mod component;
 mod conformance;
@@ -24,6 +25,13 @@ pub use authority::{
     ConsensusCommit, ConsensusEngine, ConsensusProposal, LogPosition, MetadataCommand,
     MetadataCommandKind, MetadataPage, MetadataQuery, MetadataRepository, MetadataResult,
     OperationState, RepositorySnapshot,
+};
+pub use backup::{
+    BackupDeleteReceipt, BackupDeleteRequest, BackupObjectIdentity, BackupObjectReceipt,
+    BackupObjectReference, BackupProvider, BackupReadReceipt, BackupReadRequest,
+    BackupStoreRequest, BackupVerifyRequest, MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES,
+    validate_backup_delete_request, validate_backup_read_request, validate_backup_store_request,
+    validate_backup_verify_request,
 };
 
 pub use common::{
@@ -70,7 +78,7 @@ pub use storage::{
 };
 pub use suites::{
     run_access_connector_suite, run_administration_client_suite, run_authentication_handler_suite,
-    run_certificate_challenge_suite, run_coding_scheme_suite, run_consensus_engine_suite,
-    run_metadata_repository_suite, run_observability_sink_suite, run_placement_policy_suite,
-    run_storage_provider_suite,
+    run_backup_provider_suite, run_certificate_challenge_suite, run_coding_scheme_suite,
+    run_consensus_engine_suite, run_metadata_repository_suite, run_observability_sink_suite,
+    run_placement_policy_suite, run_storage_provider_suite,
 };
