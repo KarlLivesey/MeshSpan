@@ -13,6 +13,9 @@ mod executor;
 mod http01;
 mod jws;
 mod order_machine;
+mod rfc2136_provider;
+#[cfg(test)]
+mod rfc2136_provider_tests;
 mod strict_json;
 mod transport;
 mod wire;
@@ -34,6 +37,7 @@ pub use order_machine::{
     AcmeChallengePreference, AcmeMachineAction, AcmeMachineError, AcmeMachineEvent,
     AcmeOrderMachine,
 };
+pub use rfc2136_provider::{Rfc2136DnsProvider, Rfc2136ProviderPolicy};
 pub use transport::RustlsAcmeTransport;
 pub use wire::{
     AcmeAuthorization, AcmeBadNonceRetry, AcmeChallengeRecord, AcmeDirectory, AcmeHttpResponse,
