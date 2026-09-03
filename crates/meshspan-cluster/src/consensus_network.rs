@@ -143,6 +143,16 @@ struct ConsensusPeers {
     outbound: BTreeMap<NodeId, mpsc::Sender<CoreMessage>>,
 }
 
+#[derive(Clone)]
+struct AuthenticatedStreamIngress {
+    peer: meshspan_transport::AuthenticatedPeer,
+    capability_digest: [u8; 32],
+    messages: mpsc::Sender<PeerConsensusMessage>,
+    controls: Option<mpsc::Sender<PeerControlRequest>>,
+    snapshots: Option<mpsc::Sender<ReceivedConsensusSnapshot>>,
+    data: Option<mpsc::Sender<PeerDataStream>>,
+}
+
 impl ConsensusNetwork {
     /// Starts client/server endpoints and bounded per-peer outbound workers.
     ///
@@ -631,74 +641,114 @@ impl ConsensusNetwork {
         .await?;
         negotiation.send.finish()?;
 
+        let ingress = AuthenticatedStreamIngress {
+            peer,
+            capability_digest,
+            messages,
+            controls,
+            snapshots,
+            data,
+        };
+
         loop {
-            let mut accepted = accept_stream(&connection).await?;
-            match accepted.kind {
-                StreamKind::Consensus => {
-                    let envelope = receive_control(&mut accepted.receive, self.wire_limits).await?;
-                    self.verify_header(&envelope, peer.node_id(), peer.incarnation())?;
-                    let message = decode_consensus_message(&envelope)?;
-                    messages
-                        .send(PeerConsensusMessage {
-                            from: peer.node_id(),
-                            sender_incarnation: peer.incarnation(),
-                            message,
-                        })
-                        .await
-                        .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
-                    send_receipt(&mut accepted.send, self.wire_limits).await?;
+            let accepted = accept_stream(&connection).await?;
+            let stream_network = self.clone();
+            let stream_connection = connection.clone();
+            let stream_ingress = ingress.clone();
+            self.runtime.spawn(async move {
+                if stream_network
+                    .receive_authenticated_stream(accepted, stream_ingress)
+                    .await
+                    .is_err()
+                {
+                    stream_connection.close(2_u32.into(), b"invalid peer traffic");
                 }
-                StreamKind::Metadata => {
-                    let controls = controls
-                        .as_ref()
-                        .ok_or(ConsensusNetworkError::InvalidTraffic)?;
-                    let envelope = receive_control(&mut accepted.receive, self.wire_limits).await?;
-                    self.verify_header(&envelope, peer.node_id(), peer.incarnation())?;
-                    let (respond, response) = oneshot::channel();
-                    controls
-                        .send(PeerControlRequest {
-                            from: peer.node_id(),
-                            sender_incarnation: peer.incarnation(),
-                            envelope,
-                            certificate_fingerprint: peer.certificate_fingerprint(),
-                            capability_digest,
-                            respond,
-                        })
-                        .await
-                        .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
-                    let response = tokio::time::timeout(CONTROL_RESPONSE_TIMEOUT, response)
-                        .await
-                        .map_err(|_| ConsensusNetworkError::AuthorityStopped)?
-                        .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
-                    send_control(&mut accepted.send, &response, self.wire_limits).await?;
-                    accepted.send.finish()?;
-                }
-                StreamKind::Snapshot => {
-                    let snapshots = snapshots
-                        .as_ref()
-                        .ok_or(ConsensusNetworkError::InvalidTraffic)?;
-                    let staging_path = self
-                        .snapshot_staging_path
-                        .as_ref()
-                        .ok_or(ConsensusNetworkError::InvalidTraffic)?;
-                    self.receive_snapshot(peer.node_id(), staging_path, &mut accepted, snapshots)
-                        .await?;
-                }
-                StreamKind::Data => {
-                    data.as_ref()
-                        .ok_or(ConsensusNetworkError::InvalidTraffic)?
-                        .send(PeerDataStream {
-                            peer,
-                            stream: accepted,
-                            limits: self.wire_limits,
-                        })
-                        .await
-                        .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
-                }
-                StreamKind::Federation => {
-                    return Err(ConsensusNetworkError::InvalidTraffic);
-                }
+            });
+        }
+    }
+
+    async fn receive_authenticated_stream(
+        &self,
+        mut accepted: meshspan_transport::AcceptedStream,
+        ingress: AuthenticatedStreamIngress,
+    ) -> Result<(), ConsensusNetworkError> {
+        match accepted.kind {
+            StreamKind::Consensus => {
+                let envelope = receive_control(&mut accepted.receive, self.wire_limits).await?;
+                self.verify_header(
+                    &envelope,
+                    ingress.peer.node_id(),
+                    ingress.peer.incarnation(),
+                )?;
+                let message = decode_consensus_message(&envelope)?;
+                ingress
+                    .messages
+                    .send(PeerConsensusMessage {
+                        from: ingress.peer.node_id(),
+                        sender_incarnation: ingress.peer.incarnation(),
+                        message,
+                    })
+                    .await
+                    .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
+                send_receipt(&mut accepted.send, self.wire_limits).await
             }
+            StreamKind::Metadata => {
+                let controls = ingress
+                    .controls
+                    .ok_or(ConsensusNetworkError::InvalidTraffic)?;
+                let envelope = receive_control(&mut accepted.receive, self.wire_limits).await?;
+                self.verify_header(
+                    &envelope,
+                    ingress.peer.node_id(),
+                    ingress.peer.incarnation(),
+                )?;
+                let (respond, response) = oneshot::channel();
+                controls
+                    .send(PeerControlRequest {
+                        from: ingress.peer.node_id(),
+                        sender_incarnation: ingress.peer.incarnation(),
+                        envelope,
+                        certificate_fingerprint: ingress.peer.certificate_fingerprint(),
+                        capability_digest: ingress.capability_digest,
+                        respond,
+                    })
+                    .await
+                    .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
+                let response = tokio::time::timeout(CONTROL_RESPONSE_TIMEOUT, response)
+                    .await
+                    .map_err(|_| ConsensusNetworkError::AuthorityStopped)?
+                    .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
+                send_control(&mut accepted.send, &response, self.wire_limits).await?;
+                accepted.send.finish()?;
+                Ok(())
+            }
+            StreamKind::Snapshot => {
+                let snapshots = ingress
+                    .snapshots
+                    .ok_or(ConsensusNetworkError::InvalidTraffic)?;
+                let staging_path = self
+                    .snapshot_staging_path
+                    .as_ref()
+                    .ok_or(ConsensusNetworkError::InvalidTraffic)?;
+                self.receive_snapshot(
+                    ingress.peer.node_id(),
+                    staging_path,
+                    &mut accepted,
+                    &snapshots,
+                )
+                .await
+            }
+            StreamKind::Data => ingress
+                .data
+                .ok_or(ConsensusNetworkError::InvalidTraffic)?
+                .send(PeerDataStream {
+                    peer: ingress.peer,
+                    stream: accepted,
+                    limits: self.wire_limits,
+                })
+                .await
+                .map_err(|_| ConsensusNetworkError::AuthorityStopped),
+            StreamKind::Federation => Err(ConsensusNetworkError::InvalidTraffic),
         }
     }
 

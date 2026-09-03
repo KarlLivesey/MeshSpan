@@ -6,10 +6,12 @@ use std::time::Duration;
 use meshspan_consensus::{
     ActiveQuorumPlan, CoreMessage, LogPosition, VoteRequest, compile_plan, flat_plan,
 };
-use meshspan_domain::{BackupId, QuorumPlanId, Revision, SnapshotId, UnixMicros};
+use meshspan_domain::{BackupId, OperationId, QuorumPlanId, Revision, SnapshotId, UnixMicros};
 use meshspan_metadata::{
     LogPosition as MetadataLogPosition, PartitionBackupManifest, PartitionSnapshotManifest,
 };
+use meshspan_protocol::v1::control_envelope::Message;
+use meshspan_protocol::v1::{ControlEnvelope, Ping, Pong};
 use meshspan_test_certificates::CertificateAuthority;
 use sha2::{Digest, Sha256};
 
@@ -171,6 +173,116 @@ async fn real_quinn_mtls_transfers_and_confirms_one_verified_snapshot()
     first.send_snapshot(second_node, &snapshot).await?;
     assert_eq!(installed.await??, bytes);
     Ok(())
+}
+
+#[tokio::test]
+async fn one_blocked_control_stream_does_not_block_another_on_the_same_connection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let authority = CertificateAuthority::new()?;
+    let first_identity = authority.issue_node("meshspan.internal")?;
+    let second_identity = authority.issue_node("meshspan.internal")?;
+    let first_node = NodeId::from_bytes([21; 16])?;
+    let second_node = NodeId::from_bytes([22; 16])?;
+    let first_address = unused_udp_address()?;
+    let second_address = unused_udp_address()?;
+    let mesh_id = MeshId::from_bytes([23; 16])?;
+    let partition_id = PartitionId::from_bytes([24; 16])?;
+    let trust_anchor = authority.certificate_der().to_vec();
+    let (first_messages, _first_received) = mpsc::channel(8);
+    let (second_messages, _second_received) = mpsc::channel(8);
+    let (controls, mut received_controls) = mpsc::channel(2);
+    let first = ConsensusNetwork::start(
+        config(
+            first_node,
+            first_address,
+            &first_identity,
+            trust_anchor.clone(),
+            peer(
+                second_node,
+                second_address,
+                second_identity.certificate_der(),
+            ),
+            mesh_id,
+            partition_id,
+        ),
+        first_messages,
+    )?;
+    let second = ConsensusNetwork::start_with_control(
+        config(
+            second_node,
+            second_address,
+            &second_identity,
+            trust_anchor,
+            peer(first_node, first_address, first_identity.certificate_der()),
+            mesh_id,
+            partition_id,
+        ),
+        second_messages,
+        controls,
+    )?;
+    let first_operation = OperationId::from_bytes([25; 16])?;
+    let second_operation = OperationId::from_bytes([26; 16])?;
+    let first_request = control_request(&first, first_operation, 1)?;
+    let second_request = control_request(&first, second_operation, 2)?;
+    let first_client = first.clone();
+    let first_call = tokio::spawn(async move {
+        first_client
+            .request_control(second_node, &first_request)
+            .await
+    });
+    let first_received = tokio::time::timeout(Duration::from_secs(5), received_controls.recv())
+        .await?
+        .ok_or("first control receive queue closed")?;
+    let second_client = first.clone();
+    let second_call = tokio::spawn(async move {
+        second_client
+            .request_control(second_node, &second_request)
+            .await
+    });
+    let second_received = tokio::time::timeout(Duration::from_secs(5), received_controls.recv())
+        .await?
+        .ok_or("second control stream was blocked behind the first")?;
+
+    second_received
+        .respond
+        .send(control_response(&second, second_operation, 2)?)
+        .map_err(|_| "second response receiver closed")?;
+    first_received
+        .respond
+        .send(control_response(&second, first_operation, 1)?)
+        .map_err(|_| "first response receiver closed")?;
+    assert!(first_call.await?.is_ok());
+    assert!(second_call.await?.is_ok());
+    Ok(())
+}
+
+fn control_request(
+    network: &ConsensusNetwork,
+    operation_id: OperationId,
+    nonce: u64,
+) -> Result<ControlEnvelope, ConsensusNetworkError> {
+    Ok(ControlEnvelope {
+        header: Some(network.control_header(operation_id, i64::MAX)?),
+        message: Some(Message::Ping(Ping {
+            nonce,
+            sent_monotonic_micros: nonce,
+        })),
+    })
+}
+
+fn control_response(
+    network: &ConsensusNetwork,
+    operation_id: OperationId,
+    nonce: u64,
+) -> Result<ControlEnvelope, ConsensusNetworkError> {
+    Ok(ControlEnvelope {
+        header: Some(network.control_header(operation_id, i64::MAX)?),
+        message: Some(Message::Pong(Pong {
+            nonce,
+            received_monotonic_micros: nonce,
+            sent_monotonic_micros: nonce,
+        })),
+    })
 }
 
 fn config(

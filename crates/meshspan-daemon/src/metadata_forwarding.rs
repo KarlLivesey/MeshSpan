@@ -15,8 +15,8 @@ use meshspan_metadata::{
 use meshspan_protocol::v1::control_envelope::Message;
 use meshspan_protocol::v1::metadata_command::Command;
 use meshspan_protocol::v1::{
-    ControlEnvelope, MetadataCommand, OperationOutcome, OperationResult, OperationStatusResponse,
-    VersionedPayload,
+    ControlEnvelope, ErrorCode, MetadataCommand, OperationOutcome, OperationResult,
+    OperationStatusResponse, VersionedPayload, WireError,
 };
 
 use crate::private_consensus_runtime::PrivateConsensusRuntime;
@@ -24,8 +24,7 @@ use crate::private_consensus_runtime::PrivateConsensusRuntime;
 const FORWARD_TIMEOUT_MICROS: i64 = 30 * 1_000_000;
 const LOCAL_APPLY_ATTEMPTS: usize = 200;
 const LEADER_HINT_GRACE: Duration = Duration::from_millis(250);
-const CANDIDATE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
-const LEADER_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
+const AUTHORITY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) async fn forward_to_authority(
     runtime: &Arc<PrivateConsensusRuntime>,
@@ -107,7 +106,7 @@ async fn discover_durable_result(
     if requests.is_empty() {
         return Err(MetadataAuthorityRequestError::Unavailable);
     }
-    tokio::time::timeout(LEADER_DISCOVERY_TIMEOUT, async move {
+    tokio::time::timeout(AUTHORITY_RESPONSE_TIMEOUT, async move {
         while let Some(result) = requests.join_next().await {
             if let Some(digest) = candidate_result(&result)? {
                 return Ok(digest);
@@ -129,7 +128,7 @@ fn spawn_candidate_request(
     let request = request.clone();
     requests.spawn(async move {
         tokio::time::timeout(
-            CANDIDATE_RESPONSE_TIMEOUT,
+            AUTHORITY_RESPONSE_TIMEOUT,
             request_durable_result(&network, candidate, &request),
         )
         .await
@@ -206,7 +205,7 @@ async fn request_durable_result(
         .as_ref()
         .ok_or(MetadataAuthorityRequestError::Failed)?;
     if result.outcome != i32::from(OperationOutcome::Durable) {
-        return Err(MetadataAuthorityRequestError::Unavailable);
+        return Err(authority_response_error(result));
     }
     result
         .result_digest
@@ -246,9 +245,19 @@ pub(crate) async fn handle(
     {
         return Err(MetadataAuthorityRequestError::Rejected);
     }
-    let receipt = authority
+    let result = match authority
         .commit_or_resolve(decoded.context, decoded.command)
-        .await?;
+        .await
+    {
+        Ok(receipt) => OperationResult {
+            outcome: OperationOutcome::Durable.into(),
+            committed_revision: Some(receipt.committed_revision.get()),
+            error: None,
+            result: None,
+            result_digest: receipt.result_digest.to_vec(),
+        },
+        Err(error) => authority_error_result(error),
+    };
     Ok(ControlEnvelope {
         header: Some(
             network
@@ -256,15 +265,67 @@ pub(crate) async fn handle(
                 .map_err(|_| MetadataAuthorityRequestError::Failed)?,
         ),
         message: Some(Message::OperationStatusResponse(OperationStatusResponse {
-            result: Some(OperationResult {
-                outcome: OperationOutcome::Durable.into(),
-                committed_revision: Some(receipt.committed_revision.get()),
-                error: None,
-                result: None,
-                result_digest: receipt.result_digest.to_vec(),
-            }),
+            result: Some(result),
         })),
     })
+}
+
+fn authority_error_result(error: MetadataAuthorityRequestError) -> OperationResult {
+    let (outcome, code, diagnostic_code) = match error {
+        MetadataAuthorityRequestError::NotLeader { .. } => {
+            (OperationOutcome::Redirect, ErrorCode::Unavailable, 1)
+        }
+        MetadataAuthorityRequestError::Unavailable => {
+            (OperationOutcome::Failed, ErrorCode::Unavailable, 2)
+        }
+        MetadataAuthorityRequestError::Conflict => {
+            (OperationOutcome::Rejected, ErrorCode::Conflict, 3)
+        }
+        MetadataAuthorityRequestError::Rejected => {
+            (OperationOutcome::Rejected, ErrorCode::Invalid, 4)
+        }
+        MetadataAuthorityRequestError::Unsupported => {
+            (OperationOutcome::Rejected, ErrorCode::Unsupported, 5)
+        }
+        MetadataAuthorityRequestError::Failed => {
+            (OperationOutcome::Failed, ErrorCode::InternalContract, 6)
+        }
+    };
+    OperationResult {
+        outcome: outcome.into(),
+        committed_revision: None,
+        error: Some(WireError {
+            code: code.into(),
+            diagnostic_code,
+            retry_after_micros: None,
+        }),
+        result: None,
+        result_digest: Vec::new(),
+    }
+}
+
+fn authority_response_error(result: &OperationResult) -> MetadataAuthorityRequestError {
+    match result
+        .error
+        .as_ref()
+        .and_then(|error| ErrorCode::try_from(error.code).ok())
+    {
+        Some(ErrorCode::Unavailable) => MetadataAuthorityRequestError::Unavailable,
+        Some(ErrorCode::Conflict) => MetadataAuthorityRequestError::Conflict,
+        Some(ErrorCode::Invalid) => MetadataAuthorityRequestError::Rejected,
+        Some(ErrorCode::Unsupported) => MetadataAuthorityRequestError::Unsupported,
+        Some(
+            ErrorCode::InternalContract
+            | ErrorCode::Unauthorised
+            | ErrorCode::Stale
+            | ErrorCode::Exhausted
+            | ErrorCode::Corrupt
+            | ErrorCode::Deadline
+            | ErrorCode::NotFound
+            | ErrorCode::Unspecified,
+        )
+        | None => MetadataAuthorityRequestError::Failed,
+    }
 }
 
 #[cfg(test)]
@@ -295,6 +356,45 @@ mod forwarding_candidate_tests {
         );
 
         assert_eq!(candidates, vec![node(1)?, node(2)?, node(3)?]);
+        Ok(())
+    }
+
+    #[test]
+    fn authority_failures_round_trip_as_typed_operation_results()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let cases = [
+            (
+                MetadataAuthorityRequestError::NotLeader {
+                    leader_id: Some(node(2)?),
+                },
+                MetadataAuthorityRequestError::Unavailable,
+            ),
+            (
+                MetadataAuthorityRequestError::Unavailable,
+                MetadataAuthorityRequestError::Unavailable,
+            ),
+            (
+                MetadataAuthorityRequestError::Conflict,
+                MetadataAuthorityRequestError::Conflict,
+            ),
+            (
+                MetadataAuthorityRequestError::Rejected,
+                MetadataAuthorityRequestError::Rejected,
+            ),
+            (
+                MetadataAuthorityRequestError::Unsupported,
+                MetadataAuthorityRequestError::Unsupported,
+            ),
+            (
+                MetadataAuthorityRequestError::Failed,
+                MetadataAuthorityRequestError::Failed,
+            ),
+        ];
+        for (authority_error, expected_response) in cases {
+            let result = authority_error_result(authority_error);
+            assert_ne!(result.outcome, i32::from(OperationOutcome::Durable));
+            assert_eq!(authority_response_error(&result), expected_response);
+        }
         Ok(())
     }
 

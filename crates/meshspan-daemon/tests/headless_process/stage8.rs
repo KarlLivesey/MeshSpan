@@ -668,8 +668,8 @@ async fn prove_https_and_smb_share_one_protected_namespace(
 ) -> Result<(), Box<dyn Error>> {
     let https_bytes = b"Stage 8 exact HTTPS protected bytes";
     let committed = upload_file(
-        fixtures[0].address,
-        &clients[0],
+        fixtures[2].address,
+        &clients[2],
         api_key,
         volume_id,
         https_bytes,
