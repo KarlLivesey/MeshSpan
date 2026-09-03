@@ -1,0 +1,142 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+use serde_json::Value;
+
+use super::checkpoint::MAXIMUM_CHECKPOINT_BYTES;
+use crate::{
+    AcmeAuthorization, AcmeChallengePreference, AcmeChallengeRecord, AcmeDirectory,
+    AcmeMachineEvent, AcmeOrder, AcmeOrderMachine, AcmeOrderRequest, AcmeResourceStatus,
+};
+
+#[test]
+fn every_order_phase_round_trips_as_the_same_next_action() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut machine = machine()?;
+    assert_round_trip(&machine)?;
+    machine.advance(AcmeMachineEvent::DirectoryDiscovered(directory()))?;
+    assert_round_trip(&machine)?;
+    machine.advance(AcmeMachineEvent::NonceAcquired("nonce-1".to_owned()))?;
+    assert_round_trip(&machine)?;
+    machine.advance(AcmeMachineEvent::AccountCreated {
+        account_url: "https://ca.example.test/account/1".to_owned(),
+        replay_nonce: "nonce-2".to_owned(),
+    })?;
+    assert_round_trip(&machine)?;
+    machine.advance(AcmeMachineEvent::OrderCreated {
+        order_url: "https://ca.example.test/order/1".to_owned(),
+        order: order(AcmeResourceStatus::Pending, None),
+        replay_nonce: "nonce-3".to_owned(),
+    })?;
+    assert_round_trip(&machine)?;
+    machine.advance(AcmeMachineEvent::AuthorizationFetched {
+        authorization: authorization(AcmeResourceStatus::Pending),
+        replay_nonce: "nonce-4".to_owned(),
+    })?;
+    assert_round_trip(&machine)?;
+    machine.advance(AcmeMachineEvent::ChallengePublished {
+        publication_digest: [7; 32],
+    })?;
+    assert_round_trip(&machine)?;
+    machine.advance(AcmeMachineEvent::ChallengeNotified {
+        replay_nonce: "nonce-5".to_owned(),
+    })?;
+    assert_round_trip(&machine)?;
+    machine.advance(AcmeMachineEvent::AuthorizationPolled {
+        authorization: authorization(AcmeResourceStatus::Valid),
+        replay_nonce: "nonce-6".to_owned(),
+    })?;
+    assert_round_trip(&machine)?;
+    machine.advance(AcmeMachineEvent::ChallengeCleaned)?;
+    assert_round_trip(&machine)?;
+    machine.advance(AcmeMachineEvent::OrderPolled {
+        order: order(AcmeResourceStatus::Ready, None),
+        replay_nonce: "nonce-7".to_owned(),
+    })?;
+    assert_round_trip(&machine)?;
+    machine.advance(AcmeMachineEvent::OrderFinalized {
+        order: order(AcmeResourceStatus::Processing, None),
+        replay_nonce: "nonce-8".to_owned(),
+    })?;
+    assert_round_trip(&machine)?;
+    machine.advance(AcmeMachineEvent::OrderPolled {
+        order: order(
+            AcmeResourceStatus::Valid,
+            Some("https://ca.example.test/certificate/1"),
+        ),
+        replay_nonce: "nonce-9".to_owned(),
+    })?;
+    assert_round_trip(&machine)?;
+    machine.advance(AcmeMachineEvent::CertificateDownloaded(vec![0x30, 1, 2]))?;
+    assert_round_trip(&machine)?;
+    Ok(())
+}
+
+#[test]
+fn hostile_checkpoint_version_shape_and_size_fail_closed() -> Result<(), Box<dyn std::error::Error>>
+{
+    let machine = machine()?;
+    let encoded = machine.encode_checkpoint()?;
+    let mut value: Value = serde_json::from_slice(&encoded)?;
+    value["version"] = Value::from(2);
+    assert!(AcmeOrderMachine::decode_checkpoint(&serde_json::to_vec(&value)?).is_err());
+
+    let mut value: Value = serde_json::from_slice(&encoded)?;
+    value["machine"]["phase"] = Value::from("complete");
+    assert!(AcmeOrderMachine::decode_checkpoint(&serde_json::to_vec(&value)?).is_err());
+
+    let mut value: Value = serde_json::from_slice(&encoded)?;
+    value["unexpected"] = Value::Bool(true);
+    assert!(AcmeOrderMachine::decode_checkpoint(&serde_json::to_vec(&value)?).is_err());
+    assert!(
+        AcmeOrderMachine::decode_checkpoint(&vec![b' '; MAXIMUM_CHECKPOINT_BYTES + 1]).is_err()
+    );
+    Ok(())
+}
+
+fn assert_round_trip(machine: &AcmeOrderMachine) -> Result<(), Box<dyn std::error::Error>> {
+    let decoded = AcmeOrderMachine::decode_checkpoint(&machine.encode_checkpoint()?)?;
+    assert_eq!(decoded, *machine);
+    assert_eq!(decoded.action()?, machine.action()?);
+    Ok(())
+}
+
+fn machine() -> Result<AcmeOrderMachine, Box<dyn std::error::Error>> {
+    Ok(AcmeOrderMachine::new(
+        "https://ca.example.test/directory".to_owned(),
+        AcmeOrderRequest::new(vec!["files.example.test".to_owned()])?,
+        AcmeChallengePreference::Http01,
+        17,
+    )?)
+}
+
+fn directory() -> AcmeDirectory {
+    AcmeDirectory {
+        new_nonce: "https://ca.example.test/nonce".to_owned(),
+        new_account: "https://ca.example.test/account".to_owned(),
+        new_order: "https://ca.example.test/order".to_owned(),
+    }
+}
+
+fn order(status: AcmeResourceStatus, certificate: Option<&str>) -> AcmeOrder {
+    AcmeOrder {
+        status,
+        dns_names: vec!["files.example.test".to_owned()],
+        authorizations: vec!["https://ca.example.test/authorization/1".to_owned()],
+        finalize: "https://ca.example.test/finalize/1".to_owned(),
+        certificate: certificate.map(str::to_owned),
+    }
+}
+
+fn authorization(status: AcmeResourceStatus) -> AcmeAuthorization {
+    AcmeAuthorization {
+        dns_name: "files.example.test".to_owned(),
+        wildcard: false,
+        status,
+        challenges: vec![AcmeChallengeRecord {
+            kind: "http-01".to_owned(),
+            url: "https://ca.example.test/challenge/1".to_owned(),
+            token: "token-1".to_owned(),
+            status: AcmeResourceStatus::Pending,
+        }],
+    }
+}
