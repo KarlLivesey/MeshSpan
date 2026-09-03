@@ -580,8 +580,8 @@ pub use metadata_backup_preparation::{
     MetadataBackupPreparationService, PreparedMetadataBackup,
 };
 pub use metadata_backup_provider_resolution::{
-    MetadataBackupProviderResolutionError, MetadataBackupProviderResolver,
-    ResolvingMetadataBackupDestinationWriter,
+    MetadataBackupProviderResolutionError, MetadataBackupProviderResolver, RegisteredBackupTarget,
+    RegisteredTargetBackupProviderResolver, ResolvingMetadataBackupDestinationWriter,
 };
 pub use namespace_mutation_api::{
     NativeNamespaceMutationApiError, NativeNamespaceMutationController,
