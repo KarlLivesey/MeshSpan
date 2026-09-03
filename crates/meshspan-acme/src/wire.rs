@@ -489,7 +489,7 @@ fn parse_authorization(bytes: &[u8]) -> Result<AcmeAuthorization, AcmeProtocolEr
         return Err(AcmeProtocolError::InvalidResponse);
     }
     let dns_name = required_text(identifier, "value", MAXIMUM_DNS_NAME_BYTES)?;
-    if !valid_dns_name(&dns_name) {
+    if dns_name.starts_with("*.") || !valid_dns_name(&dns_name) {
         return Err(AcmeProtocolError::InvalidResponse);
     }
     let wildcard = match object.get("wildcard") {
