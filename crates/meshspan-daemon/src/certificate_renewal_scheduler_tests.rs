@@ -21,7 +21,7 @@ fn scheduler_commits_one_deterministic_immediately_actionable_replacement()
 -> Result<(), Box<dyn std::error::Error>> {
     let candidate = candidate()?;
     let authority = RecordingAuthority::new(candidate);
-    let scheduler = CertificateRenewalScheduler::new(&authority, PrincipalId::from_bytes([3; 16])?);
+    let scheduler = CertificateRenewalScheduler::new(&authority);
 
     let commit = scheduler
         .schedule_next(UnixMicros::new(500), DurationMicros::new(600), None, 10)?
@@ -35,6 +35,7 @@ fn scheduler_commits_one_deterministic_immediately_actionable_replacement()
     assert_eq!(replacement.next_attempt_at, UnixMicros::new(500));
     assert_eq!(replacement.state, CertificateOrderState::Queued);
     assert_eq!(authority.commit_count(), 1);
+    assert_eq!(authority.commit_actor(), Some(candidate.configured_by));
     Ok(())
 }
 
@@ -42,8 +43,12 @@ fn scheduler_commits_one_deterministic_immediately_actionable_replacement()
 fn scheduler_rejects_invalid_lead_before_reading_authority()
 -> Result<(), Box<dyn std::error::Error>> {
     let authority = RecordingAuthority::new(candidate()?);
-    let result = CertificateRenewalScheduler::new(&authority, PrincipalId::from_bytes([3; 16])?)
-        .schedule_next(UnixMicros::new(500), DurationMicros::new(0), None, 10);
+    let result = CertificateRenewalScheduler::new(&authority).schedule_next(
+        UnixMicros::new(500),
+        DurationMicros::new(0),
+        None,
+        10,
+    );
     assert!(matches!(
         result,
         Err(CertificateRenewalScheduleError::InvalidInput)
@@ -56,6 +61,7 @@ fn candidate() -> Result<CertificateRenewalCandidate, Box<dyn std::error::Error>
     Ok(CertificateRenewalCandidate {
         source_order_id: CertificateOrderId::from_bytes([1; 16])?,
         config_id: AcmeConfigurationId::from_bytes([2; 16])?,
+        configured_by: PrincipalId::from_bytes([3; 16])?,
         not_after: UnixMicros::new(1_000),
         revision: Revision::new(9),
     })
@@ -71,6 +77,7 @@ struct AuthorityState {
     replacement: Option<CertificateOrderRecord>,
     reads: usize,
     commits: usize,
+    commit_actor: Option<PrincipalId>,
 }
 
 impl RecordingAuthority {
@@ -95,6 +102,10 @@ impl RecordingAuthority {
 
     fn commit_count(&self) -> usize {
         self.state.lock().map_or(0, |state| state.commits)
+    }
+
+    fn commit_actor(&self) -> Option<PrincipalId> {
+        self.state.lock().map_or(None, |state| state.commit_actor)
     }
 }
 
@@ -155,6 +166,7 @@ impl CertificateRenewalAuthority for RecordingAuthority {
             .map_err(|_| MetadataAuthorityRequestError::Failed)?;
         state.replacement = Some(replacement);
         state.commits = state.commits.saturating_add(1);
+        state.commit_actor = Some(context.actor_principal_id);
         Ok(CommandReceipt {
             disposition: ApplyDisposition::Applied,
             operation_id: context.operation_id,

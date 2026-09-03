@@ -152,6 +152,7 @@ fn complete_acme_configuration_round_trips_from_authoritative_state()
         actual.certificate_names,
         expected.certificate_names.as_slice()
     );
+    assert_eq!(actual.configured_by, fixture.administrator);
     assert_eq!(actual.revision, Revision::new(3));
     Ok(())
 }
@@ -440,6 +441,7 @@ fn due_certificate_renewal_disappears_when_a_replacement_is_actionable()
     assert_eq!(due.items.len(), 1);
     assert_eq!(due.items[0].source_order_id, source_order_id);
     assert_eq!(due.items[0].config_id, config_id);
+    assert_eq!(due.items[0].configured_by, fixture.administrator);
     assert_eq!(due.items[0].not_after, UnixMicros::new(1_000));
     assert_eq!(due.items[0].revision, Revision::new(6));
 

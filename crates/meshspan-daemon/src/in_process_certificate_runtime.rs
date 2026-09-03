@@ -608,6 +608,7 @@ mod tests {
                         }
                     }),
                     certificate_names: names,
+                    configured_by: meshspan_domain::PrincipalId::from_bytes([9; 16])?,
                     revision: Revision::new(3),
                 },
                 checkpoint: None,

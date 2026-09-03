@@ -4,7 +4,7 @@
 
 use meshspan_acme::AcmeTransport;
 use meshspan_contracts::CertificateChallenge;
-use meshspan_domain::{Clock, DurationMicros, NodeId, PrincipalId, RandomSource};
+use meshspan_domain::{Clock, DurationMicros, NodeId, RandomSource};
 use meshspan_metadata::DueCertificateOrderCursor;
 use thiserror::Error;
 
@@ -70,7 +70,6 @@ pub trait CertificateOrderPreparer {
     /// Fails closed for stale claims, unavailable secrets, invalid checkpoints or failed receipts.
     fn prepare_order(
         &mut self,
-        actor_principal_id: PrincipalId,
         now: meshspan_domain::UnixMicros,
         assignment: CertificateOrderAssignment,
     ) -> Result<PreparedCertificateOrder, CertificateOrderPreparationError>;
@@ -84,11 +83,10 @@ where
 {
     fn prepare_order(
         &mut self,
-        actor_principal_id: PrincipalId,
         now: meshspan_domain::UnixMicros,
         assignment: CertificateOrderAssignment,
     ) -> Result<PreparedCertificateOrder, CertificateOrderPreparationError> {
-        self.prepare(actor_principal_id, now, assignment)
+        self.prepare(now, assignment)
     }
 }
 
@@ -133,6 +131,7 @@ pub enum CertificateAutomationOutcome {
 /// Stateful one-order-at-a-time ACME automation service for one daemon incarnation.
 pub struct CertificateAutomationService<A, P, F, R, C>
 where
+    A: Clone,
     F: CertificateExecutionFactory,
 {
     authority: A,
@@ -143,15 +142,16 @@ where
     clock: C,
     worker_node_id: NodeId,
     worker_incarnation: u64,
-    actor_principal_id: PrincipalId,
     policy: CertificateAutomationPolicy,
     active: Option<FactoryExecution<F>>,
 }
 
 /// Inputs with independent ownership needed to construct a certificate automation service.
 pub struct CertificateAutomationComponents<A, P, F, R, C> {
-    /// Consensus-backed certificate authority.
+    /// Consensus-backed authority used by renewal and order admission.
     pub authority: A,
+    /// Independently owned consensus reader used by checkpoint, retry and completion driving.
+    pub driver_authority: A,
     /// Protected key and checkpoint preparation capability.
     pub preparation: P,
     /// Concrete transport/challenge selector.
@@ -164,8 +164,6 @@ pub struct CertificateAutomationComponents<A, P, F, R, C> {
     pub worker_node_id: NodeId,
     /// Restart incarnation fencing old workers.
     pub worker_incarnation: u64,
-    /// Audited internal actor.
-    pub actor_principal_id: PrincipalId,
     /// Bounded scheduling and execution policy.
     pub policy: CertificateAutomationPolicy,
     /// Explicit CA trust-path validator.
@@ -183,10 +181,9 @@ where
     #[must_use]
     pub fn new(components: CertificateAutomationComponents<A, P, F, R, C>) -> Self {
         let driver = CertificateOrderDriver::new(
-            components.authority.clone(),
+            components.driver_authority,
             components.random.clone(),
             components.clock.clone(),
-            components.actor_principal_id,
             components.policy.drive,
             components.result,
         );
@@ -199,7 +196,6 @@ where
             clock: components.clock,
             worker_node_id: components.worker_node_id,
             worker_incarnation: components.worker_incarnation,
-            actor_principal_id: components.actor_principal_id,
             policy: components.policy,
             active: None,
         }
@@ -228,13 +224,12 @@ where
         &mut self,
     ) -> Result<CertificateAutomationOutcome, CertificateAutomationError> {
         let now = self.clock.now();
-        let renewal = CertificateRenewalScheduler::new(&self.authority, self.actor_principal_id)
-            .schedule_next(
-                now,
-                self.policy.renewal_lead,
-                None,
-                self.policy.admission_page_items,
-            )?;
+        let renewal = CertificateRenewalScheduler::new(&self.authority).schedule_next(
+            now,
+            self.policy.renewal_lead,
+            None,
+            self.policy.admission_page_items,
+        )?;
         if self.active.is_none() {
             self.active = self.claim_and_prepare(now)?;
         }
@@ -261,7 +256,6 @@ where
             &mut self.dispatch_random,
             self.worker_node_id,
             self.worker_incarnation,
-            self.actor_principal_id,
         )
         .claim_next(
             now,
@@ -272,9 +266,7 @@ where
         let Some(assignment) = assignment else {
             return Ok(None);
         };
-        let prepared = self
-            .preparation
-            .prepare_order(self.actor_principal_id, now, assignment)?;
+        let prepared = self.preparation.prepare_order(now, assignment)?;
         Ok(Some(self.execution_factory.create_execution(prepared)?))
     }
 }

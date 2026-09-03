@@ -118,6 +118,7 @@ fn assignment(
             challenge_kind: AcmeChallengeKind::Http01,
             challenge_settings: None,
             certificate_names: vec!["files.example.test".to_owned()],
+            configured_by: PrincipalId::from_bytes([2; 16])?,
             revision: Revision::new(7),
         },
         checkpoint: None,
