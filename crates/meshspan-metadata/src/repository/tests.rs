@@ -6,6 +6,7 @@ use std::io::Write;
 use std::path::Path;
 
 use ed25519_dalek::{Signer, SigningKey};
+use meshspan_backup::BackupError;
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{
     ActivationId, ActivationPolicyId, ApiKeyId, AssuranceLevel, AuditEventId,
@@ -16,16 +17,19 @@ use meshspan_domain::{
     RandomSource, Revision, Rights, RoleId, RootDelegatedRoute, ScopeId, SessionId, SnapshotId,
     TagId, UnixMicros, VolumeId,
 };
-use meshspan_secret_envelope::{SecretContext, WrappingPublicKey, encrypt_secret};
+use meshspan_secret_envelope::{
+    SecretContext, WrappingPrivateKey, WrappingPublicKey, encrypt_secret,
+};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 use super::apply::{ApplyFaultPoint, apply_committed_with_fault, read_current_revision};
 use super::{
-    ApplyDisposition, AuthoritativeRepository, EntityKind, GroupMembershipEventKind, LogPosition,
-    PageLimit, PreservedVote, PrincipalCursor, PrincipalKind, RepositoryConformanceReport,
-    RepositoryConformanceVector, RepositoryError, restore_partition_backup,
-    restore_partition_snapshot, run_repository_conformance,
+    ApplyDisposition, AuthoritativeRepository, EncryptedBackupPaths, EncryptedRestorePaths,
+    EntityKind, GroupMembershipEventKind, LogPosition, PageLimit, PreservedVote, PrincipalCursor,
+    PrincipalKind, RepositoryConformanceReport, RepositoryConformanceVector, RepositoryError,
+    restore_encrypted_partition_backup, restore_partition_backup, restore_partition_snapshot,
+    run_repository_conformance,
 };
 use crate::{
     AbortScopeHandoff, ActivateGrant, ActivateGroup, ActivateScopeHandoff, AddGroupMember,
@@ -986,27 +990,7 @@ fn backup_restore_verifies_exact_state_and_rejects_changed_bytes()
     let backup_path = directory.path().join("partition.backup.sqlite3");
     let restore_path = directory.path().join("restored.sqlite3");
     let tampered_restore_path = directory.path().join("tampered.sqlite3");
-    let ids = fixture_ids()?;
-    let database = PartitionDatabase::open(&database_path, ids.partition, UnixMicros::new(1))?;
-    let mut repository = AuthoritativeRepository::new(database);
-    let bootstrap_context = context(80, ids.administrator, 81, 100, Some(0))?;
-    apply(
-        &mut repository,
-        1,
-        bootstrap_context,
-        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
-            mesh_id: MeshId::from_bytes([82; 16])?,
-            mesh_name: RecordName::new("Backup proof")?,
-            administrator_id: ids.administrator,
-            administrator_name: RecordName::new("Administrator")?,
-            administrator_role_id: RoleId::from_bytes([83; 16])?,
-            host_id: HostId::from_bytes([84; 16])?,
-            host_name: RecordName::new("Host")?,
-            node_id: NodeId::from_bytes([85; 16])?,
-            node_name: RecordName::new("Node")?,
-            partition_name: RecordName::new("Authority")?,
-        }),
-    )?;
+    let (repository, bootstrap_context) = backup_repository(&database_path)?;
     let manifest = repository.create_backup(
         BackupId::from_bytes([86; 16])?,
         &backup_path,
@@ -1040,6 +1024,78 @@ fn backup_restore_verifies_exact_state_and_rejects_changed_bytes()
         ),
         Err(RepositoryError::BackupMismatch)
     ));
+    Ok(())
+}
+
+#[test]
+fn encrypted_backup_removes_plaintext_staging_and_restores_exact_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let database_path = directory.path().join("partition.sqlite3");
+    let plaintext_staging = directory.path().join("backup.staging.sqlite3");
+    let encrypted_path = directory.path().join("backup.msbackup");
+    let restore_staging = directory.path().join("restore.staging.sqlite3");
+    let restored_path = directory.path().join("restored.sqlite3");
+    let (repository, bootstrap_context) = backup_repository(&database_path)?;
+    let recovery_key = WrappingPrivateKey::from_bytes([87; 32])?;
+    let manifest = repository.create_encrypted_backup(
+        EncryptedBackupPaths {
+            plaintext_staging: &plaintext_staging,
+            encrypted_destination: &encrypted_path,
+        },
+        BackupId::from_bytes([88; 16])?,
+        UnixMicros::new(300),
+        &[recovery_key.public_key()],
+        &mut VolumeKeyRandom(89),
+    )?;
+    assert!(!plaintext_staging.exists());
+    assert!(encrypted_path.exists());
+
+    let wrong_mesh_id = MeshId::from_bytes([90; 16])?;
+    let wrong_mesh_manifest = super::EncryptedPartitionBackupManifest {
+        partition: super::PartitionBackupManifest {
+            mesh_id: wrong_mesh_id,
+            ..manifest.partition
+        },
+        encrypted: meshspan_backup::BackupFileEvidence {
+            source: meshspan_backup::BackupSourceManifest {
+                mesh_id: wrong_mesh_id,
+                ..manifest.encrypted.source
+            },
+            ..manifest.encrypted
+        },
+    };
+    assert!(matches!(
+        restore_encrypted_partition_backup(
+            EncryptedRestorePaths {
+                encrypted_source: &encrypted_path,
+                plaintext_staging: &restore_staging,
+                restored_destination: &restored_path,
+            },
+            wrong_mesh_manifest,
+            &recovery_key,
+            UnixMicros::new(301),
+        ),
+        Err(RepositoryError::EncryptedBackup(BackupError::Corrupt))
+    ));
+    assert!(!restore_staging.exists());
+
+    let restored = restore_encrypted_partition_backup(
+        EncryptedRestorePaths {
+            encrypted_source: &encrypted_path,
+            plaintext_staging: &restore_staging,
+            restored_destination: &restored_path,
+        },
+        manifest,
+        &recovery_key,
+        UnixMicros::new(302),
+    )?;
+    assert!(!restore_staging.exists());
+    assert!(
+        AuthoritativeRepository::new(restored)
+            .resolve_operation(bootstrap_context.operation_id)?
+            .is_some()
+    );
     Ok(())
 }
 
@@ -1126,6 +1182,33 @@ fn consensus_snapshot_restores_exact_state_without_forgetting_receiver_vote()
         Err(RepositoryError::SnapshotMismatch)
     ));
     Ok(())
+}
+
+fn backup_repository(
+    database_path: &Path,
+) -> Result<(AuthoritativeRepository, CommandContext), Box<dyn std::error::Error>> {
+    let ids = fixture_ids()?;
+    let database = PartitionDatabase::open(database_path, ids.partition, UnixMicros::new(1))?;
+    let mut repository = AuthoritativeRepository::new(database);
+    let bootstrap_context = context(80, ids.administrator, 81, 100, Some(0))?;
+    apply(
+        &mut repository,
+        1,
+        bootstrap_context,
+        &AuthoritativeCommand::BootstrapMesh(BootstrapMesh {
+            mesh_id: MeshId::from_bytes([82; 16])?,
+            mesh_name: RecordName::new("Backup proof")?,
+            administrator_id: ids.administrator,
+            administrator_name: RecordName::new("Administrator")?,
+            administrator_role_id: RoleId::from_bytes([83; 16])?,
+            host_id: HostId::from_bytes([84; 16])?,
+            host_name: RecordName::new("Host")?,
+            node_id: NodeId::from_bytes([85; 16])?,
+            node_name: RecordName::new("Node")?,
+            partition_name: RecordName::new("Authority")?,
+        }),
+    )?;
+    Ok((repository, bootstrap_context))
 }
 
 fn bootstrap_snapshot_repository(

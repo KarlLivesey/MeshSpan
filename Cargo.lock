@@ -1398,6 +1398,7 @@ dependencies = [
  "blake3",
  "ed25519-dalek",
  "meshspan-acme",
+ "meshspan-backup",
  "meshspan-consensus",
  "meshspan-contracts",
  "meshspan-domain",

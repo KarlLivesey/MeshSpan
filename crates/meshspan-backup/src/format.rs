@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::{Cursor, Read};
 use std::path::Path;
 
-use meshspan_domain::{BackupId, PartitionId, UnixMicros};
+use meshspan_domain::{BackupId, MeshId, PartitionId, UnixMicros};
 use meshspan_secret_envelope::{
     EncryptedSecret, EncryptedSecretParts, RecipientEnvelopeParts, RecipientKeyEnvelope,
     SecretContext,
@@ -30,6 +30,8 @@ pub struct BackupSourceManifest {
     pub backup_id: BackupId,
     /// Metadata partition contained in the backup.
     pub partition_id: PartitionId,
+    /// Mesh whose recovery authority owns the partition.
+    pub mesh_id: MeshId,
     /// Last applied committed consensus log index.
     pub last_log_index: u64,
     /// Term of the last applied committed consensus entry.
@@ -154,6 +156,7 @@ impl BackupHeader {
 fn encode_source(output: &mut Vec<u8>, source: BackupSourceManifest) {
     output.extend_from_slice(&source.backup_id.as_bytes());
     output.extend_from_slice(&source.partition_id.as_bytes());
+    output.extend_from_slice(&source.mesh_id.as_bytes());
     output.extend_from_slice(&source.last_log_index.to_be_bytes());
     output.extend_from_slice(&source.last_log_term.to_be_bytes());
     output.extend_from_slice(&source.state_revision.to_be_bytes());
@@ -168,6 +171,7 @@ fn decode_source(input: &mut Cursor<&[u8]>) -> Result<BackupSourceManifest, Back
         backup_id: BackupId::from_bytes(read_array(input)?).map_err(|_| BackupError::Corrupt)?,
         partition_id: PartitionId::from_bytes(read_array(input)?)
             .map_err(|_| BackupError::Corrupt)?,
+        mesh_id: MeshId::from_bytes(read_array(input)?).map_err(|_| BackupError::Corrupt)?,
         last_log_index: read_u64(input)?,
         last_log_term: read_u64(input)?,
         state_revision: read_u64(input)?,

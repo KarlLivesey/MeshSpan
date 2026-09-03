@@ -2,7 +2,9 @@
 
 use std::fs;
 
-use meshspan_domain::{BackupId, EntropyError, PartitionId, RandomSource, UnixMicros, uuid_v8};
+use meshspan_domain::{
+    BackupId, EntropyError, MeshId, PartitionId, RandomSource, UnixMicros, uuid_v8,
+};
 use meshspan_secret_envelope::WrappingPrivateKey;
 use sha2::{Digest, Sha256};
 
@@ -145,6 +147,7 @@ fn manifest(bytes: &[u8]) -> Result<BackupSourceManifest, Box<dyn std::error::Er
     Ok(BackupSourceManifest {
         backup_id: BackupId::from_bytes(uuid_v8([1; 16]))?,
         partition_id: PartitionId::from_bytes(uuid_v8([2; 16]))?,
+        mesh_id: MeshId::from_bytes(uuid_v8([3; 16]))?,
         last_log_index: 41,
         last_log_term: 7,
         state_revision: 89,
