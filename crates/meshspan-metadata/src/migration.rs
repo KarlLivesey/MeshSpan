@@ -877,6 +877,11 @@ pub(crate) fn partition_builtin_fault_classes_migration_digest() -> [u8; 32] {
 }
 
 #[cfg(test)]
+pub(crate) fn partition_metadata_backup_catalogue_migration_digest() -> [u8; 32] {
+    migration_digest(PARTITION_MIGRATIONS[80].sql)
+}
+
+#[cfg(test)]
 pub(crate) fn local_migration_digest() -> [u8; 32] {
     migration_digest(LOCAL_MIGRATIONS[0].sql)
 }

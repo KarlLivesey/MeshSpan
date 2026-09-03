@@ -354,7 +354,8 @@ mod tests {
         partition_federation_quarantine_proof_migration_digest,
         partition_federation_relationship_evidence_guard_migration_digest,
         partition_federation_relationship_history_migration_digest,
-        partition_federation_storage_allocation_migration_digest, partition_migration_digest,
+        partition_federation_storage_allocation_migration_digest,
+        partition_metadata_backup_catalogue_migration_digest, partition_migration_digest,
         partition_namespace_inheritance_migration_digest,
         partition_node_activations_migration_digest, partition_node_wrapping_keys_migration_digest,
         partition_online_certificate_authority_migration_digest,
@@ -1520,6 +1521,57 @@ mod tests {
                 0x12, 0x61, 0xd4, 0x70,
             ]
         );
+    }
+
+    #[test]
+    fn metadata_backup_catalogue_migration_digest_is_committed() {
+        assert_eq!(
+            partition_metadata_backup_catalogue_migration_digest(),
+            [
+                0xc2, 0xfe, 0x4d, 0xcb, 0x91, 0x60, 0xc4, 0x15, 0x19, 0x82, 0xa1, 0x09, 0x3b, 0x38,
+                0xf2, 0x77, 0x0d, 0xda, 0x08, 0x5b, 0x87, 0x1b, 0x03, 0x80, 0xdb, 0xbb, 0x2f, 0xbd,
+                0x11, 0xda, 0x77, 0xc5,
+            ]
+        );
+    }
+
+    #[test]
+    fn metadata_backup_catalogue_refuses_legacy_rows_atomically()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let file_path = directory.path().join("legacy-backup-catalogue.sqlite3");
+        let mut connection = open_connection(&file_path)?;
+        migrate_partition_through(&mut connection, 80, 10)?;
+        connection.execute(
+            "INSERT INTO metadata_backups(
+                backup_id, partition_id, last_log_index, last_log_term, state_revision,
+                schema_version, byte_length, digest, state, created_at
+             ) VALUES (?1, ?2, 1, 1, 1, 80, 32, ?3, 1, 10)",
+            params![
+                [70_u8; 16].as_slice(),
+                [71_u8; 16].as_slice(),
+                [72_u8; 32].as_slice(),
+            ],
+        )?;
+
+        assert!(migrate_partition(&mut connection, 20).is_err());
+        assert_eq!(
+            connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
+            80
+        );
+        let retained: i64 = connection.query_row(
+            "SELECT count(*) FROM metadata_backups WHERE backup_id = ?1",
+            [[70_u8; 16].as_slice()],
+            |row| row.get(0),
+        )?;
+        assert_eq!(retained, 1);
+        let new_table: i64 = connection.query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'backup_copies'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(new_table, 0);
+        Ok(())
     }
 
     #[test]
