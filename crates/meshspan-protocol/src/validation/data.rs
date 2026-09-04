@@ -2,6 +2,8 @@
 
 //! Private shard-stream control-message validation.
 
+mod backup;
+
 use crate::framing::{WireContractError, WireLimits};
 use crate::v1::data_control_envelope::Message;
 use crate::v1::{
@@ -16,20 +18,7 @@ use super::{
 
 pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireContractError> {
     match value {
-        Message::PutShardBegin(value) => {
-            validate_header(
-                value
-                    .header
-                    .as_ref()
-                    .ok_or(WireContractError::InvalidMessage)?,
-            )?;
-            validate_target(&value.target_id, value.target_generation)?;
-            validate_shard(value.shard.as_ref())?;
-            nonzero(value.declared_length)?;
-            valid_digest(&value.declared_digest)?;
-            valid_nonempty_bytes(&value.write_capability, limits.maximum_control_bytes())?;
-            optional_digest(&value.federation_capability_digest)
-        }
+        Message::PutShardBegin(value) => put_begin(value, limits),
         Message::PutShardReady(value) => put_ready(value, limits),
         Message::PutShardFinish(value) => {
             nonzero(value.final_length)?;
@@ -39,77 +28,104 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
             validate_operation_result(value.result.as_ref(), limits)?;
             validate_mutation_receipt(value.result.as_ref(), value.receipt.as_ref(), limits)
         }
-        Message::GetShardRequest(value) => {
-            validate_header(
-                value
-                    .header
-                    .as_ref()
-                    .ok_or(WireContractError::InvalidMessage)?,
-            )?;
-            validate_target(&value.target_id, value.target_generation)?;
-            validate_shard(value.shard.as_ref())?;
-            valid_nonempty_bytes(&value.read_capability, limits.maximum_control_bytes())?;
-            optional_digest(&value.federation_capability_digest)
-        }
+        Message::GetShardRequest(value) => get_request(value, limits),
         Message::GetShardHeader(value) => get_header(value, limits),
         Message::GetShardResult(value) => validate_operation_result(value.result.as_ref(), limits),
         Message::ScrubShardRequest(value) => scrub_request(value, limits),
         Message::ScrubShardResult(value) => scrub_result(value, limits),
-        Message::DeleteShardRequest(value) => {
-            validate_header(
-                value
-                    .header
-                    .as_ref()
-                    .ok_or(WireContractError::InvalidMessage)?,
-            )?;
-            validate_target(&value.target_id, value.target_generation)?;
-            validate_shard(value.shard.as_ref())?;
-            validate_removal_authority(
-                value.removal_permit.as_ref(),
-                &value.federation_capability,
-                limits,
-            )?;
-            correlated_federation_digest(
-                &value.federation_capability,
-                &value.federation_capability_digest,
-            )
-        }
+        Message::DeleteShardRequest(value) => delete_request(value, limits),
         Message::DeleteShardResult(value) => {
             validate_operation_result(value.result.as_ref(), limits)?;
             validate_mutation_receipt(value.result.as_ref(), value.receipt.as_ref(), limits)
         }
-        Message::ReclaimShardRequest(value) => {
-            validate_header(
-                value
-                    .header
-                    .as_ref()
-                    .ok_or(WireContractError::InvalidMessage)?,
-            )?;
-            validate_target(&value.target_id, value.target_generation)?;
-            validate_shard(value.shard.as_ref())?;
-            validate_payload(value.tombstone_receipt.as_ref(), limits)?;
-            optional_bytes(&value.federation_capability, limits)?;
-            correlated_federation_digest(
-                &value.federation_capability,
-                &value.federation_capability_digest,
-            )
-        }
+        Message::ReclaimShardRequest(value) => reclaim_request(value, limits),
         Message::ReclaimShardResult(value) => {
             validate_operation_result(value.result.as_ref(), limits)?;
             validate_mutation_receipt(value.result.as_ref(), value.receipt.as_ref(), limits)
         }
-        Message::ValidateRemoval(value) => {
-            validate_header(
-                value
-                    .header
-                    .as_ref()
-                    .ok_or(WireContractError::InvalidMessage)?,
-            )?;
-            validate_target(&value.target_id, value.target_generation)?;
-            validate_shard(value.shard.as_ref())?;
-            valid_digest(&value.permit_digest)
-        }
+        Message::ValidateRemoval(value) => validate_removal(value),
+        Message::StoreBackupBegin(_)
+        | Message::StoreBackupReady(_)
+        | Message::StoreBackupFinish(_)
+        | Message::StoreBackupResult(_)
+        | Message::ReadBackupRequest(_)
+        | Message::ReadBackupHeader(_)
+        | Message::ReadBackupResult(_)
+        | Message::VerifyBackupRequest(_)
+        | Message::VerifyBackupResult(_)
+        | Message::DeleteBackupRequest(_)
+        | Message::DeleteBackupResult(_) => backup::message(value, limits),
     }
+}
+
+fn put_begin(
+    value: &crate::v1::PutShardBegin,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    validate_required_header(value.header.as_ref())?;
+    validate_target(&value.target_id, value.target_generation)?;
+    validate_shard(value.shard.as_ref())?;
+    nonzero(value.declared_length)?;
+    valid_digest(&value.declared_digest)?;
+    valid_nonempty_bytes(&value.write_capability, limits.maximum_control_bytes())?;
+    optional_digest(&value.federation_capability_digest)
+}
+
+fn get_request(
+    value: &crate::v1::GetShardRequest,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    validate_required_header(value.header.as_ref())?;
+    validate_target(&value.target_id, value.target_generation)?;
+    validate_shard(value.shard.as_ref())?;
+    valid_nonempty_bytes(&value.read_capability, limits.maximum_control_bytes())?;
+    optional_digest(&value.federation_capability_digest)
+}
+
+fn delete_request(
+    value: &crate::v1::DeleteShardRequest,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    validate_required_header(value.header.as_ref())?;
+    validate_target(&value.target_id, value.target_generation)?;
+    validate_shard(value.shard.as_ref())?;
+    validate_removal_authority(
+        value.removal_permit.as_ref(),
+        &value.federation_capability,
+        limits,
+    )?;
+    correlated_federation_digest(
+        &value.federation_capability,
+        &value.federation_capability_digest,
+    )
+}
+
+fn reclaim_request(
+    value: &crate::v1::ReclaimShardRequest,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    validate_required_header(value.header.as_ref())?;
+    validate_target(&value.target_id, value.target_generation)?;
+    validate_shard(value.shard.as_ref())?;
+    validate_payload(value.tombstone_receipt.as_ref(), limits)?;
+    optional_bytes(&value.federation_capability, limits)?;
+    correlated_federation_digest(
+        &value.federation_capability,
+        &value.federation_capability_digest,
+    )
+}
+
+fn validate_removal(value: &crate::v1::ValidateRemoval) -> Result<(), WireContractError> {
+    validate_required_header(value.header.as_ref())?;
+    validate_target(&value.target_id, value.target_generation)?;
+    validate_shard(value.shard.as_ref())?;
+    valid_digest(&value.permit_digest)
+}
+
+fn validate_required_header(
+    value: Option<&crate::v1::RequestHeader>,
+) -> Result<(), WireContractError> {
+    validate_header(value.ok_or(WireContractError::InvalidMessage)?)
 }
 
 fn scrub_request(value: &ScrubShardRequest, limits: WireLimits) -> Result<(), WireContractError> {
