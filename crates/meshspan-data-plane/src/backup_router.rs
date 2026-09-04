@@ -17,10 +17,21 @@ pub struct RemoteBackupRouter<Provider, Authority> {
     services: BTreeMap<(BackupDestinationId, u64), RemoteBackupService<Provider, Authority>>,
 }
 
+impl<Provider, Authority> Clone for RemoteBackupRouter<Provider, Authority>
+where
+    Authority: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            services: self.services.clone(),
+        }
+    }
+}
+
 impl<Provider, Authority> RemoteBackupRouter<Provider, Authority>
 where
     Provider: BackupProvider + Send + 'static,
-    Authority: RemoteBackupAuthority,
+    Authority: RemoteBackupAuthority + Clone + Send + 'static,
 {
     /// Builds a bounded router and rejects empty, excessive or duplicate route sets.
     ///
@@ -71,6 +82,18 @@ where
             .await?
             .into_inner();
         let message = envelope.message.ok_or(BackupPlaneError::InvalidMessage)?;
+        self.serve_message(stream, peer, limits, observed_at, message)
+            .await
+    }
+
+    pub(crate) async fn serve_message(
+        &self,
+        stream: AcceptedStream,
+        peer: AuthenticatedPeer,
+        limits: WireLimits,
+        observed_at: UnixMicros,
+        message: Message,
+    ) -> Result<(), BackupPlaneError> {
         let route = message_route(&message)?;
         self.services
             .get(&route)

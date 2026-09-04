@@ -14,7 +14,7 @@ use meshspan_protocol::v1::{
 };
 use meshspan_transport::AuthenticatedPeer;
 
-use super::{RemoteBackupAuthorisation, RemoteBackupAuthority, RemoteBackupService};
+use super::{RemoteBackupAuthority, RemoteBackupService};
 use crate::backup_wire::{object, read_request_parts, request_context, verify_request_parts};
 
 impl<Provider, Authority> RemoteBackupService<Provider, Authority>
@@ -37,11 +37,6 @@ where
         };
         validate_backup_store_request(request, observed_at)?;
         self.validate_binding(request.object)?;
-        self.authority.authorise(
-            peer,
-            RemoteBackupAuthorisation::Store(&request),
-            observed_at,
-        )?;
         Ok(request)
     }
 
@@ -62,8 +57,6 @@ where
         .map_err(|_| ContractError::InvalidInput)?;
         validate_backup_read_request(&request, observed_at)?;
         self.validate_binding(request.object)?;
-        self.authority
-            .authorise(peer, RemoteBackupAuthorisation::Read(&request), observed_at)?;
         Ok(request)
     }
 
@@ -84,11 +77,6 @@ where
         .map_err(|_| ContractError::InvalidInput)?;
         validate_backup_verify_request(&request, observed_at)?;
         self.validate_binding(request.object)?;
-        self.authority.authorise(
-            peer,
-            RemoteBackupAuthorisation::Verify(&request),
-            observed_at,
-        )?;
         Ok(request)
     }
 
@@ -113,11 +101,6 @@ where
         };
         validate_backup_delete_request(&request, observed_at)?;
         self.validate_binding(request.object)?;
-        self.authority.authorise(
-            peer,
-            RemoteBackupAuthorisation::Delete(&request),
-            observed_at,
-        )?;
         Ok(request)
     }
 

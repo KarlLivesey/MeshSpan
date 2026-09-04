@@ -13,7 +13,7 @@ use meshspan_contracts::{
 };
 use meshspan_data_plane::{
     BackupPlaneError, RemoteBackupAuthorisation, RemoteBackupAuthority, RemoteBackupRouter,
-    RemoteBackupService, delete_backup, read_backup, store_backup, verify_backup,
+    RemoteBackupService, RemoteDataRouter, delete_backup, read_backup, store_backup, verify_backup,
 };
 use meshspan_domain::{
     BackupDestinationId, BackupId, MeshId, NodeId, OperationId, PartitionId, Revision, UnixMicros,
@@ -74,10 +74,12 @@ async fn real_mtls_stream_proves_exact_remote_backup_lifecycle() -> Result<(), B
         &certificates.server_certificate,
     )?;
 
-    let router = RemoteBackupRouter::new([fixture.service(client_node)?], 16)?;
-    assert_eq!(router.destination_count(), 1);
+    let backups = RemoteBackupRouter::new([fixture.service(client_node)?], 16)?;
+    assert_eq!(backups.destination_count(), 1);
+    let mut router =
+        RemoteDataRouter::<meshspan_storage::FolderShardStore, _, _>::new(None, Some(backups))?;
     tokio::try_join!(
-        serve_lifecycle(&server_connection, &router, client_peer, limits),
+        serve_lifecycle(&server_connection, &mut router, client_peer, limits),
         prove_client_lifecycle(&client_connection, &fixture, client_node, limits),
     )?;
     client_connection.close(0_u32.into(), b"test complete");
@@ -89,7 +91,11 @@ async fn real_mtls_stream_proves_exact_remote_backup_lifecycle() -> Result<(), B
 
 async fn serve_lifecycle(
     connection: &quinn::Connection,
-    router: &RemoteBackupRouter<DirectoryBackupProvider, TestAuthority>,
+    router: &mut RemoteDataRouter<
+        meshspan_storage::FolderShardStore,
+        DirectoryBackupProvider,
+        TestAuthority,
+    >,
     peer: AuthenticatedPeer,
     limits: WireLimits,
 ) -> Result<(), Box<dyn Error>> {

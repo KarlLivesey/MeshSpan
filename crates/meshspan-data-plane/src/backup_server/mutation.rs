@@ -12,7 +12,7 @@ use meshspan_protocol::v1::{
 };
 use meshspan_transport::{AcceptedStream, AuthenticatedPeer, send_data_control};
 
-use super::{RemoteBackupAuthority, RemoteBackupService};
+use super::{OwnedRemoteBackupAuthorisation, RemoteBackupAuthority, RemoteBackupService};
 use crate::BackupPlaneError;
 use crate::backup_wire::{
     durable_result, rejected_result, wire_delete_receipt, wire_object_receipt,
@@ -21,7 +21,7 @@ use crate::backup_wire::{
 impl<Provider, Authority> RemoteBackupService<Provider, Authority>
 where
     Provider: BackupProvider + Send + 'static,
-    Authority: RemoteBackupAuthority,
+    Authority: RemoteBackupAuthority + Clone + Send + 'static,
 {
     pub(super) async fn serve_verify(
         &self,
@@ -35,6 +35,16 @@ where
             Ok(request) => request,
             Err(error) => return send_verify_result(stream, limits, Err(error)).await,
         };
+        if let Err(error) = self
+            .authorise(
+                peer,
+                OwnedRemoteBackupAuthorisation::Verify(request.clone()),
+                observed_at,
+            )
+            .await
+        {
+            return send_verify_result(stream, limits, Err(error)).await;
+        }
         let provider = self.provider.clone();
         let result = tokio::task::spawn_blocking(move || {
             provider
@@ -59,6 +69,16 @@ where
             Ok(request) => request,
             Err(error) => return send_delete_result(stream, limits, Err(error)).await,
         };
+        if let Err(error) = self
+            .authorise(
+                peer,
+                OwnedRemoteBackupAuthorisation::Delete(request.clone()),
+                observed_at,
+            )
+            .await
+        {
+            return send_delete_result(stream, limits, Err(error)).await;
+        }
         let provider = self.provider.clone();
         let result = tokio::task::spawn_blocking(move || {
             provider

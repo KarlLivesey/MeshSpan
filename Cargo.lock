@@ -1320,6 +1320,7 @@ dependencies = [
  "meshspan-smb",
  "meshspan-storage",
  "meshspan-test-certificates",
+ "meshspan-transport",
  "meshspan-work",
  "p256",
  "rustls",

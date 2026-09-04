@@ -58,10 +58,32 @@ pub struct RemoteBackupService<Provider, Authority> {
     pub(super) provider_generation: u64,
 }
 
+impl<Provider, Authority> Clone for RemoteBackupService<Provider, Authority>
+where
+    Authority: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            provider: Arc::clone(&self.provider),
+            authority: self.authority.clone(),
+            mesh_id: self.mesh_id,
+            destination_id: self.destination_id,
+            provider_generation: self.provider_generation,
+        }
+    }
+}
+
+enum OwnedRemoteBackupAuthorisation {
+    Store(BackupStoreRequest),
+    Read(BackupReadRequest),
+    Verify(BackupVerifyRequest),
+    Delete(BackupDeleteRequest),
+}
+
 impl<Provider, Authority> RemoteBackupService<Provider, Authority>
 where
     Provider: BackupProvider + Send + 'static,
-    Authority: RemoteBackupAuthority,
+    Authority: RemoteBackupAuthority + Clone + Send + 'static,
 {
     /// Binds a provider and authority to one exact destination incarnation.
     ///
@@ -147,5 +169,33 @@ where
             }
             _ => Err(BackupPlaneError::InvalidMessage),
         }
+    }
+
+    async fn authorise(
+        &self,
+        peer: AuthenticatedPeer,
+        request: OwnedRemoteBackupAuthorisation,
+        observed_at: UnixMicros,
+    ) -> Result<(), ContractError> {
+        let authority = self.authority.clone();
+        tokio::task::spawn_blocking(move || {
+            let borrowed = match &request {
+                OwnedRemoteBackupAuthorisation::Store(value) => {
+                    RemoteBackupAuthorisation::Store(value)
+                }
+                OwnedRemoteBackupAuthorisation::Read(value) => {
+                    RemoteBackupAuthorisation::Read(value)
+                }
+                OwnedRemoteBackupAuthorisation::Verify(value) => {
+                    RemoteBackupAuthorisation::Verify(value)
+                }
+                OwnedRemoteBackupAuthorisation::Delete(value) => {
+                    RemoteBackupAuthorisation::Delete(value)
+                }
+            };
+            authority.authorise(peer, borrowed, observed_at)
+        })
+        .await
+        .map_err(|_| ContractError::InternalContract)?
     }
 }

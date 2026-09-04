@@ -134,9 +134,14 @@ fn rejected_stream_and_capacity_claim_publish_nothing() -> Result<(), Box<dyn st
         provider.store_exact(request, &mut Cursor::new(b"thr"), UnixMicros::new(2)),
         Err(ContractError::Corrupt)
     );
-    let pending_entries =
-        std::fs::read_dir(directory.path().join(".meshspan-backups").join("objects"))?
-            .collect::<Result<Vec<_>, _>>()?;
+    let pending_entries = std::fs::read_dir(
+        directory
+            .path()
+            .join(".meshspan-backups")
+            .join(destination_id.to_string().replace('-', ""))
+            .join("objects"),
+    )?
+    .collect::<Result<Vec<_>, _>>()?;
     assert!(pending_entries.is_empty());
     let receipt = provider.store_exact(request, &mut Cursor::new(bytes), UnixMicros::new(2))?;
     let second = BackupStoreRequest {
@@ -183,6 +188,7 @@ fn changed_provider_bytes_are_reported_as_corrupt() -> Result<(), Box<dyn std::e
         directory
             .path()
             .join(".meshspan-backups")
+            .join(destination_id.to_string().replace('-', ""))
             .join("objects")
             .join(receipt.object_reference.as_str()),
         b"substituted ciphertext",
@@ -211,6 +217,22 @@ fn changed_provider_bytes_are_reported_as_corrupt() -> Result<(), Box<dyn std::e
         ),
         Err(ContractError::Corrupt)
     );
+    Ok(())
+}
+
+#[test]
+fn independent_destinations_can_share_one_registered_folder()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first_id = BackupDestinationId::from_bytes([30; 16])?;
+    let second_id = BackupDestinationId::from_bytes([31; 16])?;
+
+    let first =
+        DirectoryBackupProvider::open(directory.path(), first_id, 1, 1_024, UnixMicros::new(1))?;
+    let second =
+        DirectoryBackupProvider::open(directory.path(), second_id, 1, 1_024, UnixMicros::new(1))?;
+
+    assert_eq!(first.describe(), second.describe());
     Ok(())
 }
 

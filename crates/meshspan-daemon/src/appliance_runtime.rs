@@ -29,16 +29,19 @@ use meshspan_consensus::{
     flat_plan,
 };
 use meshspan_contracts::{ContractVersion, RequestContext};
-use meshspan_data_plane::{RemoteShardRouter, RemoteShardService};
+use meshspan_data_plane::{
+    RemoteBackupRouter, RemoteBackupService, RemoteDataRouter, RemoteShardRouter,
+    RemoteShardService,
+};
 use meshspan_domain::{
-    AuditEventId, DurationMicros, InitialBootstrapMaterial, InitialBootstrapMaterialError,
-    JoinGrantBundle, NodeId, OperationId, PrincipalId, RandomSource, Revision, SnapshotId,
-    TargetId, UnixMicros, uuid_v8,
+    AuditEventId, BackupDestinationId, DurationMicros, InitialBootstrapMaterial,
+    InitialBootstrapMaterialError, JoinGrantBundle, NodeId, OperationId, PrincipalId, RandomSource,
+    Revision, SnapshotId, TargetId, UnixMicros, uuid_v8,
 };
 use meshspan_metadata::{
-    AuthoritativeRepository, ClaimMaintenanceWork, CommandContext, ConsensusStoreError, JoinRoles,
-    LocalDatabase, MetadataStoreError, PageLimit, PartitionDatabase, RepositoryError,
-    StorageScopeDrainCursor,
+    AuthoritativeRepository, BackupDestinationBinding, ClaimMaintenanceWork, CommandContext,
+    ConsensusStoreError, JoinRoles, LocalDatabase, MetadataStoreError, PageLimit,
+    PartitionDatabase, RepositoryError, StorageScopeDrainCursor,
 };
 use meshspan_protocol::v1::control_envelope::Message;
 use meshspan_protocol::v1::{
@@ -149,12 +152,22 @@ const SCOPE_DRAIN_PAGE_ITEMS: usize = 32;
 const METADATA_BACKUP_LEASE_MICROS: u64 = 5 * 60 * 1_000_000;
 const METADATA_BACKUP_PROVIDER_TIMEOUT_MICROS: u64 = 2 * 60 * 1_000_000;
 const METADATA_BACKUP_DESTINATION_PAGE_ITEMS: usize = 8;
+const MAXIMUM_BACKUP_DESTINATIONS: usize = 1_024;
 
 type AuthorityTask = (
     MetadataAuthorityHandle,
     JoinHandle<Result<(), MetadataAuthorityRuntimeError>>,
     u64,
 );
+type ProductionRemoteBackupService = RemoteBackupService<
+    meshspan_backup::DirectoryBackupProvider,
+    crate::remote_backup_authority::ConsensusRemoteBackupAuthority,
+>;
+type ProductionDataRouter = RemoteDataRouter<
+    crate::LocalFolderStorageProvider,
+    meshspan_backup::DirectoryBackupProvider,
+    crate::remote_backup_authority::ConsensusRemoteBackupAuthority,
+>;
 
 struct StorageRuntimeComposition {
     readiness: Arc<RuntimeReadiness>,
@@ -944,6 +957,10 @@ fn compose_storage_runtime(
         ),
         maintenance_authority: authentication_authority()?,
         maintenance_progress: local_state.open_local_database(now)?,
+        backup_authority: crate::remote_backup_authority::ConsensusRemoteBackupAuthority::new(
+            open_root_repository(local_state, now)?,
+            local_state.node_id(),
+        ),
         private_network: Arc::clone(private_network),
         runtime,
         state_directory: local_state.state_directory().to_path_buf(),
@@ -2230,6 +2247,8 @@ struct StorageTargetRuntime {
     maintenance_authority: ConsensusAuthenticationAuthority,
     maintenance_progress: LocalDatabase,
     backup_worker: crate::MetadataBackupWorker,
+    backup_authority: crate::remote_backup_authority::ConsensusRemoteBackupAuthority,
+    backup_services: BTreeMap<(BackupDestinationId, u64), ProductionRemoteBackupService>,
     private_network: Arc<PrivateConsensusRuntime>,
     runtime: tokio::runtime::Handle,
     state_directory: PathBuf,
@@ -2263,6 +2282,7 @@ struct StorageTargetRuntimeServices {
         StoragePermitLoadingService<ConsensusAuthenticationAuthority, crate::LocalWrappingKey>,
     maintenance_authority: ConsensusAuthenticationAuthority,
     maintenance_progress: LocalDatabase,
+    backup_authority: crate::remote_backup_authority::ConsensusRemoteBackupAuthority,
     private_network: Arc<PrivateConsensusRuntime>,
     runtime: tokio::runtime::Handle,
     state_directory: PathBuf,
@@ -2284,6 +2304,8 @@ impl StorageTargetRuntime {
             maintenance_authority: services.maintenance_authority,
             maintenance_progress: services.maintenance_progress,
             backup_worker: crate::MetadataBackupWorker::default(),
+            backup_authority: services.backup_authority,
+            backup_services: BTreeMap::new(),
             private_network: services.private_network,
             runtime: services.runtime,
             state_directory: services.state_directory,
@@ -2304,9 +2326,28 @@ impl StorageTargetRuntime {
         }
     }
 
-    fn data_router(&self) -> Result<RemoteShardRouter<crate::LocalFolderStorageProvider>, ()> {
+    fn data_router(&mut self, now: UnixMicros) -> Result<ProductionDataRouter, ()> {
+        self.refresh_backup_services(now)?;
+        let shards = self.shard_router()?;
+        let backups = if self.backup_services.is_empty() {
+            None
+        } else {
+            Some(
+                RemoteBackupRouter::new(
+                    self.backup_services.values().cloned(),
+                    self.backup_services.len(),
+                )
+                .map_err(|_| ())?,
+            )
+        };
+        RemoteDataRouter::new(shards, backups).map_err(|_| ())
+    }
+
+    fn shard_router(
+        &self,
+    ) -> Result<Option<RemoteShardRouter<crate::LocalFolderStorageProvider>>, ()> {
         if self.active.is_empty() {
-            return Err(());
+            return Ok(None);
         }
         let mut services = Vec::with_capacity(self.active.len());
         for target in self.active.values() {
@@ -2328,7 +2369,71 @@ impl StorageTargetRuntime {
                 .map_err(|_| ())?,
             );
         }
-        RemoteShardRouter::new(services, self.active.len()).map_err(|_| ())
+        RemoteShardRouter::new(services, self.active.len())
+            .map(Some)
+            .map_err(|_| ())
+    }
+
+    fn refresh_backup_services(&mut self, now: UnixMicros) -> Result<(), ()> {
+        let page_limit = PageLimit::new(256).map_err(|_| ())?;
+        let mut after = None;
+        let mut active_routes = BTreeSet::new();
+        loop {
+            let page = self
+                .maintenance_authority
+                .reader()
+                .active_backup_destinations(after, page_limit)
+                .map_err(|_| ())?;
+            for destination in page.items {
+                let BackupDestinationBinding::RegisteredTarget {
+                    target_id,
+                    target_generation,
+                } = destination.binding
+                else {
+                    continue;
+                };
+                let route = (destination.destination_id, target_generation);
+                if !active_routes.insert(route) || active_routes.len() > MAXIMUM_BACKUP_DESTINATIONS
+                {
+                    return Err(());
+                }
+                if self.backup_services.contains_key(&route) {
+                    continue;
+                }
+                let Some((storage_path, target)) = self.active.iter().find(|(_, target)| {
+                    let context = target.context();
+                    context.target_id == target_id && context.generation == target_generation
+                }) else {
+                    continue;
+                };
+                let Ok(provider) = meshspan_backup::DirectoryBackupProvider::open(
+                    storage_path,
+                    destination.destination_id,
+                    target_generation,
+                    target.capacity_ceiling().map_err(|_| ())?,
+                    now,
+                ) else {
+                    self.readiness.store_degraded(true);
+                    continue;
+                };
+                let service = ProductionRemoteBackupService::new(
+                    provider,
+                    self.backup_authority.clone(),
+                    target.context().mesh_id,
+                    destination.destination_id,
+                    target_generation,
+                )
+                .map_err(|_| ())?;
+                self.backup_services.insert(route, service);
+            }
+            let Some(next) = page.next else {
+                break;
+            };
+            after = Some(next);
+        }
+        self.backup_services
+            .retain(|route, _| active_routes.contains(route));
+        Ok(())
     }
 
     fn run_maintenance_tick(&mut self, now: UnixMicros) -> Result<(), ()> {
@@ -3255,20 +3360,22 @@ fn spawn_data_plane_runtime(
 ) {
     tokio::spawn(async move {
         while let Some(stream) = streams.recv().await {
-            let router = match storage_targets.lock() {
-                Ok(targets) => targets.data_router(),
-                Err(poisoned) => {
-                    poisoned.into_inner().readiness.store_degraded(true);
-                    Err(())
-                }
-            };
-            let Ok(mut router) = router else {
-                continue;
-            };
-            let Ok(observed_at) = current_time() else {
-                continue;
-            };
+            let targets = Arc::clone(&storage_targets);
             tokio::spawn(async move {
+                let Ok(observed_at) = current_time() else {
+                    return;
+                };
+                let router = tokio::task::spawn_blocking(move || match targets.lock() {
+                    Ok(mut targets) => targets.data_router(observed_at),
+                    Err(poisoned) => {
+                        poisoned.into_inner().readiness.store_degraded(true);
+                        Err(())
+                    }
+                })
+                .await;
+                let Ok(Ok(mut router)) = router else {
+                    return;
+                };
                 let _result = router
                     .serve_stream(stream.stream, stream.peer, stream.limits, observed_at)
                     .await;

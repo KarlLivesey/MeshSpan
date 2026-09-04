@@ -10,6 +10,7 @@ mod backup_server;
 mod backup_wire;
 mod capability;
 mod client;
+mod data_router;
 mod error;
 mod router;
 mod server;
@@ -28,6 +29,7 @@ pub use client::{
     get_federated_shard, get_shard, put_federated_shard, put_shard, reclaim_federated_shard,
     reclaim_shard, retire_federated_shard, scrub_federated_shard, tombstone_shard,
 };
+pub use data_router::{RemoteDataRouter, RemoteDataRouterError};
 pub use error::DataPlaneError;
 pub use router::RemoteShardRouter;
 pub use server::{
