@@ -2,7 +2,7 @@
 
 [package]
 name = "meshspan-data-plane"
-description = "Authenticated private shard streams over replaceable MeshSpan storage providers"
+description = "Authenticated private data streams over replaceable MeshSpan providers"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -17,10 +17,12 @@ meshspan-domain = { path = "../meshspan-domain" }
 meshspan-protocol = { path = "../meshspan-protocol" }
 meshspan-transport = { path = "../meshspan-transport" }
 quinn.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+meshspan-backup = { path = "../meshspan-backup" }
 meshspan-storage = { path = "../meshspan-storage" }
 meshspan-test-certificates = { path = "../meshspan-test-certificates" }
 rustls.workspace = true

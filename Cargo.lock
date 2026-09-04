@@ -1340,6 +1340,7 @@ name = "meshspan-data-plane"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "meshspan-backup",
  "meshspan-contracts",
  "meshspan-domain",
  "meshspan-protocol",
@@ -1348,6 +1349,7 @@ dependencies = [
  "meshspan-transport",
  "quinn",
  "rustls",
+ "sha2",
  "tempfile",
  "thiserror",
  "tokio",
