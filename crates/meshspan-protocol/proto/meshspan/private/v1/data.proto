@@ -111,6 +111,97 @@ message ValidateRemoval {
   bytes permit_digest = 5;
 }
 
+message BackupObjectIdentity {
+  bytes backup_id = 1;
+  bytes destination_id = 2;
+  uint64 provider_generation = 3;
+  uint64 byte_length = 4;
+  bytes digest = 5;
+}
+
+message BackupObjectReceipt {
+  bytes operation_id = 1;
+  BackupObjectIdentity object = 2;
+  string object_reference = 3;
+}
+
+message BackupReadReceipt {
+  bytes operation_id = 1;
+  uint64 byte_length = 2;
+  bytes digest = 3;
+}
+
+message BackupDeleteReceipt {
+  bytes operation_id = 1;
+  BackupObjectIdentity object = 2;
+  uint64 retirement_revision = 3;
+}
+
+message StoreBackupBegin {
+  RequestHeader header = 1;
+  BackupObjectIdentity object = 2;
+  uint64 authority_revision = 3;
+}
+
+message StoreBackupReady {
+  bytes reservation = 1;
+  uint64 maximum_frame_bytes = 2;
+  optional WireError rejection = 3;
+}
+
+message StoreBackupFinish {
+  uint64 final_length = 1;
+  bytes final_digest = 2;
+}
+
+message StoreBackupResult {
+  OperationResult result = 1;
+  optional BackupObjectReceipt receipt = 2;
+}
+
+message ReadBackupRequest {
+  RequestHeader header = 1;
+  BackupObjectIdentity object = 2;
+  string object_reference = 3;
+  uint64 authority_revision = 4;
+}
+
+message ReadBackupHeader {
+  uint64 byte_length = 1;
+  bytes digest = 2;
+  uint64 maximum_frame_bytes = 3;
+  optional WireError rejection = 4;
+}
+
+message ReadBackupResult {
+  OperationResult result = 1;
+  optional BackupReadReceipt receipt = 2;
+}
+
+message VerifyBackupRequest {
+  RequestHeader header = 1;
+  BackupObjectIdentity object = 2;
+  string object_reference = 3;
+  uint64 authority_revision = 4;
+}
+
+message VerifyBackupResult {
+  OperationResult result = 1;
+  optional BackupObjectReceipt receipt = 2;
+}
+
+message DeleteBackupRequest {
+  RequestHeader header = 1;
+  BackupObjectIdentity object = 2;
+  string object_reference = 3;
+  uint64 retirement_revision = 4;
+}
+
+message DeleteBackupResult {
+  OperationResult result = 1;
+  optional BackupDeleteReceipt receipt = 2;
+}
+
 message DataControlEnvelope {
   oneof message {
     PutShardBegin put_shard_begin = 10;
@@ -127,5 +218,16 @@ message DataControlEnvelope {
     ValidateRemoval validate_removal = 32;
     ReclaimShardRequest reclaim_shard_request = 33;
     ReclaimShardResult reclaim_shard_result = 34;
+    StoreBackupBegin store_backup_begin = 40;
+    StoreBackupReady store_backup_ready = 41;
+    StoreBackupFinish store_backup_finish = 42;
+    StoreBackupResult store_backup_result = 43;
+    ReadBackupRequest read_backup_request = 50;
+    ReadBackupHeader read_backup_header = 51;
+    ReadBackupResult read_backup_result = 52;
+    VerifyBackupRequest verify_backup_request = 60;
+    VerifyBackupResult verify_backup_result = 61;
+    DeleteBackupRequest delete_backup_request = 70;
+    DeleteBackupResult delete_backup_result = 71;
   }
 }

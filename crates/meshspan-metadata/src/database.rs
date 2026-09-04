@@ -692,7 +692,7 @@ mod tests {
         let second = NodeId::from_bytes([4; 16])?;
         let database = LocalDatabase::open(&file_path, first, UnixMicros::new(10))?;
         assert_eq!(database.node_id(), first);
-        assert_eq!(database.schema_version(), 12);
+        assert_eq!(database.schema_version(), LOCAL_SCHEMA_VERSION);
         drop(database);
         assert!(LocalDatabase::open(&file_path, first, UnixMicros::new(11)).is_ok());
         let existing = LocalDatabase::open_existing(&file_path, UnixMicros::new(12))?;

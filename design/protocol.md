@@ -376,7 +376,46 @@ authority unless the permit itself is a verifiable, unexpired capability from
 the current epoch. Implementations must fail closed when authority is unknown.
 Location alone is never a deletion credential.
 
-## 11. Repair and drain coordination
+## 11. Remote metadata-backup provider streams
+
+An authority-fenced backup worker may use a registered target on another swarm
+node through the same authenticated QUIC data-stream class as shard IO. Backup
+control messages never contain the encrypted backup body. The body uses
+independently bounded `DataFrame` messages, and the receiver counts and hashes
+the complete stream itself.
+
+Every operation names the exact backup ID, destination ID, provider generation,
+encrypted-container length and digest. Store, read and verify also carry the
+positive catalogue revision that authorised the operation. Delete instead
+carries the exact positive retirement revision. A provider object reference is
+bounded opaque data returned by a successful store; it is never interpreted as
+authority and cannot authorise deletion by location alone.
+
+Store uses this sequence:
+
+1. `StoreBackupBegin` declares the exact object and authority revision.
+2. `StoreBackupReady` returns a bounded reservation and maximum frame size, or
+   a typed rejection with no reservation.
+3. Contiguous `DataFrame` messages carry the encrypted container.
+4. `StoreBackupFinish` repeats the final length and digest.
+5. `StoreBackupResult` returns a durable, operation-bound object receipt or a
+   typed failure with no success evidence.
+
+Read uses `ReadBackupRequest`, `ReadBackupHeader`, bounded `DataFrame` messages
+and `ReadBackupResult`. The final receipt repeats the independently observed
+length and digest. Verify uses `VerifyBackupRequest` and
+`VerifyBackupResult` without returning object bytes. Delete uses
+`DeleteBackupRequest` and `DeleteBackupResult`; both its request and receipt
+bind the exact object and retirement revision.
+
+Retries reuse the same operation ID. A receiver rejects changed reuse, stale
+provider generations, elapsed deadlines, revision mismatch, non-contiguous
+frames, short or long bodies, digest mismatch and success results without exact
+receipts. Session handling additionally checks that every response receipt and
+finish message matches its initiating request; structural wire validation does
+not substitute for that conversation-state check.
+
+## 12. Repair and drain coordination
 
 - `ClaimWork` returns a leased, fenced repair/scrub/drain task.
 - `RenewWork` extends the same claim only while its fence is current.
@@ -387,7 +426,7 @@ Location alone is never a deletion credential.
 The durable job remains in metadata; peer-to-peer messages do not create a
 second scheduler truth.
 
-## 12. Certificate and secret distribution
+## 13. Certificate and secret distribution
 
 Only the elected, fenced certificate worker completes ACME HTTP-01 or DNS-01.
 After issuance it submits a certificate bundle encrypted separately for each
@@ -402,7 +441,7 @@ The private key is never broadcast in plaintext or made readable through a
 metadata query. Public challenge settings and non-secret status may be
 replicated normally.
 
-## 13. Enrolment boundary
+## 14. Enrolment boundary
 
 An unenrolled node has no private-protocol certificate, so initial enrolment is
 an HTTPS API flow. It presents a short-lived, single-purpose join grant and a
@@ -411,7 +450,7 @@ the node and returns a mesh certificate chain plus bootstrap peers. The private
 key never leaves the joining node. Subsequent activation and topology changes
 use the private protocol.
 
-## 14. Versioning and bounds
+## 15. Versioning and bounds
 
 - Major-version mismatch refuses the connection. Minor versions negotiate
   explicit feature bits.
@@ -423,7 +462,7 @@ use the private protocol.
   durations; wall clocks never order consensus events.
 - Compression is opt-in per safe message family and never applied to secrets.
 
-## 15. Implementation order
+## 16. Implementation order
 
 1. Generate message types and compatibility fixtures.
 2. Establish mTLS identity binding and `NodeHello` negotiation.
