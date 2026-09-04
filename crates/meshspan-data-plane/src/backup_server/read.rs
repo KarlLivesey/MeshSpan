@@ -12,7 +12,7 @@ use meshspan_protocol::v1::{
 use meshspan_transport::{AcceptedStream, AuthenticatedPeer, send_data_control, send_data_frame};
 use sha2::{Digest, Sha256};
 
-use super::{RemoteBackupAuthority, RemoteBackupService};
+use super::{OwnedRemoteBackupAuthorisation, RemoteBackupAuthority, RemoteBackupService};
 use crate::BackupPlaneError;
 use crate::backup_bridge::ProviderWriter;
 use crate::backup_wire::{durable_result, rejected_result, wire_error, wire_read_receipt};
@@ -22,7 +22,7 @@ const PROVIDER_CHANNEL_FRAMES: usize = 2;
 impl<Provider, Authority> RemoteBackupService<Provider, Authority>
 where
     Provider: BackupProvider + Send + 'static,
-    Authority: RemoteBackupAuthority,
+    Authority: RemoteBackupAuthority + Clone + Send + 'static,
 {
     pub(super) async fn serve_read(
         &self,
@@ -36,6 +36,16 @@ where
             Ok(request) => request,
             Err(error) => return reject_read(stream, limits, error).await,
         };
+        if let Err(error) = self
+            .authorise(
+                peer,
+                OwnedRemoteBackupAuthorisation::Read(request.clone()),
+                observed_at,
+            )
+            .await
+        {
+            return reject_read(stream, limits, error).await;
+        }
         let expected = request.object;
         let (chunk_sender, mut chunk_receiver) =
             tokio::sync::mpsc::channel(PROVIDER_CHANNEL_FRAMES);

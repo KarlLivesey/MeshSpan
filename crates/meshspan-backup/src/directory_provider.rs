@@ -52,7 +52,7 @@ impl DirectoryBackupProvider {
         if provider_generation == 0 || maximum_bytes == 0 {
             return Err(DirectoryBackupProviderError::InvalidInput);
         }
-        let files = object_io::open(storage_path)?;
+        let files = object_io::open(storage_path, destination_id)?;
         let catalogue = Catalogue::open(
             &files.catalogue_path,
             destination_id,

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptions};
 use meshspan_contracts::{BackupObjectIdentity, BackupObjectReference};
-use meshspan_domain::OperationId;
+use meshspan_domain::{BackupDestinationId, OperationId};
 use sha2::{Digest, Sha256};
 
 use super::DirectoryBackupProviderError;
@@ -26,19 +26,36 @@ pub(super) struct ProviderFiles {
     pub(super) lock: std::fs::File,
 }
 
-pub(super) fn open(storage_path: &Path) -> Result<ProviderFiles, DirectoryBackupProviderError> {
+pub(super) fn open(
+    storage_path: &Path,
+    destination_id: BackupDestinationId,
+) -> Result<ProviderFiles, DirectoryBackupProviderError> {
     let canonical_path = std::fs::canonicalize(storage_path)?;
     let root = Dir::open_ambient_dir(&canonical_path, ambient_authority())?;
     create_directory(&root, PRIVATE_DIRECTORY)?;
     let private = root.open_dir(PRIVATE_DIRECTORY)?;
-    let lock = open_lock(&private)?;
-    create_directory(&private, OBJECT_DIRECTORY)?;
-    let objects = private.open_dir(OBJECT_DIRECTORY)?;
+    let destination_directory = destination_directory(destination_id)?;
+    create_directory(&private, &destination_directory)?;
+    let destination = private.open_dir(&destination_directory)?;
+    let lock = open_lock(&destination)?;
+    create_directory(&destination, OBJECT_DIRECTORY)?;
+    let objects = destination.open_dir(OBJECT_DIRECTORY)?;
     Ok(ProviderFiles {
         objects,
-        catalogue_path: canonical_path.join(PRIVATE_DIRECTORY).join(CATALOGUE_FILE),
+        catalogue_path: canonical_path
+            .join(PRIVATE_DIRECTORY)
+            .join(destination_directory)
+            .join(CATALOGUE_FILE),
         lock,
     })
+}
+
+fn destination_directory(
+    destination_id: BackupDestinationId,
+) -> Result<String, DirectoryBackupProviderError> {
+    let mut value = String::with_capacity(32);
+    append_hex(&mut value, &destination_id.as_bytes())?;
+    Ok(value)
 }
 
 pub(super) fn object_reference(

@@ -14,7 +14,7 @@ use meshspan_transport::{
 };
 use sha2::{Digest, Sha256};
 
-use super::{RemoteBackupAuthority, RemoteBackupService};
+use super::{OwnedRemoteBackupAuthorisation, RemoteBackupAuthority, RemoteBackupService};
 use crate::BackupPlaneError;
 use crate::backup_bridge::ProviderReader;
 use crate::backup_wire::{durable_result, rejected_result, wire_error, wire_object_receipt};
@@ -24,7 +24,7 @@ const PROVIDER_CHANNEL_FRAMES: usize = 2;
 impl<Provider, Authority> RemoteBackupService<Provider, Authority>
 where
     Provider: BackupProvider + Send + 'static,
-    Authority: RemoteBackupAuthority,
+    Authority: RemoteBackupAuthority + Clone + Send + 'static,
 {
     pub(super) async fn serve_store(
         &self,
@@ -38,6 +38,16 @@ where
             Ok(request) => request,
             Err(error) => return reject_store(stream, limits, error).await,
         };
+        if let Err(error) = self
+            .authorise(
+                peer,
+                OwnedRemoteBackupAuthorisation::Store(request),
+                observed_at,
+            )
+            .await
+        {
+            return reject_store(stream, limits, error).await;
+        }
         send_store_ready(stream, limits, &begin).await?;
         let (sender, receiver) = tokio::sync::mpsc::channel(PROVIDER_CHANNEL_FRAMES);
         let provider = self.provider.clone();

@@ -41,6 +41,7 @@ meshspan-rustls-provider = { path = "../meshspan-rustls-provider" }
 meshspan-secret-envelope = { path = "../meshspan-secret-envelope" }
 meshspan-smb = { path = "../meshspan-smb" }
 meshspan-storage = { path = "../meshspan-storage" }
+meshspan-transport = { path = "../meshspan-transport" }
 meshspan-work = { path = "../meshspan-work" }
 rustls.workspace = true
 rustls-native-certs.workspace = true

@@ -70,6 +70,18 @@ impl SharedStorageProvider<FolderShardStore> {
             .map_err(|_| FolderShardStoreError::Unavailable)?
             .check_health()
     }
+
+    /// Returns the configured physical-byte ceiling under the same target lock as shard IO.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the provider lock, filesystem measurement or target policy is invalid.
+    pub fn capacity_ceiling(&self) -> Result<u64, FolderShardStoreError> {
+        self.inner
+            .lock()
+            .map_err(|_| FolderShardStoreError::Unavailable)?
+            .capacity_ceiling()
+    }
 }
 
 impl<P> StorageProvider for SharedStorageProvider<P>
@@ -229,6 +241,16 @@ mod tests {
                 .as_slice(),
             b"shared target"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn shared_target_exposes_the_configured_capacity_ceiling()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_directory, provider, _) = provider()?;
+        let shared = SharedStorageProvider::new(provider);
+
+        assert!(shared.capacity_ceiling()? > 0);
         Ok(())
     }
 

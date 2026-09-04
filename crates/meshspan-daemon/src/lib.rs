@@ -82,6 +82,7 @@ mod claim_file;
 mod claim_service;
 #[cfg(test)]
 mod claim_service_tests;
+mod cluster_backup_provider;
 mod cluster_secret_redistribution;
 mod cluster_storage_provider;
 mod consensus_authentication_authority;
@@ -274,6 +275,7 @@ mod recovery_code_issuance_tests;
 mod recovery_code_session_creation;
 #[cfg(test)]
 mod recovery_code_session_creation_tests;
+mod remote_backup_authority;
 mod revoke_session;
 mod revoke_session_api;
 mod scope_drain_worker;

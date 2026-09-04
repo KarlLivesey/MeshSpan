@@ -63,6 +63,18 @@ impl<Provider: StorageProvider> RemoteShardRouter<Provider> {
             .await?
             .into_inner();
         let message = envelope.message.ok_or(DataPlaneError::InvalidMessage)?;
+        self.serve_message(stream, peer, limits, observed_at, message)
+            .await
+    }
+
+    pub(crate) async fn serve_message(
+        &mut self,
+        stream: AcceptedStream,
+        peer: AuthenticatedPeer,
+        limits: WireLimits,
+        observed_at: UnixMicros,
+        message: Message,
+    ) -> Result<(), DataPlaneError> {
         let route = message_route(&message)?;
         let service = self
             .services
