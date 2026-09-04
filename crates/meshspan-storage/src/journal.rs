@@ -161,6 +161,15 @@ impl TargetJournal {
             })
     }
 
+    /// Resolves the configured provider ceiling against one current filesystem measurement.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid persisted policy or an unsupported byte range.
+    pub fn capacity_ceiling(&self, total_bytes: u64) -> Result<u64, TargetJournalError> {
+        usage_ceiling(self.policy.usage_limit, total_bytes)
+    }
+
     /// Reserves capacity idempotently for one exact target generation and budget class.
     ///
     /// # Errors

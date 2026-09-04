@@ -537,6 +537,18 @@ impl FolderShardStore {
             .check_integrity()
             .map_err(|error| map_pack(&error))
     }
+
+    /// Returns the current configured physical-byte ceiling for this target filesystem.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the filesystem cannot be measured or its persisted policy is invalid.
+    pub fn capacity_ceiling(&self) -> Result<u64, FolderShardStoreError> {
+        let observation = self.folder.capacity_observation()?;
+        self.journal
+            .capacity_ceiling(observation.total_bytes)
+            .map_err(Into::into)
+    }
 }
 
 impl StorageProvider for FolderShardStore {

@@ -146,6 +146,9 @@ const DRAIN_RETRY_MICROS: u64 = 1_000_000;
 const REBALANCE_ADMISSION_INTERVAL_MICROS: u64 = 60 * 1_000_000;
 const REBALANCE_PAGE_ITEMS: usize = 64;
 const SCOPE_DRAIN_PAGE_ITEMS: usize = 32;
+const METADATA_BACKUP_LEASE_MICROS: u64 = 5 * 60 * 1_000_000;
+const METADATA_BACKUP_PROVIDER_TIMEOUT_MICROS: u64 = 2 * 60 * 1_000_000;
+const METADATA_BACKUP_DESTINATION_PAGE_ITEMS: usize = 8;
 
 type AuthorityTask = (
     MetadataAuthorityHandle,
@@ -941,6 +944,9 @@ fn compose_storage_runtime(
         ),
         maintenance_authority: authentication_authority()?,
         maintenance_progress: local_state.open_local_database(now)?,
+        private_network: Arc::clone(private_network),
+        runtime,
+        state_directory: local_state.state_directory().to_path_buf(),
     };
     let targets = StorageTargetRuntime::new(
         services,
@@ -2223,6 +2229,10 @@ struct StorageTargetRuntime {
         StoragePermitLoadingService<ConsensusAuthenticationAuthority, crate::LocalWrappingKey>,
     maintenance_authority: ConsensusAuthenticationAuthority,
     maintenance_progress: LocalDatabase,
+    backup_worker: crate::MetadataBackupWorker,
+    private_network: Arc<PrivateConsensusRuntime>,
+    runtime: tokio::runtime::Handle,
+    state_directory: PathBuf,
     local_node_id: NodeId,
     native_filesystem: NativeFilesystemRuntime,
     configured_paths: Vec<PathBuf>,
@@ -2253,6 +2263,9 @@ struct StorageTargetRuntimeServices {
         StoragePermitLoadingService<ConsensusAuthenticationAuthority, crate::LocalWrappingKey>,
     maintenance_authority: ConsensusAuthenticationAuthority,
     maintenance_progress: LocalDatabase,
+    private_network: Arc<PrivateConsensusRuntime>,
+    runtime: tokio::runtime::Handle,
+    state_directory: PathBuf,
 }
 
 impl StorageTargetRuntime {
@@ -2270,6 +2283,10 @@ impl StorageTargetRuntime {
             data_permits: services.data_permits,
             maintenance_authority: services.maintenance_authority,
             maintenance_progress: services.maintenance_progress,
+            backup_worker: crate::MetadataBackupWorker::default(),
+            private_network: services.private_network,
+            runtime: services.runtime,
+            state_directory: services.state_directory,
             local_node_id,
             native_filesystem,
             configured_paths,
@@ -2322,7 +2339,74 @@ impl StorageTargetRuntime {
         self.execute_one_target_drain(now)?;
         self.execute_one_rebalance(now)?;
         self.execute_one_reconciliation(now)?;
-        self.execute_one_scrub_page(now)
+        self.execute_one_scrub_page(now)?;
+        self.execute_metadata_backup(now)
+    }
+
+    fn execute_metadata_backup(&mut self, now: UnixMicros) -> Result<(), ()> {
+        let Some(mesh_id) = self
+            .maintenance_authority
+            .reader()
+            .local_mesh_id()
+            .map_err(|_| ())?
+        else {
+            return Ok(());
+        };
+        let Some(actor_principal_id) = self
+            .maintenance_authority
+            .reader()
+            .storage_target_registration_context(self.local_node_id, now)
+            .map_err(|_| ())?
+            .map(|context| context.actor_principal_id)
+        else {
+            return Ok(());
+        };
+        let local_targets = self
+            .active
+            .iter()
+            .map(|(storage_path, target)| {
+                let context = target.context();
+                Ok(crate::RegisteredBackupTarget {
+                    target_id: context.target_id,
+                    target_generation: context.generation,
+                    storage_path: storage_path.clone(),
+                    maximum_backup_bytes: target.capacity_ceiling().map_err(|_| ())?,
+                })
+            })
+            .collect::<Result<Vec<_>, ()>>()?;
+        let local = crate::RegisteredTargetBackupProviderResolver::new(local_targets, now)
+            .map_err(|_| ())?;
+        let mut resolver = crate::cluster_backup_provider::ClusterBackupProviderResolver::new(
+            mesh_id,
+            self.local_node_id,
+            self.maintenance_authority.reader(),
+            local,
+            Arc::clone(&self.private_network),
+            self.runtime.clone(),
+        );
+        let mut random = OperatingSystemRandom;
+        let mut cycle = crate::ComposedMetadataBackupCycle {
+            authority: &self.maintenance_authority,
+            local: &mut self.maintenance_progress,
+            resolver: &mut resolver,
+            random: &mut random,
+            state_directory: &self.state_directory,
+            worker_node_id: self.local_node_id,
+            worker_incarnation: 1,
+            actor_principal_id,
+        };
+        self.backup_worker
+            .run_once(
+                &mut cycle,
+                now,
+                crate::MetadataBackupWorkerLimits {
+                    lease_duration: DurationMicros::new(METADATA_BACKUP_LEASE_MICROS),
+                    provider_timeout: DurationMicros::new(METADATA_BACKUP_PROVIDER_TIMEOUT_MICROS),
+                    destination_page_items: METADATA_BACKUP_DESTINATION_PAGE_ITEMS,
+                },
+            )
+            .map(|_| ())
+            .map_err(|_| ())
     }
 
     fn execute_one_scope_drain(&mut self) -> Result<(), ()> {

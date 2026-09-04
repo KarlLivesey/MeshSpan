@@ -82,6 +82,7 @@ mod claim_file;
 mod claim_service;
 #[cfg(test)]
 mod claim_service_tests;
+mod cluster_backup_provider;
 mod cluster_secret_redistribution;
 mod cluster_storage_provider;
 mod consensus_authentication_authority;
