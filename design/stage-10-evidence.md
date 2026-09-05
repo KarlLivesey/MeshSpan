@@ -540,7 +540,11 @@ the existing node-loss/file round trip in 18.89 seconds. Three concurrent reruns
 passed in 25.99, 25.94 and 25.92 seconds; the earlier claimed-run timeouts were not
 accepted as success.
 
-The complete local gate is still pending for this slice.
+The complete NVM-default `MESHSPAN_CHECK_WORKERS=4 pnpm check` passed on
+`071620e` in **1121.29 seconds**. Rust workspace tests took 1016.67 seconds and
+web tests took 15.51 seconds. Generated-contract drift, Rust/workspace formatting,
+all-target/all-feature Clippy, TypeScript/ESLint and both dependency licence gates
+also passed. No release, tag, image or publication workflow was run.
 
 ## Remaining backup integration
 
