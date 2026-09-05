@@ -94,6 +94,9 @@ consume the most recently built `web/dist`; rebuild the bundle after web changes
 The canonical local check always rebuilds it before Rust compilation. This is a
 development build, not a release or publication command.
 
+Dependency and toolchain updates use `pnpm check:dependency-update`: advisory
+scans followed by the complete local gate. It does not publish a release.
+
 ## GPL-2.0-only
 
 **Valid licence identifier: `GPL-2.0-only`.**

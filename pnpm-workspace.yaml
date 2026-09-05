@@ -5,6 +5,14 @@ packages:
   - "tooling/*"
 allowBuilds:
   unrs-resolver: true
+overrides:
+  # The code generator pins a vulnerable YAML parser; keep the patch scoped to that edge.
+  "@hey-api/json-schema-ref-parser@0.0.0-next-20260824173136>js-yaml": 5.2.2
+peerDependencyRules:
+  allowedVersions:
+    # The current plugin has not widened its peer declaration. Our compatibility tests
+    # exercise its strict rules on ESLint 10; no global peer-check suppression is used.
+    "eslint-plugin-jsx-a11y@6.10.2>eslint": "^10.0.0"
 minimumReleaseAgeExclude:
   - "@types/node@26.4.0"
   - eslint-plugin-solid@0.16.1
