@@ -56,9 +56,16 @@ pub(super) fn create_partition_backup(
     created_at: UnixMicros,
 ) -> Result<PartitionBackupManifest, RepositoryError> {
     require_absent(destination)?;
-    let state = read_state(database.connection())?;
-    let mesh_id = read_mesh_id(database.connection())?;
     database.connection().backup(MAIN_DB, destination, None)?;
+    // The live head may advance during online copying. Evidence describes the completed
+    // immutable copy, never separately sampled pre-copy state from the live connection.
+    let copied = Connection::open_with_flags(
+        destination,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let state = read_state(&copied)?;
+    let mesh_id = read_mesh_id(&copied)?;
+    drop(copied);
     let (byte_length, digest) = hash_file(destination)?;
     let manifest = PartitionBackupManifest {
         backup_id,

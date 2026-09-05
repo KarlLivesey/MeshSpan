@@ -403,6 +403,7 @@ fn add_generation(
     apply(
         fixture,
         &AuthoritativeCommand::RecordMetadataBackup(RecordMetadataBackup {
+            source_created_at: UnixMicros::new(now + 2),
             backup_id: backup,
             partition_id: fixture.partition,
             mesh_id: fixture.mesh,

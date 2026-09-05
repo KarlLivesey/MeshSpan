@@ -1457,6 +1457,12 @@ Protected copies on local targets, other swarms or other provider destinations
 do not vote and cannot appoint authority. Recovery material remains encrypted
 for the administrator-held recovery mechanism.
 
+`metadata_backups.created_at` is immutable source-capture time. A publication or
+retry has its own operation/audit time and must not rewrite that captured value.
+The captured log position/revision may precede the live head at admission; its
+historical authority evidence must still be verifiable. A successful encrypted
+export is not a claim that the backup can safely appoint new authority.
+
 ## 26. Cross-record invariants
 
 The command layer and database constraints jointly enforce:

@@ -141,6 +141,7 @@ fn backup_catalogue_commands_round_trip_canonically() -> Result<(), Box<dyn std:
     assert_round_trip(
         context,
         AuthoritativeCommand::RecordMetadataBackup(crate::RecordMetadataBackup {
+            source_created_at: UnixMicros::new(90),
             backup_id,
             partition_id: meshspan_domain::PartitionId::from_bytes([87; 16])?,
             mesh_id: MeshId::from_bytes([88; 16])?,

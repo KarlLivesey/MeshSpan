@@ -46,6 +46,7 @@ import type {
   BackupScheduleResponse,
   ListBackupDestinationsQuery,
   ListBackupRunsQuery,
+  BackupExportHeaders,
   ListBackupRunsResponse,
   ListBackupDestinationsResponse,
   ConfigureBackupDestinationRequest,
@@ -156,6 +157,8 @@ import {
   zGetBackupScheduleResponse,
   zListBackupDestinationsQuery,
   zListBackupRunsQuery,
+  zBackupExportPath,
+  zBackupExportHeaders,
   zListBackupRunsResponse2,
   zListBackupDestinationsResponse2,
   zConfigureBackupDestinationBody,
@@ -249,6 +252,7 @@ import {
   zWithdrawSmbExportPath,
   zWithdrawSmbExportResponse2,
 } from "./zod.gen";
+import { verifyBackupStream } from "../native-api/backup-stream";
 import {
   appendQuery,
   authenticatedHeaders,
@@ -450,6 +454,17 @@ export interface MeshSpanFetchClient {
   ): Promise<ConfigureBackupDestinationResponse>;
   listBackupRuns(query?: ListBackupRunsQuery): Promise<ListBackupRunsResponse>;
   listNextBackupRuns(nextPageUrl: string): Promise<ListBackupRunsResponse>;
+  /** Opens encrypted bytes. Consume through successful EOF for verified length and SHA-256.
+   * Partial consumption is not a complete download; this is not restore proof. */
+  exportMetadataBackup(
+    backupId: string,
+    signal?: AbortSignal,
+  ): Promise<
+    Readonly<{
+      headers: BackupExportHeaders;
+      body: ReadableStream<Uint8Array>;
+    }>
+  >;
   addGroupMember(
     groupId: string,
     request: AddGroupMemberRequest,
@@ -975,6 +990,76 @@ export function createMeshSpanFetchClient(
         { method: "GET" },
         zListBackupRunsResponse2,
       );
+    },
+    async exportMetadataBackup(
+      backupId,
+      signal,
+    ): Promise<
+      Readonly<{
+        headers: BackupExportHeaders;
+        body: ReadableStream<Uint8Array>;
+      }>
+    > {
+      const input = zBackupExportPath.parse({ backup_id: backupId });
+      const route = substitutePathParameter(
+        "/admin/backups/{backup_id}/export",
+        "backup_id",
+        input.backup_id,
+      );
+      const response = await context.fetch(
+        resolveRoute(context.apiRoot, route),
+        {
+          method: "GET",
+          credentials:
+            context.authorization === undefined ? "same-origin" : "omit",
+          headers: authenticatedHeaders(context.authorization, {
+            Accept: "application/octet-stream",
+          }),
+          ...(signal === undefined ? {} : { signal }),
+        },
+      );
+      try {
+        validateContractHeaders(response);
+        if (!response.ok) {
+          const error = zApiError.safeParse(await readBoundedJson(response));
+          throw new MeshSpanApiError(
+            response.status,
+            error.success ? error.data : undefined,
+          );
+        }
+        if (
+          response.status !== 200 ||
+          response.headers.get("content-type") !== "application/octet-stream" ||
+          response.body === null
+        ) {
+          throw new TypeError(
+            "backup export response is not a complete-container stream",
+          );
+        }
+        const headers = zBackupExportHeaders.parse({
+          "Content-Length": response.headers.get("content-length"),
+          "MeshSpan-Backup-ID": response.headers.get("meshspan-backup-id"),
+          "MeshSpan-Backup-Digest": response.headers.get(
+            "meshspan-backup-digest",
+          ),
+        });
+        if (headers["MeshSpan-Backup-ID"] !== input.backup_id) {
+          throw new TypeError(
+            "backup export response names another generation",
+          );
+        }
+        return {
+          headers,
+          body: verifyBackupStream(
+            response.body,
+            headers["Content-Length"],
+            headers["MeshSpan-Backup-Digest"],
+          ),
+        };
+      } catch (error) {
+        if (!response.bodyUsed) await response.body?.cancel();
+        throw error;
+      }
     },
     async addGroupMember(
       groupId,

@@ -92,6 +92,7 @@ function readAuthenticationRoutes(operations) {
 function readAdministrationRoutes(operations) {
   return {
     listBackupRuns: requireOperation(operations, "listBackupRuns"),
+    exportMetadataBackup: requireOperation(operations, "exportMetadataBackup"),
     listBackupDestinations: requireOperation(
       operations,
       "listBackupDestinations",

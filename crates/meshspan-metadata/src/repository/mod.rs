@@ -2216,6 +2216,21 @@ impl AuthoritativeRepository {
         backup_catalogue::copy(self.database.connection(), backup_id, destination_id)
     }
 
+    /// Returns one bounded page of exact copy records, including retired generations.
+    ///
+    /// Callers must check current access, copy state and destination fencing before IO.
+    ///
+    /// # Errors
+    /// Rejects malformed persisted copy records.
+    pub fn backup_copies(
+        &self,
+        backup_id: meshspan_domain::BackupId,
+        after: Option<BackupDestinationCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<BackupCopyRecord, BackupDestinationCursor>, RepositoryError> {
+        backup_catalogue::copies(self.database.connection(), backup_id, after, limit)
+    }
+
     /// Returns the current automatic metadata-backup policy for this partition.
     ///
     /// # Errors

@@ -12,6 +12,7 @@ import {
 } from "./fetch-contract.mjs";
 import { renderUploadClientMethods } from "./render-upload-client.mjs";
 import { renderBackupScheduleClientMethods } from "./render-backup-schedule-client.mjs";
+import { renderBackupExportClientMethods } from "./render-backup-export-client.mjs";
 import {
   renderBackupHistoryClientMethods,
   renderBackupHistoryRuntime,
@@ -83,6 +84,7 @@ const source = `// SPDX-License-Identifier: GPL-2.0-only
 // Generated from the Rust-authored MeshSpan OpenAPI contract. Do not edit.
 
 ${CLIENT_IMPORTS}
+import { verifyBackupStream } from "../native-api/backup-stream";
 import {
   appendQuery,
   authenticatedHeaders,
@@ -146,6 +148,7 @@ export function createMeshSpanFetchClient(
     ${renderBackupScheduleClientMethods(routes)}
     ${renderBackupDestinationClientMethods(routes)}
     ${renderBackupHistoryClientMethods(routes)}
+    ${renderBackupExportClientMethods(routes)}
     ${renderIdentityAdministrationClientMethods(routes)}
     ${renderNamespaceMutationClientMethods(routes)}
     ${renderUploadClientMethods(routes)}

@@ -11,7 +11,7 @@ const FRAME_BYTES: usize = 64 * 1024;
 
 /// Counts and hashes provider bytes independently, withholding the final frame until verified.
 ///
-/// The caller must obtain `request` from current authorised catalogue evidence and recheck
+/// The caller must obtain transfer evidence from the current authorised catalogue and recheck
 /// authority before calling `finish`. Failed verification never emits the declared complete
 /// byte length, including when a provider lies in its receipt. `flush` deliberately
 /// does not release the withheld frame. This is encrypted-byte verification, not restore proof.

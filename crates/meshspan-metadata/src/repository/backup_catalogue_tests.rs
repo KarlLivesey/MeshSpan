@@ -6,6 +6,10 @@ use meshspan_domain::{
 };
 use sha2::{Digest, Sha256};
 
+#[path = "backup_capture_tests.rs"]
+mod capture;
+#[path = "backup_copy_inventory_tests.rs"]
+mod copy_inventory;
 #[path = "backup_defaults_tests.rs"]
 mod defaults;
 #[path = "backup_destination_tests.rs"]
@@ -142,6 +146,7 @@ fn record_and_verify_backup(
         LogPosition { index: 7, term: 1 },
         context(36, fixture.administrator, 37, 40, 6)?,
         &AuthoritativeCommand::RecordMetadataBackup(RecordMetadataBackup {
+            source_created_at: UnixMicros::new(40),
             backup_id: backup,
             partition_id: fixture.partition,
             mesh_id: fixture.mesh,

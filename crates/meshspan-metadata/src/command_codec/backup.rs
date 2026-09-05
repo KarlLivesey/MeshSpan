@@ -375,6 +375,7 @@ fn encode_backup(
 ) -> Result<(), MetadataCommandCodecError> {
     validate_backup(value)?;
     encoder.u16(RECORD_METADATA_BACKUP)?;
+    encoder.i64(value.source_created_at.get())?;
     encoder.identifier(value.backup_id.as_bytes())?;
     encoder.identifier(value.partition_id.as_bytes())?;
     encoder.identifier(value.mesh_id.as_bytes())?;
@@ -395,6 +396,7 @@ fn decode_backup(
     decoder: &mut Decoder<'_>,
 ) -> Result<RecordMetadataBackup, MetadataCommandCodecError> {
     let value = RecordMetadataBackup {
+        source_created_at: UnixMicros::new(decoder.i64()?),
         backup_id: BackupId::from_bytes(decoder.identifier()?)?,
         partition_id: PartitionId::from_bytes(decoder.identifier()?)?,
         mesh_id: MeshId::from_bytes(decoder.identifier()?)?,
@@ -519,7 +521,8 @@ fn decode_failure_relationship(
 }
 
 fn validate_backup(value: &RecordMetadataBackup) -> Result<(), MetadataCommandCodecError> {
-    if value.last_log_index == 0
+    if value.source_created_at.get() < 0
+        || value.last_log_index == 0
         || value.last_log_term == 0
         || value.state_revision.get() == 0
         || value.schema_version == 0

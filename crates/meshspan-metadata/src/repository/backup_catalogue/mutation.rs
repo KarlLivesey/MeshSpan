@@ -114,6 +114,9 @@ pub(in crate::repository) fn record_backup(
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
     validate_backup_source(transaction, partition_id, command)?;
+    if command.source_created_at.get() < 0 || command.source_created_at > context.occurred_at {
+        return Err(RepositoryError::InvalidCommand);
+    }
     validate_initial_copy(transaction, command)?;
     transaction.execute(
         "INSERT INTO metadata_backups(
@@ -134,7 +137,7 @@ pub(in crate::repository) fn record_backup(
             command.manifest_digest.as_slice(),
             to_i64(command.encrypted_byte_length)?,
             command.encrypted_digest.as_slice(),
-            context.occurred_at.get(),
+            command.source_created_at.get(),
             to_i64(revision.get())?,
         ],
     )?;
@@ -273,6 +276,8 @@ fn validate_backup_source(
     partition_id: PartitionId,
     command: &RecordMetadataBackup,
 ) -> Result<(), RepositoryError> {
+    // Uploads do not freeze the live head. Historical admission needs an exact retained
+    // log term and the latest committed state revision at that position, not just <= bounds.
     if command.partition_id != partition_id
         || command.last_log_index == 0
         || command.last_log_term == 0
@@ -288,9 +293,16 @@ fn validate_backup_source(
             SELECT 1 FROM meshes m, applied_state a
             WHERE m.mesh_id = ?1 AND a.singleton = 1
               AND a.schema_version = ?2
-              AND a.last_log_index = ?3
-              AND a.last_log_term = ?4
-              AND a.state_revision = ?5
+              AND a.last_log_index >= ?3 AND a.state_revision >= ?5
+              AND (
+                (a.last_log_index = ?3 AND a.last_log_term = ?4 AND a.state_revision = ?5)
+                OR (
+                  a.last_log_index > ?3
+                  AND EXISTS(SELECT 1 FROM consensus_log l WHERE l.log_index = ?3 AND l.term = ?4)
+                  AND (SELECT o.revision FROM operations o WHERE o.committed_log_index <= ?3
+                       ORDER BY o.committed_log_index DESC LIMIT 1) = ?5
+                )
+              )
          )",
         params![
             command.mesh_id.as_bytes().as_slice(),
