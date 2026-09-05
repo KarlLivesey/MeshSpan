@@ -439,8 +439,12 @@ exact retry. Six journal cases passed in 0.06 seconds, including 64-item paging,
 changed identity, stored/retired rejection and transactional fault rollback.
 The full backup/storage library suites passed (12 tests in 0.77 seconds and 30
 tests in 1.08 seconds). Affected all-target/all-feature Clippy passed in 20.53
-seconds, then 4.57 seconds after the final integration cases. Full workspace
-verification is required before merge.
+seconds, then 4.57 seconds after the final integration cases. The complete
+NVM-default `MESHSPAN_CHECK_WORKERS=4 pnpm check` passed on `953b47d` in
+**619.68 seconds**: Rust workspace tests took 575.63 seconds and web tests took
+5.33 seconds. Workspace Clippy, both licence gates, formatting, type checking and
+generated-contract drift passed. Existing opt-in SMB container and hardware/soak
+proofs remain separate; no release or image was produced.
 
 An unindexed published object deliberately keeps its charge and is recoverable
 by exact retry; this is not a claim that an abandoned published generation may be
