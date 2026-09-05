@@ -614,8 +614,11 @@ cases across 37 files in 5.00 seconds**, with TypeScript and full web/tooling ES
 The real CLI/HTTPS operator flow created an automatic encrypted backup, downloaded
 it and successfully exercised this isolated-restore endpoint before completing
 the existing file/node-loss cycle in **21.77 seconds**. Workspace Clippy passed
-after correcting two unnecessary owned arguments. The complete local gate for
-this slice remains pending.
+after correcting two unnecessary owned arguments. The complete NVM-default
+`MESHSPAN_CHECK_WORKERS=4 pnpm check` passed on `4ee4388` in **818.77 seconds**:
+Rust workspace tests took 779.34 seconds and web tests took 12.19 seconds. Generated
+contract drift, both licence gates, Rust and web lint, formatting, TypeScript and
+scheduler checks all passed. The gate ran locally; no GitHub Actions were used.
 
 This is not an offline-bundle verification, catastrophe-recovery authority
 transition, restore-as-live activation or a guarantee that a historical copy will
