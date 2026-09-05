@@ -78,13 +78,43 @@ Local validation on 5 September 2026:
 - The real mTLS/QUIC lifecycle passed locally. This proof is not a claim that
   destination administration, retention or end-to-end disaster recovery is done.
 
+## Common shard and backup capacity accounting
+
+Registered-target backup providers now charge the existing target journal rather
+than receiving an independent copy of the folder allowance. Every destination
+on that target shares the shard reservation and committed-usage counters.
+
+The durable order is reserve before provider IO, commit usage after durable
+catalogue publication, and release after exact physical retirement. Exact object
+identity—not a fresh request ID—keys the charge. Unknown/failed writes keep their
+hold through reservation expiry and restart; exact retry resolves it. Existing
+catalogued backup objects are charged during provider opening, including when
+their usage exceeds a reduced ceiling. Admission then refuses additional space.
+This accounting does not claim that an uncertain write produced a usable backup.
+
+Target-journal migration 2 adds the charge records without replacing shard
+reservations or inventory. Provider capacity is mutable policy rather than part
+of destination identity. Runtime routes share the live target policy owner and
+are rebuilt when that owner changes.
+
+Focused local tests prove common admission across two real backup destinations
+and a shard provider, rejection before consuming an over-limit stream, release
+exactly once, failed-stream retry after provider restart, startup charging,
+target-journal restart and migration from schema 1. `pnpm check` passed locally
+on 5 September 2026 in **457.36 seconds** with four workers under NVM default
+Node 26.8.1. The Rust workspace test lane took 416.18 seconds and web tests took
+4.07 seconds. This includes format, warning-denied lint, typechecking, contract
+drift and dependency licence gates. Opt-in SMB image tests, hardware and soak
+acceptance remain separate; nothing was released or published.
+
 ## Remaining backup integration
 
 The schedule API does not close these separate outstanding requirements:
 
 - destination administration and automatic default policy selection;
-- one shared target capacity account for shards and backup destinations;
 - retention retirement and guarded physical reclamation;
+- automatic resolution of abandoned backup holds and completion of a capacity
+  release interrupted after provider retirement;
 - product-facing restore-readiness, encrypted export and recovery workflows;
 - provider/federation destination implementations and their acceptance evidence.
 

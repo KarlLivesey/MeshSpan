@@ -14,6 +14,38 @@ use meshspan_domain::UnixMicros;
 
 use crate::{FolderShardStore, FolderShardStoreError};
 
+impl<P: StorageProvider + meshspan_contracts::BackupCapacityBudget>
+    meshspan_contracts::BackupCapacityBudget for SharedStorageProvider<P>
+{
+    fn reserve(
+        &mut self,
+        object: meshspan_contracts::BackupObjectIdentity,
+    ) -> Result<(), ContractError> {
+        meshspan_contracts::BackupCapacityBudget::reserve(&mut *self.lock()?, object)
+    }
+
+    fn commit(
+        &mut self,
+        object: meshspan_contracts::BackupObjectIdentity,
+    ) -> Result<(), ContractError> {
+        self.lock()?.commit(object)
+    }
+
+    fn reconcile_existing(
+        &mut self,
+        object: meshspan_contracts::BackupObjectIdentity,
+    ) -> Result<(), ContractError> {
+        self.lock()?.reconcile_existing(object)
+    }
+
+    fn release(
+        &mut self,
+        object: meshspan_contracts::BackupObjectIdentity,
+    ) -> Result<(), ContractError> {
+        self.lock()?.release(object)
+    }
+}
+
 /// One target-local provider shared by independently opened filesystem service connections.
 ///
 /// A registered target owns one journal and active pack writer, so its mutations must be ordered.
@@ -40,6 +72,12 @@ where
             descriptor,
             removal_fence,
         }
+    }
+
+    /// Whether two handles borrow the same live target and policy owner.
+    #[must_use]
+    pub fn shares_owner_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, P>, ContractError> {
@@ -251,6 +289,7 @@ mod tests {
         let shared = SharedStorageProvider::new(provider);
 
         assert!(shared.capacity_ceiling()? > 0);
+        assert!(shared.shares_owner_with(&shared.clone()));
         Ok(())
     }
 

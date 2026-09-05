@@ -5,6 +5,7 @@
 mod access;
 mod authority;
 mod backup;
+mod backup_capacity;
 mod common;
 mod component;
 mod conformance;
@@ -33,6 +34,7 @@ pub use backup::{
     validate_backup_delete_request, validate_backup_read_request, validate_backup_store_request,
     validate_backup_verify_request,
 };
+pub use backup_capacity::BackupCapacityBudget;
 
 pub use common::{
     BoundedBytes, BoundedBytesError, BoundedItems, BoundedItemsError, ContractError, ContractKind,

@@ -111,11 +111,17 @@ fn bind_identity(
             ))
         },
     )?;
-    if stored.0.as_slice() != destination_id.as_bytes()
-        || to_u64(stored.1)? != provider_generation
-        || to_u64(stored.2)? != maximum_bytes
+    if stored.0.as_slice() != destination_id.as_bytes() || to_u64(stored.1)? != provider_generation
     {
         return Err(DirectoryBackupProviderError::IdentityMismatch);
+    }
+    // A ceiling is mutable policy, not provider identity. Existing objects remain charged
+    // even when a replacement policy is below their usage; only new admission is refused.
+    if to_u64(stored.2)? != maximum_bytes {
+        transaction.execute(
+            "UPDATE provider_state SET maximum_bytes = ?1 WHERE singleton = 1",
+            [to_i64(maximum_bytes)?],
+        )?;
     }
     transaction.commit()?;
     Ok(())

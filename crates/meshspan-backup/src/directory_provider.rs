@@ -11,11 +11,11 @@ use std::path::Path;
 use cap_std::fs::Dir;
 use catalogue::{Catalogue, OperationKind, operation_digest};
 use meshspan_contracts::{
-    BackupDeleteReceipt, BackupDeleteRequest, BackupObjectIdentity, BackupObjectReceipt,
-    BackupProvider, BackupReadReceipt, BackupReadRequest, BackupStoreRequest, BackupVerifyRequest,
-    ContractError, ContractKind, ContractLimits, ContractVersion, ImplementationDescriptor,
-    validate_backup_delete_request, validate_backup_read_request, validate_backup_store_request,
-    validate_backup_verify_request,
+    BackupCapacityBudget, BackupDeleteReceipt, BackupDeleteRequest, BackupObjectIdentity,
+    BackupObjectReceipt, BackupProvider, BackupReadReceipt, BackupReadRequest, BackupStoreRequest,
+    BackupVerifyRequest, ContractError, ContractKind, ContractLimits, ContractVersion,
+    ImplementationDescriptor, validate_backup_delete_request, validate_backup_read_request,
+    validate_backup_store_request, validate_backup_verify_request,
 };
 use meshspan_domain::{BackupDestinationId, UnixMicros};
 use object_io::{
@@ -32,6 +32,7 @@ pub struct DirectoryBackupProvider {
     catalogue: Catalogue,
     destination_id: BackupDestinationId,
     provider_generation: u64,
+    capacity: Option<Box<dyn BackupCapacityBudget>>,
     _lock: std::fs::File,
 }
 
@@ -65,8 +66,33 @@ impl DirectoryBackupProvider {
             catalogue,
             destination_id,
             provider_generation,
+            capacity: None,
             _lock: files.lock,
         })
+    }
+
+    /// Binds shared target accounting and charges already catalogued objects before serving IO.
+    ///
+    /// # Errors
+    /// Fails closed on a changed charge, invalid catalogue or unavailable target journal.
+    /// Catalogue rows are paged; this does not read all backup contents into memory.
+    pub fn with_capacity_budget(
+        mut self,
+        mut budget: Box<dyn BackupCapacityBudget>,
+    ) -> Result<Self, DirectoryBackupProviderError> {
+        let mut after = None;
+        loop {
+            let objects = self.catalogue.live_objects(after)?;
+            if objects.is_empty() {
+                break;
+            }
+            for object in objects {
+                budget.reconcile_existing(object)?;
+                after = Some(object.backup_id);
+            }
+        }
+        self.capacity = Some(budget);
+        Ok(self)
     }
 
     fn validate_binding(&self, object: BackupObjectIdentity) -> Result<(), ContractError> {
@@ -90,14 +116,25 @@ impl DirectoryBackupProvider {
         let reference = object_reference(request.object)?;
         let request_digest =
             operation_digest(OperationKind::Store, request, reference.as_str(), None);
-        if self.catalogue.operation_completed(
+        let completed = self.catalogue.operation_completed(
             request.context.operation_id,
             OperationKind::Store,
             request_digest,
-        )? {
+        )?;
+        if !completed {
+            self.catalogue.admit_capacity(request.object)?;
+        }
+        // A failed/unknown write keeps its hold. Exact retry or confirmed retirement resolves
+        // it; reservation expiry must never free space potentially occupied by backup bytes.
+        if let Some(budget) = &mut self.capacity {
+            budget.reserve(request.object)?;
+        }
+        if completed {
+            if let Some(budget) = &mut self.capacity {
+                budget.commit(request.object)?;
+            }
             return Ok(store_receipt(request, reference));
         }
-        self.catalogue.admit_capacity(request.object)?;
         persist_stream(
             &self.objects,
             request.context.operation_id,
@@ -107,6 +144,9 @@ impl DirectoryBackupProvider {
         )?;
         self.catalogue
             .record_store(request, reference.as_str(), request_digest, observed_at)?;
+        if let Some(budget) = &mut self.capacity {
+            budget.commit(request.object)?;
+        }
         Ok(store_receipt(request, reference))
     }
 
@@ -179,6 +219,9 @@ impl DirectoryBackupProvider {
             OperationKind::Delete,
             request_digest,
         )? {
+            if let Some(budget) = &mut self.capacity {
+                budget.release(request.object)?;
+            }
             return Ok(delete_receipt(request));
         }
         self.catalogue
@@ -186,6 +229,9 @@ impl DirectoryBackupProvider {
         remove_if_present(&self.objects, request.object_reference.as_str())?;
         self.catalogue
             .record_delete(request, request_digest, observed_at)?;
+        if let Some(budget) = &mut self.capacity {
+            budget.release(request.object)?;
+        }
         Ok(delete_receipt(request))
     }
 }
@@ -289,7 +335,7 @@ pub enum DirectoryBackupProviderError {
     /// Provider configuration or integer bounds are invalid.
     #[error("backup provider input is invalid")]
     InvalidInput,
-    /// Existing state belongs to another destination generation or capacity configuration.
+    /// Existing state belongs to another destination generation.
     #[error("backup provider identity does not match")]
     IdentityMismatch,
     /// The provider directory is already owned by another live process.

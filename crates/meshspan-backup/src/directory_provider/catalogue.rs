@@ -9,7 +9,7 @@ use std::path::Path;
 use meshspan_contracts::{
     BackupDeleteRequest, BackupObjectIdentity, BackupObjectReference, BackupStoreRequest,
 };
-use meshspan_domain::{BackupDestinationId, OperationId, UnixMicros};
+use meshspan_domain::{BackupDestinationId, BackupId, OperationId, UnixMicros};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
@@ -30,6 +30,50 @@ pub(super) struct Catalogue {
 }
 
 impl Catalogue {
+    pub(super) fn live_objects(
+        &self,
+        after: Option<BackupId>,
+    ) -> Result<Vec<BackupObjectIdentity>, DirectoryBackupProviderError> {
+        let mut statement = self.connection.prepare(
+            "SELECT backup_id, destination_id, provider_generation, byte_length, digest
+             FROM backup_objects WHERE state = 1 AND backup_id > ?1 ORDER BY backup_id LIMIT 64",
+        )?;
+        let lower = after.map_or([0; 16], BackupId::as_bytes);
+        let rows = statement.query_map([lower.as_slice()], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Vec<u8>>(4)?,
+            ))
+        })?;
+        let mut objects = Vec::new();
+        for row in rows {
+            let (backup, destination, generation, bytes, digest) = row?;
+            objects.push(BackupObjectIdentity {
+                backup_id: BackupId::from_bytes(
+                    backup
+                        .try_into()
+                        .map_err(|_| DirectoryBackupProviderError::Corrupt)?,
+                )
+                .map_err(|_| DirectoryBackupProviderError::Corrupt)?,
+                destination_id: BackupDestinationId::from_bytes(
+                    destination
+                        .try_into()
+                        .map_err(|_| DirectoryBackupProviderError::Corrupt)?,
+                )
+                .map_err(|_| DirectoryBackupProviderError::Corrupt)?,
+                provider_generation: to_u64(generation)?,
+                byte_length: to_u64(bytes)?,
+                digest: digest
+                    .try_into()
+                    .map_err(|_| DirectoryBackupProviderError::Corrupt)?,
+            });
+        }
+        Ok(objects)
+    }
+
     pub(super) fn open(
         file_path: &Path,
         destination_id: BackupDestinationId,

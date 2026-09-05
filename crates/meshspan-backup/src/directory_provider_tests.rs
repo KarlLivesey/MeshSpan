@@ -221,6 +221,57 @@ fn changed_provider_bytes_are_reported_as_corrupt() -> Result<(), Box<dyn std::e
 }
 
 #[test]
+fn changed_capacity_policy_preserves_existing_objects_and_limits_new_admission()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let destination_id = BackupDestinationId::from_bytes([25; 16])?;
+    let bytes = b"four";
+    let object = identity(destination_id, BackupId::from_bytes([26; 16])?, bytes);
+    let receipt = {
+        let mut provider = DirectoryBackupProvider::open(
+            directory.path(),
+            destination_id,
+            1,
+            4,
+            UnixMicros::new(1),
+        )?;
+        provider.store_exact(
+            BackupStoreRequest {
+                context: context(27, 1)?,
+                object,
+            },
+            &mut Cursor::new(bytes),
+            UnixMicros::new(2),
+        )?
+    };
+    let mut reduced =
+        DirectoryBackupProvider::open(directory.path(), destination_id, 1, 2, UnixMicros::new(3))?;
+    let mut returned = Vec::new();
+    reduced.read_exact(
+        &BackupReadRequest {
+            context: context(28, 2)?,
+            object,
+            object_reference: receipt.object_reference,
+        },
+        &mut returned,
+        UnixMicros::new(4),
+    )?;
+    assert_eq!(returned, bytes);
+    assert_eq!(
+        reduced.store_exact(
+            BackupStoreRequest {
+                context: context(29, 3)?,
+                object: identity(destination_id, BackupId::from_bytes([30; 16])?, b"x"),
+            },
+            &mut Cursor::new(b"x"),
+            UnixMicros::new(5)
+        ),
+        Err(ContractError::ResourceExhausted)
+    );
+    Ok(())
+}
+
+#[test]
 fn independent_destinations_can_share_one_registered_folder()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
