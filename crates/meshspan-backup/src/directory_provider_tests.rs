@@ -272,6 +272,47 @@ fn changed_capacity_policy_preserves_existing_objects_and_limits_new_admission()
 }
 
 #[test]
+fn restart_and_changed_operation_retry_discard_only_unpublished_staging()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let destination = BackupDestinationId::from_bytes([50; 16])?;
+    let open = || {
+        DirectoryBackupProvider::open(directory.path(), destination, 1, 1_024, UnixMicros::new(1))
+    };
+    let provider = open()?;
+    let objects = directory
+        .path()
+        .join(".meshspan-backups")
+        .join(destination.to_string().replace('-', ""))
+        .join("objects");
+    let orphan = objects.join("pending-11111111111111111111111111111111");
+    let sibling = objects.join("pending-not-an-operation");
+    std::fs::write(&orphan, b"partial backup")?;
+    std::fs::write(&sibling, b"not selected")?;
+    drop(provider);
+    let mut provider = open()?;
+    assert!(!orphan.try_exists()?);
+    assert_eq!(std::fs::read(&sibling)?, b"not selected");
+    std::fs::write(&orphan, b"prior failed attempt")?;
+    let object = identity(destination, BackupId::from_bytes([51; 16])?, b"final");
+    let receipt = provider.store_exact(
+        BackupStoreRequest {
+            context: context(52, 1)?,
+            object,
+        },
+        &mut Cursor::new(b"final"),
+        UnixMicros::new(2),
+    )?;
+    assert!(!orphan.try_exists()?);
+    assert_eq!(
+        std::fs::read(objects.join(receipt.object_reference.as_str()))?,
+        b"final"
+    );
+    assert_eq!(std::fs::read(&sibling)?, b"not selected");
+    Ok(())
+}
+
+#[test]
 fn independent_destinations_can_share_one_registered_folder()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;

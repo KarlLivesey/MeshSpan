@@ -107,6 +107,16 @@ Node 26.8.1. The Rust workspace test lane took 416.18 seconds and web tests took
 drift and dependency licence gates. Opt-in SMB image tests, hardware and soak
 acceptance remain separate; nothing was released or published.
 
+A follow-up recovery check found that a failed write could leave a temporary
+file under an older operation ID. The exclusively owned provider now removes
+strictly named unpublished staging files on opening and before another write,
+so repeated attempts cannot accumulate uncharged temporary copies. Published
+objects and non-matching names are not selected. After this follow-up, all 11
+backup tests passed in 0.74 seconds, the three real-folder capacity tests in
+0.20 seconds and the real mTLS/QUIC lifecycle in 0.34 seconds. Affected
+all-target/all-feature warning-denied Clippy passed in 12.85 seconds; the full
+workspace result above precedes this focused follow-up.
+
 ## Remaining backup integration
 
 The schedule API does not close these separate outstanding requirements:

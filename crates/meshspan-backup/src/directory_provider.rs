@@ -61,6 +61,7 @@ impl DirectoryBackupProvider {
             maximum_bytes,
             opened_at,
         )?;
+        object_io::discard_unpublished_staging(&files.objects)?;
         Ok(Self {
             objects: files.objects,
             catalogue,
