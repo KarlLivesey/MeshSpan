@@ -440,6 +440,7 @@ mod volume_inventory_tests;
 mod volume_key_loading;
 #[cfg(test)]
 mod volume_key_loading_tests;
+mod web_assets;
 
 pub use api_key_issuance::ApiKeyIssuanceService;
 pub use api_key_issuance_api::{

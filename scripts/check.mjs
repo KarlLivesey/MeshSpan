@@ -17,7 +17,16 @@ report(generation);
 if (!generation.passed) {
   process.exitCode = 1;
 } else {
-  const rustQualityLanes = [
+  const buildAndRustLanes = [
+    {
+      name: "embedded web bundle",
+      steps: [
+        [
+          process.execPath,
+          ["web/node_modules/vite/bin/vite.js", "build", "web"],
+        ],
+      ],
+    },
     {
       name: "Rust format",
       steps: [["cargo", ["fmt", "--all", "--", "--check"]]],
@@ -120,7 +129,7 @@ if (!generation.passed) {
     },
   ];
   const results = [];
-  for (const lane of rustQualityLanes) {
+  for (const lane of buildAndRustLanes) {
     const result = await runLane(lane);
     results.push(result);
     report(result);
