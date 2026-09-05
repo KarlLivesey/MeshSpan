@@ -11,6 +11,9 @@ mod directory_provider;
 #[cfg(test)]
 mod directory_provider_tests;
 mod error;
+mod export;
+#[cfg(test)]
+mod export_tests;
 mod format;
 mod reader;
 mod shared_provider;
@@ -18,6 +21,7 @@ mod writer;
 
 pub use directory_provider::{DirectoryBackupProvider, DirectoryBackupProviderError};
 pub use error::BackupError;
+pub use export::{BackupExportEvidence, VerifiedBackupExport};
 pub use format::{BackupFileEvidence, BackupSourceManifest};
 pub use reader::restore_backup;
 pub use shared_provider::SharedBackupProvider;

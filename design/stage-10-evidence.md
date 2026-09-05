@@ -482,8 +482,69 @@ seconds), web tests (8.58 seconds), both licence gates, workspace Clippy,
 formatting, TypeScript/ESLint and generated-contract drift. No release, tag,
 image or publication workflow was run.
 
-This is historical inventory, not the still-outstanding restore-readiness,
-encrypted export or recovery workflow.
+This is historical inventory, not restore-readiness or recovery proof. Native
+encrypted export is described below.
+
+## Native encrypted backup export
+
+`GET /api/latest/admin/backups/{backup_id}/export` streams an exact encrypted
+container through the existing local-folder or private QUIC/mTLS backup provider.
+It accepts current system-manager credentials, not provider paths or a recovery
+private key. Rust-authored OpenAPI defines the canonical generation identifier,
+lossless `Content-Length`, and `MeshSpan-Backup-Digest` headers. There are no query
+parameters or range/resume semantics in this operation.
+
+The daemon hashes and counts bytes independently of the provider receipt and
+withholds its final 64 KiB frame until the receipt, current authority and exact
+catalogue evidence pass verification. Corruption, truncation, changed copies,
+revocation or deadline expiry cannot produce the declared complete download.
+Another provider is tried only before any prefix has escaped. The HTTP bridge
+uses two 64 KiB queue slots, closes its sink on client cancellation, and times
+out backpressure. Export admission covers preparation and provider work; its
+default worker capacity follows available CPU parallelism, and its constructor
+accepts explicit capacity and transfer-time limits. The daemon currently supplies
+a one-hour transfer deadline. This does not cap ordinary HTTP connections.
+
+The generated Fetch client validates the path and response headers and exposes a
+cancellable byte stream. The stream checks exact length and SHA-256 through EOF
+using the existing hashing dependency. A caller must finish consuming that stream
+before committing its downloaded file. Opening a transfer, receiving headers or
+downloading encrypted bytes does not prove decryption or restoration. The panel
+download action and product-facing recovery flow remain separate work.
+
+The real-process proof exposed an existing admission race: encrypted bytes could
+be stored, but any intervening metadata commit made the captured revision differ
+from the live head, preventing admission forever on retry. Admission now verifies
+an older captured position against retained committed log-term and indexed
+operation-revision evidence, while rejecting unknown/future or contradictory
+positions. If that historical evidence is no longer retained, admission still
+fails closed; recovery of such unpublished generations remains outstanding.
+Snapshot construction derives its manifest from the finished SQLite copy, not a
+separate pre-copy read of the changing live head. Capture time is also preserved
+independently of later publication or retry time.
+
+This adds `source_created_at` to the pre-`1.0` private `RecordMetadataBackup`
+command encoding and canonical request digest. Nodes need matching builds;
+old encoded instances of that command are not compatible. No SQL migration,
+dependency, release, tag, image or publication workflow was introduced.
+
+Focused local evidence: four streaming-core cases passed in 0.01 seconds; five
+HTTP/body cases passed in 0.36 seconds; two Rust boundary cases passed in 0.02
+seconds. Indexed copy paging/corrupt-row rejection passed in 0.29 seconds and the
+capture/admission regression passed in 0.36 seconds. The metadata backup suite
+passed 48 cases in 37.23 seconds before the added capture regression. All 165 web
+tests passed in 4.16 seconds, and TypeScript/ESLint passed. After correcting the
+admission race, the actual CLI/HTTPS operator flow completed an automatic backup,
+downloaded it, checked its container magic, exact length and digest, and completed
+the existing node-loss/file round trip in 18.89 seconds. Three concurrent reruns
+passed in 25.99, 25.94 and 25.92 seconds; the earlier claimed-run timeouts were not
+accepted as success.
+
+The complete NVM-default `MESHSPAN_CHECK_WORKERS=4 pnpm check` passed on
+`071620e` in **1121.29 seconds**. Rust workspace tests took 1016.67 seconds and
+web tests took 15.51 seconds. Generated-contract drift, Rust/workspace formatting,
+all-target/all-feature Clippy, TypeScript/ESLint and both dependency licence gates
+also passed. No release, tag, image or publication workflow was run.
 
 ## Remaining backup integration
 
@@ -497,7 +558,7 @@ The schedule API does not close these separate outstanding requirements:
 
 - remote/provider failure-assessment integration;
 - authoritative recovery/retirement of abandoned published-but-unindexed backup objects;
-- product-facing restore-readiness, encrypted export and recovery workflows;
+- panel export, product-facing restore-readiness and recovery workflows;
 - provider/federation destination implementations and their acceptance evidence.
 
 The remaining certificate, operational panel, metrics, update, packaging and

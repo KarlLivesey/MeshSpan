@@ -297,6 +297,38 @@ export type AssignVolumeProtectionPolicyResponse = {
 };
 
 /**
+ * BackupExportHeaders
+ *
+ * Headers binding a streamed encrypted container to authoritative catalogue evidence.
+ */
+export type BackupExportHeaders = {
+  /**
+   * Exact encrypted-container length as a lossless decimal string.
+   */
+  "Content-Length": string;
+  /**
+   * SHA-256 of the complete encrypted container, verified during streaming.
+   */
+  "MeshSpan-Backup-Digest": string;
+  /**
+   * Exact generation; not a statement of current protection or restore readiness.
+   */
+  "MeshSpan-Backup-ID": string;
+};
+
+/**
+ * BackupExportPath
+ *
+ * Exact native encrypted-export path. No provider path or private key is accepted.
+ */
+export type BackupExportPath = {
+  /**
+   * Backup generation selected from the administration history.
+   */
+  backup_id: string;
+};
+
+/**
  * BackupScheduleResponse
  *
  * Current backup schedule for the gateway's authoritative partition.
@@ -5755,6 +5787,58 @@ export type ConfigureBackupScheduleResponses = {
 
 export type ConfigureBackupScheduleResponse2 =
   ConfigureBackupScheduleResponses[keyof ConfigureBackupScheduleResponses];
+
+export type ExportMetadataBackupData = {
+  body?: never;
+  path: {
+    /**
+     * Backup generation selected from the administration history.
+     */
+    backup_id: string;
+  };
+  query?: never;
+  url: "/admin/backups/{backup_id}/export";
+};
+
+export type ExportMetadataBackupErrors = {
+  /**
+   * Invalid identifier or unsupported query
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Selected generation is not exportable
+   */
+  409: ApiError;
+  /**
+   * Outgoing evidence failed validation
+   */
+  500: ApiError;
+  /**
+   * Export capacity or authority unavailable
+   */
+  503: ApiError;
+};
+
+export type ExportMetadataBackupError =
+  ExportMetadataBackupErrors[keyof ExportMetadataBackupErrors];
+
+export type ExportMetadataBackupResponses = {
+  /**
+   * Exact encrypted container; completion requires verified bytes
+   */
+  200: Blob | File;
+};
+
+export type ExportMetadataBackupResponse =
+  ExportMetadataBackupResponses[keyof ExportMetadataBackupResponses];
 
 export type ListManualDnsTasksData = {
   body?: never;

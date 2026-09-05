@@ -45,6 +45,7 @@ pub(super) fn record_backup(
     claim: MetadataBackupRunClaim,
 ) -> RecordMetadataBackup {
     RecordMetadataBackup {
+        source_created_at: evidence.source.created_at,
         backup_id: evidence.source.backup_id,
         partition_id: evidence.source.partition_id,
         mesh_id: evidence.source.mesh_id,
