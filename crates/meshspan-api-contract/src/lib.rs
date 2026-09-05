@@ -10,6 +10,10 @@ mod backup_destination;
 #[cfg(test)]
 mod backup_destination_tests;
 mod backup_destination_validation;
+mod backup_history;
+#[cfg(test)]
+mod backup_history_tests;
+mod backup_history_validation;
 mod backup_schedule;
 #[cfg(test)]
 mod backup_schedule_tests;
@@ -119,6 +123,12 @@ pub use backup_destination_validation::{
     MAX_CONFIGURE_BACKUP_DESTINATION_BYTES, decode_configure_backup_destination_request,
     encode_configure_backup_destination_response, encode_list_backup_destinations_response,
     validate_list_backup_destinations_query,
+};
+pub use backup_history::{
+    BackupRunStatus, BackupRunSummary, ListBackupRunsQuery, ListBackupRunsResponse,
+};
+pub use backup_history_validation::{
+    encode_list_backup_runs_response, validate_list_backup_runs_query,
 };
 pub use backup_schedule::{
     BackupSchedulePolicy, BackupScheduleResponse, BackupScheduleStatus,

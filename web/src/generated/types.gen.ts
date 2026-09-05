@@ -2895,6 +2895,71 @@ export type ListBackupDestinationsResponse = {
 };
 
 /**
+ * ListBackupRunsQuery
+ *
+ * Bounded newest-first history. Continuations preserve position, not stale authority.
+ */
+export type ListBackupRunsQuery = {
+  /**
+   * Opaque caller-bound continuation from the preceding page.
+   */
+  cursor?: string;
+  /**
+   * Maximum records; defaults to 25.
+   */
+  limit?: number;
+};
+
+/**
+ * ListBackupRunsResponse
+ *
+ * One live, newest-first page. Refresh starts at the newest occurrence.
+ */
+export type ListBackupRunsResponse = {
+  /**
+   * Exact relative continuation, or null at the end.
+   */
+  next_page_url: string | null;
+  /**
+   * Bounded records, ordered by decreasing run sequence.
+   */
+  runs: Array<{
+    /**
+     * Exact immutable backup identity.
+     */
+    backup_id: string;
+    /**
+     * Null until terminal; never inferred from a worker lease or timeout.
+     */
+    completed_at_epoch_micros: number | null;
+    /**
+     * Independent-copy requirement at queue time.
+     */
+    minimum_independent_copies: number;
+    /**
+     * Verified-copy requirement at queue time.
+     */
+    minimum_verified_copies: number;
+    /**
+     * Lossless monotonic occurrence number, not wall-clock ordering.
+     */
+    run_sequence: string;
+    /**
+     * Exact policy revision used by this occurrence.
+     */
+    schedule_sequence: string;
+    /**
+     * Scheduled occurrence time in Unix microseconds.
+     */
+    scheduled_for_epoch_micros: number;
+    /**
+     * Historical execution outcome, not current safety.
+     */
+    state: "queued" | "claimed" | "recorded" | "protected" | "incomplete";
+  }>;
+};
+
+/**
  * ListDirectoryResponse
  *
  * One immutable, bounded directory page.
@@ -5535,6 +5600,58 @@ export type ConfigureBackupDestinationResponses = {
 
 export type ConfigureBackupDestinationResponse2 =
   ConfigureBackupDestinationResponses[keyof ConfigureBackupDestinationResponses];
+
+export type ListBackupRunsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    /**
+     * Maximum records; defaults to 25.
+     */
+    limit?: number;
+    /**
+     * Opaque caller-bound continuation from the preceding page.
+     */
+    cursor?: string;
+  };
+  url: "/admin/backups/runs";
+};
+
+export type ListBackupRunsErrors = {
+  /**
+   * Invalid query or continuation
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListBackupRunsError =
+  ListBackupRunsErrors[keyof ListBackupRunsErrors];
+
+export type ListBackupRunsResponses = {
+  /**
+   * Bounded historical run outcomes and relative continuation
+   */
+  200: ListBackupRunsResponse;
+};
+
+export type ListBackupRunsResponse2 =
+  ListBackupRunsResponses[keyof ListBackupRunsResponses];
 
 export type GetBackupScheduleData = {
   body?: never;

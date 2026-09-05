@@ -1327,7 +1327,15 @@ fn authenticated_administration_routes(
         open_authentication_authority(local_state, authority, Arc::clone(private_network), now)?,
         gateway,
     ))?;
-    Ok(security.merge(resources).merge(backup).merge(destinations))
+    let history = crate::backup_history_api_router(crate::BackupHistoryService::new(
+        open_authentication_authority(local_state, authority, Arc::clone(private_network), now)?,
+        gateway,
+    ))?;
+    Ok(security
+        .merge(resources)
+        .merge(backup)
+        .merge(destinations)
+        .merge(history))
 }
 
 fn security_administration_routes(

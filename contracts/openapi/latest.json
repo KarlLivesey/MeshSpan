@@ -6377,6 +6377,151 @@
         "title": "ListBackupDestinationsResponse",
         "type": "object"
       },
+      "ListBackupRunsQuery": {
+        "additionalProperties": false,
+        "description": "Bounded newest-first history. Continuations preserve position, not stale authority.",
+        "properties": {
+          "cursor": {
+            "description": "Opaque caller-bound continuation from the preceding page.",
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9._-]+$",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Maximum records; defaults to 25.",
+            "format": "uint16",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "title": "ListBackupRunsQuery",
+        "type": "object"
+      },
+      "ListBackupRunsResponse": {
+        "additionalProperties": false,
+        "description": "One live, newest-first page. Refresh starts at the newest occurrence.",
+        "properties": {
+          "next_page_url": {
+            "description": "Exact relative continuation, or null at the end.",
+            "maxLength": 512,
+            "pattern": "^/api/latest/admin/backups/runs\\?limit=[0-9]+&cursor=[a-zA-Z0-9._-]+$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runs": {
+            "description": "Bounded records, ordered by decreasing run sequence.",
+            "items": {
+              "additionalProperties": false,
+              "description": "Historical run and the protection requirements captured when it was queued.",
+              "properties": {
+                "backup_id": {
+                  "description": "Exact immutable backup identity.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "completed_at_epoch_micros": {
+                  "description": "Null until terminal; never inferred from a worker lease or timeout.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "minimum_independent_copies": {
+                  "description": "Independent-copy requirement at queue time.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "minimum_verified_copies": {
+                  "description": "Verified-copy requirement at queue time.",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "run_sequence": {
+                  "description": "Lossless monotonic occurrence number, not wall-clock ordering.",
+                  "maxLength": 19,
+                  "minLength": 1,
+                  "pattern": "^[1-9][0-9]*$",
+                  "type": "string"
+                },
+                "schedule_sequence": {
+                  "description": "Exact policy revision used by this occurrence.",
+                  "maxLength": 19,
+                  "minLength": 1,
+                  "pattern": "^[1-9][0-9]*$",
+                  "type": "string"
+                },
+                "scheduled_for_epoch_micros": {
+                  "description": "Scheduled occurrence time in Unix microseconds.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "state": {
+                  "description": "Historical execution outcome, not current safety.",
+                  "oneOf": [
+                    {
+                      "const": "queued",
+                      "description": "An occurrence has been queued.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "claimed",
+                      "description": "A worker claim exists; it may need recovery after expiry.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "recorded",
+                      "description": "Encrypted bytes and their first receipt were recorded.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "protected",
+                      "description": "Required protection was met at completion, not necessarily now.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "incomplete",
+                      "description": "The occurrence ended without its required protection.",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "backup_id",
+                "run_sequence",
+                "schedule_sequence",
+                "scheduled_for_epoch_micros",
+                "completed_at_epoch_micros",
+                "state",
+                "minimum_verified_copies",
+                "minimum_independent_copies"
+              ],
+              "type": "object"
+            },
+            "maxItems": 100,
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs",
+          "next_page_url"
+        ],
+        "title": "ListBackupRunsResponse",
+        "type": "object"
+      },
       "ListDirectoryResponse": {
         "additionalProperties": false,
         "description": "One immutable, bounded directory page.",
@@ -11836,6 +11981,190 @@
           }
         },
         "summary": "Select a registered target or change a destination name and eligibility",
+        "x-meshspan-access": "system-manager"
+      }
+    },
+    "/admin/backups/runs": {
+      "get": {
+        "description": "Run states describe recorded execution, not present copy availability or restore readiness. Completion protection is historical. Pagination follows decreasing run sequence; newer runs appear on refresh, while existing run outcomes remain live. Every page checks current system-manager authority.",
+        "operationId": "listBackupRuns",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ListBackupRunsQuery/properties/limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ListBackupRunsQuery/properties/cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListBackupRunsResponse"
+                }
+              }
+            },
+            "description": "Bounded historical run outcomes and relative continuation",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid query or continuation",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List newest-first automatic metadata-backup history",
         "x-meshspan-access": "system-manager"
       }
     },

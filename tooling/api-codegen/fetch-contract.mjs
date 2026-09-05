@@ -91,6 +91,7 @@ function readAuthenticationRoutes(operations) {
 
 function readAdministrationRoutes(operations) {
   return {
+    listBackupRuns: requireOperation(operations, "listBackupRuns"),
     listBackupDestinations: requireOperation(
       operations,
       "listBackupDestinations",

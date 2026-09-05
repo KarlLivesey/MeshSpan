@@ -12,6 +12,8 @@ import type {
 export type BackupAdministrationClient = Pick<
   MeshSpanFetchClient,
   | "getBackupSchedule"
+  | "listBackupRuns"
+  | "listNextBackupRuns"
   | "configureBackupSchedule"
   | "listBackupDestinations"
   | "listNextBackupDestinations"

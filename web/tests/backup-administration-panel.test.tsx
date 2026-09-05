@@ -219,6 +219,8 @@ function fixture(): BackupAdministrationClient {
   let destinations = [destination()];
   return {
     getBackupSchedule: async () => currentSchedule,
+    listBackupRuns: async () => ({ runs: [], next_page_url: null }),
+    listNextBackupRuns: async () => ({ runs: [], next_page_url: null }),
     listBackupDestinations: async () => ({
       destinations,
       next_page_url: null,

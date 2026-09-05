@@ -7,6 +7,7 @@ import { AdministrationNavigation } from "../administration/AdministrationNaviga
 import { BackupScheduleForm } from "./BackupScheduleForm";
 import { BackupDestinations } from "./BackupDestinations";
 import { AddBackupDestination } from "./AddBackupDestination";
+import { BackupHistory } from "./BackupHistory";
 import {
   createBackupAdministration,
   type BackupAdministrationClient,
@@ -82,6 +83,7 @@ export function BackupAdministrationPanel(
           </>
         )}
       </Show>
+      <BackupHistory client={props.client} />
     </div>
   );
 }

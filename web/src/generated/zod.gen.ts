@@ -3173,6 +3173,79 @@ export const zListBackupDestinationsResponse = z
   .strict();
 
 /**
+ * ListBackupRunsQuery
+ *
+ * Bounded newest-first history. Continuations preserve position, not stale authority.
+ */
+export const zListBackupRunsQuery = z
+  .strictObject({
+    cursor: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^[a-zA-Z0-9._-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(100).optional(),
+  })
+  .strict();
+
+/**
+ * ListBackupRunsResponse
+ *
+ * One live, newest-first page. Refresh starts at the newest occurrence.
+ */
+export const zListBackupRunsResponse = z
+  .strictObject({
+    next_page_url: z
+      .string()
+      .max(512)
+      .regex(
+        /^\/api\/latest\/admin\/backups\/runs\?limit=[0-9]+&cursor=[a-zA-Z0-9._-]+$/,
+      )
+      .nullable(),
+    runs: z
+      .array(
+        z
+          .strictObject({
+            backup_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            completed_at_epoch_micros: z
+              .int()
+              .gte(0)
+              .lte(9007199254740991)
+              .nullable(),
+            minimum_independent_copies: z.int().gte(0).lte(255),
+            minimum_verified_copies: z.int().gte(1).lte(255),
+            run_sequence: z
+              .string()
+              .min(1)
+              .max(19)
+              .regex(/^[1-9][0-9]*$/),
+            schedule_sequence: z
+              .string()
+              .min(1)
+              .max(19)
+              .regex(/^[1-9][0-9]*$/),
+            scheduled_for_epoch_micros: z.int().gte(0).lte(9007199254740991),
+            state: z.union([
+              z.literal("queued"),
+              z.literal("claimed"),
+              z.literal("recorded"),
+              z.literal("protected"),
+              z.literal("incomplete"),
+            ]),
+          })
+          .strict(),
+      )
+      .max(100),
+  })
+  .strict();
+
+/**
  * ListDirectoryResponse
  *
  * One immutable, bounded directory page.
@@ -5812,6 +5885,23 @@ export const zConfigureBackupDestinationHeaders = z
  */
 export const zConfigureBackupDestinationResponse2 =
   zConfigureBackupDestinationResponse;
+
+export const zListBackupRunsQuery2 = z
+  .object({
+    limit: z.int().gte(1).lte(100).optional(),
+    cursor: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^[a-zA-Z0-9._-]+$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Bounded historical run outcomes and relative continuation
+ */
+export const zListBackupRunsResponse2 = zListBackupRunsResponse;
 
 /**
  * Current policy, or null before configuration
