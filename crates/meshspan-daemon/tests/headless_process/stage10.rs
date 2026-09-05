@@ -67,7 +67,7 @@ pub(super) async fn backup_destination_controls(
         .ok_or("explicit destination missing")?;
     assert_eq!(destination["state"], "paused");
     assert_eq!(destination["revision"], paused["committed_revision"]);
-    assert_eq!(destination["failure_relationship"], "unknown");
+    assert_eq!(destination["failure_relationship"], "overlapping");
     assert!(page["next_page_url"].is_null());
     Ok(())
 }
@@ -111,11 +111,13 @@ async fn automatic_backup_configuration(
                 .as_array()
                 .ok_or("destinations missing")?;
             assert!(!destinations.is_empty());
+            // Both joined nodes hold partition replicas. Their own folders
+            // therefore share a source-machine boundary, regardless of drive.
             assert!(
                 destinations
                     .iter()
                     .all(|destination| destination["state"] == "active"
-                        && destination["failure_relationship"] == "unknown")
+                        && destination["failure_relationship"] == "overlapping")
             );
             return Ok(());
         }

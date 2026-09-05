@@ -399,8 +399,14 @@ implementing those destinations remains outstanding.
 
 The 45 focused metadata backup tests passed in 24.26 seconds, including six new
 topology/protection cases and the indexed-query-plan check. Affected all-target,
-all-feature Clippy passed in 11.00 seconds. Complete workspace verification is
-still required before this slice is merged.
+all-feature Clippy passed in 11.00 seconds. The first full gate stopped at an
+outdated real-process assertion requiring every destination to remain unknown
+(239.17 seconds total). Both nodes in that fixture hold metadata replicas, so
+their backup folders must report overlapping. The updated real CLI/HTTPS flow
+passed in 15.69 seconds. A final focused rerun passed all 45 metadata cases in
+27.25 seconds; metadata/daemon all-target, all-feature Clippy passed in 20.66
+seconds. Complete workspace verification is still required before this slice is
+merged.
 
 ## Remaining backup integration
 

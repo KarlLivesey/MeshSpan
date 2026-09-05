@@ -113,7 +113,9 @@ const ASSESSMENT_SQL: &str = "WITH
        JOIN host_fault_group_memberships y USING(group_id)
        WHERE x.host_id = s.host_id AND y.host_id = t.host_id)),
    EXISTS(SELECT 1 FROM fault_group_classes WHERE system_managed = 0)
-     AND NOT EXISTS(SELECT 1 FROM fault_groups WHERE parent_group_id IS NOT NULL)
+     AND NOT EXISTS(SELECT 1 FROM involved_hosts h
+       JOIN host_fault_group_memberships f USING(host_id) JOIN fault_groups g USING(group_id)
+       WHERE g.parent_group_id IS NOT NULL)
      AND NOT EXISTS(SELECT 1 FROM involved_hosts h CROSS JOIN fault_group_classes c
        WHERE c.system_managed = 0 AND NOT EXISTS(SELECT 1 FROM host_fault_group_memberships f
          JOIN fault_groups g USING(group_id) WHERE f.host_id = h.host_id AND g.class_id = c.class_id))
