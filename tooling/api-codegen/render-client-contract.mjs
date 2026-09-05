@@ -2,6 +2,7 @@
 
 import { renderAuthenticationClientInterface } from "./render-authentication-client.mjs";
 import { renderBackupScheduleClientInterface } from "./render-backup-schedule-client.mjs";
+import { renderBackupDestinationClientInterface } from "./render-backup-destination-client.mjs";
 import {
   renderCertificateClientInterface,
   renderCertificateRequestTypes,
@@ -120,6 +121,7 @@ function renderClientInterface() {
   ${renderAuthenticationClientInterface()}
   ${renderCertificateClientInterface()}
   ${renderBackupScheduleClientInterface()}
+  ${renderBackupDestinationClientInterface()}
   ${renderIdentityAdministrationClientInterface()}
   ${renderNamespaceMutationClientInterface()}
   ${renderUploadClientInterface()}

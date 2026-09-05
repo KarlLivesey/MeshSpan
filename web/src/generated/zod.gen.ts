@@ -785,6 +785,69 @@ export const zCommitUploadResponse = z
   .strict();
 
 /**
+ * ConfigureBackupDestinationRequest
+ *
+ * One registered target selected for encrypted recovery copies.
+ */
+export const zConfigureBackupDestinationRequest = z
+  .strictObject({
+    destination_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    enabled: z.boolean(),
+    expected_revision: z.int().gte(0).lte(9007199254740991),
+    name: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^\P{Cc}+$/u),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    target_generation: z
+      .string()
+      .min(1)
+      .max(20)
+      .regex(/^[1-9][0-9]{0,19}$/),
+    target_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * ConfigureBackupDestinationResponse
+ *
+ * Original durable receipt; configuration does not imply completed backup protection.
+ */
+export const zConfigureBackupDestinationResponse = z
+  .strictObject({
+    committed_revision: z.int().gte(1).lte(9007199254740991),
+    destination_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * ConfigureBackupScheduleRequest
  *
  * Exact-retry replacement of the current partition backup policy.
@@ -3001,6 +3064,110 @@ export const zListAvailabilityCellsResponse = z
       .min(1)
       .max(16384)
       .regex(/^\/api\/latest\/admin\/topology\/availability-cells/)
+      .nullable(),
+  })
+  .strict();
+
+/**
+ * ListBackupDestinationsQuery
+ *
+ * Bounded live inventory of configured destinations, including paused entries.
+ */
+export const zListBackupDestinationsQuery = z
+  .strictObject({
+    cursor: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^[a-zA-Z0-9._-]+$/)
+      .optional(),
+    limit: z.int().gte(1).lte(256).optional(),
+  })
+  .strict();
+
+/**
+ * ListBackupDestinationsResponse
+ *
+ * One current-authorisation inventory page, ordered by destination identity.
+ */
+export const zListBackupDestinationsResponse = z
+  .strictObject({
+    destinations: z
+      .array(
+        z
+          .strictObject({
+            destination_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            failure_relationship: z.union([
+              z.literal("unknown"),
+              z.literal("overlapping"),
+              z.literal("independent"),
+            ]),
+            name: z
+              .string()
+              .min(1)
+              .max(128)
+              .regex(/^\P{Cc}+$/u),
+            provider: z.union([
+              z
+                .strictObject({
+                  kind: z.literal("registered_target"),
+                  target_id: z
+                    .string()
+                    .length(36)
+                    .regex(
+                      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+                    ),
+                })
+                .strict(),
+              z
+                .strictObject({
+                  kind: z.literal("federated_mesh"),
+                  remote_mesh_id: z
+                    .string()
+                    .length(36)
+                    .regex(
+                      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+                    ),
+                })
+                .strict(),
+              z
+                .strictObject({
+                  instance_id: z
+                    .string()
+                    .length(36)
+                    .regex(
+                      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+                    ),
+                  kind: z.literal("component_provider"),
+                })
+                .strict(),
+            ]),
+            provider_generation: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^[1-9][0-9]{0,19}$/),
+            revision: z.int().gte(1).lte(9007199254740991),
+            state: z.union([
+              z.literal("active"),
+              z.literal("paused"),
+              z.literal("retired"),
+            ]),
+          })
+          .strict(),
+      )
+      .max(256),
+    next_page_url: z
+      .string()
+      .max(512)
+      .regex(
+        /^\/api\/latest\/admin\/backups\/destinations\?limit=[0-9]+&cursor=[a-zA-Z0-9._-]+$/,
+      )
       .nullable(),
   })
   .strict();
@@ -5607,6 +5774,44 @@ export const zCreateAcknowledgementPolicyHeaders = z
  */
 export const zCreateAcknowledgementPolicyResponse2 =
   zCreateAcknowledgementPolicyResponse;
+
+export const zListBackupDestinationsQuery2 = z
+  .object({
+    limit: z.int().gte(1).lte(256).optional(),
+    cursor: z
+      .string()
+      .min(1)
+      .max(256)
+      .regex(/^[a-zA-Z0-9._-]+$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Current destination page with a relative next-page URL
+ */
+export const zListBackupDestinationsResponse2 = zListBackupDestinationsResponse;
+
+/**
+ * Complete destination and exact-retry identity
+ */
+export const zConfigureBackupDestinationBody =
+  zConfigureBackupDestinationRequest;
+
+export const zConfigureBackupDestinationHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Original committed configuration receipt
+ */
+export const zConfigureBackupDestinationResponse2 =
+  zConfigureBackupDestinationResponse;
 
 /**
  * Current policy, or null before configuration

@@ -4,6 +4,8 @@
 
 #[path = "support/passkey.rs"]
 mod passkey_support;
+#[path = "headless_process/stage10.rs"]
+mod stage10;
 #[path = "headless_process/stage8.rs"]
 mod stage8;
 
@@ -618,6 +620,7 @@ async fn clean_machine_operator_flow_uses_only_cli_and_public_https() -> Result<
         wait_for_status(peer.address, &peer_client, "configured").await?;
         wait_for_storage_folder_visibility(&root, &root_client, api_key).await?;
         wait_for_storage_folder_visibility(&peer, &peer_client, api_key).await?;
+        stage10::backup_destination_controls(root.address, &root_client, api_key).await?;
         register_storage_folder(
             root.address,
             &root_client,

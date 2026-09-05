@@ -37,6 +37,8 @@ use crate::{
     StoragePermitLoadingService, VolumeAdministrationAuthority, VolumeKeyLoadingService,
 };
 
+#[path = "backup_destination_service_tests.rs"]
+mod backup_destination_service_tests;
 #[path = "backup_schedule_service_tests.rs"]
 mod backup_schedule;
 

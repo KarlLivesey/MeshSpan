@@ -91,6 +91,14 @@ function readAuthenticationRoutes(operations) {
 
 function readAdministrationRoutes(operations) {
   return {
+    listBackupDestinations: requireOperation(
+      operations,
+      "listBackupDestinations",
+    ),
+    configureBackupDestination: requireOperation(
+      operations,
+      "configureBackupDestination",
+    ),
     getBackupSchedule: requireOperation(operations, "getBackupSchedule"),
     configureBackupSchedule: requireOperation(
       operations,

@@ -117,11 +117,75 @@ backup tests passed in 0.74 seconds, the three real-folder capacity tests in
 all-target/all-feature warning-denied Clippy passed in 12.85 seconds; the full
 workspace result above precedes this focused follow-up.
 
+## Backup destination controls
+
+`GET /api/latest/admin/backups/destinations` lists a bounded current inventory,
+including paused destinations. Keyset continuations retain the partition, caller
+and page size, and fence a minimum observed metadata revision; every request
+checks current system-manager authority. Responses
+provide relative next-page URLs. This is a live inventory, not a historical
+snapshot of configuration.
+
+`PUT` on the same route selects an exact registered target/generation, sets its
+display name and enables or pauses new copies. Target generations use the same
+lossless decimal-string representation as storage-folder inventory. Settings
+are committed and audited through consensus. The destination's own revision
+guards replacement without conflicting with unrelated partition activity.
+Exact retries return their original receipt even after a later settings edit.
+Existing destination bindings cannot be changed: another provider or target
+generation requires another destination identity, preserving lookup for older
+copies. Pausing never deletes a backup, and the runtime retains provider routes
+for reading and guarded retirement while new-copy authority rejects paused
+destinations.
+
+Folder selection records failure independence as **unknown**; it is not proof
+of a separate device, power supply or building. Configuring through this endpoint
+also resets any previous declared assessment to unknown. Automated assessment
+and its product presentation remain to be integrated. The listing can describe
+all existing binding kinds, but this configuration endpoint does not pretend
+that unimplemented external-provider/federation setup is operational.
+
+Requests and outgoing responses are independently validated in Rust. OpenAPI,
+strict TypeScript, Zod and native-Fetch controls are generated. The Fetch
+generator's static import registry now has its own module; generated behaviour
+is unchanged apart from the new destination operations.
+
+Focused evidence on 5 September 2026:
+
+- Seven metadata catalogue tests passed in 2.82 seconds, including independent
+  revision checks, rejected rebinding, pause/resume, exact replay and bounded
+  administration pages. Metadata Clippy passed with warnings denied.
+- The real SQLite/consensus-backed destination service test creates destinations,
+  pauses one, resolves the original creation receipt after replacement, rejects
+  changed/stale retries and follows a bounded inventory continuation.
+- HTTP tests exercise authentication before body consumption/query parsing,
+  current authentication after body transfer and outgoing-receipt rejection.
+- The real CLI/HTTPS clean-machine test now selects its actual registered folder,
+  creates and pauses a destination, retries the earlier create and observes the
+  unchanged paused revision through the real listener. It passed in 12.30 seconds.
+- Generated-client fixtures check request intent, CSRF headers, pagination,
+  unknown/missing/null/coerced values and rejection of invalid server responses.
+
+Persisted catalogue rows are unchanged. The pre-alpha blind-upsert command kind
+63 is replaced by revision-checked kind 72, and the canonical digest includes
+the expected destination revision. Old command bytes are not reinterpreted;
+mixed-build compatibility and replay of old kind-63 log entries are not provided.
+This is not an automated rolling-upgrade compatibility claim.
+
+The complete NVM-driven `pnpm check` passed in **512.81 seconds** with four
+workers (Rust workspace tests 470.02 seconds; web tests 4.17 seconds). After the
+final continuation-revision fence and its rejection fixture, all **643 library
+tests** across the API-contract, daemon and metadata crates passed, followed by
+all-target/all-feature warning-denied Clippy in 9.54 seconds. Generated-contract
+drift and Rust formatting were checked again. No release, tag or image was
+published; the opt-in SMB-image and hardware/soak gates remain separate.
+
 ## Remaining backup integration
 
 The schedule API does not close these separate outstanding requirements:
 
-- destination administration and automatic default policy selection;
+- backup panel controls, automatic destination/default policy selection and
+  topology-backed failure assessments;
 - retention retirement and guarded physical reclamation;
 - automatic resolution of abandoned backup holds and completion of a capacity
   release interrupted after provider retirement;
