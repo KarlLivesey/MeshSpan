@@ -37,7 +37,11 @@ pub(crate) fn router<C: MetadataDiagnosticsController>(
     let digest =
         HeaderValue::from_str(document.digest()).map_err(PublicContractApiError::SchemaDigest)?;
     Ok(Router::new()
-        .route("/api/latest/admin/diagnostics/metadata", get(read::<C>))
+        .route(
+            "/api/latest/admin/diagnostics/metadata",
+            get(read::<C, false>),
+        )
+        .route("/api/latest/admin/diagnostics/bundle", get(read::<C, true>))
         .with_state(Arc::new(DiagnosticsApi {
             controller: Arc::new(Mutex::new(controller)),
             // This limits diagnostic jobs, not users, connections or foreground IO.
@@ -47,7 +51,7 @@ pub(crate) fn router<C: MetadataDiagnosticsController>(
         })))
 }
 
-async fn read<C: MetadataDiagnosticsController>(
+async fn read<C: MetadataDiagnosticsController, const BUNDLE: bool>(
     State(state): State<Arc<DiagnosticsApi<C>>>,
     request: Request,
 ) -> Response<Body> {
@@ -77,7 +81,7 @@ async fn read<C: MetadataDiagnosticsController>(
                     Ok(())
                 }
             };
-            let outcome = execute(&controller, &request, &check);
+            let outcome = execute::<C, BUNDLE>(&controller, &request, &check);
             let _cancelled = respond.send(outcome);
         });
     }
@@ -86,9 +90,11 @@ async fn read<C: MetadataDiagnosticsController>(
             let mut response = json_response(StatusCode::OK, bytes, state.digest.clone());
             response.headers_mut().insert(
                 "content-disposition",
-                HeaderValue::from_static(
-                    "attachment; filename=\"meshspan-metadata-diagnostics.json\"",
-                ),
+                HeaderValue::from_static(if BUNDLE {
+                    "attachment; filename=\"meshspan-diagnostics.json\""
+                } else {
+                    "attachment; filename=\"meshspan-metadata-diagnostics.json\""
+                }),
             );
             response.headers_mut().insert(
                 "x-content-type-options",
@@ -102,7 +108,7 @@ async fn read<C: MetadataDiagnosticsController>(
     }
 }
 
-fn execute<C: MetadataDiagnosticsController>(
+fn execute<C: MetadataDiagnosticsController, const BUNDLE: bool>(
     controller: &Mutex<C>,
     request: &Request,
     check: &dyn Fn() -> Result<(), Error>,
@@ -124,8 +130,23 @@ fn execute<C: MetadataDiagnosticsController>(
     }
     let value = controller.collect(now, check)?;
     check()?;
-    let bytes = encode_metadata_diagnostics_response(&value).map_err(|_| Error::Failed)?;
-    if bytes.len() > meshspan_api_contract::MAX_METADATA_DIAGNOSTICS_BYTES {
+    let bytes = if BUNDLE {
+        meshspan_api_contract::encode_diagnostics_bundle_response(
+            &meshspan_api_contract::DiagnosticsBundleResponse {
+                metadata: value,
+                runtime: controller.collect_runtime(),
+            },
+        )
+    } else {
+        encode_metadata_diagnostics_response(&value)
+    }
+    .map_err(|_| Error::Failed)?;
+    let maximum = if BUNDLE {
+        meshspan_api_contract::MAX_DIAGNOSTICS_BUNDLE_BYTES
+    } else {
+        meshspan_api_contract::MAX_METADATA_DIAGNOSTICS_BYTES
+    };
+    if bytes.len() > maximum {
         return Err(Error::Failed);
     }
     controller.authenticate(request.headers(), current_time().ok_or(Error::Unavailable)?)?;

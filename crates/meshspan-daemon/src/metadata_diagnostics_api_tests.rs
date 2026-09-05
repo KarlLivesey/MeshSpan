@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+use crate::runtime_observations::RuntimeObservationSource as _;
 use axum::{
     body::{Body, to_bytes},
     http::{HeaderMap, Request, StatusCode},
 };
-use meshspan_api_contract::MetadataDiagnosticsResponse;
+use meshspan_api_contract::{MetadataDiagnosticsResponse, RuntimeDiagnosticsResponse};
 use meshspan_domain::UnixMicros;
 use std::sync::{
     Arc,
@@ -20,9 +21,13 @@ struct Controller {
     revoked: AtomicBool,
     revoke_on_collect: bool,
     invalid_output: bool,
+    runtime: Option<RuntimeDiagnosticsResponse>,
 }
 
 impl MetadataDiagnosticsController for Controller {
+    fn collect_runtime(&self) -> Option<RuntimeDiagnosticsResponse> {
+        self.runtime.clone()
+    }
     fn authenticate(&self, headers: &HeaderMap, _now: UnixMicros) -> Result<(), Error> {
         if self.revoked.load(Ordering::Acquire) {
             return Err(Error::Forbidden);
@@ -115,7 +120,15 @@ async fn metadata_diagnostics_cancellation_retains_admission_until_the_worker_st
     first.abort();
     assert!(first.await.is_err_and(|error| error.is_cancelled()));
     assert_eq!(
-        router.clone().oneshot(request()?).await?.status(),
+        router
+            .clone()
+            .oneshot(
+                Request::get("/api/latest/admin/diagnostics/bundle")
+                    .header("x-test-auth", "manager")
+                    .body(Body::empty())?
+            )
+            .await?
+            .status(),
         StatusCode::SERVICE_UNAVAILABLE
     );
     assert_eq!(collections.load(Ordering::Relaxed), 0);
@@ -205,6 +218,63 @@ async fn metadata_diagnostics_suppresses_output_after_revocation_or_contract_fai
         let body = std::str::from_utf8(&bytes)?;
         assert!(!body.contains("sensitive/raw/path"));
         assert!(!body.contains("revision_before"));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn diagnostic_bundle_shares_authentication_and_validates_runtime_output()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (auth, query, invalid, revoke, expected) in [
+        ("", "?unsafe=true", false, false, StatusCode::UNAUTHORIZED),
+        ("user", "", false, false, StatusCode::FORBIDDEN),
+        (
+            "manager",
+            "?unsafe=true",
+            false,
+            false,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "manager",
+            "",
+            true,
+            false,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        ("manager", "", false, true, StatusCode::FORBIDDEN),
+        ("manager", "", false, false, StatusCode::OK),
+    ] {
+        let observations = crate::runtime_observations::RuntimeObservations::default();
+        let mut runtime = observations.snapshot().ok_or("snapshot missing")?.project();
+        if invalid {
+            runtime.dropped_updates.0 = "18446744073709551616".to_owned();
+        }
+        let controller = Controller {
+            runtime: Some(runtime.clone()),
+            revoke_on_collect: revoke,
+            ..Controller::default()
+        };
+        let response = crate::metadata_diagnostics_api::router(controller)?
+            .oneshot(
+                Request::get(format!("/api/latest/admin/diagnostics/bundle{query}"))
+                    .header("x-test-auth", auth)
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(response.status(), expected);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        if expected == StatusCode::OK {
+            assert_eq!(
+                response.headers()["content-disposition"],
+                "attachment; filename=\"meshspan-diagnostics.json\""
+            );
+            let bytes = to_bytes(response.into_body(), 524_288).await?;
+            let bundle: meshspan_api_contract::DiagnosticsBundleResponse =
+                serde_json::from_slice(&bytes)?;
+            assert_eq!(bundle.metadata, fixture()?);
+            assert_eq!(bundle.runtime, Some(runtime));
+        }
     }
     Ok(())
 }

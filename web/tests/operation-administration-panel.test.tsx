@@ -23,6 +23,8 @@ describe("operation administration panel", () => {
       OperationAdministrationClient["listNextOperations"]
     >(async () => ({ next_page_url: null, operations: [] }));
     const client: OperationAdministrationClient = {
+      readDiagnosticsBundle:
+        vi.fn<OperationAdministrationClient["readDiagnosticsBundle"]>(),
       listNextOperations,
       listOperations: async () => ({
         next_page_url:

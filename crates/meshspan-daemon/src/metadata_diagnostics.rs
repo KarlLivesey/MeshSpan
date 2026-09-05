@@ -3,7 +3,10 @@
 //! Read-only local diagnostics over existing identity, metadata and reactor boundaries.
 
 use axum::http::HeaderMap;
-use meshspan_api_contract::{DiagnosticCounter, DiagnosticIdentifier, MetadataDiagnosticsResponse};
+use meshspan_api_contract::{
+    DiagnosticCounter, DiagnosticIdentifier, MetadataDiagnosticsResponse,
+    RuntimeDiagnosticsResponse,
+};
 use meshspan_cluster::MetadataAuthorityHandle;
 use meshspan_domain::UnixMicros;
 use thiserror::Error;
@@ -38,6 +41,10 @@ pub(crate) trait MetadataDiagnosticsController: Send + 'static {
         now: UnixMicros,
         check: &dyn Fn() -> Result<(), DiagnosticsError>,
     ) -> Result<MetadataDiagnosticsResponse, DiagnosticsError>;
+
+    fn collect_runtime(&self) -> Option<RuntimeDiagnosticsResponse> {
+        None
+    }
 }
 
 pub(crate) struct MetadataDiagnosticsService {
@@ -45,6 +52,7 @@ pub(crate) struct MetadataDiagnosticsService {
     gateway: GatewaySessionIdentity,
     reactor: MetadataAuthorityHandle,
     runtime: tokio::runtime::Handle,
+    observations: std::sync::Arc<dyn crate::runtime_observations::RuntimeObservationSource>,
 }
 
 impl MetadataDiagnosticsService {
@@ -52,17 +60,25 @@ impl MetadataDiagnosticsService {
         authority: ConsensusAuthenticationAuthority,
         gateway: GatewaySessionIdentity,
         reactor: MetadataAuthorityHandle,
+        observations: std::sync::Arc<dyn crate::runtime_observations::RuntimeObservationSource>,
     ) -> Self {
         Self {
             authority,
             gateway,
             reactor,
             runtime: tokio::runtime::Handle::current(),
+            observations,
         }
     }
 }
 
 impl MetadataDiagnosticsController for MetadataDiagnosticsService {
+    fn collect_runtime(&self) -> Option<RuntimeDiagnosticsResponse> {
+        self.observations
+            .snapshot()
+            .map(|snapshot| snapshot.project())
+    }
+
     fn authenticate(&self, headers: &HeaderMap, now: UnixMicros) -> Result<(), DiagnosticsError> {
         authenticate_system_manager_read(&self.authority, self.gateway, headers, now)
             .map(|_| ())

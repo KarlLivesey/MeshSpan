@@ -2,7 +2,13 @@
 
 /** Derives the diagnostic route and independent response budget from Rust's OpenAPI. */
 export function renderDiagnosticsClientMethods(routes) {
-  const route = routes.readMetadataDiagnostics;
+  return [
+    renderMethod(routes.readMetadataDiagnostics, "MetadataDiagnosticsResponse"),
+    renderMethod(routes.readDiagnosticsBundle, "DiagnosticsBundleResponse"),
+  ].join("\n");
+}
+
+function renderMethod(route, responseType) {
   const maximumBytes = route.operation["x-meshspan-response-max-bytes"];
   if (
     !Number.isSafeInteger(maximumBytes) ||
@@ -13,10 +19,10 @@ export function renderDiagnosticsClientMethods(routes) {
       "diagnostic response requires a bounded Rust-authored byte limit",
     );
   }
-  return `async readMetadataDiagnostics(signal): Promise<MetadataDiagnosticsResponse> {
+  return `async ${route.operation.operationId}(signal): Promise<${responseType}> {
       return requestJson(context, ${JSON.stringify(route.route)}, {
         method: ${JSON.stringify(route.method)},
         ...(signal === undefined ? {} : { signal }),
-      }, zMetadataDiagnosticsResponse, ${String(maximumBytes)});
+      }, z${responseType}, ${String(maximumBytes)});
     },`;
 }

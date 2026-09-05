@@ -3,6 +3,71 @@
 Status: **in progress**. Stage 11 has not started. Publication remains on hold
 pending the owner's dependency review.
 
+## Runtime diagnostic bundle and download control
+
+`GET /api/latest/admin/diagnostics/bundle` combines the existing metadata
+section with bounded process-local storage observations. The Operations panel
+provides an explicit download action with collection, cancellation and error
+states. The generated native client is also available to non-panel clients.
+No collection starts merely because the panel is opened. Responses are validated
+again before a browser download; cancellation, unmount or a changed client
+discards late results. A download request is not reported as a successfully saved
+file, and the panel explains that diagnostics are not a backup or protection proof.
+
+The bundle shares metadata collection's authentication, reauthorisation, worker
+admission and cooperative deadline. It has an independent Rust-authored 512 KiB
+response limit; the metadata-only endpoint remains 256 KiB. Runtime collection
+reads a separate in-memory store and never acquires the storage IO lock, probes
+a provider, contacts a peer or starts repair. An unavailable observation store
+is explicit `runtime: null`.
+
+Existing provider health checks and storage reconciliation cycles now record
+completion times, monotonic ages/durations, closed outcomes and process-lifetime
+counters. Target generations remain bound to their samples. At most 100 target
+samples and 100 newest-first transition events are retained. Eviction and dropped
+update counters expose missing evidence; repeated failures do not flood the
+transition history. Clock corrections cannot reorder events, and unavailable or
+invalid local timestamps drop an observation without blocking domain work.
+These transient events have no arbitrary message/payload field and are not
+durable audit or notification-delivery authority. A passing provider check is
+not a complete shard scrub or a current availability guarantee.
+
+Focused Rust contract cases passed (**4 cases, 0.04 seconds**), observation
+transition/window/contention/clock cases passed (**3 cases, under 0.01 seconds**),
+and HTTP authentication, reauthorisation, invalid-output and shared cancelled-job
+admission cases passed (**4 cases, 0.43 seconds**). All-target/all-feature
+affected-crate Clippy passed in **21.91 seconds**; the final process-test change
+passed Clippy in **1.60 seconds**. The real two-daemon HTTPS operator cycle
+passed in **16.61 seconds**, collecting bundles from both gateways and again
+after one daemon was killed.
+
+The first operator-cycle run failed in **27.54 seconds** because an automatic
+backup remained `Claimed` beyond its existing wait deadline, before the new
+diagnostic checks ran. No timeout was increased and no cause/fix is claimed.
+Its failure path now attempts a bounded, validated runtime summary instead of
+discarding all diagnostic evidence; the focused repeat above passed. This
+unexplained timing failure remains relevant to the Stage 11 reliability audit.
+
+The generated OpenAPI document grew to **1,059,843 bytes**, exceeding the build
+tool's original 1 MiB source limit. The code-generation file reader now allows
+2 MiB, bounds actual reads as well as the initial file stat, and rejects invalid
+UTF-8. Its exact-limit/oversize/non-file/encoding test passed (**0.055 seconds**
+including the Node harness) and is included in the canonical local gate. This
+does not raise public request or ordinary response budgets. No dependency was
+added. Twelve focused native-client and headless DOM cases passed in
+**0.648 seconds**, covering exact downloaded JSON values, explicit admission,
+cancellation, unmount, invalid output, route/budget generation and existing
+operation pagination. Full web/tooling ESLint, strict TypeScript and generated
+drift checks passed. An initial DOM assertion compared JSON property order,
+which Zod normalises; it now checks the exact parsed values without asserting
+an ordering the download contract does not promise. Complete-gate evidence is
+still pending.
+
+This advances OPS-007/011/017/019 without claiming the remaining full metric
+catalogue, persistent metric history, exporters, durable notifications or
+operational dashboard are finished. No release, image, browser interaction or
+publication workflow was run.
+
 ## Native metadata diagnostics
 
 `GET /api/latest/admin/diagnostics/metadata` collects a bounded, redacted local

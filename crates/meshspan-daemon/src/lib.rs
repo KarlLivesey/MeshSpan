@@ -69,6 +69,7 @@ mod metadata_diagnostics;
 mod metadata_diagnostics_api;
 #[cfg(test)]
 mod metadata_diagnostics_api_tests;
+mod runtime_observations;
 
 #[cfg(test)]
 mod backup_restore_readiness_tests;

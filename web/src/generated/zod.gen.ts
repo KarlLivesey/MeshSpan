@@ -2661,6 +2661,447 @@ export const zDeleteObjectResponse = z
   .strict();
 
 /**
+ * DiagnosticsBundleResponse
+ *
+ * Local metadata and runtime observations; never an atomic swarm snapshot or a backup.
+ */
+export const zDiagnosticsBundleResponse = z
+  .strictObject({
+    metadata: z
+      .strictObject({
+        collected_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+        consensus: z
+          .strictObject({
+            applied_index: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+            commit_index: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+            known_leader: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              )
+              .nullable(),
+            membership_epoch: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+            node_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            partition_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+            pending_operations: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+            persistence_blocked: z.boolean(),
+            plan_digest: z
+              .string()
+              .length(64)
+              .regex(/^[0-9a-f]{64}$/),
+            queued_operations: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+            role: z.union([
+              z.literal("follower"),
+              z.literal("candidate"),
+              z.literal("leader"),
+            ]),
+            term: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+          })
+          .strict()
+          .nullable(),
+        daemon_version: z
+          .string()
+          .min(1)
+          .max(64)
+          .regex(/^[0-9A-Za-z.+-]+$/),
+        mesh_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        node_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        nodes: z
+          .strictObject({
+            items: z
+              .array(
+                z
+                  .strictObject({
+                    configured_state: z.union([
+                      z.literal("joining"),
+                      z.literal("active"),
+                      z.literal("draining"),
+                      z.literal("retired"),
+                    ]),
+                    host_id: z
+                      .string()
+                      .length(36)
+                      .regex(
+                        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+                      ),
+                    incarnation: z
+                      .string()
+                      .min(1)
+                      .max(20)
+                      .regex(/^(0|[1-9][0-9]*)$/),
+                    node_id: z
+                      .string()
+                      .length(36)
+                      .regex(
+                        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+                      ),
+                    roles: z
+                      .strictObject({
+                        gateway: z.boolean(),
+                        metadata_eligible: z.boolean(),
+                        storage: z.boolean(),
+                      })
+                      .strict(),
+                  })
+                  .strict(),
+              )
+              .max(100),
+            truncated: z.boolean(),
+          })
+          .strict(),
+        partition_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        recent_operations: z
+          .strictObject({
+            items: z
+              .array(
+                z
+                  .strictObject({
+                    completed_at_epoch_micros: z
+                      .int()
+                      .gte(0)
+                      .lte(9007199254740991)
+                      .nullable(),
+                    operation_id: z
+                      .string()
+                      .length(36)
+                      .regex(
+                        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+                      ),
+                    revision: z
+                      .string()
+                      .min(1)
+                      .max(20)
+                      .regex(/^(0|[1-9][0-9]*)$/),
+                    started_at_epoch_micros: z
+                      .int()
+                      .gte(0)
+                      .lte(9007199254740991),
+                    state: z.union([
+                      z.literal("queued"),
+                      z.literal("running"),
+                      z.literal("awaiting_action"),
+                      z.literal("succeeded"),
+                      z.literal("failed"),
+                      z.literal("cancelled"),
+                    ]),
+                  })
+                  .strict(),
+              )
+              .max(100),
+            truncated: z.boolean(),
+          })
+          .strict(),
+        revision_after: z
+          .string()
+          .min(1)
+          .max(20)
+          .regex(/^(0|[1-9][0-9]*)$/),
+        revision_before: z
+          .string()
+          .min(1)
+          .max(20)
+          .regex(/^(0|[1-9][0-9]*)$/),
+        targets: z
+          .strictObject({
+            items: z
+              .array(
+                z
+                  .strictObject({
+                    configured_state: z.union([
+                      z.literal("configuring"),
+                      z.literal("active"),
+                      z.literal("draining"),
+                      z.literal("unavailable"),
+                      z.literal("retired"),
+                    ]),
+                    generation: z
+                      .string()
+                      .min(1)
+                      .max(20)
+                      .regex(/^(0|[1-9][0-9]*)$/),
+                    node_id: z
+                      .string()
+                      .length(36)
+                      .regex(
+                        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+                      ),
+                    target_id: z
+                      .string()
+                      .length(36)
+                      .regex(
+                        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+                      ),
+                    usage_limit: z.union([
+                      z
+                        .strictObject({
+                          kind: z.literal("percent"),
+                          percent: z.int().gte(1).lte(100),
+                        })
+                        .strict(),
+                      z
+                        .strictObject({
+                          bytes: z
+                            .string()
+                            .min(1)
+                            .max(20)
+                            .regex(/^[1-9][0-9]{0,19}$/),
+                          kind: z.literal("bytes"),
+                        })
+                        .strict(),
+                    ]),
+                  })
+                  .strict(),
+              )
+              .max(100),
+            truncated: z.boolean(),
+          })
+          .strict(),
+      })
+      .strict(),
+    runtime: z
+      .strictObject({
+        dropped_updates: z
+          .string()
+          .min(1)
+          .max(20)
+          .regex(/^(0|[1-9][0-9]*)$/),
+        event_evictions: z
+          .string()
+          .min(1)
+          .max(20)
+          .regex(/^(0|[1-9][0-9]*)$/),
+        observation_sequence: z
+          .string()
+          .min(1)
+          .max(20)
+          .regex(/^(0|[1-9][0-9]*)$/),
+        recent_events: z
+          .array(
+            z
+              .strictObject({
+                code: z.union([
+                  z.literal("target_probe_failed"),
+                  z.literal("target_probe_recovered"),
+                  z.literal("storage_reconciliation_failed"),
+                  z.literal("storage_reconciliation_recovered"),
+                ]),
+                observation: z
+                  .strictObject({
+                    age_millis: z
+                      .string()
+                      .min(1)
+                      .max(20)
+                      .regex(/^(0|[1-9][0-9]*)$/),
+                    observed_at_epoch_micros: z
+                      .int()
+                      .gte(0)
+                      .lte(9007199254740991),
+                    sequence: z
+                      .string()
+                      .min(1)
+                      .max(20)
+                      .regex(/^(0|[1-9][0-9]*)$/),
+                  })
+                  .strict(),
+                target: z
+                  .strictObject({
+                    generation: z
+                      .string()
+                      .min(1)
+                      .max(20)
+                      .regex(/^(0|[1-9][0-9]*)$/),
+                    target_id: z
+                      .string()
+                      .length(36)
+                      .regex(
+                        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+                      ),
+                  })
+                  .strict()
+                  .nullable(),
+              })
+              .strict(),
+          )
+          .max(100),
+        reconciliation_cycles: z
+          .string()
+          .min(1)
+          .max(20)
+          .regex(/^(0|[1-9][0-9]*)$/),
+        reconciliation_failures: z
+          .string()
+          .min(1)
+          .max(20)
+          .regex(/^(0|[1-9][0-9]*)$/),
+        storage_reconciliation: z
+          .strictObject({
+            configured_folders: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+            duration_millis: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+            failed_steps: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+            observation: z
+              .strictObject({
+                age_millis: z
+                  .string()
+                  .min(1)
+                  .max(20)
+                  .regex(/^(0|[1-9][0-9]*)$/),
+                observed_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+                sequence: z
+                  .string()
+                  .min(1)
+                  .max(20)
+                  .regex(/^(0|[1-9][0-9]*)$/),
+              })
+              .strict(),
+            open_targets: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+            pending_return_scans: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+          })
+          .strict()
+          .nullable(),
+        target_check_evictions: z
+          .string()
+          .min(1)
+          .max(20)
+          .regex(/^(0|[1-9][0-9]*)$/),
+        target_checks: z
+          .array(
+            z
+              .strictObject({
+                duration_millis: z
+                  .string()
+                  .min(1)
+                  .max(20)
+                  .regex(/^(0|[1-9][0-9]*)$/),
+                observation: z
+                  .strictObject({
+                    age_millis: z
+                      .string()
+                      .min(1)
+                      .max(20)
+                      .regex(/^(0|[1-9][0-9]*)$/),
+                    observed_at_epoch_micros: z
+                      .int()
+                      .gte(0)
+                      .lte(9007199254740991),
+                    sequence: z
+                      .string()
+                      .min(1)
+                      .max(20)
+                      .regex(/^(0|[1-9][0-9]*)$/),
+                  })
+                  .strict(),
+                result: z.union([z.literal("passed"), z.literal("failed")]),
+                target: z
+                  .strictObject({
+                    generation: z
+                      .string()
+                      .min(1)
+                      .max(20)
+                      .regex(/^(0|[1-9][0-9]*)$/),
+                    target_id: z
+                      .string()
+                      .length(36)
+                      .regex(
+                        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+                      ),
+                  })
+                  .strict(),
+              })
+              .strict(),
+          )
+          .max(100),
+        target_probe_failures: z
+          .string()
+          .min(1)
+          .max(20)
+          .regex(/^(0|[1-9][0-9]*)$/),
+        target_probe_passes: z
+          .string()
+          .min(1)
+          .max(20)
+          .regex(/^(0|[1-9][0-9]*)$/),
+        uptime_millis: z
+          .string()
+          .min(1)
+          .max(20)
+          .regex(/^(0|[1-9][0-9]*)$/),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+
+/**
  * EnrolNodeRequest
  *
  * One node-owned identity presentation for pre-authorised enrolment.
@@ -6363,6 +6804,11 @@ export const zProvisionMeshLocalCertificateResponse2 =
  * Current secret-free certificate status
  */
 export const zGetCertificateStatusResponse = zCertificateStatusResponse;
+
+/**
+ * Bounded diagnostic bundle
+ */
+export const zReadDiagnosticsBundleResponse = zDiagnosticsBundleResponse;
 
 /**
  * Redacted local metadata observations

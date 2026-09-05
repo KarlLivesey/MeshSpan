@@ -2,6 +2,8 @@
 
 import { open, rename, writeFile } from "node:fs/promises";
 
+const MAX_OPENAPI_SOURCE_BYTES = 2 * 1024 * 1024;
+
 export function parseContract(sourceText) {
   const document = JSON.parse(sourceText);
   if (!isRecord(document)) {
@@ -94,6 +96,10 @@ function readAdministrationRoutes(operations) {
     readMetadataDiagnostics: requireOperation(
       operations,
       "readMetadataDiagnostics",
+    ),
+    readDiagnosticsBundle: requireOperation(
+      operations,
+      "readDiagnosticsBundle",
     ),
     listBackupRuns: requireOperation(operations, "listBackupRuns"),
     exportMetadataBackup: requireOperation(operations, "exportMetadataBackup"),
@@ -285,12 +291,30 @@ export async function readBoundedUtf8(sourcePath) {
   const handle = await open(sourcePath, "r");
   try {
     const metadata = await handle.stat();
-    if (!metadata.isFile() || metadata.size > 1_048_576) {
+    if (!metadata.isFile() || metadata.size > MAX_OPENAPI_SOURCE_BYTES) {
       throw new Error(
-        "OpenAPI input must be a regular file no larger than 1 MiB",
+        "OpenAPI input must be a regular file no larger than 2 MiB",
       );
     }
-    return await handle.readFile("utf8");
+    // Bound actual reads too: a file growing after stat cannot cause an unbounded allocation.
+    const buffer = Buffer.alloc(MAX_OPENAPI_SOURCE_BYTES + 1);
+    let used = 0;
+    while (used < buffer.length) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        used,
+        buffer.length - used,
+        null,
+      );
+      if (bytesRead === 0) break;
+      used += bytesRead;
+    }
+    if (used > MAX_OPENAPI_SOURCE_BYTES) {
+      throw new Error("OpenAPI input exceeds 2 MiB");
+    }
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      buffer.subarray(0, used),
+    );
   } finally {
     await handle.close();
   }

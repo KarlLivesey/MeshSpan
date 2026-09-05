@@ -49,6 +49,7 @@ import type {
   BackupExportHeaders,
   BackupReadinessResponse,
   MetadataDiagnosticsResponse,
+  DiagnosticsBundleResponse,
   ListBackupRunsResponse,
   ListBackupDestinationsResponse,
   ConfigureBackupDestinationRequest,
@@ -163,6 +164,7 @@ import {
   zBackupExportHeaders,
   zBackupReadinessResponse,
   zMetadataDiagnosticsResponse,
+  zDiagnosticsBundleResponse,
   zListBackupRunsResponse2,
   zListBackupDestinationsResponse2,
   zConfigureBackupDestinationBody,
@@ -462,6 +464,10 @@ export interface MeshSpanFetchClient {
   readMetadataDiagnostics(
     signal?: AbortSignal,
   ): Promise<MetadataDiagnosticsResponse>;
+  /** Downloads bounded metadata and existing runtime observations without new provider probes. */
+  readDiagnosticsBundle(
+    signal?: AbortSignal,
+  ): Promise<DiagnosticsBundleResponse>;
   /** Builds a credential-free browser download URL without making a request.
    * Requires a browser session; API-key clients use exportMetadataBackup instead.
    * The server reauthorises the download. A URL is not evidence of availability. */
@@ -1020,6 +1026,18 @@ export function createMeshSpanFetchClient(
         },
         zMetadataDiagnosticsResponse,
         262144,
+      );
+    },
+    async readDiagnosticsBundle(signal): Promise<DiagnosticsBundleResponse> {
+      return requestJson(
+        context,
+        "/admin/diagnostics/bundle",
+        {
+          method: "GET",
+          ...(signal === undefined ? {} : { signal }),
+        },
+        zDiagnosticsBundleResponse,
+        524288,
       );
     },
     metadataBackupDownloadUrl(backupId): string {
