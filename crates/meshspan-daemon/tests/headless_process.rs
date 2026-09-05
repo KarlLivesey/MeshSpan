@@ -956,8 +956,10 @@ async fn assert_storage_folder_visible(
     .await?;
     require_status(&response, "200 OK", "list CLI-registered storage folder")?;
     let payload: serde_json::Value = serde_json::from_str(response_body(&response)?)?;
-    let expected_path = fixture
-        .storage_path
+    // Registration reports the canonical folder: macOS commonly supplies /var in TMPDIR
+    // although the same directory is reached through /private/var after canonicalisation.
+    let canonical_storage_path = fs::canonicalize(&fixture.storage_path)?;
+    let expected_path = canonical_storage_path
         .to_str()
         .ok_or("temporary storage path was not UTF-8")?;
     let visible = payload["folders"].as_array().is_some_and(|folders| {
@@ -966,9 +968,13 @@ async fn assert_storage_folder_visible(
                 && folder["state"].as_str() == Some("active")
         })
     });
-    visible
-        .then_some(())
-        .ok_or_else(|| "public storage-folder inventory omitted the active CLI path".into())
+    visible.then_some(()).ok_or_else(|| {
+        format!(
+            "public storage-folder inventory omitted active path {expected_path}; returned {}",
+            payload["folders"]
+        )
+        .into()
+    })
 }
 
 async fn register_storage_folder(
@@ -1001,7 +1007,8 @@ async fn register_storage_folder(
         "register storage folder over HTTPS",
     )?;
     let payload: serde_json::Value = serde_json::from_str(response_body(&response)?)?;
-    if payload["folder"]["path"].as_str() == Some(path)
+    let canonical_folder_path = fs::canonicalize(folder_path)?;
+    if payload["folder"]["path"].as_str().map(Path::new) == Some(canonical_folder_path.as_path())
         && payload["folder"]["state"].as_str() == Some("active")
     {
         Ok(())

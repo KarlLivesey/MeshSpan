@@ -6,6 +6,11 @@ mod api_key_management;
 mod api_key_validation;
 mod authentication_method_listing;
 mod authentication_method_listing_validation;
+mod backup_schedule;
+#[cfg(test)]
+mod backup_schedule_tests;
+mod backup_schedule_validation;
+
 mod certificate_administration;
 mod certificate_administration_validation;
 mod directory_listing;
@@ -99,6 +104,14 @@ pub use authentication_method_listing::{
 pub use authentication_method_listing_validation::{
     encode_list_authentication_methods_response, validate_list_authentication_methods_query,
     validate_list_authentication_methods_query_value,
+};
+pub use backup_schedule::{
+    BackupSchedulePolicy, BackupScheduleResponse, BackupScheduleStatus,
+    ConfigureBackupScheduleRequest, ConfigureBackupScheduleResponse,
+};
+pub use backup_schedule_validation::{
+    MAX_CONFIGURE_BACKUP_SCHEDULE_BYTES, decode_configure_backup_schedule_request,
+    encode_backup_schedule_response, encode_configure_backup_schedule_response,
 };
 pub use certificate_administration::{
     AcmeConfigurationId, CertificateChainPem, CertificateChallenge, CertificateGeneration,

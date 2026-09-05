@@ -297,6 +297,38 @@ export const zAssignVolumeProtectionPolicyResponse = z
   .strict();
 
 /**
+ * BackupScheduleResponse
+ *
+ * Current backup schedule for the gateway's authoritative partition.
+ */
+export const zBackupScheduleResponse = z
+  .strictObject({
+    partition_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    schedule: z
+      .strictObject({
+        next_due_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+        policy: z
+          .strictObject({
+            enabled: z.boolean(),
+            interval_seconds: z.int().gte(1).lte(4294967295),
+            minimum_independent_copies: z.int().gte(0).lte(255),
+            minimum_verified_copies: z.int().gte(1).lte(255),
+            retained_generations: z.int().gte(1).lte(1024),
+          })
+          .strict(),
+        sequence: z.int().gte(1).lte(9007199254740991),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+
+/**
  * BeginStorageDrainRequest
  *
  * Exact-retry request to start one safe storage drain.
@@ -749,6 +781,50 @@ export const zCommitUploadResponse = z
           ),
       })
       .strict(),
+  })
+  .strict();
+
+/**
+ * ConfigureBackupScheduleRequest
+ *
+ * Exact-retry replacement of the current partition backup policy.
+ */
+export const zConfigureBackupScheduleRequest = z
+  .strictObject({
+    expected_sequence: z.int().gte(0).lte(9007199254740990),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    policy: z
+      .strictObject({
+        enabled: z.boolean(),
+        interval_seconds: z.int().gte(1).lte(4294967295),
+        minimum_independent_copies: z.int().gte(0).lte(255),
+        minimum_verified_copies: z.int().gte(1).lte(255),
+        retained_generations: z.int().gte(1).lte(1024),
+      })
+      .strict(),
+  })
+  .strict();
+
+/**
+ * ConfigureBackupScheduleResponse
+ *
+ * Original durable configuration receipt, including when a later policy supersedes it.
+ */
+export const zConfigureBackupScheduleResponse = z
+  .strictObject({
+    committed_revision: z.int().gte(1).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    sequence: z.int().gte(1).lte(9007199254740991),
   })
   .strict();
 
@@ -5531,6 +5607,31 @@ export const zCreateAcknowledgementPolicyHeaders = z
  */
 export const zCreateAcknowledgementPolicyResponse2 =
   zCreateAcknowledgementPolicyResponse;
+
+/**
+ * Current policy, or null before configuration
+ */
+export const zGetBackupScheduleResponse = zBackupScheduleResponse;
+
+/**
+ * Complete policy and exact-retry identity
+ */
+export const zConfigureBackupScheduleBody = zConfigureBackupScheduleRequest;
+
+export const zConfigureBackupScheduleHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Original committed configuration receipt
+ */
+export const zConfigureBackupScheduleResponse2 =
+  zConfigureBackupScheduleResponse;
 
 export const zListManualDnsTasksQuery = z
   .object({

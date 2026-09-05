@@ -39,6 +39,11 @@ mod backup_publication;
 #[cfg(test)]
 mod backup_publication_tests;
 mod backup_restore_readiness;
+mod backup_schedule_administration;
+mod backup_schedule_api;
+#[cfg(test)]
+mod backup_schedule_api_tests;
+
 #[cfg(test)]
 mod backup_restore_readiness_tests;
 mod browser_authentication;
@@ -290,6 +295,10 @@ mod storage_drain_administration_api_tests;
 mod storage_scrub_worker;
 mod target_drain_worker;
 
+pub use backup_schedule_administration::{
+    BackupScheduleController, BackupScheduleError, BackupScheduleService,
+};
+pub use backup_schedule_api::{BackupScheduleApiError, backup_schedule_api_router};
 pub use http01_server::{Http01Server, Http01ServerError};
 pub use maintenance_authority::MaintenanceMetadataAuthority;
 pub use maintenance_dispatcher::{

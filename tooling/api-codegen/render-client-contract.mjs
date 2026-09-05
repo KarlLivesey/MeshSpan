@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 import { renderAuthenticationClientInterface } from "./render-authentication-client.mjs";
+import { renderBackupScheduleClientInterface } from "./render-backup-schedule-client.mjs";
 import {
   renderCertificateClientInterface,
   renderCertificateRequestTypes,
@@ -118,6 +119,7 @@ function renderClientInterface() {
   return `export interface MeshSpanFetchClient {
   ${renderAuthenticationClientInterface()}
   ${renderCertificateClientInterface()}
+  ${renderBackupScheduleClientInterface()}
   ${renderIdentityAdministrationClientInterface()}
   ${renderNamespaceMutationClientInterface()}
   ${renderUploadClientInterface()}
