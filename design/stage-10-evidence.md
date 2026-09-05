@@ -297,8 +297,40 @@ outcomes, duplicate-click admission, invalid receipts, pagination, preservation
 of form input, large generation identifiers and failed-read clearing. These are
 headless DOM tests and generated-client transport fixtures, not a live-browser
 or real-device visual acceptance claim. TypeScript and strict ESLint passed; the
-production web build also passed before the final form-reset change. Final full
-local verification is still pending for this slice.
+final production web build also passed in 0.307 seconds.
+
+The complete local gate failed in the three-process consensus suite after
+166.39 seconds: `STATUS 5` did not become `COMMITTED` within 15 seconds. Operation
+5 is initial node enrolment, not the later leader-restart phase. All five process
+cases subsequently passed together, including ten consecutive runs of the exact
+workspace-feature build (7.33–7.61 seconds each). That does not establish the
+original failure's cause or prove it fixed. Test timeout diagnostics now retain
+the last response, node role and bounded process log, with a deadline on each
+control request.
+
+Inspection found a separately deterministic membership liveness counterexample,
+captured in `core::tests::membership_loss::follower_recovers_after_losing_membership_commit_notification`.
+An incumbent follower durably holds a transition but loses its old-plan commit
+notification. The leader activates the joint plan. All three subsequent reliable
+heartbeats are rejected as `StaleMember`, leaving the follower at commit index 0
+instead of 1. Reintroducing the deliberately lost notification advances that same
+follower, confirming the fixture itself is viable. This regression test is
+intentionally red until the recovery path is repaired; it must not be ignored,
+weakened or described as passing. The production authority and proof runtime both
+send an old-plan heartbeat once before activation; neither supplies replay after
+that notification is lost.
+
+The panel is therefore pushed but not merged. The correction needs a bounded,
+durably recoverable membership-transition catch-up contract while preserving
+epoch fencing for elections, writes and reads. This is broader than the panel
+slice and requires review before implementation. No claim is made that this
+counterexample proves the cause of the original process timeout.
+
+Focused Clippy across all targets/features of `meshspan-consensus` and
+`meshspan-cluster` passed in 24.82 seconds after the diagnostic additions. The
+deterministic counterexample compiled and failed in under 0.01 seconds exactly
+at the expected commit-index assertion, including the passing lost-packet
+control. Formatting and diff-whitespace checks passed.
 
 ## Remaining backup integration
 

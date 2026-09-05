@@ -61,8 +61,8 @@ async fn three_process_cluster_survives_lost_reply_and_leader_restart() -> Resul
     )
     .await?;
     for operation in [1_u8, 12, 2, 3, 4, 5] {
-        wait_for_response(
-            launches[2].control_address,
+        wait_for_node_response(
+            &launches[2],
             &format!("STATUS {operation}"),
             Some("COMMITTED"),
         )
@@ -554,15 +554,44 @@ async fn wait_for_response(
 ) -> Result<String, Box<dyn Error>> {
     let started = Instant::now();
     loop {
-        if let Ok(response) = command(address, request).await
+        let observed =
+            tokio::time::timeout(Duration::from_secs(1), command(address, request)).await;
+        if let Ok(Ok(response)) = &observed
             && expected.is_none_or(|value| response == value)
         {
-            return Ok(response);
+            return Ok(response.clone());
         }
         if started.elapsed() >= WAIT_LIMIT {
-            return Err(format!("timed out waiting for {request} at {address}").into());
+            let info = tokio::time::timeout(Duration::from_secs(1), command(address, "INFO")).await;
+            return Err(format!(
+                "timed out waiting for {request} at {address}; expected={expected:?}; \
+                 last response={observed:?}; node info={info:?}"
+            )
+            .into());
         }
         tokio::time::sleep(RETRY_INTERVAL).await;
+    }
+}
+
+async fn wait_for_node_response(
+    launch: &NodeLaunch,
+    request: &str,
+    expected: Option<&str>,
+) -> Result<String, Box<dyn Error>> {
+    use std::io::Read;
+
+    match wait_for_response(launch.control_address, request, expected).await {
+        Ok(response) => Ok(response),
+        Err(error) => {
+            let mut log = String::new();
+            let log_result = fs::File::open(&launch.log_path)
+                .and_then(|file| file.take(8_192).read_to_string(&mut log));
+            Err(format!(
+                "node {}: {error}; log read={log_result:?}; log={log:?}",
+                launch.number
+            )
+            .into())
+        }
     }
 }
 
@@ -601,7 +630,7 @@ async fn commit_on_nodes(
     }
     let status = format!("STATUS {operation}");
     for launch in launches.iter().take(node_count) {
-        wait_for_response(launch.control_address, &status, Some("COMMITTED")).await?;
+        wait_for_node_response(launch, &status, Some("COMMITTED")).await?;
     }
     Ok(())
 }
