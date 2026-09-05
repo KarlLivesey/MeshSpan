@@ -24,50 +24,23 @@ const RETRY_INTERVAL: Duration = Duration::from_millis(50);
 #[tokio::test]
 async fn three_process_cluster_survives_lost_reply_and_leader_restart() -> Result<(), Box<dyn Error>>
 {
-    let temporary = TempDir::new()?;
-    let launches = build_launches(temporary.path())?;
-    let mut cluster = ProcessCluster::start(&launches)?;
+    prove_cluster_recovery(false).await
+}
 
-    wait_for_response(launches[0].control_address, "INFO", None).await?;
-    assert_eq!(
-        command(launches[0].control_address, "ELECT").await?,
-        "ELECTION_STARTED"
-    );
-    wait_for_response(launches[0].control_address, "INFO", Some("LEADER")).await?;
-    for operation in [1_u8, 12, 2, 3] {
-        commit_on_nodes(&launches, 0, operation, 1).await?;
+#[tokio::test]
+async fn membership_catches_up_when_every_old_phase_commit_notification_is_lost()
+-> Result<(), Box<dyn Error>> {
+    prove_cluster_recovery(true).await
+}
+
+async fn prove_cluster_recovery(drop_commits: bool) -> Result<(), Box<dyn Error>> {
+    let temporary = TempDir::new()?;
+    let mut launches = build_launches(temporary.path())?;
+    for launch in &mut launches {
+        launch.drop_commits = drop_commits;
     }
-    wait_for_response(
-        launches[1].control_address,
-        "INFO",
-        Some("FOLLOWER_WITH_LEADER"),
-    )
-    .await?;
-    for operation in [1_u8, 12, 2, 3] {
-        wait_for_response(
-            launches[1].control_address,
-            &format!("STATUS {operation}"),
-            Some("COMMITTED"),
-        )
-        .await?;
-    }
-    for operation in 4_u8..=5 {
-        commit_on_nodes(&launches, 0, operation, 2).await?;
-    }
-    wait_for_response(
-        launches[2].control_address,
-        "INFO",
-        Some("FOLLOWER_WITH_LEADER"),
-    )
-    .await?;
-    for operation in [1_u8, 12, 2, 3, 4, 5] {
-        wait_for_response(
-            launches[2].control_address,
-            &format!("STATUS {operation}"),
-            Some("COMMITTED"),
-        )
-        .await?;
-    }
+    let mut cluster = ProcessCluster::start(&launches)?;
+    establish_three_voters(&launches).await?;
     for operation in 6_u8..=11 {
         commit_on_nodes(&launches, 0, operation, 3).await?;
     }
@@ -85,6 +58,26 @@ async fn three_process_cluster_survives_lost_reply_and_leader_restart() -> Resul
     abandon_response(launches[0].control_address, "PROPOSE 22").await?;
     wait_for_response(launches[1].control_address, "STATUS 22", Some("COMMITTED")).await?;
 
+    prove_leader_failover(&mut cluster, &launches).await?;
+    for number in 1_u8..=3 {
+        cluster.stop(number)?;
+    }
+    assert_promoted_membership(&launches)?;
+    if drop_commits {
+        let evidence =
+            fs::read_to_string(launches[0].state_path.with_extension("lost-commits.marker"))?;
+        assert!(
+            evidence.lines().count() >= 4,
+            "the proof must actually drop multiple phase notifications"
+        );
+    }
+    Ok(())
+}
+
+async fn prove_leader_failover(
+    cluster: &mut ProcessCluster,
+    launches: &[NodeLaunch],
+) -> Result<(), Box<dyn Error>> {
     cluster.stop(1)?;
     assert_eq!(
         command(launches[1].control_address, "ELECT").await?,
@@ -110,10 +103,50 @@ async fn three_process_cluster_survives_lost_reply_and_leader_restart() -> Resul
     cluster.restart(&launches[0])?;
     wait_for_response(launches[0].control_address, "INFO", None).await?;
     wait_for_response(launches[0].control_address, "STATUS 23", Some("COMMITTED")).await?;
-    for number in 1_u8..=3 {
-        cluster.stop(number)?;
+    Ok(())
+}
+
+async fn establish_three_voters(launches: &[NodeLaunch]) -> Result<(), Box<dyn Error>> {
+    wait_for_response(launches[0].control_address, "INFO", None).await?;
+    assert_eq!(
+        command(launches[0].control_address, "ELECT").await?,
+        "ELECTION_STARTED"
+    );
+    wait_for_response(launches[0].control_address, "INFO", Some("LEADER")).await?;
+    for operation in [1_u8, 12, 2, 3] {
+        commit_on_nodes(launches, 0, operation, 1).await?;
     }
-    assert_promoted_membership(&launches)?;
+    wait_for_response(
+        launches[1].control_address,
+        "INFO",
+        Some("FOLLOWER_WITH_LEADER"),
+    )
+    .await?;
+    for operation in [1_u8, 12, 2, 3] {
+        wait_for_node_response(
+            &launches[1],
+            &format!("STATUS {operation}"),
+            Some("COMMITTED"),
+        )
+        .await?;
+    }
+    for operation in 4_u8..=5 {
+        commit_on_nodes(launches, 0, operation, 2).await?;
+    }
+    wait_for_response(
+        launches[2].control_address,
+        "INFO",
+        Some("FOLLOWER_WITH_LEADER"),
+    )
+    .await?;
+    for operation in [1_u8, 12, 2, 3, 4, 5] {
+        wait_for_node_response(
+            &launches[2],
+            &format!("STATUS {operation}"),
+            Some("COMMITTED"),
+        )
+        .await?;
+    }
     Ok(())
 }
 
@@ -349,6 +382,7 @@ fn assert_promoted_membership(launches: &[NodeLaunch]) -> Result<(), Box<dyn Err
 }
 
 struct NodeLaunch {
+    drop_commits: bool,
     number: u8,
     quic_address: SocketAddr,
     control_address: SocketAddr,
@@ -466,6 +500,9 @@ fn spawn_node(launch: &NodeLaunch) -> Result<RunningNode, Box<dyn Error>> {
     if let Some(target) = launch.exit_after_plan {
         command.env("MESHSPAN_TEST_EXIT_AFTER_PLAN", target);
     }
+    if launch.drop_commits {
+        command.env("MESHSPAN_TEST_DROP_MEMBERSHIP_COMMITS", "true");
+    }
     let child = command
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(error_log))
@@ -509,6 +546,7 @@ fn build_launches_with_exit(
         .map(|number| {
             let index = usize::from(number - 1);
             NodeLaunch {
+                drop_commits: false,
                 number,
                 quic_address: quic_addresses[index],
                 control_address: control_addresses[index],
@@ -554,15 +592,44 @@ async fn wait_for_response(
 ) -> Result<String, Box<dyn Error>> {
     let started = Instant::now();
     loop {
-        if let Ok(response) = command(address, request).await
+        let observed =
+            tokio::time::timeout(Duration::from_secs(1), command(address, request)).await;
+        if let Ok(Ok(response)) = &observed
             && expected.is_none_or(|value| response == value)
         {
-            return Ok(response);
+            return Ok(response.clone());
         }
         if started.elapsed() >= WAIT_LIMIT {
-            return Err(format!("timed out waiting for {request} at {address}").into());
+            let info = tokio::time::timeout(Duration::from_secs(1), command(address, "INFO")).await;
+            return Err(format!(
+                "timed out waiting for {request} at {address}; expected={expected:?}; \
+                 last response={observed:?}; node info={info:?}"
+            )
+            .into());
         }
         tokio::time::sleep(RETRY_INTERVAL).await;
+    }
+}
+
+async fn wait_for_node_response(
+    launch: &NodeLaunch,
+    request: &str,
+    expected: Option<&str>,
+) -> Result<String, Box<dyn Error>> {
+    use std::io::Read;
+
+    match wait_for_response(launch.control_address, request, expected).await {
+        Ok(response) => Ok(response),
+        Err(error) => {
+            let mut log = String::new();
+            let log_result = fs::File::open(&launch.log_path)
+                .and_then(|file| file.take(8_192).read_to_string(&mut log));
+            Err(format!(
+                "node {}: {error}; log read={log_result:?}; log={log:?}",
+                launch.number
+            )
+            .into())
+        }
     }
 }
 
@@ -601,7 +668,7 @@ async fn commit_on_nodes(
     }
     let status = format!("STATUS {operation}");
     for launch in launches.iter().take(node_count) {
-        wait_for_response(launch.control_address, &status, Some("COMMITTED")).await?;
+        wait_for_node_response(launch, &status, Some("COMMITTED")).await?;
     }
     Ok(())
 }

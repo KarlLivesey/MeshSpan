@@ -462,6 +462,7 @@ message ControlEnvelope {
     SnapshotChunk snapshot_chunk = 25;
     SnapshotFinish snapshot_finish = 26;
     SnapshotResult snapshot_result = 27;
+    CommittedPrefix committed_prefix = 28;
     MetadataCommand metadata_command = 30;
     MetadataQuery metadata_query = 31;
     MetadataPage metadata_page = 32;

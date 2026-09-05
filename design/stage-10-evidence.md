@@ -267,6 +267,110 @@ Local evidence for this slice:
   run was slower than the preceding retention gate; no test-speed improvement is
   claimed. Hardware/soak and opt-in SMB-image proofs remain separate.
 
+## Backup administration panel
+
+`/admin/backups` now exposes the existing Rust-generated backup APIs through the
+manager-gated web panel. It shows the current schedule and paged destinations,
+supports explicit frequency/retention/copy thresholds, pauses or resumes a
+registered destination, and selects existing active storage anywhere in the mesh
+for a new destination. It never asks for provider filesystem paths or duplicate
+credentials. Advanced settings are collapsed; the ordinary view distinguishes
+configuration from proof of a completed backup and labels unknown failure
+independence honestly.
+
+Inventory loading and save/retry handling have separate responsibilities. Reads
+are coalesced while in flight; pages are requested only on demand. Paging does
+not reset partially completed forms, while successful destination creation does.
+Failed reads clear stale private inventory instead of displaying an empty mesh
+as if the query succeeded. Mutations carry CSRF and observed revisions, wait for
+matching receipts and retain the exact operation/request for in-panel retry after
+an unknown result. No optimistic saved or protected state is invented.
+
+The native-Fetch generator now includes `listNextBackupDestinations`, validating
+the continuation origin, exact endpoint, duplicate/unknown query fields and
+numeric limits before sending credentials. Generated files were regenerated,
+not hand-edited. No public API schema, Rust persistence or dependencies changed.
+
+Sixteen focused component/client tests passed in 1.53 seconds. They cover actual
+DOM form submissions, pause/resume revisions, CSRF, invalid policy, unknown
+outcomes, duplicate-click admission, invalid receipts, pagination, preservation
+of form input, large generation identifiers and failed-read clearing. These are
+headless DOM tests and generated-client transport fixtures, not a live-browser
+or real-device visual acceptance claim. TypeScript and strict ESLint passed; the
+final production web build also passed in 0.307 seconds.
+
+The complete local gate failed in the three-process consensus suite after
+166.39 seconds: `STATUS 5` did not become `COMMITTED` within 15 seconds. Operation
+5 is initial node enrolment, not the later leader-restart phase. All five process
+cases subsequently passed together, including ten consecutive runs of the exact
+workspace-feature build (7.33–7.61 seconds each). That does not establish the
+original failure's cause or prove it fixed. Test timeout diagnostics now retain
+the last response, node role and bounded process log, with a deadline on each
+control request.
+
+Inspection found a separately deterministic membership liveness counterexample,
+captured in `core::tests::membership_loss::follower_recovers_after_losing_membership_commit_notification`.
+An incumbent follower durably holds a transition but loses its old-plan commit
+notification. The leader activates the joint plan. All three subsequent reliable
+heartbeats are rejected as `StaleMember`, leaving the follower at commit index 0
+instead of 1. Reintroducing the deliberately lost notification advances that same
+follower, confirming the fixture itself is viable. The regression was committed
+red in `c8e4c82` and was not ignored or weakened. The production authority and proof runtime both
+send an old-plan heartbeat once before activation; neither supplies replay after
+that notification is lost.
+
+No claim is made that this counterexample proves the cause of the original
+process timeout. The panel remains unmerged until the repaired tree passes the
+complete local gate.
+
+Focused Clippy across all targets/features of `meshspan-consensus` and
+`meshspan-cluster` passed in 24.82 seconds after the diagnostic additions. The
+deterministic counterexample compiled and failed in under 0.01 seconds exactly
+at the expected commit-index assertion, including the passing lost-packet
+control. Formatting and diff-whitespace checks passed.
+
+### Membership catch-up repair
+
+The core now returns bounded phase hints instead of silently discarding every
+message whose membership phase differs. Applied canonical membership records
+reconstruct historical phase boundaries from the durable log on restart. A
+known historical voter may serve `CommittedPrefix` through the normal Quinn
+consensus stream even before a replacement election completes. This distinct
+message cannot elect its supplier, reset a newer vote, acknowledge a read
+barrier or contribute to the current write quorum. It contains only a bounded
+committed prefix up to the exact historical transition, with independently
+validated indices and digests. New bytes are persisted before commit/apply
+effects, and committed content cannot be overwritten.
+
+The deterministic regression now routes replies as well as requests, allowing
+the receiver to request its missing phase; it never needs the deliberately lost
+notification to return. Twenty-nine core tests passed in 4.63 seconds, covering
+the original loss, a newer follower election term, source restart without an
+elected leader, commit-limit overreach, immutable committed content and exclusion
+from current quorum/read evidence. Seven wire-related tests passed in 0.01
+seconds, including the new message's Protobuf round trip, corrupt entry bytes and
+commit-range overreach.
+
+A real three-process Quinn/mTLS proof deliberately drops every old-phase
+membership commit notification, records that multiple drops occurred, then
+completes promotion, writes, leader loss and restart. All six process cases
+passed concurrently in 8.14 seconds. Setup/promotion and failover are distinct
+test responsibilities; no timeouts or lint limits were raised and no tests were
+serialised. These proofs do not replace Stage 11's wider churn and hardware
+campaigns.
+
+The private protocol adds `CommittedPrefix` (envelope field 28); peers need this
+implementation for the new recovery exchange. There is no SQL migration, public
+API schema change or new dependency.
+
+The complete NVM-default `MESHSPAN_CHECK_WORKERS=4 pnpm check` passed on the
+repaired tree in **655.03 seconds**. Rust workspace tests took 586.47 seconds;
+web tests took 5.06 seconds; workspace Clippy took 49.82 seconds. Generated drift,
+both licence policies, formatting, TypeScript/ESLint and scheduler tests also
+passed. This run was slower than the earlier 551.45-second backup-defaults gate;
+no test-speed improvement is claimed. No release, tag, image or publication
+workflow has been run.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in
@@ -277,7 +381,7 @@ or image was produced; hardware/soak and opt-in SMB-image proofs remain separate
 
 The schedule API does not close these separate outstanding requirements:
 
-- backup panel controls and topology-backed failure assessments;
+- topology-backed failure assessments;
 - automatic resolution of abandoned unpublished backup holds;
 - product-facing restore-readiness, encrypted export and recovery workflows;
 - provider/federation destination implementations and their acceptance evidence.

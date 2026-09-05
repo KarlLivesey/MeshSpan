@@ -69,6 +69,47 @@ pub(super) fn append_response(value: &AppendResponse) -> Result<(), WireContract
     validate_conditional_error(value.accepted, value.rejection.as_ref())
 }
 
+pub(super) fn committed_prefix(
+    value: &crate::v1::CommittedPrefix,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    valid_digest(&value.previous_digest)?;
+    valid_digest(&value.quorum_plan_digest)?;
+    validate_position(value.previous.as_ref(), true)?;
+    valid_count(value.entries.len(), limits, true)?;
+    let previous = value
+        .previous
+        .as_ref()
+        .ok_or(WireContractError::InvalidMessage)?;
+    let mut index = previous.index;
+    let mut term = previous.term;
+    for entry in &value.entries {
+        validate_position(entry.position.as_ref(), false)?;
+        valid_identifier(&entry.operation_id)?;
+        valid_digest(&entry.command_digest)?;
+        validate_payload(entry.command.as_ref(), limits)?;
+        let position = entry
+            .position
+            .as_ref()
+            .ok_or(WireContractError::InvalidMessage)?;
+        index = index
+            .checked_add(1)
+            .ok_or(WireContractError::InvalidMessage)?;
+        if position.index != index || position.term < term {
+            return Err(WireContractError::InvalidMessage);
+        }
+        term = position.term;
+    }
+    if value.membership_epoch == 0
+        || value.committed_index == 0
+        || value.committed_index != index
+        || (previous.index == 0 && value.previous_digest != [0; 32])
+    {
+        return Err(WireContractError::InvalidMessage);
+    }
+    Ok(())
+}
+
 pub(super) fn snapshot_begin(
     value: &SnapshotBegin,
     limits: WireLimits,

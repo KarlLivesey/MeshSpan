@@ -13,6 +13,8 @@ use super::{
 };
 use crate::{JointQuorumPlan, compile_plan, flat_plan};
 
+mod membership_loss;
+
 #[test]
 fn campaign_is_durable_before_messages_or_role_change() -> Result<(), Box<dyn Error>> {
     let mut core = core(3)?;

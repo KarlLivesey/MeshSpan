@@ -437,6 +437,9 @@ export interface MeshSpanFetchClient {
   listBackupDestinations(
     query?: ListBackupDestinationsQuery,
   ): Promise<ListBackupDestinationsResponse>;
+  listNextBackupDestinations(
+    nextPageUrl: string,
+  ): Promise<ListBackupDestinationsResponse>;
   configureBackupDestination(
     request: ConfigureBackupDestinationRequest,
     csrfToken?: string,
@@ -915,6 +918,16 @@ export function createMeshSpanFetchClient(
       return requestJson(
         context,
         "/admin/backups/destinations" + (suffix ? "?" + suffix : ""),
+        { method: "GET" },
+        zListBackupDestinationsResponse2,
+      );
+    },
+    async listNextBackupDestinations(
+      nextPageUrl,
+    ): Promise<ListBackupDestinationsResponse> {
+      return requestJson(
+        context,
+        validateBackupDestinationPageUrl(context.apiRoot, nextPageUrl),
         { method: "GET" },
         zListBackupDestinationsResponse2,
       );
@@ -2411,6 +2424,36 @@ function validateStorageFolderPageUrl(apiRoot: URL, value: string): string {
   }
   const rawLimit = route.searchParams.get("limit");
   zListStorageFoldersQuery.parse({
+    cursor: route.searchParams.get("cursor") ?? undefined,
+    limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
+  });
+  return route.pathname + route.search;
+}
+function validateBackupDestinationPageUrl(apiRoot: URL, value: string): string {
+  if (value.length === 0 || value.length > 16_384 || !value.startsWith("/")) {
+    throw new TypeError("backup destination page URL is invalid");
+  }
+  const route = new URL(value, apiRoot.origin);
+  if (
+    route.origin !== apiRoot.origin ||
+    route.username !== "" ||
+    route.password !== "" ||
+    route.hash !== "" ||
+    route.pathname !== "/api/latest/admin/backups/destinations"
+  ) {
+    throw new TypeError(
+      "backup destination page URL is outside the administration API",
+    );
+  }
+  const names = [...route.searchParams.keys()];
+  if (
+    names.some((name) => name !== "cursor" && name !== "limit") ||
+    new Set(names).size !== names.length
+  ) {
+    throw new TypeError("backup destination page URL has invalid query fields");
+  }
+  const rawLimit = route.searchParams.get("limit");
+  zListBackupDestinationsQuery.parse({
     cursor: route.searchParams.get("cursor") ?? undefined,
     limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
   });

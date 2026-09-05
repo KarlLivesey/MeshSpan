@@ -290,6 +290,23 @@ pub struct AppendResponse {
     pub plan_digest: [u8; 32],
 }
 
+/// Bounded historical committed range, without election or read authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommittedPrefix {
+    /// Position immediately before this bounded range.
+    pub previous: LogPosition,
+    /// Exact previous-entry digest; all zeroes only at genesis.
+    pub previous_digest: [u8; 32],
+    /// Contiguous, already committed entries, never a speculative tail.
+    pub entries: Vec<LogEntry>,
+    /// Exact last position in this range, also its commit limit.
+    pub committed_index: u64,
+    /// Receiver's exact historical membership phase.
+    pub membership_epoch: u64,
+    /// Receiver's exact historical compiled plan digest.
+    pub plan_digest: [u8; 32],
+}
+
 /// Closed peer messages owned by the consensus core.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CoreMessage {
@@ -301,6 +318,8 @@ pub enum CoreMessage {
     AppendRequest(AppendRequest),
     /// Follower replication result.
     AppendResponse(AppendResponse),
+    /// Historical committed bytes only; conveys no election, vote or read authority.
+    CommittedPrefix(CommittedPrefix),
 }
 
 /// Explicit deterministic inputs; no ambient clock, network, disk or randomness exists here.
@@ -478,6 +497,31 @@ pub(super) fn validate_append_entries(request: &AppendRequest) -> Result<(), Cor
             return Err(CoreError::InvalidInput);
         }
         expected = expected.checked_add(1).ok_or(CoreError::Exhausted)?;
+    }
+    Ok(())
+}
+
+pub(super) fn validate_committed_prefix(prefix: &CommittedPrefix) -> Result<(), CoreError> {
+    if !prefix.previous.is_valid()
+        || prefix.entries.len() > MAXIMUM_APPEND_ENTRIES
+        || prefix.membership_epoch == 0
+        || prefix.committed_index == 0
+        || (prefix.previous == LogPosition::GENESIS && prefix.previous_digest != [0; 32])
+    {
+        return Err(CoreError::InvalidInput);
+    }
+    let mut index = prefix.previous.index;
+    let mut term = prefix.previous.term;
+    for entry in &prefix.entries {
+        entry.validate()?;
+        index = index.checked_add(1).ok_or(CoreError::Exhausted)?;
+        if entry.position.index != index || entry.position.term < term {
+            return Err(CoreError::InvalidInput);
+        }
+        term = entry.position.term;
+    }
+    if index != prefix.committed_index {
+        return Err(CoreError::InvalidInput);
     }
     Ok(())
 }

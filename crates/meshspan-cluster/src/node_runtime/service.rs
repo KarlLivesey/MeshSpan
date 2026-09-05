@@ -364,7 +364,17 @@ fn apply_effects(
     loop {
         if let Some(effect) = pending.pop_front() {
             match effect {
-                DriverEffect::Send { to, message } => network.send(to, message),
+                DriverEffect::Send { to, message } => {
+                    let committed = match &message {
+                        meshspan_consensus::CoreMessage::AppendRequest(request) => {
+                            driver.log_entry(request.leader_commit_index)
+                        }
+                        _ => None,
+                    };
+                    if !test_plan_exit.suppress_commit_notification(&message, committed)? {
+                        network.send(to, message);
+                    }
+                }
                 DriverEffect::ApplyCommitted { entries } => {
                     for entry in entries {
                         apply_committed_entry(

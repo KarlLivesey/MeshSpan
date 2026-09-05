@@ -108,12 +108,39 @@ stream is bound to one partition ID; terms and log indices are meaningful only
 inside that partition. The wire contract has only these families:
 
 - `VoteRequest` / `VoteResponse`;
-- `AppendRequest` / `AppendResponse`; and
+- `AppendRequest` / `AppendResponse`;
+- `CommittedPrefix` for bounded recovery across a committed membership transition; and
 - `SnapshotBegin`, `SnapshotChunk`, `SnapshotFinish` / `SnapshotResult`.
 
 Terms, log positions, membership configuration and snapshot checksums are
 explicit. Snapshot chunks are bounded and resumable. No application request may
 bypass consensus by writing a peer database directly.
+
+An authenticated member with a different membership phase receives only an exact
+phase hint, not a vote, read acknowledgement or permission to advance current
+authority. A node which durably applied that historical transition can respond
+with `CommittedPrefix`: previous position/digest, contiguous entries, exact
+commit limit, membership epoch and plan digest. It may serve only a prefix ending
+at or before its durable transition boundary, at most 64 entries per exchange.
+The commit limit must equal the last supplied position; speculative tails are
+never replayed. Repeated phase hints retry loss without retaining volatile
+transfer state, and applied canonical membership commands reconstruct the
+boundary index after restart.
+
+The receiver requires its exact current phase and an authenticated, current-
+incarnation voter in that phase. It independently checks bounds, entry digests,
+continuity and the previous digest, preserves committed entries and persists
+any new bytes before emitting an apply effect. Replay carries neither a leader
+term nor a read barrier. It does not elect its supplier, erase a newer durable
+vote or count as current-plan quorum evidence. Followers can serve their durable
+history before a replacement election succeeds. This uses the same explicitly
+non-Byzantine voter model as the consensus contract; it does not authorise an
+unknown node or learner merely because it has an mTLS connection.
+
+The initial implementation retains the complete bounded consensus log in its
+SQLite snapshots. Any later prefix-compaction implementation must preserve a
+verified membership-history anchor and range retrieval before discarding those
+entries. It must not silently disable membership catch-up after compaction.
 
 Replicated log commands have their own positive version. Membership command
 version `2` uses the canonical `MSMC` record and only permits three shapes:

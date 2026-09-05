@@ -539,6 +539,81 @@ textarea:hover {
   container-type: inline-size;
 }
 
+.backup-administration {
+  display: grid;
+  gap: var(--space-2xl);
+  container-type: inline-size;
+}
+
+.backup-administration .administration-nav {
+  margin-bottom: 0;
+}
+
+.backup-settings {
+  border-block: 1px solid var(--line);
+  padding-block: var(--space-lg);
+}
+
+.backup-settings summary {
+  cursor: pointer;
+  min-height: 2.75rem;
+  font-weight: 700;
+}
+
+.backup-settings summary:focus-visible {
+  outline: 0.1875rem solid var(--focus);
+  outline-offset: 0.1875rem;
+}
+
+.backup-settings form,
+.backup-fields {
+  display: grid;
+  gap: var(--space-lg);
+  margin-top: var(--space-lg);
+}
+
+.backup-fields {
+  border: 0;
+  padding: 0;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+}
+
+.backup-checkbox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  grid-column: 1 / -1;
+}
+
+.backup-checkbox input {
+  width: auto;
+}
+
+.backup-caution {
+  color: var(--ink-soft);
+}
+
+.backup-destinations {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.backup-destinations li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-lg);
+  padding-block: var(--space-lg);
+  border-bottom: 1px solid var(--line);
+}
+
+.backup-destinations li > div {
+  flex: 1 1 20rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .certificate-administration .administration-nav {
   margin-bottom: 0;
 }
