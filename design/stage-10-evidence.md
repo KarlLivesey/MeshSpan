@@ -451,9 +451,7 @@ by exact retry; this is not a claim that an abandoned published generation may b
 removed without authoritative retirement. That remaining interruption-recovery
 path is tracked below.
 
-## Remaining backup integration
-
-### Native backup history and panel
+## Native backup history and panel
 
 `GET /api/latest/admin/backups/runs` now exposes a bounded newest-first page of
 automatic backup attempts, with caller/partition/limit/revision-bound relative
@@ -478,10 +476,16 @@ invalid outgoing data, substituted cursors and committed credential revocation.
 The real CLI/HTTPS operator flow observed an automatic run in 13.95 seconds.
 Fifteen focused panel/generated-client tests passed in 2.77 seconds. TypeScript,
 ESLint and affected all-target/all-feature Clippy passed (final Clippy 4.39
-seconds). The complete local gate will be recorded after it finishes.
+seconds). The complete NVM-default `MESHSPAN_CHECK_WORKERS=4 pnpm check` passed
+on `c0eab43` in **866.95 seconds**, including Rust workspace tests (807.76
+seconds), web tests (8.58 seconds), both licence gates, workspace Clippy,
+formatting, TypeScript/ESLint and generated-contract drift. No release, tag,
+image or publication workflow was run.
 
 This is historical inventory, not the still-outstanding restore-readiness,
 encrypted export or recovery workflow.
+
+## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in
 **444.29 seconds** with four workers. Rust workspace tests took 398.64 seconds;
