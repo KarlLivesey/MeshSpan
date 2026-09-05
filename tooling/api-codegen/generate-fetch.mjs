@@ -13,6 +13,10 @@ import {
 import { renderUploadClientMethods } from "./render-upload-client.mjs";
 import { renderBackupScheduleClientMethods } from "./render-backup-schedule-client.mjs";
 import {
+  renderBackupHistoryClientMethods,
+  renderBackupHistoryRuntime,
+} from "./render-backup-history-client.mjs";
+import {
   renderBackupDestinationClientMethods,
   renderBackupDestinationRuntime,
 } from "./render-backup-destination-client.mjs";
@@ -141,6 +145,7 @@ export function createMeshSpanFetchClient(
     ${renderCertificateClientMethods(routes)}
     ${renderBackupScheduleClientMethods(routes)}
     ${renderBackupDestinationClientMethods(routes)}
+    ${renderBackupHistoryClientMethods(routes)}
     ${renderIdentityAdministrationClientMethods(routes)}
     ${renderNamespaceMutationClientMethods(routes)}
     ${renderUploadClientMethods(routes)}
@@ -287,6 +292,7 @@ ${renderStorageDrainRuntime(routes)}
 
 ${renderStorageFolderRuntime(routes)}
 ${renderBackupDestinationRuntime(routes)}
+${renderBackupHistoryRuntime(routes)}
 
 ${renderTopologyRuntime(routes)}
 

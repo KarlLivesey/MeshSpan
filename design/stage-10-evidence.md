@@ -451,6 +451,40 @@ by exact retry; this is not a claim that an abandoned published generation may b
 removed without authoritative retirement. That remaining interruption-recovery
 path is tracked below.
 
+## Native backup history and panel
+
+`GET /api/latest/admin/backups/runs` now exposes a bounded newest-first page of
+automatic backup attempts, with caller/partition/limit/revision-bound relative
+continuations. Every page checks current system-manager authority. Run sequence
+strings retain exact values beyond JavaScript's safe integer range; recorded
+outcomes explicitly describe historical execution, never present restore safety.
+The repository uses the existing partition/run-sequence index; there is no
+migration, provider scan or new dependency.
+
+The backup panel reads this native API through generated Fetch/Zod contracts.
+It keeps one page, follows older history on demand, refreshes the newest attempts,
+and clears private rows when reads fail. Its labels distinguish queued, claimed,
+recorded, completed-at-required-protection and incomplete attempts. Existing
+panel styles are reused; no browser interaction or real-device visual proof was
+performed.
+
+Focused local evidence: two repository history cases passed in 0.77 seconds,
+including concurrent new-run paging, terminal-page behaviour, index plans and
+corrupt-record rejection. Two Rust contract cases passed in 0.02 seconds; two
+daemon HTTP/consensus cases passed in 0.47 seconds, including early rejection,
+invalid outgoing data, substituted cursors and committed credential revocation.
+The real CLI/HTTPS operator flow observed an automatic run in 13.95 seconds.
+Fifteen focused panel/generated-client tests passed in 2.77 seconds. TypeScript,
+ESLint and affected all-target/all-feature Clippy passed (final Clippy 4.39
+seconds). The complete NVM-default `MESHSPAN_CHECK_WORKERS=4 pnpm check` passed
+on `c0eab43` in **866.95 seconds**, including Rust workspace tests (807.76
+seconds), web tests (8.58 seconds), both licence gates, workspace Clippy,
+formatting, TypeScript/ESLint and generated-contract drift. No release, tag,
+image or publication workflow was run.
+
+This is historical inventory, not the still-outstanding restore-readiness,
+encrypted export or recovery workflow.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in

@@ -41,6 +41,10 @@ mod backup_destination_administration;
 mod backup_destination_api;
 #[cfg(test)]
 mod backup_destination_api_tests;
+mod backup_history;
+mod backup_history_api;
+#[cfg(test)]
+mod backup_history_api_tests;
 mod backup_publication;
 #[cfg(test)]
 mod backup_publication_tests;
@@ -309,6 +313,8 @@ pub use backup_destination_administration::{
     BackupDestinationController, BackupDestinationError, BackupDestinationService,
 };
 pub use backup_destination_api::{BackupDestinationApiError, backup_destination_api_router};
+pub use backup_history::{BackupHistoryController, BackupHistoryService};
+pub use backup_history_api::backup_history_api_router;
 pub use backup_schedule_administration::{
     BackupScheduleController, BackupScheduleError, BackupScheduleService,
 };

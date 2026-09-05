@@ -129,6 +129,8 @@ fn components() -> Value {
                 "ConfigureBackupDestinationResponse",
             ),
             schema_request::<crate::ListBackupDestinationsQuery>("ListBackupDestinationsQuery"),
+            schema_request::<crate::ListBackupRunsQuery>("ListBackupRunsQuery"),
+            schema_response::<crate::ListBackupRunsResponse>("ListBackupRunsResponse"),
             schema_response::<crate::ListBackupDestinationsResponse>(
                 "ListBackupDestinationsResponse",
             ),
@@ -529,6 +531,7 @@ fn administration_paths() -> Vec<(String, Value)> {
             ),
             ("/admin/storage-drains".to_owned(), storage_drains_path()),
             ("/admin/backups/schedule".to_owned(), backup_schedule_path()),
+            ("/admin/backups/runs".to_owned(), backup_runs_path()),
             (
                 "/admin/backups/destinations".to_owned(),
                 backup_destinations_path(),
@@ -539,6 +542,27 @@ fn administration_paths() -> Vec<(String, Value)> {
             ),
         ])
         .collect()
+}
+
+fn backup_runs_path() -> Value {
+    json!({ "get": {
+        "operationId": "listBackupRuns",
+        "summary": "List newest-first automatic metadata-backup history",
+        "description": "Run states describe recorded execution, not present copy availability or restore readiness. Completion protection is historical. Pagination follows decreasing run sequence; newer runs appear on refresh, while existing run outcomes remain live. Every page checks current system-manager authority.",
+        "x-meshspan-access": "system-manager",
+        "parameters": [
+            { "name": "limit", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/ListBackupRunsQuery/properties/limit" } },
+            { "name": "cursor", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/ListBackupRunsQuery/properties/cursor" } }
+        ],
+        "responses": {
+            "200": json_response("Bounded historical run outcomes and relative continuation", "#/components/schemas/ListBackupRunsResponse"),
+            "400": json_response("Invalid query or continuation", "#/components/schemas/ApiError"),
+            "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+            "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+            "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+            "503": json_response("Authority temporarily unavailable", "#/components/schemas/ApiError")
+        }
+    } })
 }
 
 fn backup_destinations_path() -> Value {

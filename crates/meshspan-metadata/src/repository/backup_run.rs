@@ -2,7 +2,9 @@
 
 //! Fenced execution and honest terminal state for automatic metadata backups.
 
+mod history;
 mod query;
+pub(super) use history::page;
 mod transition;
 
 use meshspan_domain::{BackupId, PartitionId, Revision, UnixMicros};

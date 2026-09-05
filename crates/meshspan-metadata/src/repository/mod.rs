@@ -2255,6 +2255,26 @@ impl AuthoritativeRepository {
         backup_run::load(self.database.connection(), backup_id)
     }
 
+    /// Returns newest-first history, strictly before an optional run sequence.
+    ///
+    /// Completion records describe the outcome at completion, not current copy safety.
+    /// Callers must authorise inventory access on every page.
+    ///
+    /// # Errors
+    /// Rejects zero/out-of-range cursors and malformed persisted run records.
+    pub fn metadata_backup_runs(
+        &self,
+        before: Option<u64>,
+        limit: PageLimit,
+    ) -> Result<Page<MetadataBackupRun, u64>, RepositoryError> {
+        backup_run::page(
+            self.database.connection(),
+            self.database.partition_id(),
+            before,
+            limit,
+        )
+    }
+
     /// Returns the current live worker claim for one automatic backup run.
     ///
     /// # Errors

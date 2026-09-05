@@ -2,6 +2,7 @@
 
 //! Backup controls exercised against the real appliance HTTPS listener.
 
+use super::backup_history::automatic_backup_history;
 use super::{
     ClientConfig, Error, Instant, RETRY_INTERVAL, SocketAddr, WAIT_LIMIT, request_with_headers,
     require_status, response_body, sleep,
@@ -17,6 +18,7 @@ pub(super) async fn backup_destination_controls(
 ) -> Result<(), Box<dyn Error>> {
     let authorization = format!("Bearer {api_key}");
     automatic_backup_configuration(address, client, &authorization).await?;
+    automatic_backup_history(address, client, &authorization).await?;
     let response = request_with_headers(
         address,
         client,

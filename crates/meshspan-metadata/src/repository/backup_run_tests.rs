@@ -17,6 +17,9 @@ use crate::{
 
 const DAY_MICROS: u64 = 86_400_000_000;
 
+#[path = "backup_history_tests.rs"]
+mod history;
+
 struct Fixture {
     _directory: TempDir,
     repository: AuthoritativeRepository,

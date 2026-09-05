@@ -2,6 +2,8 @@
 
 //! Real-process proof for headless startup, HTTPS setup and durable restart.
 
+#[path = "headless_process/backup_history.rs"]
+mod backup_history;
 #[path = "support/passkey.rs"]
 mod passkey_support;
 #[path = "headless_process/stage10.rs"]
