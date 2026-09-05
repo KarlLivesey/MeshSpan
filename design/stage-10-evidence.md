@@ -3,6 +3,47 @@
 Status: **in progress**. Stage 11 has not started. Publication remains on hold
 pending the owner's dependency review.
 
+## Embedded appliance panels
+
+The actual Vite-built web application is now embedded into the daemon binary and
+served by the same HTTPS listener before claim and after configuration/join. The
+runtime does not read a web directory, run Node.js, launch another service or
+expose provider folders. This closes the previous integration gap between the
+implemented panels and the native appliance listener (SYS-007, D-016, D-020).
+
+`pnpm build:daemon` builds the panel then the development daemon. The canonical
+local check rebuilds the panel before Rust compilation. Cargo embeds the last
+explicitly built bundle; a missing bundle fails with build guidance. Generated
+assets remain ignored, and no release/publication command is added or run.
+
+The public asset boundary serves only embedded HTML, JavaScript and CSS, with
+explicit media types, no-sniff/frame/CSP headers, non-cached-index revalidation
+and immutable hashed-asset caching. HEAD reports the same length without a body.
+HTML navigation supports deep links, but API paths, missing assets, source maps,
+Vite metadata, source files and encoded/traversal paths never fall back to HTML.
+The build bounds file count and size and rejects unsupported served asset kinds.
+Static application code is public; every native API keeps its existing independent
+authentication and authorisation boundary.
+
+Four asset/router cases passed in **0.01 seconds**. Daemon all-target/all-feature
+Clippy passed in **15.65 seconds**, and the final changed-target pass took **4.67
+seconds** after renaming the now-used temporary-fixture owner out of its
+underscore-prefixed name. Script lint plus workspace formatting passed.
+`pnpm build:daemon` built Vite in **0.264 seconds** and the development
+daemon in **24.63 seconds**. The real TLS operator proof compares the exact HTML
+and every built JS/CSS asset before claim and on a joined node, tests deep links
+and non-public-resource rejection, then continues through users, groups, storage,
+volumes, automatic backup/export/restore and file/node-loss behaviour. The first
+run failed with an unexpected TLS close without request context; no cause or fix
+is claimed. Added request diagnostics leave errors fatal. A repeat passed in
+**17.61 seconds**, and three independent concurrent runs passed in **24.34,
+24.19 and 24.28 seconds**. The intermittent close remains a reliability observation
+for the wider Stage 11 churn proof, not erased evidence.
+
+These are headless HTTP/DOM proofs, not a live-browser or released-artifact claim.
+The full local gate for this slice remains pending. No dependency, SQL schema,
+private protocol, release, tag, image or publication workflow changed.
+
 ## Automatic metadata-backup policy API
 
 `GET /api/latest/admin/backups/schedule` reads the current authoritative

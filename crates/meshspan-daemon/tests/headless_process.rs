@@ -10,6 +10,8 @@ mod passkey_support;
 mod stage10;
 #[path = "headless_process/stage8.rs"]
 mod stage8;
+#[path = "headless_process/web_panel.rs"]
+mod web_panel;
 
 use std::error::Error;
 use std::fs;
@@ -605,10 +607,12 @@ async fn clean_machine_operator_flow_uses_only_cli_and_public_https() -> Result<
     let peer = ProcessFixture::new()?;
     let mut processes = Vec::new();
     let proof = async {
-        processes.push(root.start()?);
+        // This working directory has no application sources or compiled web assets.
+        processes.push(root.command().current_dir(root.temporary.path()).spawn()?);
         let claim = wait_for_claim(&root.claim_path).await?;
         let root_client = wait_for_client(&root.identity_path).await?;
         wait_for_status(root.address, &root_client, "claim_required").await?;
+        web_panel::verify(root.address, &root_client).await?;
         let administrator_id = bootstrap_administrator_id(&claim, &root.identity_path)?;
         let created = create_process_mesh(&root, &root_client, &claim).await?;
         let api_key = created["api_key"]
@@ -620,6 +624,7 @@ async fn clean_machine_operator_flow_uses_only_cli_and_public_https() -> Result<
         processes.push(peer.start_join(&join_code)?);
         let peer_client = wait_for_client(&peer.identity_path).await?;
         wait_for_status(peer.address, &peer_client, "configured").await?;
+        web_panel::verify(peer.address, &peer_client).await?;
         wait_for_storage_folder_visibility(&root, &root_client, api_key).await?;
         wait_for_storage_folder_visibility(&peer, &peer_client, api_key).await?;
         stage10::backup_destination_controls(root.address, &root_client, api_key).await?;
@@ -2486,7 +2491,7 @@ fn response_body(response: &str) -> Result<&str, Box<dyn Error>> {
 }
 
 struct ProcessFixture {
-    _temporary: TempDir,
+    temporary: TempDir,
     address: SocketAddr,
     http01_address: SocketAddr,
     smb_address: SocketAddr,
@@ -2525,7 +2530,7 @@ impl ProcessFixture {
                 .join("state/secrets/pending-offline-recovery.bundle"),
             saved_recovery_bundle_path: temporary.path().join("offline-recovery.bundle"),
             saved_recovery_code_path: temporary.path().join("offline-recovery.code"),
-            _temporary: temporary,
+            temporary,
         })
     }
 
@@ -2696,6 +2701,7 @@ async fn request_with_headers(
         additional_headers,
     )
     .await
+    .map_err(|error| format!("native HTTPS {method} {target}: {error}").into())
 }
 
 async fn request_with_content_type(

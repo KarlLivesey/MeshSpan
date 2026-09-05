@@ -86,6 +86,14 @@ memory. Regenerate the committed OpenAPI, TypeScript, native-Fetch and Zod artef
 
 Early development uses local verification only. There are deliberately no GitHub Actions yet.
 
+Build the self-contained development daemon with `pnpm build:daemon` after activating
+the NVM default toolchain. This compiles the web client first, then embeds its HTML,
+JavaScript and CSS in `target/debug/meshspan-daemon`. No Node.js process, separate web
+server or runtime asset directory is needed to serve the panels. Direct Cargo builds
+consume the most recently built `web/dist`; rebuild the bundle after web changes.
+The canonical local check always rebuilds it before Rust compilation. This is a
+development build, not a release or publication command.
+
 ## GPL-2.0-only
 
 **Valid licence identifier: `GPL-2.0-only`.**

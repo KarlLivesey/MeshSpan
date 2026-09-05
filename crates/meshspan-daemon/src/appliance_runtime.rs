@@ -674,7 +674,8 @@ fn compose_appliance_services(
             gateway,
             started_at,
             native_filesystem,
-        )?);
+        )?)
+        .fallback(crate::web_assets::serve);
     Ok(ApplianceServiceComposition {
         router,
         smb_connections,
