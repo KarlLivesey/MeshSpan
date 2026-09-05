@@ -60,8 +60,15 @@ cancellation, unmount, invalid output, route/budget generation and existing
 operation pagination. Full web/tooling ESLint, strict TypeScript and generated
 drift checks passed. An initial DOM assertion compared JSON property order,
 which Zod normalises; it now checks the exact parsed values without asserting
-an ordering the download contract does not promise. Complete-gate evidence is
-still pending.
+an ordering the download contract does not promise.
+
+The complete NVM-default `MESHSPAN_CHECK_WORKERS=4 pnpm check` passed on
+`258b0f0` in **649.67 seconds**. Rust workspace tests took **593.34 seconds**
+and web tests took **9.22 seconds**. Generated-contract drift, embedded web
+build, Rust formatting and workspace Clippy, both licence gates, workspace
+formatting, strict TypeScript, ESLint and tooling tests all passed. The earlier
+backup timing failure remains recorded above; a passing full gate does not
+establish its cause or claim that it was fixed.
 
 This advances OPS-007/011/017/019 without claiming the remaining full metric
 catalogue, persistent metric history, exporters, durable notifications or
