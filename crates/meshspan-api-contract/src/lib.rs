@@ -40,6 +40,17 @@ mod identity_administration_validation;
 mod manual_dns_task;
 mod manual_dns_task_validation;
 mod metadata_diagnostics;
+mod runtime_diagnostics;
+#[cfg(test)]
+mod runtime_diagnostics_tests;
+mod runtime_diagnostics_validation;
+pub use runtime_diagnostics::{
+    DiagnosticObservationTime, DiagnosticProbeResult, DiagnosticRuntimeEvent,
+    DiagnosticRuntimeEventCode, DiagnosticStorageReconciliation, DiagnosticTargetCheck,
+    DiagnosticTargetIdentity, DiagnosticsBundleResponse, MAX_DIAGNOSTICS_BUNDLE_BYTES,
+    RuntimeDiagnosticsResponse,
+};
+pub use runtime_diagnostics_validation::encode_diagnostics_bundle_response;
 #[cfg(test)]
 mod metadata_diagnostics_tests;
 mod model;

@@ -2,7 +2,7 @@
 
 use crate::{MetadataDiagnosticsResponse, encode_metadata_diagnostics_response};
 
-fn fixture() -> serde_json::Value {
+pub(crate) fn fixture() -> serde_json::Value {
     serde_json::json!({
         "mesh_id": "11111111-1111-4111-8111-111111111111",
         "partition_id": "22222222-2222-4222-8222-222222222222",

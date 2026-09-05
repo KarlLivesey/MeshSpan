@@ -217,7 +217,7 @@ pub fn encode_metadata_diagnostics_response(
     serde_json::to_vec(&json).map_err(|_| crate::BoundaryError::EncodeMismatch)
 }
 
-fn counter(value: &DiagnosticCounter) -> Result<u64, crate::BoundaryError> {
+pub(crate) fn counter(value: &DiagnosticCounter) -> Result<u64, crate::BoundaryError> {
     value
         .0
         .parse()

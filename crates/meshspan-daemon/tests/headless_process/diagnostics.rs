@@ -4,7 +4,10 @@ use super::{
     ClientConfig, Error, SocketAddr, request_with_headers, require_status, response_body,
     response_header,
 };
-use meshspan_api_contract::{MetadataDiagnosticsResponse, encode_metadata_diagnostics_response};
+use meshspan_api_contract::{
+    DiagnosticsBundleResponse, MetadataDiagnosticsResponse, encode_diagnostics_bundle_response,
+    encode_metadata_diagnostics_response,
+};
 
 pub(super) async fn verify(
     address: SocketAddr,
@@ -48,6 +51,58 @@ pub(super) async fn verify(
     assert!(!snapshot.nodes.truncated);
     assert!(!snapshot.targets.items.is_empty());
     assert!(!snapshot.recent_operations.items.is_empty());
+    require_redaction(body, api_key);
+    verify_bundle(address, client, api_key).await
+}
+
+async fn verify_bundle(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+) -> Result<(), Box<dyn Error>> {
+    let authorization = format!("Bearer {api_key}");
+    let started = super::Instant::now();
+    loop {
+        let response = request_with_headers(
+            address,
+            client,
+            "GET",
+            "/api/latest/admin/diagnostics/bundle",
+            None,
+            &[("Authorization", &authorization)],
+        )
+        .await?;
+        require_status(
+            &response,
+            "200 OK",
+            "collect native runtime diagnostic bundle",
+        )?;
+        assert_eq!(response_header(&response, "cache-control")?, "no-store");
+        assert_eq!(
+            response_header(&response, "content-disposition")?,
+            "attachment; filename=\"meshspan-diagnostics.json\""
+        );
+        let body = response_body(&response)?;
+        require_redaction(body, api_key);
+        let bundle: DiagnosticsBundleResponse = serde_json::from_str(body)?;
+        encode_diagnostics_bundle_response(&bundle)?;
+        if let Some(runtime) = bundle.runtime {
+            assert!(runtime.reconciliation_cycles.0.parse::<u64>()? > 0);
+            assert!(runtime.storage_reconciliation.is_some());
+            assert!(runtime.target_checks.len() <= 100);
+            assert!(runtime.recent_events.len() <= 100);
+            return Ok(());
+        }
+        // Null is a valid non-blocking observation under contention; retry the read,
+        // never trigger maintenance or treat unavailable evidence as a healthy sample.
+        if started.elapsed() >= super::WAIT_LIMIT {
+            return Err("runtime observation store did not become readable".into());
+        }
+        tokio::time::sleep(super::RETRY_INTERVAL).await;
+    }
+}
+
+fn require_redaction(body: &str, api_key: &str) {
     for (index, forbidden) in [
         api_key,
         "Root node",
@@ -67,5 +122,37 @@ pub(super) async fn verify(
             "diagnostic redaction omitted field {index}"
         );
     }
-    Ok(())
+}
+
+pub(super) async fn failure_evidence(
+    address: SocketAddr,
+    client: &ClientConfig,
+    authorization: &str,
+) -> String {
+    let evidence = async {
+        let response = request_with_headers(
+            address,
+            client,
+            "GET",
+            "/api/latest/admin/diagnostics/bundle",
+            None,
+            &[("Authorization", authorization)],
+        )
+        .await?;
+        require_status(&response, "200 OK", "collect failure evidence")?;
+        let bundle: DiagnosticsBundleResponse = serde_json::from_str(response_body(&response)?)?;
+        encode_diagnostics_bundle_response(&bundle)?;
+        let runtime = bundle.runtime.ok_or("runtime observation unavailable")?;
+        Ok::<_, Box<dyn Error>>(format!(
+            "cycles={}, failed_cycles={}, last_cycle={:?}, recent_events={:?}, consensus={:?}",
+            runtime.reconciliation_cycles.0,
+            runtime.reconciliation_failures.0,
+            runtime.storage_reconciliation,
+            runtime.recent_events.iter().take(3).collect::<Vec<_>>(),
+            bundle.metadata.consensus,
+        ))
+    }
+    .await;
+    // Do not echo arbitrary HTTP bodies or errors from a failed diagnostic boundary.
+    evidence.unwrap_or_else(|_| "validated runtime failure evidence unavailable".to_owned())
 }

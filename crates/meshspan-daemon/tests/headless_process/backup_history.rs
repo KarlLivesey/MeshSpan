@@ -49,9 +49,11 @@ pub(super) async fn automatic_backup_history(
             }
         }
         if Instant::now() >= deadline {
+            let runtime =
+                super::diagnostics::failure_evidence(address, client, authorization).await;
             return Err(format!(
-                "automatic backup did not finish its protected run; observed history: {:?}",
-                page.runs
+                "automatic backup did not finish its protected run; observed history: {:?}; {runtime}",
+                page.runs,
             )
             .into());
         }

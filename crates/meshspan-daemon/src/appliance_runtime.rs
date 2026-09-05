@@ -1342,6 +1342,15 @@ fn authenticated_administration_routes(
             )?,
             gateway,
             authority.clone(),
+            // Clone once during composition. Diagnostic reads never take the storage IO lock.
+            Arc::new(
+                storage_targets
+                    .lock()
+                    .map_err(|_| DaemonProcessError::StorageTargetTaskStopped)?
+                    .readiness
+                    .observations
+                    .clone(),
+            ),
         ),
     )?;
     let export_service = Arc::new(crate::backup_export_service::BackupExportService::new(
@@ -2300,6 +2309,7 @@ fn current_time() -> Result<UnixMicros, DaemonProcessError> {
 #[derive(Default)]
 struct RuntimeReadiness {
     degraded: AtomicBool,
+    observations: crate::runtime_observations::RuntimeObservations,
 }
 
 impl RuntimeReadiness {
@@ -3068,10 +3078,15 @@ impl StorageTargetRuntime {
             .active
             .iter()
             .filter_map(|(canonical_path, target)| {
-                target
-                    .check_health()
-                    .is_err()
-                    .then_some(canonical_path.clone())
+                let started = std::time::Instant::now();
+                let passed = target.check_health().is_ok();
+                self.readiness.observations.record_probe(
+                    (target.context().target_id, target.context().generation),
+                    passed,
+                    started.elapsed(),
+                    current_time().ok(),
+                );
+                (!passed).then_some(canonical_path.clone())
             })
             .collect::<Vec<_>>();
         if unavailable.is_empty() {
@@ -3120,6 +3135,7 @@ impl StorageTargetRuntime {
     }
 
     fn reconcile(&mut self, now: UnixMicros) {
+        let started = std::time::Instant::now();
         let mut failures = 0_usize;
         if self.restore_persisted_paths().is_err() {
             failures = failures.saturating_add(1);
@@ -3170,6 +3186,16 @@ impl StorageTargetRuntime {
             }
         }
         self.readiness.store_degraded(failures > 0);
+        self.readiness.observations.record_cycle(
+            crate::runtime_observations::StorageCycleSummary {
+                configured_folders: self.configured_paths.len(),
+                open_targets: self.active.len(),
+                pending_return_scans: self.pending_return_scans.len(),
+                failed_steps: failures,
+            },
+            started.elapsed(),
+            current_time().ok(),
+        );
     }
 }
 

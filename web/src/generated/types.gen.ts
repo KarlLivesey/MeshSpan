@@ -2469,6 +2469,405 @@ export type DeleteObjectResponse = {
 };
 
 /**
+ * DiagnosticsBundleResponse
+ *
+ * Local metadata and runtime observations; never an atomic swarm snapshot or a backup.
+ */
+export type DiagnosticsBundleResponse = {
+  /**
+   * Independently validated metadata section with its own revision bounds.
+   */
+  metadata: {
+    /**
+     * Local system-clock time at collection start, not a mesh-time uncertainty proof.
+     */
+    collected_at_epoch_micros: number;
+    /**
+     * One coherent local reactor observation, or null if it did not answer within its budget.
+     */
+    consensus: {
+      /**
+       * Highest locally applied index.
+       */
+      applied_index: string;
+      /**
+       * Highest locally known committed index.
+       */
+      commit_index: string;
+      /**
+       * Known leader identity, without a reachability guarantee.
+       */
+      known_leader: string | null;
+      /**
+       * Active stable or transitional membership epoch.
+       */
+      membership_epoch: string;
+      /**
+       * Observed reactor node.
+       */
+      node_id: string;
+      /**
+       * Exact local partition.
+       */
+      partition_id: string;
+      /**
+       * Operations awaiting committed results.
+       */
+      pending_operations: string;
+      /**
+       * Whether persistence has fenced further mutation.
+       */
+      persistence_blocked: boolean;
+      /**
+       * Exact active plan proof digest, not a fresh quorum acknowledgement.
+       */
+      plan_digest: string;
+      /**
+       * Mutations waiting for reactor admission.
+       */
+      queued_operations: string;
+      /**
+       * Last observed role.
+       */
+      role: "follower" | "candidate" | "leader";
+      /**
+       * Current local durable term.
+       */
+      term: string;
+    } | null;
+    /**
+     * Daemon package version, not an assertion of signed release provenance.
+     */
+    daemon_version: string;
+    /**
+     * Owning swarm identity, independent of reactor responsiveness.
+     */
+    mesh_id: string;
+    /**
+     * Gateway which collected this snapshot.
+     */
+    node_id: string;
+    /**
+     * Configured nodes, never inferred reachability; names and endpoints are omitted.
+     */
+    nodes: {
+      /**
+       * At most one hundred explicitly redacted records.
+       */
+      items: Array<{
+        /**
+         * Persisted lifecycle, not current reachability.
+         */
+        configured_state: "joining" | "active" | "draining" | "retired";
+        /**
+         * Shared physical-machine identity.
+         */
+        host_id: string;
+        /**
+         * Persisted restart incarnation.
+         */
+        incarnation: string;
+        /**
+         * Daemon identity.
+         */
+        node_id: string;
+        /**
+         * Configured capabilities, not current readiness.
+         */
+        roles: {
+          /**
+           * May expose configured access protocols.
+           */
+          gateway: boolean;
+          /**
+           * Eligible for metadata learner/voter placement.
+           */
+          metadata_eligible: boolean;
+          /**
+           * May host encrypted storage shards.
+           */
+          storage: boolean;
+        };
+      }>;
+      /**
+       * More records existed at this section's read; use the normal inventory API for paging.
+       */
+      truncated: boolean;
+    };
+    /**
+     * Local queried metadata partition.
+     */
+    partition_id: string;
+    /**
+     * Newest recorded operation outcomes, not the complete background-work inventory.
+     */
+    recent_operations: {
+      /**
+       * At most one hundred explicitly redacted records.
+       */
+      items: Array<{
+        /**
+         * Recorded terminal time, if any.
+         */
+        completed_at_epoch_micros: number | null;
+        /**
+         * Exact operation correlation identity.
+         */
+        operation_id: string;
+        /**
+         * Recorded event revision.
+         */
+        revision: string;
+        /**
+         * Recorded start time.
+         */
+        started_at_epoch_micros: number;
+        /**
+         * Recorded lifecycle outcome.
+         */
+        state:
+          | "queued"
+          | "running"
+          | "awaiting_action"
+          | "succeeded"
+          | "failed"
+          | "cancelled";
+      }>;
+      /**
+       * More records existed at this section's read; use the normal inventory API for paging.
+       */
+      truncated: boolean;
+    };
+    /**
+     * Local metadata revision after collection; a change exposes concurrent application.
+     */
+    revision_after: string;
+    /**
+     * Local metadata revision before collection.
+     */
+    revision_before: string;
+    /**
+     * Configured storage, never inferred live IO health; paths and names are omitted.
+     */
+    targets: {
+      /**
+       * At most one hundred explicitly redacted records.
+       */
+      items: Array<{
+        /**
+         * Persisted lifecycle, not a fresh probe.
+         */
+        configured_state:
+          "configuring" | "active" | "draining" | "unavailable" | "retired";
+        /**
+         * Authority-fenced provider generation.
+         */
+        generation: string;
+        /**
+         * Owning daemon.
+         */
+        node_id: string;
+        /**
+         * Registered target identity.
+         */
+        target_id: string;
+        /**
+         * Configured capacity ceiling, not measured free space.
+         */
+        usage_limit:
+          | {
+              kind: "percent";
+              /**
+               * Inclusive percentage from 1 through 100.
+               */
+              percent: number;
+            }
+          | {
+              /**
+               * Positive unsigned 64-bit decimal bytes.
+               */
+              bytes: string;
+              kind: "bytes";
+            };
+      }>;
+      /**
+       * More records existed at this section's read; use the normal inventory API for paging.
+       */
+      truncated: boolean;
+    };
+  };
+  /**
+   * Null when the bounded observation store cannot be read immediately.
+   */
+  runtime: {
+    /**
+     * Updates omitted because observation admission or the local clock was unavailable.
+     */
+    dropped_updates: string;
+    /**
+     * Older transient events evicted from the bounded process-lifetime window.
+     */
+    event_evictions: string;
+    /**
+     * Last accepted local observation sequence, unrelated to consensus ordering.
+     */
+    observation_sequence: string;
+    /**
+     * At most 100 newest-first redacted runtime transitions, not durable audit records.
+     */
+    recent_events: Array<{
+      /**
+       * Closed transition vocabulary.
+       */
+      code:
+        | "target_probe_failed"
+        | "target_probe_recovered"
+        | "storage_reconciliation_failed"
+        | "storage_reconciliation_recovered";
+      /**
+       * Event time and process-local ordering.
+       */
+      observation: {
+        /**
+         * Monotonic sample age at collection; old successful checks are not current health.
+         */
+        age_millis: string;
+        /**
+         * Local clock at completion, not quorum time or a clock-uncertainty proof.
+         */
+        observed_at_epoch_micros: number;
+        /**
+         * Positive process-local sequence; a wall-clock correction cannot reorder samples.
+         */
+        sequence: string;
+      };
+      /**
+       * Present only for target-check transitions.
+       */
+      target: {
+        /**
+         * Positive registered provider generation.
+         */
+        generation: string;
+        /**
+         * Target identity only; never its filesystem path or display name.
+         */
+        target_id: string;
+      } | null;
+    }>;
+    /**
+     * Completed reconciliation cycles; not the number of durable work operations.
+     */
+    reconciliation_cycles: string;
+    /**
+     * Cycles reporting at least one failure, including recoverable background failures.
+     */
+    reconciliation_failures: string;
+    /**
+     * Last completed cycle, or null before any cycle finishes.
+     */
+    storage_reconciliation: {
+      /**
+       * Configured folder count; no names or paths are included.
+       */
+      configured_folders: string;
+      /**
+       * Monotonic cycle duration.
+       */
+      duration_millis: string;
+      /**
+       * Failed cycle steps, not failed nodes, files or shards.
+       */
+      failed_steps: string;
+      /**
+       * Completion time, not the scheduled start time.
+       */
+      observation: {
+        /**
+         * Monotonic sample age at collection; old successful checks are not current health.
+         */
+        age_millis: string;
+        /**
+         * Local clock at completion, not quorum time or a clock-uncertainty proof.
+         */
+        observed_at_epoch_micros: number;
+        /**
+         * Positive process-local sequence; a wall-clock correction cannot reorder samples.
+         */
+        sequence: string;
+      };
+      /**
+       * Open local provider handles, not independently verified readable data.
+       */
+      open_targets: string;
+      /**
+       * Return scans awaiting admission, not the entire durable maintenance queue.
+       */
+      pending_return_scans: string;
+    } | null;
+    /**
+     * Older target samples evicted to bound this diagnostic window, not removed targets.
+     */
+    target_check_evictions: string;
+    /**
+     * At most 100 latest target-generation checks; this is not the target inventory.
+     */
+    target_checks: Array<{
+      /**
+       * Monotonic time spent in the existing provider check.
+       */
+      duration_millis: string;
+      /**
+       * Completion time and current sample age.
+       */
+      observation: {
+        /**
+         * Monotonic sample age at collection; old successful checks are not current health.
+         */
+        age_millis: string;
+        /**
+         * Local clock at completion, not quorum time or a clock-uncertainty proof.
+         */
+        observed_at_epoch_micros: number;
+        /**
+         * Positive process-local sequence; a wall-clock correction cannot reorder samples.
+         */
+        sequence: string;
+      };
+      /**
+       * Closed result; no raw errors are accepted.
+       */
+      result: "passed" | "failed";
+      /**
+       * Exact provider observed.
+       */
+      target: {
+        /**
+         * Positive registered provider generation.
+         */
+        generation: string;
+        /**
+         * Target identity only; never its filesystem path or display name.
+         */
+        target_id: string;
+      };
+    }>;
+    /**
+     * Failed provider health checks, without raw provider errors or paths.
+     */
+    target_probe_failures: string;
+    /**
+     * Successful provider health checks, not full content scrubs or protection proofs.
+     */
+    target_probe_passes: string;
+    /**
+     * Monotonic time since this runtime observation store started.
+     */
+    uptime_millis: string;
+  } | null;
+};
+
+/**
  * EnrolNodeRequest
  *
  * One node-owned identity presentation for pre-authorised enrolment.
@@ -6423,6 +6822,49 @@ export type GetCertificateStatusResponses = {
 
 export type GetCertificateStatusResponse =
   GetCertificateStatusResponses[keyof GetCertificateStatusResponses];
+
+export type ReadDiagnosticsBundleData = {
+  body?: never;
+  path?: never;
+  query?: never;
+  url: "/admin/diagnostics/bundle";
+};
+
+export type ReadDiagnosticsBundleErrors = {
+  /**
+   * Unsupported query or body
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Invalid outgoing observation
+   */
+  500: ApiError;
+  /**
+   * Collection capacity or authority unavailable
+   */
+  503: ApiError;
+};
+
+export type ReadDiagnosticsBundleError =
+  ReadDiagnosticsBundleErrors[keyof ReadDiagnosticsBundleErrors];
+
+export type ReadDiagnosticsBundleResponses = {
+  /**
+   * Bounded diagnostic bundle
+   */
+  200: DiagnosticsBundleResponse;
+};
+
+export type ReadDiagnosticsBundleResponse =
+  ReadDiagnosticsBundleResponses[keyof ReadDiagnosticsBundleResponses];
 
 export type ReadMetadataDiagnosticsData = {
   body?: never;

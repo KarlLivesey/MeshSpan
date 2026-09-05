@@ -5303,6 +5303,914 @@
         "title": "DeleteObjectResponse",
         "type": "object"
       },
+      "DiagnosticsBundleResponse": {
+        "additionalProperties": false,
+        "description": "Local metadata and runtime observations; never an atomic swarm snapshot or a backup.",
+        "properties": {
+          "metadata": {
+            "additionalProperties": false,
+            "description": "Independently validated metadata section with its own revision bounds.",
+            "properties": {
+              "collected_at_epoch_micros": {
+                "description": "Local system-clock time at collection start, not a mesh-time uncertainty proof.",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "consensus": {
+                "additionalProperties": false,
+                "description": "One coherent local reactor observation, or null if it did not answer within its budget.",
+                "properties": {
+                  "applied_index": {
+                    "description": "Highest locally applied index.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": "string"
+                  },
+                  "commit_index": {
+                    "description": "Highest locally known committed index.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": "string"
+                  },
+                  "known_leader": {
+                    "description": "Known leader identity, without a reachability guarantee.",
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "membership_epoch": {
+                    "description": "Active stable or transitional membership epoch.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": "string"
+                  },
+                  "node_id": {
+                    "description": "Observed reactor node.",
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  },
+                  "partition_id": {
+                    "description": "Exact local partition.",
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  },
+                  "pending_operations": {
+                    "description": "Operations awaiting committed results.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": "string"
+                  },
+                  "persistence_blocked": {
+                    "description": "Whether persistence has fenced further mutation.",
+                    "type": "boolean"
+                  },
+                  "plan_digest": {
+                    "description": "Exact active plan proof digest, not a fresh quorum acknowledgement.",
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "queued_operations": {
+                    "description": "Mutations waiting for reactor admission.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": "string"
+                  },
+                  "role": {
+                    "description": "Last observed role.",
+                    "oneOf": [
+                      {
+                        "const": "follower",
+                        "description": "Replication follower.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "candidate",
+                        "description": "Campaign in progress.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "leader",
+                        "description": "Locally elected leader, which may have lost contact with its quorum.",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "term": {
+                    "description": "Current local durable term.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "partition_id",
+                  "node_id",
+                  "role",
+                  "known_leader",
+                  "term",
+                  "commit_index",
+                  "applied_index",
+                  "membership_epoch",
+                  "plan_digest",
+                  "persistence_blocked",
+                  "pending_operations",
+                  "queued_operations"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "daemon_version": {
+                "description": "Daemon package version, not an assertion of signed release provenance.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[0-9A-Za-z.+-]+$",
+                "type": "string"
+              },
+              "mesh_id": {
+                "description": "Owning swarm identity, independent of reactor responsiveness.",
+                "maxLength": 36,
+                "minLength": 36,
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              "node_id": {
+                "description": "Gateway which collected this snapshot.",
+                "maxLength": 36,
+                "minLength": 36,
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              "nodes": {
+                "additionalProperties": false,
+                "description": "Configured nodes, never inferred reachability; names and endpoints are omitted.",
+                "properties": {
+                  "items": {
+                    "description": "At most one hundred explicitly redacted records.",
+                    "items": {
+                      "additionalProperties": false,
+                      "description": "Configured node record with no user-supplied names or network addresses.",
+                      "properties": {
+                        "configured_state": {
+                          "description": "Persisted lifecycle, not current reachability.",
+                          "oneOf": [
+                            {
+                              "const": "joining",
+                              "description": "Admitted learner not yet serving its full role set.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "active",
+                              "description": "Active mesh member.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "draining",
+                              "description": "Gracefully leaving or draining.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "retired",
+                              "description": "Terminally retired.",
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "host_id": {
+                          "description": "Shared physical-machine identity.",
+                          "maxLength": 36,
+                          "minLength": 36,
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "incarnation": {
+                          "description": "Persisted restart incarnation.",
+                          "maxLength": 20,
+                          "minLength": 1,
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "node_id": {
+                          "description": "Daemon identity.",
+                          "maxLength": 36,
+                          "minLength": 36,
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "roles": {
+                          "additionalProperties": false,
+                          "description": "Configured capabilities, not current readiness.",
+                          "properties": {
+                            "gateway": {
+                              "description": "May expose configured access protocols.",
+                              "type": "boolean"
+                            },
+                            "metadata_eligible": {
+                              "description": "Eligible for metadata learner/voter placement.",
+                              "type": "boolean"
+                            },
+                            "storage": {
+                              "description": "May host encrypted storage shards.",
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "storage",
+                            "gateway",
+                            "metadata_eligible"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "node_id",
+                        "host_id",
+                        "configured_state",
+                        "incarnation",
+                        "roles"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 100,
+                    "type": "array"
+                  },
+                  "truncated": {
+                    "description": "More records existed at this section's read; use the normal inventory API for paging.",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "items",
+                  "truncated"
+                ],
+                "type": "object"
+              },
+              "partition_id": {
+                "description": "Local queried metadata partition.",
+                "maxLength": 36,
+                "minLength": 36,
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              "recent_operations": {
+                "additionalProperties": false,
+                "description": "Newest recorded operation outcomes, not the complete background-work inventory.",
+                "properties": {
+                  "items": {
+                    "description": "At most one hundred explicitly redacted records.",
+                    "items": {
+                      "additionalProperties": false,
+                      "description": "Recent durable operation event with actor, input, result entity and raw errors omitted.",
+                      "properties": {
+                        "completed_at_epoch_micros": {
+                          "description": "Recorded terminal time, if any.",
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": [
+                            "integer",
+                            "null"
+                          ]
+                        },
+                        "operation_id": {
+                          "description": "Exact operation correlation identity.",
+                          "maxLength": 36,
+                          "minLength": 36,
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "revision": {
+                          "description": "Recorded event revision.",
+                          "maxLength": 20,
+                          "minLength": 1,
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "started_at_epoch_micros": {
+                          "description": "Recorded start time.",
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "state": {
+                          "description": "Recorded lifecycle outcome.",
+                          "oneOf": [
+                            {
+                              "const": "queued",
+                              "description": "Accepted but not yet claimed by a worker.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "running",
+                              "description": "A fenced worker currently owns the next attempt.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "awaiting_action",
+                              "description": "Durable input from an authorised user or external system is required.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "succeeded",
+                              "description": "The terminal committed outcome is available.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "failed",
+                              "description": "The operation reached a terminal typed failure.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "cancelled",
+                              "description": "A safe cancellation reached its terminal state.",
+                              "type": "string"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "operation_id",
+                        "state",
+                        "revision",
+                        "started_at_epoch_micros",
+                        "completed_at_epoch_micros"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 100,
+                    "type": "array"
+                  },
+                  "truncated": {
+                    "description": "More records existed at this section's read; use the normal inventory API for paging.",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "items",
+                  "truncated"
+                ],
+                "type": "object"
+              },
+              "revision_after": {
+                "description": "Local metadata revision after collection; a change exposes concurrent application.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "revision_before": {
+                "description": "Local metadata revision before collection.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "targets": {
+                "additionalProperties": false,
+                "description": "Configured storage, never inferred live IO health; paths and names are omitted.",
+                "properties": {
+                  "items": {
+                    "description": "At most one hundred explicitly redacted records.",
+                    "items": {
+                      "additionalProperties": false,
+                      "description": "Configured target record, with no provider path or content.",
+                      "properties": {
+                        "configured_state": {
+                          "description": "Persisted lifecycle, not a fresh probe.",
+                          "oneOf": [
+                            {
+                              "const": "configuring",
+                              "description": "Registration is not yet available for placement.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "active",
+                              "description": "Target may accept and serve shards.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "draining",
+                              "description": "New placement is disabled while data leaves.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "unavailable",
+                              "description": "Target is temporarily unavailable.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "retired",
+                              "description": "Terminally retired.",
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "generation": {
+                          "description": "Authority-fenced provider generation.",
+                          "maxLength": 20,
+                          "minLength": 1,
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "node_id": {
+                          "description": "Owning daemon.",
+                          "maxLength": 36,
+                          "minLength": 36,
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "target_id": {
+                          "description": "Registered target identity.",
+                          "maxLength": 36,
+                          "minLength": 36,
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "usage_limit": {
+                          "description": "Configured capacity ceiling, not measured free space.",
+                          "oneOf": [
+                            {
+                              "additionalProperties": false,
+                              "description": "Percentage of measured backing-filesystem capacity.",
+                              "properties": {
+                                "kind": {
+                                  "const": "percent",
+                                  "type": "string"
+                                },
+                                "percent": {
+                                  "description": "Inclusive percentage from 1 through 100.",
+                                  "format": "uint8",
+                                  "maximum": 100,
+                                  "minimum": 1,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "percent"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "additionalProperties": false,
+                              "description": "Fixed byte ceiling represented as lossless decimal text.",
+                              "properties": {
+                                "bytes": {
+                                  "description": "Positive unsigned 64-bit decimal bytes.",
+                                  "maxLength": 20,
+                                  "minLength": 1,
+                                  "pattern": "^[1-9][0-9]{0,19}$",
+                                  "type": "string"
+                                },
+                                "kind": {
+                                  "const": "bytes",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "bytes"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "target_id",
+                        "node_id",
+                        "configured_state",
+                        "generation",
+                        "usage_limit"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 100,
+                    "type": "array"
+                  },
+                  "truncated": {
+                    "description": "More records existed at this section's read; use the normal inventory API for paging.",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "items",
+                  "truncated"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "mesh_id",
+              "partition_id",
+              "node_id",
+              "daemon_version",
+              "collected_at_epoch_micros",
+              "revision_before",
+              "revision_after",
+              "consensus",
+              "nodes",
+              "targets",
+              "recent_operations"
+            ],
+            "type": "object"
+          },
+          "runtime": {
+            "additionalProperties": false,
+            "description": "Null when the bounded observation store cannot be read immediately.",
+            "properties": {
+              "dropped_updates": {
+                "description": "Updates omitted because observation admission or the local clock was unavailable.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "event_evictions": {
+                "description": "Older transient events evicted from the bounded process-lifetime window.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "observation_sequence": {
+                "description": "Last accepted local observation sequence, unrelated to consensus ordering.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "recent_events": {
+                "description": "At most 100 newest-first redacted runtime transitions, not durable audit records.",
+                "items": {
+                  "additionalProperties": false,
+                  "description": "Redacted local transition; intentionally cannot carry arbitrary text or payloads.",
+                  "properties": {
+                    "code": {
+                      "description": "Closed transition vocabulary.",
+                      "oneOf": [
+                        {
+                          "const": "target_probe_failed",
+                          "description": "The latest target check changed to failure.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "target_probe_recovered",
+                          "description": "A previously failing target check now passes.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "storage_reconciliation_failed",
+                          "description": "A storage cycle first reported failed steps.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "storage_reconciliation_recovered",
+                          "description": "A previously failing storage cycle completed without failed steps.",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "observation": {
+                      "additionalProperties": false,
+                      "description": "Event time and process-local ordering.",
+                      "properties": {
+                        "age_millis": {
+                          "description": "Monotonic sample age at collection; old successful checks are not current health.",
+                          "maxLength": 20,
+                          "minLength": 1,
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "observed_at_epoch_micros": {
+                          "description": "Local clock at completion, not quorum time or a clock-uncertainty proof.",
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "sequence": {
+                          "description": "Positive process-local sequence; a wall-clock correction cannot reorder samples.",
+                          "maxLength": 20,
+                          "minLength": 1,
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "sequence",
+                        "observed_at_epoch_micros",
+                        "age_millis"
+                      ],
+                      "type": "object"
+                    },
+                    "target": {
+                      "additionalProperties": false,
+                      "description": "Present only for target-check transitions.",
+                      "properties": {
+                        "generation": {
+                          "description": "Positive registered provider generation.",
+                          "maxLength": 20,
+                          "minLength": 1,
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "target_id": {
+                          "description": "Target identity only; never its filesystem path or display name.",
+                          "maxLength": 36,
+                          "minLength": 36,
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "target_id",
+                        "generation"
+                      ],
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "observation",
+                    "code",
+                    "target"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "reconciliation_cycles": {
+                "description": "Completed reconciliation cycles; not the number of durable work operations.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "reconciliation_failures": {
+                "description": "Cycles reporting at least one failure, including recoverable background failures.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "storage_reconciliation": {
+                "additionalProperties": false,
+                "description": "Last completed cycle, or null before any cycle finishes.",
+                "properties": {
+                  "configured_folders": {
+                    "description": "Configured folder count; no names or paths are included.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": "string"
+                  },
+                  "duration_millis": {
+                    "description": "Monotonic cycle duration.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": "string"
+                  },
+                  "failed_steps": {
+                    "description": "Failed cycle steps, not failed nodes, files or shards.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": "string"
+                  },
+                  "observation": {
+                    "additionalProperties": false,
+                    "description": "Completion time, not the scheduled start time.",
+                    "properties": {
+                      "age_millis": {
+                        "description": "Monotonic sample age at collection; old successful checks are not current health.",
+                        "maxLength": 20,
+                        "minLength": 1,
+                        "pattern": "^(0|[1-9][0-9]*)$",
+                        "type": "string"
+                      },
+                      "observed_at_epoch_micros": {
+                        "description": "Local clock at completion, not quorum time or a clock-uncertainty proof.",
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "sequence": {
+                        "description": "Positive process-local sequence; a wall-clock correction cannot reorder samples.",
+                        "maxLength": 20,
+                        "minLength": 1,
+                        "pattern": "^(0|[1-9][0-9]*)$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "sequence",
+                      "observed_at_epoch_micros",
+                      "age_millis"
+                    ],
+                    "type": "object"
+                  },
+                  "open_targets": {
+                    "description": "Open local provider handles, not independently verified readable data.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": "string"
+                  },
+                  "pending_return_scans": {
+                    "description": "Return scans awaiting admission, not the entire durable maintenance queue.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "observation",
+                  "duration_millis",
+                  "configured_folders",
+                  "open_targets",
+                  "pending_return_scans",
+                  "failed_steps"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "target_check_evictions": {
+                "description": "Older target samples evicted to bound this diagnostic window, not removed targets.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "target_checks": {
+                "description": "At most 100 latest target-generation checks; this is not the target inventory.",
+                "items": {
+                  "additionalProperties": false,
+                  "description": "Completed provider health-check outcome, not a promise that every shard is intact.",
+                  "properties": {
+                    "duration_millis": {
+                      "description": "Monotonic time spent in the existing provider check.",
+                      "maxLength": 20,
+                      "minLength": 1,
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "type": "string"
+                    },
+                    "observation": {
+                      "additionalProperties": false,
+                      "description": "Completion time and current sample age.",
+                      "properties": {
+                        "age_millis": {
+                          "description": "Monotonic sample age at collection; old successful checks are not current health.",
+                          "maxLength": 20,
+                          "minLength": 1,
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "observed_at_epoch_micros": {
+                          "description": "Local clock at completion, not quorum time or a clock-uncertainty proof.",
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "sequence": {
+                          "description": "Positive process-local sequence; a wall-clock correction cannot reorder samples.",
+                          "maxLength": 20,
+                          "minLength": 1,
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "sequence",
+                        "observed_at_epoch_micros",
+                        "age_millis"
+                      ],
+                      "type": "object"
+                    },
+                    "result": {
+                      "description": "Closed result; no raw errors are accepted.",
+                      "oneOf": [
+                        {
+                          "const": "passed",
+                          "description": "The provider's configured health check completed successfully.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "failed",
+                          "description": "The provider's configured health check failed.",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "target": {
+                      "additionalProperties": false,
+                      "description": "Exact provider observed.",
+                      "properties": {
+                        "generation": {
+                          "description": "Positive registered provider generation.",
+                          "maxLength": 20,
+                          "minLength": 1,
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "target_id": {
+                          "description": "Target identity only; never its filesystem path or display name.",
+                          "maxLength": 36,
+                          "minLength": 36,
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "target_id",
+                        "generation"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "target",
+                    "observation",
+                    "duration_millis",
+                    "result"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "target_probe_failures": {
+                "description": "Failed provider health checks, without raw provider errors or paths.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "target_probe_passes": {
+                "description": "Successful provider health checks, not full content scrubs or protection proofs.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              },
+              "uptime_millis": {
+                "description": "Monotonic time since this runtime observation store started.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "uptime_millis",
+              "observation_sequence",
+              "dropped_updates",
+              "target_check_evictions",
+              "event_evictions",
+              "reconciliation_cycles",
+              "reconciliation_failures",
+              "target_probe_passes",
+              "target_probe_failures",
+              "storage_reconciliation",
+              "target_checks",
+              "recent_events"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "metadata",
+          "runtime"
+        ],
+        "title": "DiagnosticsBundleResponse",
+        "type": "object"
+      },
       "EnrolNodeRequest": {
         "additionalProperties": false,
         "description": "One node-owned identity presentation for pre-authorised enrolment.",
@@ -14740,6 +15648,173 @@
         },
         "summary": "Read current HTTPS certificate validity and gateway delivery progress",
         "x-meshspan-access": "system-manager"
+      }
+    },
+    "/admin/diagnostics/bundle": {
+      "get": {
+        "description": "Requires current system-manager authority before collection and again before output. Accepts no query or body. Shares the metadata diagnostic worker admission and five-second cooperative deadline. Runtime evidence is a bounded in-memory read of existing background observations; collection does not probe disks or peers. Samples expose monotonic age and local-clock completion time, omitted updates and evicted history. Runtime null means the observation store was unavailable. Process restart clears transient samples and counters; events are not durable audit or notification records. Passing target probes are not full-shard scrubs, fresh health, availability or protection proofs. No arbitrary log text, names, paths, credentials or user content is included; no telemetry leaves the appliance.",
+        "operationId": "readDiagnosticsBundle",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosticsBundleResponse"
+                }
+              }
+            },
+            "description": "Bounded diagnostic bundle",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Unsupported query or body",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid outgoing observation",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Collection capacity or authority unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Download bounded redacted metadata and local runtime diagnostics",
+        "x-meshspan-access": "system-manager",
+        "x-meshspan-response-max-bytes": 524288
       }
     },
     "/admin/diagnostics/metadata": {

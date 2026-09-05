@@ -112,6 +112,7 @@ if (!generation.passed) {
             "scripts/javascript-licence-policy.test.mjs",
             "scripts/scheduler.test.mjs",
             "tooling/eslint/compatibility.test.mjs",
+            "tooling/api-codegen/fetch-contract.test.mjs",
           ],
         ],
       ],

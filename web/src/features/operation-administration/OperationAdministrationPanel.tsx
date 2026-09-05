@@ -8,6 +8,7 @@ import {
   type OperationAdministrationClient,
 } from "./model";
 import { OperationList } from "./OperationList";
+import { DiagnosticsDownload } from "./DiagnosticsDownload";
 
 export function OperationAdministrationPanel(
   props: Readonly<{ client: OperationAdministrationClient }>,
@@ -26,6 +27,7 @@ export function OperationAdministrationPanel(
         </p>
       </header>
       <AdministrationNavigation current="operations" />
+      <DiagnosticsDownload client={props.client} />
       <OperationList directory={directory} />
     </div>
   );

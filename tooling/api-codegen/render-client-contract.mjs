@@ -127,6 +127,8 @@ function renderClientInterface() {
   ${renderBackupHistoryClientInterface()}
   /** Collects a bounded metadata-only diagnostic snapshot; not an availability proof. */
   readMetadataDiagnostics(signal?: AbortSignal): Promise<MetadataDiagnosticsResponse>;
+  /** Downloads bounded metadata and existing runtime observations without new provider probes. */
+  readDiagnosticsBundle(signal?: AbortSignal): Promise<DiagnosticsBundleResponse>;
   ${renderBackupExportClientInterface()}
   ${renderIdentityAdministrationClientInterface()}
   ${renderNamespaceMutationClientInterface()}

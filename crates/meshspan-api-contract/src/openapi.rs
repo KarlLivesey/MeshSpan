@@ -134,6 +134,7 @@ fn components() -> Value {
             schema_response::<crate::BackupExportHeaders>("BackupExportHeaders"),
             schema_response::<crate::BackupReadinessResponse>("BackupReadinessResponse"),
             schema_response::<crate::MetadataDiagnosticsResponse>("MetadataDiagnosticsResponse"),
+            schema_response::<crate::DiagnosticsBundleResponse>("DiagnosticsBundleResponse"),
             schema_response::<crate::ListBackupRunsResponse>("ListBackupRunsResponse"),
             schema_response::<crate::ListBackupDestinationsResponse>(
                 "ListBackupDestinationsResponse",
@@ -541,6 +542,10 @@ fn administration_paths() -> Vec<(String, Value)> {
                 metadata_diagnostics_path(),
             ),
             (
+                "/admin/diagnostics/bundle".to_owned(),
+                diagnostics_bundle_path(),
+            ),
+            (
                 "/admin/backups/{backup_id}/export".to_owned(),
                 backup_export_path(),
             ),
@@ -573,6 +578,24 @@ fn metadata_diagnostics_path() -> Value {
             "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
             "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
             "500": json_response("Invalid stored or outgoing observation", "#/components/schemas/ApiError"),
+            "503": json_response("Collection capacity or authority unavailable", "#/components/schemas/ApiError")
+        }
+    } })
+}
+
+fn diagnostics_bundle_path() -> Value {
+    json!({ "get": {
+        "operationId": "readDiagnosticsBundle",
+        "x-meshspan-response-max-bytes": crate::MAX_DIAGNOSTICS_BUNDLE_BYTES,
+        "summary": "Download bounded redacted metadata and local runtime diagnostics",
+        "description": "Requires current system-manager authority before collection and again before output. Accepts no query or body. Shares the metadata diagnostic worker admission and five-second cooperative deadline. Runtime evidence is a bounded in-memory read of existing background observations; collection does not probe disks or peers. Samples expose monotonic age and local-clock completion time, omitted updates and evicted history. Runtime null means the observation store was unavailable. Process restart clears transient samples and counters; events are not durable audit or notification records. Passing target probes are not full-shard scrubs, fresh health, availability or protection proofs. No arbitrary log text, names, paths, credentials or user content is included; no telemetry leaves the appliance.",
+        "x-meshspan-access": "system-manager",
+        "responses": {
+            "200": json_response("Bounded diagnostic bundle", "#/components/schemas/DiagnosticsBundleResponse"),
+            "400": json_response("Unsupported query or body", "#/components/schemas/ApiError"),
+            "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+            "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+            "500": json_response("Invalid outgoing observation", "#/components/schemas/ApiError"),
             "503": json_response("Collection capacity or authority unavailable", "#/components/schemas/ApiError")
         }
     } })

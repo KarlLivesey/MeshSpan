@@ -10,7 +10,7 @@ import type {
 
 export type OperationAdministrationClient = Pick<
   MeshSpanFetchClient,
-  "listNextOperations" | "listOperations"
+  "listNextOperations" | "listOperations" | "readDiagnosticsBundle"
 >;
 
 type LoadPhase = "idle" | "loading" | "loading_more";
