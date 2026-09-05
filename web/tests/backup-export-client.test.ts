@@ -2,7 +2,7 @@
 
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createMeshSpanFetchClient } from "../src/generated/fetch.gen";
 import {
   zBackupExportHeaders,
@@ -11,6 +11,40 @@ import {
 
 const BACKUP = "11111111-1111-4111-8111-111111111111";
 const BYTES = new Uint8Array([1, 2, 3]);
+
+describe("browser backup download URLs", () => {
+  it("uses the generated route without a request, credentials or copied query", () => {
+    const fetcher = vi.fn<typeof fetch>();
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/?unrelated=private#fragment",
+      fetch: fetcher,
+    });
+    expect(client.metadataBackupDownloadUrl(BACKUP)).toBe(
+      `https://node.example/api/latest/admin/backups/${BACKUP}/export`,
+    );
+    expect(() => client.metadataBackupDownloadUrl("../wrong")).toThrow();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("requires API-key clients to use the authenticated stream", () => {
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      apiKey: `meshspan-key-v1.${"3".repeat(32)}.${"4".repeat(64)}`,
+    });
+    expect(() => client.metadataBackupDownloadUrl(BACKUP)).toThrow(
+      "API-key clients must use the authenticated backup stream",
+    );
+  });
+
+  it("rejects non-HTTP links", () => {
+    const client = createMeshSpanFetchClient({
+      baseUrl: "ftp://node.example/api/latest/",
+    });
+    expect(() => client.metadataBackupDownloadUrl(BACKUP)).toThrow(
+      "HTTP or HTTPS endpoint",
+    );
+  });
+});
 
 function headers(): Record<string, string> {
   return {

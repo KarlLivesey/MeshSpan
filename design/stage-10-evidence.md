@@ -510,7 +510,7 @@ cancellable byte stream. The stream checks exact length and SHA-256 through EOF
 using the existing hashing dependency. A caller must finish consuming that stream
 before committing its downloaded file. Opening a transfer, receiving headers or
 downloading encrypted bytes does not prove decryption or restoration. The panel
-download action and product-facing recovery flow remain separate work.
+download action is described below; product-facing recovery remains separate work.
 
 The real-process proof exposed an existing admission race: encrypted bytes could
 be stored, but any intervening metadata commit made the captured revision differ
@@ -546,6 +546,35 @@ web tests took 15.51 seconds. Generated-contract drift, Rust/workspace formattin
 all-target/all-feature Clippy, TypeScript/ESLint and both dependency licence gates
 also passed. No release, tag, image or publication workflow was run.
 
+### Panel encrypted download
+
+Protected history entries now offer an encrypted-backup download. The generated
+SDK derives its URL from the Rust operation and validates the generation ID;
+rendering a link never starts provider work. It includes no credential or recovery
+secret. API-key clients continue using the authenticated streaming SDK operation,
+because an ordinary browser link cannot carry their authorisation header.
+
+The browser handles byte storage and transfer completion, without a whole-backup
+JavaScript buffer. The link opens a separate context with no opener or referrer,
+leaving the panel available if the server rejects the request. Only the server's
+successful response supplies attachment headers; there is no HTML `download`
+attribute forcing an error response to be saved as a backup. Current authority and
+copy checks still happen on the server for every download. Invalid link evidence
+shows a retry message, and rejected history refreshes remove old download links.
+
+The panel does not claim completion, decryption or restore-readiness. It reminds
+the operator to keep the offline recovery bundle separately. Existing typography,
+focus treatment and wrapping layout are retained.
+
+Local evidence: the three affected files passed **25 tests in 2.98 seconds**.
+After the final generated-helper type correction, all **171 web tests across 36
+files passed in 5.25 seconds**, alongside full web/tooling ESLint, TypeScript,
+workspace formatting and generated-contract drift checks under NVM default.
+The component cases are headless DOM tests, not a claim that a real browser's
+download manager saved a file. The underlying real HTTPS export cycle and full
+Rust gate are recorded above; no Rust code, dependency, SQL or wire format changed
+in this panel slice. No release, tag, image or publication workflow was run.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in
@@ -558,7 +587,7 @@ The schedule API does not close these separate outstanding requirements:
 
 - remote/provider failure-assessment integration;
 - authoritative recovery/retirement of abandoned published-but-unindexed backup objects;
-- panel export, product-facing restore-readiness and recovery workflows;
+- product-facing restore-readiness and recovery workflows;
 - provider/federation destination implementations and their acceptance evidence.
 
 The remaining certificate, operational panel, metrics, update, packaging and

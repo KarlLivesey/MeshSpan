@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { BackupHistory } from "../src/features/backup-administration/BackupHistory";
 import type { BackupHistoryClient } from "../src/features/backup-administration/history";
 import type { ListBackupRunsResponse } from "../src/generated";
+import { createMeshSpanFetchClient } from "../src/generated/fetch.gen";
 
 const disposals = new Set<() => void>();
 const NEXT = "/api/latest/admin/backups/runs?limit=25&cursor=v1.bkr.example";
@@ -48,6 +49,7 @@ describe("backup history panel", () => {
     }
     expect(document.body.textContent).toContain("1970-01-01T00:00:01Z");
     expect(document.querySelectorAll("li")).toHaveLength(5);
+    expect(document.querySelectorAll("a")).toHaveLength(1);
   });
 
   it("follows one older page on demand, replaces rows and refreshes newest", async () => {
@@ -98,6 +100,66 @@ describe("backup history panel", () => {
   });
 });
 
+describe("backup download controls", () => {
+  it("links the exact protected generation without fetching or claiming success", async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: fetcher,
+    });
+    mount(
+      {
+        listBackupRuns: async () => ({
+          runs: [{ ...run("1"), state: "protected" }],
+          next_page_url: null,
+        }),
+        listNextBackupRuns: async () => page("1"),
+      },
+      client.metadataBackupDownloadUrl,
+    );
+    await shows("Download encrypted backup");
+    const link = document.querySelector("a");
+    expect(link?.href).toBe(
+      "https://node.example/api/latest/admin/backups/01900000-0000-7000-8000-000000000001/export",
+    );
+    expect(link?.target).toBe("_blank");
+    expect(link?.rel).toBe("noopener noreferrer");
+    // Only a successful server response supplies attachment headers; an error
+    // must not be forcibly saved as a backup by an HTML download attribute.
+    expect(link?.hasAttribute("download")).toBe(false);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("not a restore check");
+  });
+
+  it("does not build a download from malformed generation evidence", async () => {
+    mount({
+      listBackupRuns: async () => ({
+        runs: [{ ...run("1"), state: "protected", backup_id: "../wrong" }],
+        next_page_url: null,
+      }),
+      listNextBackupRuns: async () => page("1"),
+    });
+    await shows("Download unavailable");
+    expect(document.querySelector("a")).toBeNull();
+    expect(document.body.textContent).not.toContain("ZodError");
+  });
+
+  it("removes download controls when current history access is rejected", async () => {
+    const list = vi
+      .fn<BackupHistoryClient["listBackupRuns"]>()
+      .mockResolvedValueOnce({
+        runs: [{ ...run("1"), state: "protected" }],
+        next_page_url: null,
+      })
+      .mockRejectedValueOnce(new Error("access revoked"));
+    mount({ listBackupRuns: list, listNextBackupRuns: async () => page("1") });
+    await shows("Download encrypted backup");
+    button("Refresh history").click();
+    await shows("Backup history could not be read");
+    expect(document.querySelector("a")).toBeNull();
+  });
+});
+
 function page(sequence: string): ListBackupRunsResponse {
   return { runs: [run(sequence)], next_page_url: null };
 }
@@ -113,10 +175,16 @@ function run(sequence: string): ListBackupRunsResponse["runs"][number] {
     minimum_independent_copies: 1,
   };
 }
-function mount(client: BackupHistoryClient): void {
+function mount(
+  client: Omit<BackupHistoryClient, "metadataBackupDownloadUrl">,
+  downloadUrl = createMeshSpanFetchClient({
+    baseUrl: "https://node.example/api/latest/",
+  }).metadataBackupDownloadUrl,
+): void {
   const root = document.createElement("div");
   document.body.append(root);
-  disposals.add(render(() => <BackupHistory client={client} />, root));
+  const historyClient = { ...client, metadataBackupDownloadUrl: downloadUrl };
+  disposals.add(render(() => <BackupHistory client={historyClient} />, root));
 }
 function button(label: string): HTMLButtonElement {
   const found = [...document.querySelectorAll("button")].find(
