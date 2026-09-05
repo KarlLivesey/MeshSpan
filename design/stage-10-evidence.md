@@ -314,23 +314,55 @@ An incumbent follower durably holds a transition but loses its old-plan commit
 notification. The leader activates the joint plan. All three subsequent reliable
 heartbeats are rejected as `StaleMember`, leaving the follower at commit index 0
 instead of 1. Reintroducing the deliberately lost notification advances that same
-follower, confirming the fixture itself is viable. This regression test is
-intentionally red until the recovery path is repaired; it must not be ignored,
-weakened or described as passing. The production authority and proof runtime both
+follower, confirming the fixture itself is viable. The regression was committed
+red in `c8e4c82` and was not ignored or weakened. The production authority and proof runtime both
 send an old-plan heartbeat once before activation; neither supplies replay after
 that notification is lost.
 
-The panel is therefore pushed but not merged. The correction needs a bounded,
-durably recoverable membership-transition catch-up contract while preserving
-epoch fencing for elections, writes and reads. This is broader than the panel
-slice and requires review before implementation. No claim is made that this
-counterexample proves the cause of the original process timeout.
+No claim is made that this counterexample proves the cause of the original
+process timeout. The panel remains unmerged until the repaired tree passes the
+complete local gate.
 
 Focused Clippy across all targets/features of `meshspan-consensus` and
 `meshspan-cluster` passed in 24.82 seconds after the diagnostic additions. The
 deterministic counterexample compiled and failed in under 0.01 seconds exactly
 at the expected commit-index assertion, including the passing lost-packet
 control. Formatting and diff-whitespace checks passed.
+
+### Membership catch-up repair
+
+The core now returns bounded phase hints instead of silently discarding every
+message whose membership phase differs. Applied canonical membership records
+reconstruct historical phase boundaries from the durable log on restart. A
+known historical voter may serve `CommittedPrefix` through the normal Quinn
+consensus stream even before a replacement election completes. This distinct
+message cannot elect its supplier, reset a newer vote, acknowledge a read
+barrier or contribute to the current write quorum. It contains only a bounded
+committed prefix up to the exact historical transition, with independently
+validated indices and digests. New bytes are persisted before commit/apply
+effects, and committed content cannot be overwritten.
+
+The deterministic regression now routes replies as well as requests, allowing
+the receiver to request its missing phase; it never needs the deliberately lost
+notification to return. Twenty-nine core tests passed in 4.63 seconds, covering
+the original loss, a newer follower election term, source restart without an
+elected leader, commit-limit overreach, immutable committed content and exclusion
+from current quorum/read evidence. Seven wire-related tests passed in 0.01
+seconds, including the new message's Protobuf round trip, corrupt entry bytes and
+commit-range overreach.
+
+A real three-process Quinn/mTLS proof deliberately drops every old-phase
+membership commit notification, records that multiple drops occurred, then
+completes promotion, writes, leader loss and restart. All six process cases
+passed concurrently in 8.14 seconds. Setup/promotion and failover are distinct
+test responsibilities; no timeouts or lint limits were raised and no tests were
+serialised. These proofs do not replace Stage 11's wider churn and hardware
+campaigns.
+
+The private protocol adds `CommittedPrefix` (envelope field 28); peers need this
+implementation for the new recovery exchange. There is no SQL migration, public
+API schema change or new dependency. Final full-tree local verification is in
+progress. No release, tag, image or publication workflow has been run.
 
 ## Remaining backup integration
 

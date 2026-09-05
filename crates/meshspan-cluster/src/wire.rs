@@ -3,8 +3,8 @@
 //! Exact conversion between validated Protobuf and consensus-owned values.
 
 use meshspan_consensus::{
-    AppendRequest, AppendResponse, CoreMessage, LogEntry, LogPosition, ReadBarrierId, VoteRequest,
-    VoteResponse,
+    AppendRequest, AppendResponse, CommittedPrefix, CoreMessage, LogEntry, LogPosition,
+    ReadBarrierId, VoteRequest, VoteResponse,
 };
 use meshspan_domain::{NodeId, OperationId};
 use meshspan_protocol::ValidatedControlEnvelope;
@@ -57,6 +57,16 @@ pub fn encode_consensus_message(message: &CoreMessage) -> Message {
             quorum_plan_digest: value.plan_digest.to_vec(),
             read_barrier_id: value.read_barrier_id.map(|value| value.0),
         }),
+        CoreMessage::CommittedPrefix(value) => {
+            Message::CommittedPrefix(meshspan_protocol::v1::CommittedPrefix {
+                previous: Some(position(value.previous)),
+                previous_digest: value.previous_digest.to_vec(),
+                entries: value.entries.iter().map(wire_entry).collect(),
+                committed_index: value.committed_index,
+                membership_epoch: value.membership_epoch,
+                quorum_plan_digest: value.plan_digest.to_vec(),
+            })
+        }
     }
 }
 
@@ -110,6 +120,18 @@ pub fn decode_consensus_message(
             matched_index: value.matched_index,
             next_index_hint: value.next_index_hint,
             read_barrier_id: value.read_barrier_id.map(ReadBarrierId),
+            membership_epoch: value.membership_epoch,
+            plan_digest: digest(&value.quorum_plan_digest)?,
+        })),
+        Message::CommittedPrefix(value) => Ok(CoreMessage::CommittedPrefix(CommittedPrefix {
+            previous: core_position(value.previous.as_ref())?,
+            previous_digest: digest(&value.previous_digest)?,
+            entries: value
+                .entries
+                .iter()
+                .map(core_entry)
+                .collect::<Result<_, _>>()?,
+            committed_index: value.committed_index,
             membership_epoch: value.membership_epoch,
             plan_digest: digest(&value.quorum_plan_digest)?,
         })),
@@ -238,7 +260,7 @@ mod tests {
                 leader_incarnation: 2,
                 previous: LogPosition { term: 3, index: 7 },
                 previous_digest: [7; 32],
-                entries: vec![entry],
+                entries: vec![entry.clone()],
                 leader_commit_index: 7,
                 read_barrier_id: Some(ReadBarrierId(11)),
                 membership_epoch: 9,
@@ -253,6 +275,14 @@ mod tests {
                 membership_epoch: 9,
                 plan_digest: [6; 32],
             }),
+            CoreMessage::CommittedPrefix(CommittedPrefix {
+                previous: LogPosition { term: 3, index: 7 },
+                previous_digest: [7; 32],
+                entries: vec![entry],
+                committed_index: 8,
+                membership_epoch: 9,
+                plan_digest: [6; 32],
+            }),
         ];
         for message in messages {
             let envelope = ControlEnvelope {
@@ -264,6 +294,51 @@ mod tests {
             let validated = decode_control_frame(&frame, limits)?;
             assert_eq!(decode_consensus_message(&validated)?, message);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn committed_prefix_rejects_commit_overreach_and_corrupt_entry_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let entry = LogEntry::new(
+            LogPosition { term: 1, index: 1 },
+            OperationId::from_bytes([5; 16])?,
+            1,
+            b"committed".to_vec(),
+        )?;
+        let mut envelope = ControlEnvelope {
+            header: Some(header()),
+            message: Some(encode_consensus_message(&CoreMessage::CommittedPrefix(
+                CommittedPrefix {
+                    previous: LogPosition::GENESIS,
+                    previous_digest: [0; 32],
+                    entries: vec![entry],
+                    committed_index: 1,
+                    membership_epoch: 1,
+                    plan_digest: [6; 32],
+                },
+            ))),
+        };
+        let Some(Message::CommittedPrefix(prefix)) = &mut envelope.message else {
+            return Err("missing prefix".into());
+        };
+        prefix.committed_index = 2;
+        assert!(encode_control_frame(&envelope, limits()?).is_err());
+        let Some(Message::CommittedPrefix(prefix)) = &mut envelope.message else {
+            return Err("missing prefix".into());
+        };
+        prefix.committed_index = 1;
+        prefix.entries[0]
+            .command
+            .as_mut()
+            .ok_or("missing command")?
+            .canonical_bytes = b"corrupt".to_vec();
+        let frame = encode_control_frame(&envelope, limits()?)?;
+        let validated = decode_control_frame(&frame, limits()?)?;
+        assert_eq!(
+            decode_consensus_message(&validated),
+            Err(ConsensusWireError::DigestMismatch)
+        );
         Ok(())
     }
 

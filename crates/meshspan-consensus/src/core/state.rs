@@ -2,9 +2,13 @@
 
 //! Deterministic election and log-replication state transitions.
 
+mod membership_replay;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use meshspan_domain::{NodeId, OperationId};
+
+use super::membership_history::MembershipHistory;
 
 use super::types::{
     AppendRequest, AppendResponse, CoreConfig, CoreEffect, CoreError, CoreInput, CoreMessage,
@@ -59,6 +63,10 @@ enum AfterPersistence {
         position: LogPosition,
     },
     StepDown,
+    CommittedPrefix {
+        from: NodeId,
+        committed_index: u64,
+    },
     ActivateJoint(Box<JointQuorumPlan>, MemberIncarnations),
     ActivateStable(Box<CompiledQuorumPlan>, MemberIncarnations),
 }
@@ -68,6 +76,7 @@ enum AfterPersistence {
 pub struct ConsensusCore {
     config: CoreConfig,
     active_plan: ActiveQuorumPlan,
+    membership_history: MembershipHistory,
     current_term: u64,
     voted_for: Option<NodeId>,
     log: Vec<LogEntry>,
@@ -113,6 +122,7 @@ impl ConsensusCore {
         Ok(Self {
             config,
             active_plan,
+            membership_history: MembershipHistory::default(),
             current_term: durable.current_term,
             voted_for: durable.voted_for,
             log: durable.log,
@@ -143,6 +153,8 @@ impl ConsensusCore {
             return Err(CoreError::InvalidConfiguration);
         }
         let mut core = Self::restore(config, durable)?;
+        core.membership_history =
+            MembershipHistory::restore(&core.log, core.applied_index, &active_plan)?;
         core.active_plan = active_plan;
         Ok(core)
     }
@@ -337,6 +349,7 @@ impl ConsensusCore {
             CoreMessage::VoteResponse(response) => self.vote_response(from, response),
             CoreMessage::AppendRequest(request) => self.append_request(from, &request),
             CoreMessage::AppendResponse(response) => self.append_response(from, response),
+            CoreMessage::CommittedPrefix(prefix) => self.receive_committed_prefix(from, &prefix),
         }
     }
 
@@ -345,7 +358,41 @@ impl ConsensusCore {
         from: NodeId,
         request: VoteRequest,
     ) -> Result<Vec<CoreEffect>, CoreError> {
-        self.validate_plan(request.membership_epoch, request.plan_digest)?;
+        if self
+            .validate_plan(request.membership_epoch, request.plan_digest)
+            .is_err()
+        {
+            if request.term == 0
+                || request.candidate != from
+                || request.candidate_incarnation != self.member_incarnation(from)?
+                || !request.last_log.is_valid()
+            {
+                return Err(CoreError::InvalidInput);
+            }
+            if self
+                .membership_history
+                .find(request.membership_epoch, request.plan_digest)
+                .is_some()
+            {
+                return self.replay_membership_prefix(
+                    from,
+                    AppendResponse {
+                        term: request.term,
+                        accepted: false,
+                        matched_index: 0,
+                        next_index_hint: request
+                            .last_log
+                            .index
+                            .checked_add(1)
+                            .ok_or(CoreError::Exhausted)?,
+                        read_barrier_id: None,
+                        membership_epoch: request.membership_epoch,
+                        plan_digest: request.plan_digest,
+                    },
+                );
+            }
+            return Ok(vec![self.append_response_effect(from, false, None)]);
+        }
         if request.candidate != from
             || request.candidate_incarnation != self.member_incarnation(from)?
             || request.term == 0
@@ -414,13 +461,20 @@ impl ConsensusCore {
         from: NodeId,
         request: &AppendRequest,
     ) -> Result<Vec<CoreEffect>, CoreError> {
-        self.validate_plan(request.membership_epoch, request.plan_digest)?;
         validate_append_entries(request)?;
         if request.leader != from
             || request.leader_incarnation != self.member_incarnation(from)?
             || !self.active_eligible_leaders().contains(&from)
         {
             return Err(CoreError::InvalidInput);
+        }
+        if self
+            .validate_plan(request.membership_epoch, request.plan_digest)
+            .is_err()
+        {
+            // A mismatch carries no term, leadership, commit or read authority. Tell the
+            // authenticated incumbent which exact phase needs its committed prefix replayed.
+            return Ok(vec![self.append_response_effect(from, false, None)]);
         }
         if request.term < self.current_term {
             return Ok(vec![self.append_response_effect(
@@ -486,7 +540,12 @@ impl ConsensusCore {
         from: NodeId,
         response: AppendResponse,
     ) -> Result<Vec<CoreEffect>, CoreError> {
-        self.validate_plan(response.membership_epoch, response.plan_digest)?;
+        if self
+            .validate_plan(response.membership_epoch, response.plan_digest)
+            .is_err()
+        {
+            return self.replay_membership_prefix(from, response);
+        }
         if response.term == 0
             || response.next_index_hint == 0
             || response
@@ -819,11 +878,30 @@ impl ConsensusCore {
                     term: self.current_term,
                 }])
             }
+            AfterPersistence::CommittedPrefix {
+                from,
+                committed_index,
+            } => self.finish_committed_prefix(from, committed_index),
             AfterPersistence::ActivateJoint(joint_plan, member_incarnations) => self
-                .finish_plan_activation(ActiveQuorumPlan::Joint(joint_plan), member_incarnations),
-            AfterPersistence::ActivateStable(plan, member_incarnations) => {
-                self.finish_plan_activation(ActiveQuorumPlan::Stable(plan), member_incarnations)
-            }
+                .finish_plan_activation(
+                    ActiveQuorumPlan::Joint(joint_plan),
+                    member_incarnations,
+                    pending
+                        .mutation
+                        .quorum_plan
+                        .ok_or(CoreError::InvalidInput)?
+                        .activated_position,
+                ),
+            AfterPersistence::ActivateStable(plan, member_incarnations) => self
+                .finish_plan_activation(
+                    ActiveQuorumPlan::Stable(plan),
+                    member_incarnations,
+                    pending
+                        .mutation
+                        .quorum_plan
+                        .ok_or(CoreError::InvalidInput)?
+                        .activated_position,
+                ),
         }
     }
 
@@ -831,7 +909,10 @@ impl ConsensusCore {
         &mut self,
         active_plan: ActiveQuorumPlan,
         member_incarnations: MemberIncarnations,
+        committed_position: LogPosition,
     ) -> Result<Vec<CoreEffect>, CoreError> {
+        self.membership_history
+            .record(self.active_plan.clone(), committed_position);
         self.active_plan = active_plan;
         self.config.member_incarnations = member_incarnations;
         let members = self.active_members();

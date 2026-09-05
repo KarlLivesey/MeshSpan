@@ -22,9 +22,10 @@ pub use membership_command::{
 pub use plan_record::{ActiveQuorumPlan, QuorumPlanRecordError};
 
 pub use core::{
-    AppendRequest, AppendResponse, ConsensusCore, CoreConfig, CoreEffect, CoreError, CoreInput,
-    CoreMessage, DurableCoreState, DurableMutation, DurableQuorumPlan, LogEntry, LogPosition,
-    MemberIncarnations, PersistenceId, ProposalId, ReadBarrierId, Role, VoteRequest, VoteResponse,
+    AppendRequest, AppendResponse, CommittedPrefix, ConsensusCore, CoreConfig, CoreEffect,
+    CoreError, CoreInput, CoreMessage, DurableCoreState, DurableMutation, DurableQuorumPlan,
+    LogEntry, LogPosition, MemberIncarnations, PersistenceId, ProposalId, ReadBarrierId, Role,
+    VoteRequest, VoteResponse,
 };
 
 pub use quorum::{

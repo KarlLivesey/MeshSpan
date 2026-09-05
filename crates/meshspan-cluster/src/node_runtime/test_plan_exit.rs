@@ -2,6 +2,8 @@
 
 //! Exact durable-plan crash point used only by real-process recovery proofs.
 
+mod commit_loss;
+
 use std::cell::Cell;
 use std::fs::OpenOptions;
 use std::io::Write as _;
@@ -23,6 +25,7 @@ enum PlanPhase {
 }
 
 pub(super) struct TestPlanExit {
+    commit_loss: commit_loss::CommitLoss,
     target: Option<(PlanPhase, u64)>,
     marker_path: Option<PathBuf>,
     armed: Cell<bool>,
@@ -30,8 +33,10 @@ pub(super) struct TestPlanExit {
 
 impl TestPlanExit {
     pub(super) fn load(state_path: &Path) -> Result<Self, NodeRuntimeError> {
+        let commit_loss = commit_loss::CommitLoss::load(state_path)?;
         let Some(raw) = std::env::var_os(TARGET_ENVIRONMENT_VARIABLE) else {
             return Ok(Self {
+                commit_loss,
                 target: None,
                 marker_path: None,
                 armed: Cell::new(false),
@@ -52,6 +57,7 @@ impl TestPlanExit {
             .filter(|epoch| *epoch > 0)
             .ok_or(NodeRuntimeError::InvalidConfiguration)?;
         Ok(Self {
+            commit_loss,
             target: Some((phase, epoch)),
             marker_path: Some(state_path.with_extension(format!(
                 "test-exit-{phase}-{epoch}.marker",
@@ -62,6 +68,14 @@ impl TestPlanExit {
             ))),
             armed: Cell::new(false),
         })
+    }
+
+    pub(super) fn suppress_commit_notification(
+        &self,
+        message: &meshspan_consensus::CoreMessage,
+        entry: Option<&meshspan_consensus::LogEntry>,
+    ) -> Result<bool, NodeRuntimeError> {
+        self.commit_loss.suppress(message, entry)
     }
 
     pub(super) fn arm_if_reached(&self, active_plan: &ActiveQuorumPlan) {

@@ -54,6 +54,16 @@ message AppendResponse {
   optional uint64 read_barrier_id = 8;
 }
 
+// Historical committed bytes. This message carries no leader term or read barrier.
+message CommittedPrefix {
+  LogPosition previous = 1;
+  bytes previous_digest = 2;
+  repeated LogEntry entries = 3;
+  uint64 committed_index = 4;
+  uint64 membership_epoch = 5;
+  bytes quorum_plan_digest = 6;
+}
+
 message SnapshotBegin {
   bytes snapshot_id = 1;
   LogPosition included_position = 2;
