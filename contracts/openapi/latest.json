@@ -638,6 +638,82 @@
         "title": "BackupExportPath",
         "type": "object"
       },
+      "BackupReadinessResponse": {
+        "additionalProperties": false,
+        "description": "Successful isolated restoration by a current gateway, never proof of offline-key custody.",
+        "properties": {
+          "backup_id": {
+            "description": "Exact encrypted generation actually read and restored.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "checked_at_epoch_micros": {
+            "description": "Completion time of the isolated check, not a future availability guarantee.",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "checked_by_node_id": {
+            "description": "Gateway whose protected recipient key opened the backup.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "partition_id": {
+            "description": "Partition recovered in a disposable workspace, not installed as authority.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "source_log_index": {
+            "description": "Exact recovered committed index, represented losslessly.",
+            "maxLength": 19,
+            "minLength": 1,
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "source_log_term": {
+            "description": "Exact recovered committed term, represented losslessly.",
+            "maxLength": 19,
+            "minLength": 1,
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "state_revision": {
+            "description": "Exact recovered metadata revision, represented losslessly.",
+            "maxLength": 19,
+            "minLength": 1,
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "verification": {
+            "description": "Precisely which key and recovery boundary were exercised.",
+            "oneOf": [
+              {
+                "const": "gateway_key",
+                "description": "A current gateway decrypted the container and validated an isolated SQLite restore.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "backup_id",
+          "checked_by_node_id",
+          "partition_id",
+          "source_log_index",
+          "source_log_term",
+          "state_revision",
+          "checked_at_epoch_micros",
+          "verification"
+        ],
+        "title": "BackupReadinessResponse",
+        "type": "object"
+      },
       "BackupScheduleResponse": {
         "additionalProperties": false,
         "description": "Current backup schedule for the gateway's authoritative partition.",
@@ -12843,6 +12919,208 @@
           }
         },
         "summary": "Stream one exact encrypted metadata-backup container",
+        "x-meshspan-access": "system-manager"
+      }
+    },
+    "/admin/backups/{backup_id}/restore-readiness": {
+      "get": {
+        "description": "Current system-manager authority is required before identifier parsing or provider IO. No body, query, provider path or recovery secret is accepted. One bounded worker streams and verifies an encrypted copy, decrypts it with this gateway's existing key, validates SQLite recovery in disposable private files and removes those files. This read does not mutate live authority and does not test offline recovery-key custody. Cancelled or expired checks cannot report success; running local IO stops at the next cooperative phase boundary. There is no stored or cached readiness promise.",
+        "operationId": "checkMetadataBackupReadiness",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "backup_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/BackupExportPath/properties/backup_id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupReadinessResponse"
+                }
+              }
+            },
+            "description": "Exact historical state recovered in isolation by this gateway",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid identifier, query or body",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "This gateway cannot verify restoration of this backup",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Restore validation or cleanup failed",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Check capacity, authority or required copy unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Verify an isolated restore using this gateway's protected key",
         "x-meshspan-access": "system-manager"
       }
     },

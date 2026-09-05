@@ -93,6 +93,10 @@ function readAdministrationRoutes(operations) {
   return {
     listBackupRuns: requireOperation(operations, "listBackupRuns"),
     exportMetadataBackup: requireOperation(operations, "exportMetadataBackup"),
+    checkMetadataBackupReadiness: requireOperation(
+      operations,
+      "checkMetadataBackupReadiness",
+    ),
     listBackupDestinations: requireOperation(
       operations,
       "listBackupDestinations",

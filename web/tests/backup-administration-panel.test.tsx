@@ -222,6 +222,9 @@ function fixture(): BackupAdministrationClient {
     getBackupSchedule: async () => currentSchedule,
     listBackupRuns: async () => ({ runs: [], next_page_url: null }),
     listNextBackupRuns: async () => ({ runs: [], next_page_url: null }),
+    checkMetadataBackupReadiness: async () => {
+      throw new Error("not requested by this fixture");
+    },
     metadataBackupDownloadUrl: createMeshSpanFetchClient({
       baseUrl: "https://node.example/api/latest/",
     }).metadataBackupDownloadUrl,

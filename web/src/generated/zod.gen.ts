@@ -338,6 +338,51 @@ export const zBackupExportPath = z
   .strict();
 
 /**
+ * BackupReadinessResponse
+ *
+ * Successful isolated restoration by a current gateway, never proof of offline-key custody.
+ */
+export const zBackupReadinessResponse = z
+  .strictObject({
+    backup_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    checked_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    checked_by_node_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    partition_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    source_log_index: z
+      .string()
+      .min(1)
+      .max(19)
+      .regex(/^[1-9][0-9]*$/),
+    source_log_term: z
+      .string()
+      .min(1)
+      .max(19)
+      .regex(/^[1-9][0-9]*$/),
+    state_revision: z
+      .string()
+      .min(1)
+      .max(19)
+      .regex(/^[1-9][0-9]*$/),
+    verification: z.literal("gateway_key"),
+  })
+  .strict();
+
+/**
  * BackupScheduleResponse
  *
  * Current backup schedule for the gateway's authoritative partition.
@@ -5984,6 +6029,22 @@ export const zExportMetadataBackupPath = z
  * Exact encrypted container; completion requires verified bytes
  */
 export const zExportMetadataBackupResponse = z.string();
+
+export const zCheckMetadataBackupReadinessPath = z
+  .object({
+    backup_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Exact historical state recovered in isolation by this gateway
+ */
+export const zCheckMetadataBackupReadinessResponse = zBackupReadinessResponse;
 
 export const zListManualDnsTasksQuery = z
   .object({

@@ -52,6 +52,16 @@ impl LocalWrappingKey {
         self.key.public_key()
     }
 
+    /// Decrypts a catalogue-bound backup into a new isolated path without exposing this key.
+    pub(crate) fn restore_backup(
+        &self,
+        source: &Path,
+        destination: &Path,
+        evidence: meshspan_backup::BackupFileEvidence,
+    ) -> Result<(), meshspan_backup::BackupError> {
+        meshspan_backup::restore_backup(source, destination, evidence, &self.key)
+    }
+
     /// Opens one exact recipient envelope and decrypts its bound secret generation.
     ///
     /// The private wrapping key and intermediate secret data key remain inside this boundary.

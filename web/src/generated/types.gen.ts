@@ -329,6 +329,46 @@ export type BackupExportPath = {
 };
 
 /**
+ * BackupReadinessResponse
+ *
+ * Successful isolated restoration by a current gateway, never proof of offline-key custody.
+ */
+export type BackupReadinessResponse = {
+  /**
+   * Exact encrypted generation actually read and restored.
+   */
+  backup_id: string;
+  /**
+   * Completion time of the isolated check, not a future availability guarantee.
+   */
+  checked_at_epoch_micros: number;
+  /**
+   * Gateway whose protected recipient key opened the backup.
+   */
+  checked_by_node_id: string;
+  /**
+   * Partition recovered in a disposable workspace, not installed as authority.
+   */
+  partition_id: string;
+  /**
+   * Exact recovered committed index, represented losslessly.
+   */
+  source_log_index: string;
+  /**
+   * Exact recovered committed term, represented losslessly.
+   */
+  source_log_term: string;
+  /**
+   * Exact recovered metadata revision, represented losslessly.
+   */
+  state_revision: string;
+  /**
+   * A current gateway decrypted the container and validated an isolated SQLite restore.
+   */
+  verification: "gateway_key";
+};
+
+/**
  * BackupScheduleResponse
  *
  * Current backup schedule for the gateway's authoritative partition.
@@ -5839,6 +5879,58 @@ export type ExportMetadataBackupResponses = {
 
 export type ExportMetadataBackupResponse =
   ExportMetadataBackupResponses[keyof ExportMetadataBackupResponses];
+
+export type CheckMetadataBackupReadinessData = {
+  body?: never;
+  path: {
+    /**
+     * Backup generation selected from the administration history.
+     */
+    backup_id: string;
+  };
+  query?: never;
+  url: "/admin/backups/{backup_id}/restore-readiness";
+};
+
+export type CheckMetadataBackupReadinessErrors = {
+  /**
+   * Invalid identifier, query or body
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * This gateway cannot verify restoration of this backup
+   */
+  409: ApiError;
+  /**
+   * Restore validation or cleanup failed
+   */
+  500: ApiError;
+  /**
+   * Check capacity, authority or required copy unavailable
+   */
+  503: ApiError;
+};
+
+export type CheckMetadataBackupReadinessError =
+  CheckMetadataBackupReadinessErrors[keyof CheckMetadataBackupReadinessErrors];
+
+export type CheckMetadataBackupReadinessResponses = {
+  /**
+   * Exact historical state recovered in isolation by this gateway
+   */
+  200: BackupReadinessResponse;
+};
+
+export type CheckMetadataBackupReadinessResponse =
+  CheckMetadataBackupReadinessResponses[keyof CheckMetadataBackupReadinessResponses];
 
 export type ListManualDnsTasksData = {
   body?: never;

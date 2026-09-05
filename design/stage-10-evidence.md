@@ -575,6 +575,54 @@ download manager saved a file. The underlying real HTTPS export cycle and full
 Rust gate are recorded above; no Rust code, dependency, SQL or wire format changed
 in this panel slice. No release, tag, image or publication workflow was run.
 
+## Gateway restore-check API and panel
+
+`GET /api/latest/admin/backups/{backup_id}/restore-readiness` now performs a
+non-destructive restore, rather than reporting a saved readiness flag. Current
+system-manager authority is checked before identifier parsing or provider IO.
+No body, query, provider path or recovery secret is accepted. The response names
+the exact backup, gateway, recovered partition, committed log position, revision
+and check time. Its only verification scope is `gateway_key`.
+
+The service composes the same verified export/provider boundary used by downloads.
+It reads an exact encrypted copy, decrypts using the gateway's existing protected
+recipient key, then exercises the SQLite restore, integrity and recovery-state
+validation in a private disposable workspace. It rechecks current catalogue and
+caller authority before returning, and normal completion requires successful
+workspace cleanup. Live metadata is never replaced or admitted as a new authority.
+
+One restore worker per gateway bounds disk demand independently of ordinary
+traffic and encrypted exports. Cancelled requests remain owned by the route's
+task set until their jobs finish; provider writes check cancellation and a
+monotonic deadline. Decryption and SQLite operations check the budget between
+phases, not by forcibly interrupting running kernel IO. A cancelled/expired check
+cannot return success. Recognised abandoned workspaces, including interrupted
+owner-marker publication, are cleaned before the service starts. Cleanup does not
+follow a substituted root or recursively remove arbitrary sibling content.
+
+The panel adds an explicit **Check restore** action to protected attempts. It
+does not trigger provider work on page load, has cancellable pending state, and
+clears previous proof on a failed recheck. Rust-generated Fetch and Zod validate
+the request and returned exact-generation evidence; counters remain lossless
+decimal strings and the panel uses Temporal for the displayed instant. Wording
+distinguishes a disposable gateway restore from testing offline recovery custody.
+
+Focused local evidence: five daemon rejection/cancellation/workspace cases passed
+in **0.22 seconds**; the Rust boundary case passed in **0.02 seconds**. Four affected
+web files passed 35 cases in 2.47 seconds, and the complete web suite passed **181
+cases across 37 files in 5.00 seconds**, with TypeScript and full web/tooling ESLint.
+The real CLI/HTTPS operator flow created an automatic encrypted backup, downloaded
+it and successfully exercised this isolated-restore endpoint before completing
+the existing file/node-loss cycle in **21.77 seconds**. Workspace Clippy passed
+after correcting two unnecessary owned arguments. The complete local gate for
+this slice remains pending.
+
+This is not an offline-bundle verification, catastrophe-recovery authority
+transition, restore-as-live activation or a guarantee that a historical copy will
+remain available. Those recovery workflows remain outstanding. No dependency,
+SQL migration, private wire change, release, tag, image or publication workflow
+was introduced. Panel checks use headless DOM tests, not live-browser evidence.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in
@@ -587,7 +635,7 @@ The schedule API does not close these separate outstanding requirements:
 
 - remote/provider failure-assessment integration;
 - authoritative recovery/retirement of abandoned published-but-unindexed backup objects;
-- product-facing restore-readiness and recovery workflows;
+- offline-recovery verification and product-facing disaster-recovery workflows;
 - provider/federation destination implementations and their acceptance evidence.
 
 The remaining certificate, operational panel, metrics, update, packaging and

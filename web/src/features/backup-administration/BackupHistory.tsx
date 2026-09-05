@@ -6,6 +6,7 @@ import { instantFromEpochMicroseconds } from "../../domain/instant";
 import type { ListBackupRunsResponse } from "../../generated";
 import { createBackupHistory, type BackupHistoryClient } from "./history";
 import { BackupExportLink } from "./BackupExportLink";
+import { BackupRestoreCheck } from "./BackupRestoreCheck";
 
 type BackupRunSummary = ListBackupRunsResponse["runs"][number];
 
@@ -58,10 +59,7 @@ export function BackupHistory(
               <ol class="backup-destinations" aria-label="Backup attempts">
                 <For each={page().runs}>
                   {(run) => (
-                    <BackupHistoryEntry
-                      run={run}
-                      downloadUrl={props.client.metadataBackupDownloadUrl}
-                    />
+                    <BackupHistoryEntry run={run} client={props.client} />
                   )}
                 </For>
               </ol>
@@ -87,7 +85,7 @@ export function BackupHistory(
 function BackupHistoryEntry(
   props: Readonly<{
     run: BackupRunSummary;
-    downloadUrl: BackupHistoryClient["metadataBackupDownloadUrl"];
+    client: BackupHistoryClient;
   }>,
 ): JSX.Element {
   return (
@@ -111,7 +109,11 @@ function BackupHistoryEntry(
         <Show when={props.run.state === "protected"}>
           <BackupExportLink
             backupId={props.run.backup_id}
-            downloadUrl={props.downloadUrl}
+            downloadUrl={props.client.metadataBackupDownloadUrl}
+          />
+          <BackupRestoreCheck
+            client={props.client}
+            backupId={props.run.backup_id}
           />
         </Show>
       </div>

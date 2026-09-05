@@ -44,7 +44,8 @@ pub(super) async fn automatic_backup_history(
             assert!(run.scheduled_for_epoch_micros > 0);
             assert!(run.minimum_verified_copies > 0);
             if run.state == meshspan_api_contract::BackupRunStatus::Protected {
-                return encrypted_export(address, client, authorization, &run.backup_id).await;
+                encrypted_export(address, client, authorization, &run.backup_id).await?;
+                return restore_check(address, client, authorization, &run.backup_id).await;
             }
         }
         if Instant::now() >= deadline {
@@ -56,6 +57,41 @@ pub(super) async fn automatic_backup_history(
         }
         sleep(RETRY_INTERVAL).await;
     }
+}
+
+async fn restore_check(
+    address: SocketAddr,
+    client: &ClientConfig,
+    authorization: &str,
+    backup_id: &str,
+) -> Result<(), Box<dyn Error>> {
+    let response = request_with_headers(
+        address,
+        client,
+        "GET",
+        &format!("/api/latest/admin/backups/{backup_id}/restore-readiness"),
+        None,
+        &[("Authorization", authorization)],
+    )
+    .await?;
+    require_status(
+        &response,
+        "200 OK",
+        "restore actual automatic backup in isolation",
+    )?;
+    let checked: meshspan_api_contract::BackupReadinessResponse =
+        serde_json::from_str(response_body(&response)?)?;
+    meshspan_api_contract::encode_backup_readiness_response(&checked)?;
+    assert_eq!(checked.backup_id, backup_id);
+    assert_eq!(
+        checked.verification,
+        meshspan_api_contract::BackupReadinessVerification::GatewayKey
+    );
+    assert!(checked.source_log_index.parse::<u64>()? > 0);
+    assert!(checked.source_log_term.parse::<u64>()? > 0);
+    assert!(checked.state_revision.parse::<u64>()? > 0);
+    assert!(checked.checked_at_epoch_micros > 0);
+    Ok(())
 }
 
 async fn encrypted_export(
