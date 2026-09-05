@@ -8,7 +8,10 @@ import type {
 
 export type BackupHistoryClient = Pick<
   MeshSpanFetchClient,
-  "listBackupRuns" | "listNextBackupRuns" | "metadataBackupDownloadUrl"
+  | "listBackupRuns"
+  | "listNextBackupRuns"
+  | "metadataBackupDownloadUrl"
+  | "checkMetadataBackupReadiness"
 >;
 type History = Readonly<{
   page: Accessor<ListBackupRunsResponse | undefined>;

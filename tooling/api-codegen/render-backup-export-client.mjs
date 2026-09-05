@@ -6,6 +6,8 @@ export function renderBackupExportClientInterface() {
    * Requires a browser session; API-key clients use exportMetadataBackup instead.
    * The server reauthorises the download. A URL is not evidence of availability. */
   metadataBackupDownloadUrl: (backupId: string) => string;
+  /** Performs an isolated gateway-key restore check; never tests offline recovery custody. */
+  checkMetadataBackupReadiness(backupId: string, signal?: AbortSignal): Promise<BackupReadinessResponse>;
   /** Opens encrypted bytes. Consume through successful EOF for verified length and SHA-256.
    * Partial consumption is not a complete download; this is not restore proof. */
   exportMetadataBackup(backupId: string, signal?: AbortSignal): Promise<Readonly<{
@@ -27,6 +29,16 @@ export function renderBackupExportClientMethods(routes) {
         throw new TypeError("backup downloads require an HTTP or HTTPS endpoint");
       }
       return url.href;
+    },
+    async checkMetadataBackupReadiness(backupId, signal): Promise<BackupReadinessResponse> {
+      const input = zBackupExportPath.parse({ backup_id: backupId });
+      const route = substitutePathParameter(${JSON.stringify(routes.checkMetadataBackupReadiness.route)}, "backup_id", input.backup_id);
+      const response = await requestJson(context, route, {
+        method: ${JSON.stringify(routes.checkMetadataBackupReadiness.method)},
+        ...(signal === undefined ? {} : { signal }),
+      }, zBackupReadinessResponse);
+      if (response.backup_id !== input.backup_id) throw new TypeError("restore check names another backup generation");
+      return response;
     },
     async exportMetadataBackup(backupId, signal): Promise<Readonly<{
       headers: BackupExportHeaders;

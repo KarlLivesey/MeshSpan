@@ -15,6 +15,7 @@ export type BackupAdministrationClient = Pick<
   | "listBackupRuns"
   | "listNextBackupRuns"
   | "metadataBackupDownloadUrl"
+  | "checkMetadataBackupReadiness"
   | "configureBackupSchedule"
   | "listBackupDestinations"
   | "listNextBackupDestinations"

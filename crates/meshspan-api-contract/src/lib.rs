@@ -17,6 +17,9 @@ mod backup_history;
 #[cfg(test)]
 mod backup_history_tests;
 mod backup_history_validation;
+mod backup_readiness;
+#[cfg(test)]
+mod backup_readiness_tests;
 mod backup_schedule;
 #[cfg(test)]
 mod backup_schedule_tests;
@@ -136,6 +139,9 @@ pub use backup_history::{
 };
 pub use backup_history_validation::{
     encode_list_backup_runs_response, validate_list_backup_runs_query,
+};
+pub use backup_readiness::{
+    BackupReadinessResponse, BackupReadinessVerification, encode_backup_readiness_response,
 };
 pub use backup_schedule::{
     BackupSchedulePolicy, BackupScheduleResponse, BackupScheduleStatus,

@@ -176,14 +176,23 @@ function run(sequence: string): ListBackupRunsResponse["runs"][number] {
   };
 }
 function mount(
-  client: Omit<BackupHistoryClient, "metadataBackupDownloadUrl">,
+  client: Omit<
+    BackupHistoryClient,
+    "metadataBackupDownloadUrl" | "checkMetadataBackupReadiness"
+  >,
   downloadUrl = createMeshSpanFetchClient({
     baseUrl: "https://node.example/api/latest/",
   }).metadataBackupDownloadUrl,
 ): void {
   const root = document.createElement("div");
   document.body.append(root);
-  const historyClient = { ...client, metadataBackupDownloadUrl: downloadUrl };
+  const historyClient = {
+    ...client,
+    metadataBackupDownloadUrl: downloadUrl,
+    checkMetadataBackupReadiness: async (): Promise<never> => {
+      throw new Error("not requested by this fixture");
+    },
+  };
   disposals.add(render(() => <BackupHistory client={historyClient} />, root));
 }
 function button(label: string): HTMLButtonElement {

@@ -1331,18 +1331,24 @@ fn authenticated_administration_routes(
         open_authentication_authority(local_state, authority, Arc::clone(private_network), now)?,
         gateway,
     ))?;
+    let export_service = Arc::new(crate::backup_export_service::BackupExportService::new(
+        open_authentication_authority(local_state, authority, Arc::clone(private_network), now)?,
+        gateway,
+        Arc::new(BackupExportTargetSnapshot(storage_targets)),
+        Arc::clone(private_network),
+    ));
+    let readiness = crate::backup_readiness_api::router(
+        crate::backup_readiness_service::BackupReadinessService::new(
+            Arc::clone(&export_service),
+            local_state.open_wrapping_key()?,
+            gateway.node_id,
+            local_state.state_directory(),
+        )
+        .map_err(|_| DaemonProcessError::BackupReadinessWorkspace)?,
+        std::time::Duration::from_secs(3600),
+    )?;
     let export = crate::backup_export_api_router(
-        crate::backup_export_service::BackupExportService::new(
-            open_authentication_authority(
-                local_state,
-                authority,
-                Arc::clone(private_network),
-                now,
-            )?,
-            gateway,
-            Arc::new(BackupExportTargetSnapshot(storage_targets)),
-            Arc::clone(private_network),
-        ),
+        export_service,
         std::thread::available_parallelism().unwrap_or(std::num::NonZeroUsize::MIN),
         std::time::Duration::from_secs(3600),
     )?;
@@ -1351,7 +1357,8 @@ fn authenticated_administration_routes(
         .merge(backup)
         .merge(destinations)
         .merge(history)
-        .merge(export))
+        .merge(export)
+        .merge(readiness))
 }
 
 // Clone only shared provider handles while holding the runtime lock. All export IO runs
@@ -3655,6 +3662,9 @@ pub enum DaemonProcessError {
     /// Encrypted backup export route construction failed.
     #[error("backup export route construction failed")]
     BackupExportApi(#[from] crate::BackupExportApiError),
+    /// Private disposable restore workspaces could not be prepared safely.
+    #[error("backup restore-check workspace is unavailable")]
+    BackupReadinessWorkspace,
     /// Backup destination routes could not be constructed.
     #[error("backup destination routes could not be constructed")]
     BackupDestinationApi(#[from] crate::BackupDestinationApiError),

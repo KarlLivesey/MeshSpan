@@ -47,6 +47,7 @@ import type {
   ListBackupDestinationsQuery,
   ListBackupRunsQuery,
   BackupExportHeaders,
+  BackupReadinessResponse,
   ListBackupRunsResponse,
   ListBackupDestinationsResponse,
   ConfigureBackupDestinationRequest,
@@ -159,6 +160,7 @@ import {
   zListBackupRunsQuery,
   zBackupExportPath,
   zBackupExportHeaders,
+  zBackupReadinessResponse,
   zListBackupRunsResponse2,
   zListBackupDestinationsResponse2,
   zConfigureBackupDestinationBody,
@@ -458,6 +460,11 @@ export interface MeshSpanFetchClient {
    * Requires a browser session; API-key clients use exportMetadataBackup instead.
    * The server reauthorises the download. A URL is not evidence of availability. */
   metadataBackupDownloadUrl: (backupId: string) => string;
+  /** Performs an isolated gateway-key restore check; never tests offline recovery custody. */
+  checkMetadataBackupReadiness(
+    backupId: string,
+    signal?: AbortSignal,
+  ): Promise<BackupReadinessResponse>;
   /** Opens encrypted bytes. Consume through successful EOF for verified length and SHA-256.
    * Partial consumption is not a complete download; this is not restore proof. */
   exportMetadataBackup(
@@ -1014,6 +1021,29 @@ export function createMeshSpanFetchClient(
         );
       }
       return url.href;
+    },
+    async checkMetadataBackupReadiness(
+      backupId,
+      signal,
+    ): Promise<BackupReadinessResponse> {
+      const input = zBackupExportPath.parse({ backup_id: backupId });
+      const route = substitutePathParameter(
+        "/admin/backups/{backup_id}/restore-readiness",
+        "backup_id",
+        input.backup_id,
+      );
+      const response = await requestJson(
+        context,
+        route,
+        {
+          method: "GET",
+          ...(signal === undefined ? {} : { signal }),
+        },
+        zBackupReadinessResponse,
+      );
+      if (response.backup_id !== input.backup_id)
+        throw new TypeError("restore check names another backup generation");
+      return response;
     },
     async exportMetadataBackup(
       backupId,

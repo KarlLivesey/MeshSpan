@@ -55,6 +55,11 @@ mod backup_history_api_tests;
 mod backup_publication;
 #[cfg(test)]
 mod backup_publication_tests;
+mod backup_readiness_api;
+mod backup_readiness_service;
+#[cfg(test)]
+mod backup_readiness_tests;
+mod backup_readiness_workspace;
 mod backup_restore_readiness;
 mod backup_schedule_administration;
 mod backup_schedule_api;

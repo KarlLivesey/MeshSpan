@@ -68,6 +68,27 @@ pub(crate) trait BackupExportProviders: Send + Sync {
     fn snapshot(&self) -> Result<Vec<RegisteredBackupTarget>, BackupExportError>;
 }
 
+impl<C: BackupExportController> BackupExportController for Arc<C> {
+    fn authenticate(&self, headers: &HeaderMap, now: UnixMicros) -> Result<(), BackupExportError> {
+        (**self).authenticate(headers, now)
+    }
+    fn prepare(
+        &self,
+        headers: &HeaderMap,
+        backup_id: BackupId,
+        now: UnixMicros,
+    ) -> Result<BackupFileEvidence, BackupExportError> {
+        (**self).prepare(headers, backup_id, now)
+    }
+    fn stream(
+        &self,
+        request: &BackupExportRequest,
+        sink: &mut VerifiedBackupExport<&mut dyn Write>,
+    ) -> Result<BackupReadReceipt, BackupExportError> {
+        (**self).stream(request, sink)
+    }
+}
+
 pub(crate) struct BackupExportService {
     authority: Mutex<ConsensusAuthenticationAuthority>,
     gateway: GatewaySessionIdentity,

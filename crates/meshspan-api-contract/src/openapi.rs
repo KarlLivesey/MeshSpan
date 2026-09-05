@@ -132,6 +132,7 @@ fn components() -> Value {
             schema_request::<crate::ListBackupRunsQuery>("ListBackupRunsQuery"),
             schema_request::<crate::BackupExportPath>("BackupExportPath"),
             schema_response::<crate::BackupExportHeaders>("BackupExportHeaders"),
+            schema_response::<crate::BackupReadinessResponse>("BackupReadinessResponse"),
             schema_response::<crate::ListBackupRunsResponse>("ListBackupRunsResponse"),
             schema_response::<crate::ListBackupDestinationsResponse>(
                 "ListBackupDestinationsResponse",
@@ -539,6 +540,10 @@ fn administration_paths() -> Vec<(String, Value)> {
                 backup_export_path(),
             ),
             (
+                "/admin/backups/{backup_id}/restore-readiness".to_owned(),
+                backup_readiness_path(),
+            ),
+            (
                 "/admin/backups/destinations".to_owned(),
                 backup_destinations_path(),
             ),
@@ -601,6 +606,26 @@ fn backup_export_path() -> Value {
             "409": json_response("Selected generation is not exportable", "#/components/schemas/ApiError"),
             "500": json_response("Outgoing evidence failed validation", "#/components/schemas/ApiError"),
             "503": json_response("Export capacity or authority unavailable", "#/components/schemas/ApiError")
+        }
+    } })
+}
+
+fn backup_readiness_path() -> Value {
+    json!({ "get": {
+        "operationId": "checkMetadataBackupReadiness",
+        "summary": "Verify an isolated restore using this gateway's protected key",
+        "description": "Current system-manager authority is required before identifier parsing or provider IO. No body, query, provider path or recovery secret is accepted. One bounded worker streams and verifies an encrypted copy, decrypts it with this gateway's existing key, validates SQLite recovery in disposable private files and removes those files. This read does not mutate live authority and does not test offline recovery-key custody. Cancelled or expired checks cannot report success; running local IO stops at the next cooperative phase boundary. There is no stored or cached readiness promise.",
+        "x-meshspan-access": "system-manager",
+        "parameters": [{ "name": "backup_id", "in": "path", "required": true,
+            "schema": { "$ref": "#/components/schemas/BackupExportPath/properties/backup_id" } }],
+        "responses": {
+            "200": json_response("Exact historical state recovered in isolation by this gateway", "#/components/schemas/BackupReadinessResponse"),
+            "400": json_response("Invalid identifier, query or body", "#/components/schemas/ApiError"),
+            "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+            "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+            "409": json_response("This gateway cannot verify restoration of this backup", "#/components/schemas/ApiError"),
+            "500": json_response("Restore validation or cleanup failed", "#/components/schemas/ApiError"),
+            "503": json_response("Check capacity, authority or required copy unavailable", "#/components/schemas/ApiError")
         }
     } })
 }
