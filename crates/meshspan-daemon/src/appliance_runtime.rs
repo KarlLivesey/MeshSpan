@@ -2263,6 +2263,7 @@ struct StorageTargetRuntime {
     maintenance_authority: ConsensusAuthenticationAuthority,
     maintenance_progress: LocalDatabase,
     backup_worker: crate::MetadataBackupWorker,
+    backup_retention: crate::metadata_backup_retention::MetadataBackupRetentionWorker,
     backup_authority: crate::remote_backup_authority::ConsensusRemoteBackupAuthority,
     backup_services: BTreeMap<(BackupDestinationId, u64), ActiveBackupDestination>,
     private_network: Arc<PrivateConsensusRuntime>,
@@ -2320,6 +2321,8 @@ impl StorageTargetRuntime {
             maintenance_authority: services.maintenance_authority,
             maintenance_progress: services.maintenance_progress,
             backup_worker: crate::MetadataBackupWorker::default(),
+            backup_retention:
+                crate::metadata_backup_retention::MetadataBackupRetentionWorker::default(),
             backup_authority: services.backup_authority,
             backup_services: BTreeMap::new(),
             private_network: services.private_network,
@@ -2536,7 +2539,8 @@ impl StorageTargetRuntime {
             worker_incarnation: 1,
             actor_principal_id,
         };
-        self.backup_worker
+        let backup_result = self
+            .backup_worker
             .run_once(
                 &mut cycle,
                 now,
@@ -2547,7 +2551,28 @@ impl StorageTargetRuntime {
                 },
             )
             .map(|_| ())
+            .map_err(|_| ());
+        let retention_result = self
+            .backup_retention
+            .run_once(
+                &self.maintenance_authority,
+                &mut resolver,
+                &mut random,
+                crate::metadata_backup_retention::BackupRetentionInput {
+                    actor: actor_principal_id,
+                    now,
+                    limits: crate::MetadataBackupWorkerLimits {
+                        lease_duration: DurationMicros::new(METADATA_BACKUP_LEASE_MICROS),
+                        provider_timeout: DurationMicros::new(
+                            METADATA_BACKUP_PROVIDER_TIMEOUT_MICROS,
+                        ),
+                        destination_page_items: METADATA_BACKUP_DESTINATION_PAGE_ITEMS,
+                    },
+                },
+            )
             .map_err(|_| ())
+            .and_then(|outcome| if outcome.failed == 0 { Ok(()) } else { Err(()) });
+        backup_result.and(retention_result)
     }
 
     fn execute_one_scope_drain(&mut self) -> Result<(), ()> {

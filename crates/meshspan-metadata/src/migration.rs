@@ -10,10 +10,10 @@ use thiserror::Error;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 83;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 84;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 13;
 
-const PARTITION_MIGRATIONS: [Migration; 83] = [
+const PARTITION_MIGRATIONS: [Migration; 84] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -343,8 +343,12 @@ const PARTITION_MIGRATIONS: [Migration; 83] = [
         sql: include_str!("../schema/partition/082_metadata_backup_schedules.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 83,
         sql: include_str!("../schema/partition/083_metadata_backup_run_claims.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/084_backup_reclamation.sql"),
     },
 ];
 
@@ -901,6 +905,11 @@ pub(crate) fn partition_metadata_backup_schedule_migration_digest() -> [u8; 32] 
 #[cfg(test)]
 pub(crate) fn partition_metadata_backup_claim_migration_digest() -> [u8; 32] {
     migration_digest(PARTITION_MIGRATIONS[82].sql)
+}
+
+#[cfg(test)]
+pub(crate) fn partition_backup_reclamation_migration_digest() -> [u8; 32] {
+    migration_digest(PARTITION_MIGRATIONS[83].sql)
 }
 
 #[cfg(test)]

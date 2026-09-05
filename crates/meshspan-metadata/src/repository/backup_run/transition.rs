@@ -112,7 +112,10 @@ pub(super) fn mark_backup_incomplete(
         return Ok(());
     }
     let (state, verified_at) = if verified_copies == 0 {
-        (3, None)
+        // An unsuccessful verification is not deletion authority. Keep the
+        // admitted bytes until retention atomically retires the generation and
+        // every copy against sufficient newer protected generations.
+        (1, None)
     } else {
         (2, Some(context.occurred_at.get()))
     };

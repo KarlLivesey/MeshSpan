@@ -8,6 +8,8 @@ use sha2::{Digest, Sha256};
 
 #[path = "backup_destination_tests.rs"]
 mod destination_administration;
+#[path = "backup_retention_tests.rs"]
+mod retention;
 use tempfile::{TempDir, tempdir};
 
 use super::tests::{mark_test_recovery_verified, protected_bootstrap};
@@ -24,7 +26,7 @@ use crate::{
 };
 
 struct Fixture {
-    _directory: TempDir,
+    directory: TempDir,
     repository: AuthoritativeRepository,
     administrator: PrincipalId,
     partition: PartitionId,
@@ -380,7 +382,7 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
         }),
     )?;
     Ok(Fixture {
-        _directory: directory,
+        directory,
         repository,
         administrator,
         partition,

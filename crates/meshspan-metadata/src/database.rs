@@ -341,6 +341,7 @@ mod tests {
         partition_authentication_session_delivery_migration_digest,
         partition_authentication_session_factors_migration_digest,
         partition_authentication_session_rotation_migration_digest,
+        partition_backup_reclamation_migration_digest,
         partition_builtin_fault_classes_migration_digest,
         partition_cleanup_target_ownership_migration_digest,
         partition_cluster_enrollment_migration_digest,
@@ -1568,6 +1569,37 @@ mod tests {
                 0xfc, 0x47, 0xed, 0xc1,
             ]
         );
+    }
+
+    #[test]
+    fn backup_reclamation_migration_is_fingerprinted_and_upgrades_schema_83()
+    -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(
+            partition_backup_reclamation_migration_digest(),
+            [
+                0x75, 0xe1, 0x5e, 0x52, 0xe9, 0xe2, 0x78, 0xf3, 0x7f, 0xd1, 0xbc, 0x77, 0x58, 0xb9,
+                0x5c, 0x18, 0x1e, 0x7d, 0x3d, 0x67, 0x01, 0xd2, 0x6d, 0xb5, 0x84, 0xf0, 0x4c, 0xce,
+                0x64, 0xd0, 0xc4, 0x1c,
+            ]
+        );
+        let directory = tempdir()?;
+        let mut connection = open_connection(&directory.path().join("upgrade.sqlite3"))?;
+        migrate_partition_through(&mut connection, 83, 10)?;
+        migrate_partition(&mut connection, 20)?;
+        assert_eq!(
+            connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
+            PARTITION_SCHEMA_VERSION
+        );
+        let integrity: String =
+            connection.pragma_query_value(None, "integrity_check", |row| row.get(0))?;
+        assert_eq!(integrity, "ok");
+        let tables: i64 = connection.query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE name = 'backup_copy_reclamations'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(tables, 1);
+        Ok(())
     }
 
     #[test]

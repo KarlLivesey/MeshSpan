@@ -7,6 +7,7 @@ mod acme;
 mod authentication;
 mod availability_cell;
 mod backup;
+mod backup_retention;
 mod bootstrap;
 mod certificate_name;
 mod decoder;
@@ -218,6 +219,9 @@ fn encode_extension_command(
     if mesh_local_certificate::encode_command(encoder, command)? {
         return Ok(true);
     }
+    if backup_retention::encode_command(encoder, command)? {
+        return Ok(true);
+    }
     if backup::encode_command(encoder, command)? {
         return Ok(true);
     }
@@ -239,6 +243,9 @@ fn decode_command(
     }
     if mesh_local_certificate::is_command_kind(kind) {
         return mesh_local_certificate::decode_command(kind, decoder);
+    }
+    if backup_retention::is_command_kind(kind) {
+        return backup_retention::decode_command(kind, decoder);
     }
     if backup::is_command_kind(kind) {
         return backup::decode_command(kind, decoder);

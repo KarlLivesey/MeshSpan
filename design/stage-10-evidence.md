@@ -180,15 +180,62 @@ all-target/all-feature warning-denied Clippy in 9.54 seconds. Generated-contract
 drift and Rust formatting were checked again. No release, tag or image was
 published; the opt-in SMB-image and hardware/soak gates remain separate.
 
+## Automatic retention and physical reclamation
+
+The daemon now retires excess generations and reclaims exact provider objects
+through the normal local/QUIC backup resolver. One pass proposes at most one
+retirement and processes one bounded cleanup page. An unavailable destination
+does not block later pages; unfinished copies remain durable debt across restart.
+
+Retirement is a replicated transaction, not a timer-side deletion. It rechecks
+the schedule sequence, victim revision, terminal run and a unique bounded set of
+newer protected generations. Ordering uses committed source revisions, not wall
+time. Retained generations must still satisfy both the current and captured
+verified/independent-copy thresholds. Pausing the schedule stops new retirement,
+but does not abandon already authorised cleanup.
+
+That transaction retires the generation and every copy together. Only an exact
+provider deletion receipt clears physical-cleanup debt. Provider deletion uses a
+stable object/retirement operation identity with a renewable per-attempt deadline,
+so loss after deletion or before capacity release can be recovered without a
+second charge or a guessed success. Generation creation and retention are
+attempted independently within the backup maintenance pass.
+
+Partition migration 84 adds reclamation receipts and ordered retention/debt
+indexes. It also preserves older failed, unverified generations as recorded
+rather than incorrectly treating their unfinished copies as retired. New failed
+runs use the same lifecycle and become eligible once enough newer protected
+generations exist. Closed private command kinds 73/74 carry retirement witnesses
+and reclamation receipts; no public API schema changes or dependencies are added.
+
+Focused local evidence covers:
+
+- exact excess-generation selection, current-policy revalidation, stale and
+  duplicate witnesses, and incomplete-generation retirement;
+- four transactional fault boundaries, exact replay, database reopen and debt
+  pagination;
+- inspected ordered index plans without temporary history sorting;
+- schema-83 upgrade, integrity check and the migration's fixed digest;
+- bounded wire round trips, every truncated prefix and oversized witness counts;
+- real directory deletion replay after restart with a renewed deadline;
+- worker recovery after deletion-before-receipt failure and fairness under an
+  unavailable destination;
+- real shared-folder capacity recovery after provider deletion commits but the
+  target capacity release fails, including a retry that cannot release twice.
+
 ## Remaining backup integration
+
+For this retention slice, the complete NVM-default `pnpm check` passed in
+**444.29 seconds** with four workers. Rust workspace tests took 398.64 seconds;
+web tests took 4.35 seconds. The gate also passed workspace Clippy, both licence
+checks, formatting, TypeScript/ESLint and generated-contract drift. No release
+or image was produced; hardware/soak and opt-in SMB-image proofs remain separate.
 
 The schedule API does not close these separate outstanding requirements:
 
 - backup panel controls, automatic destination/default policy selection and
   topology-backed failure assessments;
-- retention retirement and guarded physical reclamation;
-- automatic resolution of abandoned backup holds and completion of a capacity
-  release interrupted after provider retirement;
+- automatic resolution of abandoned unpublished backup holds;
 - product-facing restore-readiness, encrypted export and recovery workflows;
 - provider/federation destination implementations and their acceptance evidence.
 

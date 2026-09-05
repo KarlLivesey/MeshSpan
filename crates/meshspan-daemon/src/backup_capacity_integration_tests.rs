@@ -7,9 +7,9 @@ use std::path::Path;
 
 use meshspan_backup::DirectoryBackupProvider;
 use meshspan_contracts::{
-    BackupDeleteRequest, BackupObjectIdentity, BackupProvider, BackupStoreRequest, ContractError,
-    ContractVersion, RequestContext, ReservationClass, ReserveStorageRequest, StoragePermitMacKey,
-    StorageProvider,
+    BackupCapacityBudget, BackupDeleteRequest, BackupObjectIdentity, BackupProvider,
+    BackupStoreRequest, ContractError, ContractVersion, RequestContext, ReservationClass,
+    ReserveStorageRequest, StoragePermitMacKey, StorageProvider,
 };
 use meshspan_domain::{
     BackupDestinationId, BackupId, EntropyError, MeshId, OperationId, RandomSource, Revision,
@@ -23,6 +23,62 @@ use sha2::{Digest, Sha256};
 
 type Target = SharedStorageProvider<FolderShardStore>;
 const PAYLOAD: &[u8] = b"six hundred is not needed: exact bytes suffice";
+
+#[test]
+fn deletion_retry_recovers_capacity_release_interrupted_after_provider_commit()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let mut target = target(directory.path(), PAYLOAD.len() as u64)?;
+    let mut provider =
+        backup(directory.path(), 3)?.with_capacity_budget(Box::new(FailRelease(target.clone())))?;
+    let store = request(3, 5)?;
+    let stored = provider.store_exact(store, &mut Cursor::new(PAYLOAD), UnixMicros::new(2))?;
+    let mut deletion = BackupDeleteRequest {
+        context: context(9)?,
+        object: store.object,
+        object_reference: stored.object_reference,
+        retirement_revision: Revision::new(1),
+    };
+    assert!(
+        provider
+            .delete_exact(&deletion, UnixMicros::new(4))
+            .is_err()
+    );
+    assert_eq!(
+        StorageProvider::reserve(&mut target, shard_request(7, 1)?),
+        Err(ContractError::ResourceExhausted)
+    );
+    drop(provider);
+    let mut reopened =
+        backup(directory.path(), 3)?.with_capacity_budget(Box::new(target.clone()))?;
+    deletion.context.deadline = UnixMicros::new(200);
+    reopened.delete_exact(&deletion, UnixMicros::new(101))?;
+    reopened.delete_exact(&deletion, UnixMicros::new(102))?;
+    StorageProvider::reserve(&mut target, shard_request(10, PAYLOAD.len() as u64)?)?;
+    assert_eq!(
+        StorageProvider::reserve(&mut target, shard_request(11, 1)?),
+        Err(ContractError::ResourceExhausted)
+    );
+    Ok(())
+}
+
+/// Inject exactly the boundary after provider deletion, before durable target accounting.
+struct FailRelease(Target);
+
+impl BackupCapacityBudget for FailRelease {
+    fn reserve(&mut self, object: BackupObjectIdentity) -> Result<(), ContractError> {
+        BackupCapacityBudget::reserve(&mut self.0, object)
+    }
+    fn commit(&mut self, object: BackupObjectIdentity) -> Result<(), ContractError> {
+        BackupCapacityBudget::commit(&mut self.0, object)
+    }
+    fn reconcile_existing(&mut self, object: BackupObjectIdentity) -> Result<(), ContractError> {
+        BackupCapacityBudget::reconcile_existing(&mut self.0, object)
+    }
+    fn release(&mut self, _object: BackupObjectIdentity) -> Result<(), ContractError> {
+        Err(ContractError::Unavailable)
+    }
+}
 
 #[test]
 fn backup_destinations_and_shard_writes_cannot_each_spend_the_folder_limit()
