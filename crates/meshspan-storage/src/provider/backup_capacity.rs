@@ -3,10 +3,28 @@
 //! Backup accounting against the folder's ordinary target journal.
 
 use meshspan_contracts::{BackupCapacityBudget, BackupObjectIdentity, ContractError};
+use meshspan_domain::{BackupDestinationId, BackupId};
 
 use super::{FolderShardStore, journal_contract_error};
 
 impl BackupCapacityBudget for FolderShardStore {
+    fn pending_holds(
+        &self,
+        destination: BackupDestinationId,
+        generation: u64,
+        after: Option<BackupId>,
+    ) -> Result<Vec<BackupObjectIdentity>, ContractError> {
+        self.journal
+            .pending_backup_holds(destination, generation, after)
+            .map_err(|error| journal_contract_error(&error))
+    }
+
+    fn cancel_unpublished(&mut self, object: BackupObjectIdentity) -> Result<(), ContractError> {
+        self.journal
+            .cancel_unpublished_backup(object)
+            .map_err(|error| journal_contract_error(&error))
+    }
+
     fn reserve(&mut self, object: BackupObjectIdentity) -> Result<(), ContractError> {
         let observation = self
             .folder

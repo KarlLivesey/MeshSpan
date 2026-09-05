@@ -34,7 +34,7 @@ pub use backup::{
     validate_backup_delete_request, validate_backup_read_request, validate_backup_store_request,
     validate_backup_verify_request,
 };
-pub use backup_capacity::BackupCapacityBudget;
+pub use backup_capacity::{BackupCapacityBudget, MAXIMUM_BACKUP_CAPACITY_PAGE};
 
 pub use common::{
     BoundedBytes, BoundedBytesError, BoundedItems, BoundedItemsError, ContractError, ContractKind,

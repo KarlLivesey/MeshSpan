@@ -96,6 +96,94 @@ fn version_one_target_migrates_without_losing_shard_reservations()
     Ok(())
 }
 
+#[test]
+fn unpublished_cancellation_is_exact_and_retry_does_not_revive_retired_objects()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let mut journal = open(directory.path())?;
+    let backup = object(20, 600)?;
+    journal.reserve_backup_capacity(backup, observation())?;
+    let mut changed = backup;
+    changed.digest = [99; 32];
+    assert!(matches!(
+        journal.cancel_unpublished_backup(changed),
+        Err(TargetJournalError::OperationConflict)
+    ));
+    assert_eq!(journal.capacity()?.reserved_bytes, 600);
+    journal.cancel_unpublished_backup(backup)?;
+    journal.cancel_unpublished_backup(backup)?;
+    assert_eq!(journal.capacity()?.reserved_bytes, 0);
+    journal.reserve_backup_capacity(backup, observation())?;
+    journal.commit_backup_capacity(backup)?;
+    assert!(matches!(
+        journal.cancel_unpublished_backup(backup),
+        Err(TargetJournalError::OperationConflict)
+    ));
+    assert_eq!(journal.capacity()?.committed_bytes, 600);
+    journal.release_backup_capacity(backup)?;
+    assert!(matches!(
+        journal.cancel_unpublished_backup(backup),
+        Err(TargetJournalError::OperationConflict)
+    ));
+    journal.check_integrity()?;
+    Ok(())
+}
+
+#[test]
+fn cancellation_rolls_back_counters_if_hold_removal_fails() -> Result<(), Box<dyn std::error::Error>>
+{
+    let directory = tempfile::tempdir()?;
+    let mut journal = open(directory.path())?;
+    let backup = object(21, 600)?;
+    journal.reserve_backup_capacity(backup, observation())?;
+    journal.connection.execute_batch("CREATE TRIGGER fail_hold_delete BEFORE DELETE ON backup_capacity BEGIN SELECT RAISE(ABORT, 'injected cancellation failure'); END;")?;
+    assert!(journal.cancel_unpublished_backup(backup).is_err());
+    assert_eq!(journal.capacity()?.reserved_bytes, 600);
+    assert_eq!(
+        journal.pending_backup_holds(backup.destination_id, 1, None)?,
+        vec![backup]
+    );
+    journal
+        .connection
+        .execute_batch("DROP TRIGGER fail_hold_delete;")?;
+    journal.cancel_unpublished_backup(backup)?;
+    assert_eq!(journal.capacity()?.reserved_bytes, 0);
+    journal.check_integrity()?;
+    Ok(())
+}
+
+#[test]
+fn pending_holds_seek_by_destination_without_stored_or_released_rows()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let mut journal = open(directory.path())?;
+    for id in 1..=70 {
+        journal.reserve_backup_capacity(object(id, 1)?, observation())?;
+    }
+    journal.commit_backup_capacity(object(1, 1)?)?;
+    journal.release_backup_capacity(object(2, 1)?)?;
+    let mut other = object(71, 1)?;
+    other.destination_id = BackupDestinationId::from_bytes([12; 16])?;
+    journal.reserve_backup_capacity(other, observation())?;
+    let destination = object(1, 1)?.destination_id;
+    let first = journal.pending_backup_holds(destination, 1, None)?;
+    assert_eq!(first.len(), 64);
+    assert_eq!(first[0], object(3, 1)?);
+    assert_eq!(first[63], object(66, 1)?);
+    for pending in &first {
+        journal.cancel_unpublished_backup(*pending)?;
+    }
+    let second = journal.pending_backup_holds(destination, 1, Some(first[63].backup_id))?;
+    assert_eq!(
+        second,
+        (67..=70)
+            .map(|id| object(id, 1))
+            .collect::<Result<Vec<_>, _>>()?
+    );
+    assert!(journal.pending_backup_holds(destination, 2, None).is_err());
+    Ok(())
+}
+
 fn open(directory: &std::path::Path) -> Result<TargetJournal, Box<dyn std::error::Error>> {
     Ok(TargetJournal::open(
         directory,

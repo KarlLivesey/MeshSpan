@@ -3,12 +3,36 @@
 //! Destination-bound accounting when backups share capacity with other workloads.
 
 use crate::{BackupObjectIdentity, ContractError};
+use meshspan_domain::{BackupDestinationId, BackupId};
+
+/// Maximum pending reservations returned by one destination-local recovery query.
+pub const MAXIMUM_BACKUP_CAPACITY_PAGE: usize = 64;
 
 /// Durable accounting adapter bound to one backing target and its current policy.
 ///
 /// An exact object is charged once across operation IDs and restarts. The provider
 /// owns IO ordering; this interface is not exposed as remote allocation authority.
 pub trait BackupCapacityBudget: Send {
+    /// Lists at most `MAXIMUM_BACKUP_CAPACITY_PAGE` held objects in identity order.
+    /// Resume after the last returned backup ID; an empty page ends the scan.
+    ///
+    /// # Errors
+    /// Rejects stale generations, malformed rows and unavailable accounting.
+    fn pending_holds(
+        &self,
+        destination: BackupDestinationId,
+        generation: u64,
+        after: Option<BackupId>,
+    ) -> Result<Vec<BackupObjectIdentity>, ContractError>;
+
+    /// Cancels a hold after its exclusive provider proves there is no catalogue
+    /// object or published/staging bytes. This is not deletion authority and is
+    /// never exposed remotely. A later exact retry must reserve space again.
+    ///
+    /// # Errors
+    /// Rejects changed identities, stored/released charges or corrupt counters.
+    fn cancel_unpublished(&mut self, object: BackupObjectIdentity) -> Result<(), ContractError>;
+
     /// Durably holds space before new bytes can be written.
     ///
     /// # Errors

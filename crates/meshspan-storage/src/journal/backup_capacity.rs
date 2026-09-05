@@ -3,6 +3,7 @@
 //! Backup charges in the same atomic counters used by shard admission.
 
 use meshspan_contracts::{BackupObjectIdentity, ReservationClass};
+use meshspan_domain::{BackupDestinationId, BackupId};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::{CapacityObservation, TargetJournal, TargetJournalError, admit_capacity, to_i64};
@@ -12,6 +13,92 @@ const STORED: i64 = 2;
 const RELEASED: i64 = 3;
 
 impl TargetJournal {
+    /// Returns one bounded, identity-ordered page of a destination's unpublished holds.
+    ///
+    /// # Errors
+    /// Rejects a stale target generation or malformed persistent accounting.
+    pub fn pending_backup_holds(
+        &self,
+        destination: BackupDestinationId,
+        generation: u64,
+        after: Option<BackupId>,
+    ) -> Result<Vec<BackupObjectIdentity>, TargetJournalError> {
+        if generation != self.marker.generation() {
+            return Err(TargetJournalError::InvalidInput);
+        }
+        let lower = after.map_or([0; 16], BackupId::as_bytes);
+        let mut statement = self.connection.prepare(
+            "SELECT backup_id, byte_length, digest FROM backup_capacity
+             WHERE destination_id = ?1 AND backup_id > ?2 AND provider_generation = ?3 AND state = 1
+             ORDER BY backup_id LIMIT ?4",
+        )?;
+        let rows = statement.query_map(
+            params![
+                destination.as_bytes().as_slice(),
+                lower.as_slice(),
+                to_i64(generation)?,
+                to_i64(meshspan_contracts::MAXIMUM_BACKUP_CAPACITY_PAGE as u64)?
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            },
+        )?;
+        let mut objects = Vec::new();
+        for row in rows {
+            let (id, bytes, digest) = row?;
+            let object = BackupObjectIdentity {
+                backup_id: BackupId::from_bytes(
+                    id.try_into()
+                        .map_err(|_| TargetJournalError::CorruptState)?,
+                )
+                .map_err(|_| TargetJournalError::CorruptState)?,
+                destination_id: destination,
+                provider_generation: generation,
+                byte_length: u64::try_from(bytes).map_err(|_| TargetJournalError::CorruptState)?,
+                digest: digest
+                    .try_into()
+                    .map_err(|_| TargetJournalError::CorruptState)?,
+            };
+            self.validate_backup_object(object)?;
+            objects.push(object);
+        }
+        Ok(objects)
+    }
+
+    /// Cancels only a held object after provider-owned proof that no bytes were published.
+    /// Unlike retirement, cancellation leaves the identity available for a newly admitted retry.
+    ///
+    /// # Errors
+    /// Rejects changed identity, committed/retired objects and inconsistent counters.
+    pub fn cancel_unpublished_backup(
+        &mut self,
+        object: BackupObjectIdentity,
+    ) -> Result<(), TargetJournalError> {
+        self.validate_backup_object(object)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        match load(&transaction, object)? {
+            None => return Ok(()),
+            Some(HELD) => {}
+            Some(_) => return Err(TargetJournalError::OperationConflict),
+        }
+        changed(transaction.execute(
+            "UPDATE target_state SET reserved_bytes = reserved_bytes - ?1
+             WHERE singleton = 1 AND reserved_bytes >= ?1",
+            [to_i64(object.byte_length)?],
+        )?)?;
+        changed(transaction.execute(
+            "DELETE FROM backup_capacity WHERE destination_id = ?1 AND backup_id = ?2 AND provider_generation = ?3 AND state = 1",
+            params![object.destination_id.as_bytes().as_slice(), object.backup_id.as_bytes().as_slice(), to_i64(object.provider_generation)?])?)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     /// Reserves one immutable backup in the target's common quota and repair headroom.
     ///
     /// # Errors

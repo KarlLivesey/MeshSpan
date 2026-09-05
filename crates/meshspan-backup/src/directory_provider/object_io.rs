@@ -190,6 +190,22 @@ pub(super) fn remove_if_present(
     }
 }
 
+/// Absence is a filesystem fact, not an expired lease. A dangling symlink or
+/// non-file entry is still present and must retain its charge for investigation.
+pub(super) fn confirm_object_absent(
+    objects: &Dir,
+    object_reference: &str,
+) -> Result<bool, DirectoryBackupProviderError> {
+    match objects.symlink_metadata(object_reference) {
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            sync_directory(objects)?;
+            Ok(true)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn create_directory(parent: &Dir, name: &str) -> Result<(), DirectoryBackupProviderError> {
     match parent.create_dir(name) {
         Ok(()) => sync_directory(parent),

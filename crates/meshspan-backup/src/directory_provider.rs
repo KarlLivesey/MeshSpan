@@ -2,6 +2,7 @@
 
 //! Durable capability-scoped directory implementation of the backup-provider contract.
 
+mod capacity_recovery;
 mod catalogue;
 mod object_io;
 
@@ -93,6 +94,7 @@ impl DirectoryBackupProvider {
             }
         }
         self.capacity = Some(budget);
+        self.recover_pending_capacity()?;
         Ok(self)
     }
 
@@ -122,11 +124,13 @@ impl DirectoryBackupProvider {
             OperationKind::Store,
             request_digest,
         )?;
+        self.recover_pending_capacity()?;
         if !completed {
             self.catalogue.admit_capacity(request.object)?;
         }
-        // A failed/unknown write keeps its hold. Exact retry or confirmed retirement resolves
-        // it; reservation expiry must never free space potentially occupied by backup bytes.
+        // A failed/unknown write keeps its hold until exclusive recovery proves
+        // absence, an exact retry publishes it or confirmed retirement removes it.
+        // Reservation expiry never frees space potentially occupied by backup bytes.
         if let Some(budget) = &mut self.capacity {
             budget.reserve(request.object)?;
         }
