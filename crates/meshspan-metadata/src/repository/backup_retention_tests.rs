@@ -350,7 +350,7 @@ fn history(count: u8) -> TestResult<(Fixture, BackupDestinationId)> {
             interval: DurationMicros::new(1),
             retained_generations: 3,
             minimum_verified_copies: 1,
-            minimum_independent_copies: 1,
+            minimum_independent_copies: 0,
             enabled: true,
             next_due_at: UnixMicros::new(32),
         }),

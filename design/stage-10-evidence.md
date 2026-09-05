@@ -371,6 +371,46 @@ passed. This run was slower than the earlier 551.45-second backup-defaults gate;
 no test-speed improvement is claimed. No release, tag, image or publication
 workflow has been run.
 
+### Current local backup failure assessments
+
+Registered-folder destinations now derive their failure relationship from the
+current authoritative topology whenever they are read. The same projection feeds
+the administration inventory and protection/retention evidence; an old configured
+`independent` label cannot override a shared source host or fault group.
+
+Source boundaries include every partition replica member, including learners and
+retiring members. A destination on any source host or sharing any declared group
+is overlapping, even when its folder is on a different drive. Different hosts
+alone leave the relationship unknown. Declared independence requires disjoint
+groups and assignments for every administrator-defined class on both the
+destination and all source hosts. Missing assignments, missing/current-generation
+mismatches and unsupported parent-group evidence remain unknown. Built-in machine
+and device classes are not manual group-assignment requirements. This is evidence
+under administrator-declared topology, not discovery of undeclared shared power,
+network storage or buildings.
+
+The evidence digest binds the source partition, topology and membership revisions,
+target identity/generation and evaluated facts. A group change is reflected on
+the next authoritative read without waiting for a defaults job. A copy may remain
+byte-verified while ceasing to count towards an independent-copy requirement.
+There is no database migration, new dependency or public/private wire change.
+Remote swarm/provider declarations retain their separate evidence contract;
+implementing those destinations remains outstanding.
+
+The 45 focused metadata backup tests passed in 24.26 seconds, including six new
+topology/protection cases and the indexed-query-plan check. Affected all-target,
+all-feature Clippy passed in 11.00 seconds. The first full gate stopped at an
+outdated real-process assertion requiring every destination to remain unknown
+(239.17 seconds total). Both nodes in that fixture hold metadata replicas, so
+their backup folders must report overlapping. The updated real CLI/HTTPS flow
+passed in 15.69 seconds. A final focused rerun passed all 45 metadata cases in
+27.25 seconds; metadata/daemon all-target, all-feature Clippy passed in 20.66
+seconds. The complete NVM-default `MESHSPAN_CHECK_WORKERS=4 pnpm check` then
+passed on `ad592f2` in **585.84 seconds**, including Rust workspace tests
+(554.71 seconds), web tests (3.41 seconds), workspace Clippy, both licence gates,
+formatting and generated-contract drift. Existing opt-in SMB container and
+hardware/soak proofs remain separate; no release or image was produced.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in
@@ -381,7 +421,7 @@ or image was produced; hardware/soak and opt-in SMB-image proofs remain separate
 
 The schedule API does not close these separate outstanding requirements:
 
-- topology-backed failure assessments;
+- remote/provider failure-assessment integration;
 - automatic resolution of abandoned unpublished backup holds;
 - product-facing restore-readiness, encrypted export and recovery workflows;
 - provider/federation destination implementations and their acceptance evidence.

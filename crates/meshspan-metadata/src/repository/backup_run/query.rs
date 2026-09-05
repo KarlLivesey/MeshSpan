@@ -164,8 +164,7 @@ pub(super) fn protection_evidence(
 ) -> Result<MetadataBackupProtectionEvidence, RepositoryError> {
     let mut statement = connection.prepare(
         "SELECT c.destination_id, c.provider_generation, c.object_reference,
-                c.byte_length, c.copy_digest, d.failure_relationship,
-                d.failure_evidence_digest
+                c.byte_length, c.copy_digest
          FROM backup_copies c JOIN backup_destinations d USING(destination_id)
          JOIN metadata_backups b ON b.backup_id = c.backup_id
          WHERE c.backup_id = ?1 AND c.state = 2 AND d.state IN (1, 2)
@@ -181,8 +180,6 @@ pub(super) fn protection_evidence(
             row.get::<_, String>(2)?,
             row.get::<_, i64>(3)?,
             row.get::<_, Vec<u8>>(4)?,
-            row.get::<_, i64>(5)?,
-            row.get::<_, Vec<u8>>(6)?,
         ))
     })?;
     let mut digest = Sha256::new();
@@ -198,11 +195,16 @@ pub(super) fn protection_evidence(
         let reference_length =
             u64::try_from(row.2.len()).map_err(|_| RepositoryError::CapacityExceeded)?;
         let copy_digest = digest32(&row.4)?;
-        let failure_evidence_digest = digest32(&row.6)?;
+        let assessment = super::super::backup_catalogue::destination(connection, destination)?
+            .ok_or(RepositoryError::CorruptState)?;
+        let relationship: i64 = match assessment.failure_relationship {
+            crate::BackupFailureRelationship::Unknown => 1,
+            crate::BackupFailureRelationship::Overlapping => 2,
+            crate::BackupFailureRelationship::Independent => 3,
+        };
         if row.2.is_empty()
             || row.2.len() > crate::MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES
             || row.2.chars().any(char::is_control)
-            || !matches!(row.5, 1..=3)
         {
             return Err(RepositoryError::CorruptState);
         }
@@ -210,7 +212,7 @@ pub(super) fn protection_evidence(
             .checked_add(1)
             .ok_or(RepositoryError::CapacityExceeded)?;
         independent_copies = independent_copies
-            .checked_add(u64::from(row.5 == 3))
+            .checked_add(u64::from(relationship == 3))
             .ok_or(RepositoryError::CapacityExceeded)?;
         digest.update(destination.as_bytes());
         digest.update(provider_generation.to_be_bytes());
@@ -218,8 +220,8 @@ pub(super) fn protection_evidence(
         digest.update(reference_length.to_be_bytes());
         digest.update(row.2.as_bytes());
         digest.update(copy_digest);
-        digest.update(row.5.to_be_bytes());
-        digest.update(failure_evidence_digest);
+        digest.update(relationship.to_be_bytes());
+        digest.update(assessment.failure_evidence_digest);
     }
     digest.update(verified_copies.to_be_bytes());
     digest.update(independent_copies.to_be_bytes());
