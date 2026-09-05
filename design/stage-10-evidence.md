@@ -361,8 +361,15 @@ campaigns.
 
 The private protocol adds `CommittedPrefix` (envelope field 28); peers need this
 implementation for the new recovery exchange. There is no SQL migration, public
-API schema change or new dependency. Final full-tree local verification is in
-progress. No release, tag, image or publication workflow has been run.
+API schema change or new dependency.
+
+The complete NVM-default `MESHSPAN_CHECK_WORKERS=4 pnpm check` passed on the
+repaired tree in **655.03 seconds**. Rust workspace tests took 586.47 seconds;
+web tests took 5.06 seconds; workspace Clippy took 49.82 seconds. Generated drift,
+both licence policies, formatting, TypeScript/ESLint and scheduler tests also
+passed. This run was slower than the earlier 551.45-second backup-defaults gate;
+no test-speed improvement is claimed. No release, tag, image or publication
+workflow has been run.
 
 ## Remaining backup integration
 
