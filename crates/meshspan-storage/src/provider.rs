@@ -2,6 +2,8 @@
 
 //! Journal/pack composition for exact local shard durability.
 
+mod backup_capacity;
+
 use std::path::Path;
 
 use meshspan_contracts::{

@@ -94,11 +94,6 @@ impl NativeStorageTarget {
     pub(crate) fn check_health(&self) -> Result<(), meshspan_storage::FolderShardStoreError> {
         self.provider.check_health()
     }
-
-    /// Returns the current target policy's absolute byte ceiling.
-    pub(crate) fn capacity_ceiling(&self) -> Result<u64, meshspan_storage::FolderShardStoreError> {
-        self.provider.capacity_ceiling()
-    }
 }
 
 /// Immutable paths and authority handles needed to open the production filesystem after setup.

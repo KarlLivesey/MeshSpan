@@ -172,6 +172,7 @@ type ProductionDataRouter = RemoteDataRouter<
 struct ActiveBackupDestination {
     target_id: TargetId,
     storage_path: PathBuf,
+    target: crate::LocalFolderStorageProvider,
     provider: meshspan_backup::SharedBackupProvider<meshspan_backup::DirectoryBackupProvider>,
     service: ProductionRemoteBackupService,
 }
@@ -2417,7 +2418,9 @@ impl StorageTargetRuntime {
                     return Err(());
                 }
                 if self.backup_services.get(&route).is_some_and(|entry| {
-                    entry.target_id == target_id && entry.storage_path == *storage_path
+                    entry.target_id == target_id
+                        && entry.storage_path == *storage_path
+                        && entry.target.shares_owner_with(&target.provider())
                 }) {
                     continue;
                 }
@@ -2426,9 +2429,12 @@ impl StorageTargetRuntime {
                     storage_path,
                     destination.destination_id,
                     target_generation,
-                    target.capacity_ceiling().map_err(|_| ())?,
+                    // Registered targets use one live shared allowance, not a second frozen
+                    // copy of the folder ceiling in each backup destination catalogue.
+                    i64::MAX.unsigned_abs(),
                     now,
-                ) else {
+                )
+                .and_then(|provider| provider.with_capacity_budget(Box::new(target.provider()))) else {
                     self.readiness.store_degraded(true);
                     continue;
                 };
@@ -2446,6 +2452,7 @@ impl StorageTargetRuntime {
                     ActiveBackupDestination {
                         target_id,
                         storage_path: storage_path.clone(),
+                        target: target.provider(),
                         provider,
                         service,
                     },

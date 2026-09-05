@@ -35,6 +35,8 @@ mod authentication_root_loading;
 #[cfg(test)]
 mod authentication_root_loading_tests;
 mod authoritative_txt_observer;
+#[cfg(test)]
+mod backup_capacity_integration_tests;
 mod backup_publication;
 #[cfg(test)]
 mod backup_publication_tests;

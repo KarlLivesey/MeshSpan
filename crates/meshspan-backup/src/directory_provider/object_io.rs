@@ -86,6 +86,7 @@ pub(super) fn persist_stream(
     object_reference: &str,
     source: &mut dyn Read,
 ) -> Result<(), DirectoryBackupProviderError> {
+    discard_unpublished_staging(objects)?;
     if existing_file_matches(objects, object_reference, expected)? {
         return Ok(());
     }
@@ -119,6 +120,31 @@ pub(super) fn persist_stream(
             }
         }
         Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+/// The provider holds its exclusive destination lock: no live writer can own these files.
+/// Published objects use a different name and are never selected by this recovery pass.
+pub(super) fn discard_unpublished_staging(
+    objects: &Dir,
+) -> Result<(), DirectoryBackupProviderError> {
+    for entry in objects.entries()? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(id) = name.strip_prefix("pending-") else {
+            continue;
+        };
+        if id.len() == 32
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            remove_if_present(objects, name)?;
+        }
     }
     Ok(())
 }

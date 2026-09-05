@@ -14,6 +14,9 @@ use thiserror::Error;
 
 use crate::{TargetMarker, UsageLimit};
 
+mod backup_capacity;
+#[cfg(test)]
+mod backup_capacity_tests;
 mod inventory;
 mod removal;
 mod scrub;
@@ -27,8 +30,9 @@ pub use removal::{
 };
 pub use scrub::ScrubCheckpoint;
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 const SCHEMA: &str = include_str!("../schema/001_initial.sql");
+const BACKUP_CAPACITY_SCHEMA: &str = include_str!("../schema/002_backup_capacity.sql");
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const STATE_SUBDIRECTORY: &str = "storage-targets";
 
@@ -299,30 +303,36 @@ fn migrate(connection: &mut Connection, applied_at: UnixMicros) -> Result<(), Ta
     if version > SCHEMA_VERSION {
         return Err(TargetJournalError::UnsupportedSchema);
     }
-    let expected: [u8; 32] = blake3::hash(SCHEMA.as_bytes()).into();
-    if version == 0 {
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute_batch(SCHEMA)?;
-        transaction.execute(
-            "INSERT INTO schema_migrations(version, migration_digest, applied_at)
-             VALUES (?1, ?2, ?3)",
-            params![SCHEMA_VERSION, expected.as_slice(), applied_at.get()],
-        )?;
-        transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-        transaction.commit()?;
-        return Ok(());
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    for (migration, schema) in [(1_u32, SCHEMA), (2, BACKUP_CAPACITY_SCHEMA)] {
+        let expected = blake3::hash(schema.as_bytes());
+        if migration > version {
+            transaction.execute_batch(schema)?;
+            transaction.execute(
+                "INSERT INTO schema_migrations(version, migration_digest, applied_at)
+                 VALUES (?1, ?2, ?3)",
+                params![migration, expected.as_bytes().as_slice(), applied_at.get()],
+            )?;
+        } else {
+            let stored: Vec<u8> = transaction.query_row(
+                "SELECT migration_digest FROM schema_migrations WHERE version = ?1",
+                [migration],
+                |row| row.get(0),
+            )?;
+            if stored.as_slice() != expected.as_bytes() {
+                return Err(TargetJournalError::MigrationMismatch);
+            }
+        }
     }
-    let stored: Vec<u8> = connection.query_row(
-        "SELECT migration_digest FROM schema_migrations WHERE version = ?1",
-        [SCHEMA_VERSION],
-        |row| row.get(0),
-    )?;
-    let count: i64 = connection.query_row("SELECT count(*) FROM schema_migrations", [], |row| {
-        row.get(0)
-    })?;
-    if count != 1 || stored.as_slice() != expected {
+    let count: u32 =
+        transaction.query_row("SELECT count(*) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })?;
+    if count != SCHEMA_VERSION {
         return Err(TargetJournalError::MigrationMismatch);
     }
+    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    transaction.commit()?;
     Ok(())
 }
 
