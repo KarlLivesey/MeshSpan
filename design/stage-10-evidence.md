@@ -405,8 +405,11 @@ outdated real-process assertion requiring every destination to remain unknown
 their backup folders must report overlapping. The updated real CLI/HTTPS flow
 passed in 15.69 seconds. A final focused rerun passed all 45 metadata cases in
 27.25 seconds; metadata/daemon all-target, all-feature Clippy passed in 20.66
-seconds. Complete workspace verification is still required before this slice is
-merged.
+seconds. The complete NVM-default `MESHSPAN_CHECK_WORKERS=4 pnpm check` then
+passed on `ad592f2` in **585.84 seconds**, including Rust workspace tests
+(554.71 seconds), web tests (3.41 seconds), workspace Clippy, both licence gates,
+formatting and generated-contract drift. Existing opt-in SMB container and
+hardware/soak proofs remain separate; no release or image was produced.
 
 ## Remaining backup integration
 
