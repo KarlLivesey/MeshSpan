@@ -3,6 +3,29 @@
 Status: **in progress**. Stage 11 has not started. Publication remains on hold
 pending the owner's dependency review.
 
+## Metrics collection and encoding — in progress
+
+The [metrics contract and catalogue](metrics.md) now have a typed replaceable
+source, bounded aggregate runtime measurements and an OpenMetrics text encoder.
+The storage runtime records process-lifetime probe/cycle latency histograms;
+diagnostic-window eviction does not reset them. Output contains no dynamic
+identity/path labels. Unavailable sources and unobserved gauges remain distinct
+from zero-valued measurements.
+
+Three contract tests, four observation/source tests and two encoder tests all
+passed, each focused harness completing in under **0.01 seconds**. They check
+exact inclusive buckets and nanosecond sums, no partial overflow update,
+duplicate-family rejection, bounded churn, lock contention, missing gauges,
+deterministic family order and exact OpenMetrics bytes including counters above
+JavaScript's safe-integer range. Affected all-target/all-feature Clippy passed
+in **8.38 seconds** after correcting documentation, borrowing and test-import
+lint findings. No rule was suppressed or loosened.
+
+This is collection/encoding evidence, not a deployed exporter. Persisted opt-in,
+authenticated HTTP routing, configuration controls, the wider metric catalogue
+and whole-branch verification remain outstanding. No dependency, schema or
+private-wire change was made by this slice. No release or publication ran.
+
 ## Runtime diagnostic bundle and download control
 
 `GET /api/latest/admin/diagnostics/bundle` combines the existing metadata

@@ -12,6 +12,7 @@ mod conformance;
 mod data;
 mod federation_storage;
 mod filesystem;
+mod metrics;
 mod observability;
 mod security;
 mod storage;
@@ -63,6 +64,10 @@ pub use federation_storage::{
 };
 pub use filesystem::{
     namespace_reconciliation_result_digest, namespace_snapshot_restore_result_digest,
+};
+pub use metrics::{
+    LatencyHistogram, MAX_RUNTIME_METRIC_FAMILIES, METRIC_LATENCY_BOUNDARIES_MICROS, RuntimeMetric,
+    RuntimeMetricSnapshot, RuntimeMetricSource,
 };
 pub use observability::{EventSeverity, ObservabilityReceipt, ObservabilitySink, RedactedEvent};
 pub use security::{

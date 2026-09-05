@@ -69,7 +69,9 @@ mod metadata_diagnostics;
 mod metadata_diagnostics_api;
 #[cfg(test)]
 mod metadata_diagnostics_api_tests;
+mod openmetrics;
 mod runtime_observations;
+pub use openmetrics::{MAX_OPENMETRICS_BYTES, OPENMETRICS_CONTENT_TYPE, encode_openmetrics};
 
 #[cfg(test)]
 mod backup_restore_readiness_tests;
