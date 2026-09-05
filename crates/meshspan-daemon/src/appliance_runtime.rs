@@ -1332,6 +1332,18 @@ fn authenticated_administration_routes(
         open_authentication_authority(local_state, authority, Arc::clone(private_network), now)?,
         gateway,
     ))?;
+    let diagnostics = crate::metadata_diagnostics_api::router(
+        crate::metadata_diagnostics::MetadataDiagnosticsService::new(
+            open_authentication_authority(
+                local_state,
+                authority,
+                Arc::clone(private_network),
+                now,
+            )?,
+            gateway,
+            authority.clone(),
+        ),
+    )?;
     let export_service = Arc::new(crate::backup_export_service::BackupExportService::new(
         open_authentication_authority(local_state, authority, Arc::clone(private_network), now)?,
         gateway,
@@ -1358,6 +1370,7 @@ fn authenticated_administration_routes(
         .merge(backup)
         .merge(destinations)
         .merge(history)
+        .merge(diagnostics)
         .merge(export)
         .merge(readiness))
 }

@@ -238,8 +238,8 @@ pub use membership::{MembershipRestoreError, restore_member_incarnations};
 pub use meshspan_metadata::FederationRemoteAuthoritySnapshot;
 pub use metadata_authority::{
     ConsensusMessageTransport, MetadataAuthorityConfig, MetadataAuthorityHandle,
-    MetadataAuthorityRequestError, MetadataAuthorityRuntimeError, MetadataAuthorityStartError,
-    PeerConsensusMessage, spawn_metadata_authority,
+    MetadataAuthorityObservation, MetadataAuthorityRequestError, MetadataAuthorityRuntimeError,
+    MetadataAuthorityStartError, PeerConsensusMessage, spawn_metadata_authority,
 };
 pub use native_gateway_wire::{
     NativeGatewayWireError, decode_native_content_layout_chunk,

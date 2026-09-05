@@ -65,6 +65,10 @@ mod backup_schedule_administration;
 mod backup_schedule_api;
 #[cfg(test)]
 mod backup_schedule_api_tests;
+mod metadata_diagnostics;
+mod metadata_diagnostics_api;
+#[cfg(test)]
+mod metadata_diagnostics_api_tests;
 
 #[cfg(test)]
 mod backup_restore_readiness_tests;

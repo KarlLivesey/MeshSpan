@@ -3,6 +3,54 @@
 Status: **in progress**. Stage 11 has not started. Publication remains on hold
 pending the owner's dependency review.
 
+## Native metadata diagnostics
+
+`GET /api/latest/admin/diagnostics/metadata` collects a bounded, redacted local
+metadata snapshot through the ordinary system-manager API-key/session boundary.
+It returns an attachment containing daemon/mesh/node/partition identity, a local
+collection timestamp, before/after metadata revisions, configured nodes/targets
+and recent durable operation outcomes. Each inventory is limited to 100 records
+with explicit truncation. User-supplied names, paths, endpoints, actor identities,
+command inputs, result entities, credentials and file content are not projected.
+
+One fixed-size query to the existing metadata reactor adds its observed role,
+known leader, term, committed/applied positions, membership-plan identity and
+queued/pending work. It neither appends nor contacts peers. A full ingress queue,
+stopped owner or one-second timeout produces unavailable evidence, represented by
+`consensus: null`; no cached healthy result is substituted. Configured lifecycle
+is not reported as live reachability or target IO health, and a locally observed
+leader does not prove a live quorum. The sections are not one atomic swarm-wide
+read; revision bounds expose concurrent local application.
+
+Authentication precedes collection/input interpretation and is repeated with
+current time before output. Query/body input is rejected. The endpoint owns one
+diagnostic worker, a five-second response deadline and cooperative cancellation;
+the permit remains held until interrupted blocking work actually exits. It does
+not cap normal connections or affect foreground IO admission. Output is validated,
+bounded to 256 KiB and marked no-store. Rust OpenAPI generates the native Fetch
+method, Zod response schema and its independent response budget; ordinary JSON
+and error response budgets remain unchanged. No telemetry is sent elsewhere.
+
+Focused evidence so far: three reactor cases passed in **1.00 seconds**, three
+HTTP boundary/cancellation cases in **0.62 seconds**, two Rust contract cases in
+**0.03 seconds**, and four generated-client cases in **0.914 seconds** including
+the Vitest harness. Affected-crate all-target/all-feature Clippy passed in
+**10.47 seconds**, with the final changed-target pass in **12.45 seconds**.
+Web/tooling lint, TypeScript checking and generated-contract drift passed.
+The real two-daemon HTTPS operator cycle passed in **24.65
+seconds**, collecting and validating redacted snapshots from both gateways after
+create/join, storage registration, backup, users/groups, volume and file work.
+The final cycle, including diagnostics and file reads from the surviving gateway
+after killing the other daemon, passed in **25.32 seconds**. The complete local
+gate remains pending. These are real HTTPS/process tests, not browser, hardware
+or release artefact evidence.
+
+This is the metadata section of OPS-011, not completion of the full diagnostic
+bundle, local metric history/exporters, notification delivery or the operational
+dashboard. Live target health, runtime logs and the other operational sections
+still require implementation. No SQL schema, private wire message, dependency,
+release, tag, image or publication workflow is changed.
+
 ## Dependency-update admission
 
 `pnpm check:dependency-update` now runs Rust/JavaScript advisory checks before the
