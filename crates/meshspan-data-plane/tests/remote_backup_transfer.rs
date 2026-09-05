@@ -6,10 +6,10 @@ use std::error::Error;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use meshspan_backup::DirectoryBackupProvider;
+use meshspan_backup::{DirectoryBackupProvider, SharedBackupProvider};
 use meshspan_contracts::{
-    BackupDeleteRequest, BackupObjectIdentity, BackupReadRequest, BackupStoreRequest,
-    BackupVerifyRequest, ContractError, ContractVersion, RequestContext,
+    BackupDeleteRequest, BackupObjectIdentity, BackupProvider, BackupReadRequest,
+    BackupStoreRequest, BackupVerifyRequest, ContractError, ContractVersion, RequestContext,
 };
 use meshspan_data_plane::{
     BackupPlaneError, RemoteBackupAuthorisation, RemoteBackupAuthority, RemoteBackupRouter,
@@ -74,13 +74,27 @@ async fn real_mtls_stream_proves_exact_remote_backup_lifecycle() -> Result<(), B
         &certificates.server_certificate,
     )?;
 
-    let backups = RemoteBackupRouter::new([fixture.service(client_node)?], 16)?;
+    let local_provider = fixture.provider()?;
+    let service = RemoteBackupService::new(
+        local_provider.clone(),
+        TestAuthority { client_node },
+        fixture.mesh,
+        fixture.destination,
+        3,
+    )?;
+    let backups = RemoteBackupRouter::new([service], 16)?;
     assert_eq!(backups.destination_count(), 1);
     let mut router =
         RemoteDataRouter::<meshspan_storage::FolderShardStore, _, _>::new(None, Some(backups))?;
     tokio::try_join!(
         serve_lifecycle(&server_connection, &mut router, client_peer, limits),
-        prove_client_lifecycle(&client_connection, &fixture, client_node, limits),
+        prove_client_lifecycle(
+            &client_connection,
+            &fixture,
+            client_node,
+            limits,
+            local_provider
+        ),
     )?;
     client_connection.close(0_u32.into(), b"test complete");
     server_connection.close(0_u32.into(), b"test complete");
@@ -93,7 +107,7 @@ async fn serve_lifecycle(
     connection: &quinn::Connection,
     router: &mut RemoteDataRouter<
         meshspan_storage::FolderShardStore,
-        DirectoryBackupProvider,
+        SharedBackupProvider<DirectoryBackupProvider>,
         TestAuthority,
     >,
     peer: AuthenticatedPeer,
@@ -117,6 +131,7 @@ async fn prove_client_lifecycle(
     fixture: &Fixture,
     client_node: NodeId,
     limits: WireLimits,
+    mut local_provider: SharedBackupProvider<DirectoryBackupProvider>,
 ) -> Result<(), Box<dyn Error>> {
     let store = fixture.store_request(1)?;
     let mut rejected_source = fixture.payload.as_slice();
@@ -143,6 +158,10 @@ async fn prove_client_lifecycle(
         UnixMicros::new(10),
     )
     .await?;
+    let local_receipt = tokio::task::block_in_place(|| {
+        local_provider.store_exact(store, &mut fixture.payload.as_slice(), UnixMicros::new(10))
+    })?;
+    assert_eq!(stored, local_receipt);
     let verify = fixture.verify_request(3, stored.object_reference.clone())?;
     let verified = verify_backup(
         connection,
@@ -168,6 +187,13 @@ async fn prove_client_lifecycle(
     .await?;
     assert_eq!(destination, fixture.payload);
     assert_eq!(receipt.digest, fixture.object.digest);
+    tokio::task::block_in_place(|| -> Result<(), ContractError> {
+        let mut local_bytes = Vec::new();
+        let local_read = local_provider.read_exact(&read, &mut local_bytes, UnixMicros::new(11))?;
+        assert_eq!(local_bytes, fixture.payload);
+        assert_eq!(local_read, receipt);
+        Ok(())
+    })?;
 
     let delete = fixture.delete_request(4, stored.object_reference)?;
     delete_backup(
@@ -178,6 +204,10 @@ async fn prove_client_lifecycle(
         UnixMicros::new(10),
     )
     .await?;
+    assert_eq!(
+        tokio::task::block_in_place(|| local_provider.verify_exact(&verify, UnixMicros::new(12))),
+        Err(ContractError::NotFound)
+    );
     let missing = fixture.verify_request(5, delete.object_reference)?;
     assert!(matches!(
         verify_backup(
@@ -221,10 +251,7 @@ impl Fixture {
         })
     }
 
-    fn service(
-        &self,
-        client_node: NodeId,
-    ) -> Result<RemoteBackupService<DirectoryBackupProvider, TestAuthority>, Box<dyn Error>> {
+    fn provider(&self) -> Result<SharedBackupProvider<DirectoryBackupProvider>, Box<dyn Error>> {
         let storage_path = self.temporary.path().join("storage");
         fs::create_dir(&storage_path)?;
         let provider = DirectoryBackupProvider::open(
@@ -234,13 +261,7 @@ impl Fixture {
             1024 * 1024,
             UnixMicros::new(1),
         )?;
-        Ok(RemoteBackupService::new(
-            provider,
-            TestAuthority { client_node },
-            self.mesh,
-            self.destination,
-            3,
-        )?)
+        Ok(SharedBackupProvider::new(provider))
     }
 
     fn store_request(&self, operation: u8) -> Result<BackupStoreRequest, Box<dyn Error>> {

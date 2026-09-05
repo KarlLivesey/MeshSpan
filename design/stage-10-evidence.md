@@ -54,13 +54,36 @@ Local verification on 5 September 2026:
   not run by this gate. Hardware, power-loss, soak and release acceptance are not
   implied by this result. No release or image was published.
 
+## Shared local and remote destination ownership
+
+The local backup worker and incoming QUIC service now share one opened provider
+and catalogue per destination. The local resolver no longer opens a second
+exclusive file lock. Resolution binds destination, target and generation; the
+runtime stops retaining a route when its local target disappears, and does not
+reuse it after a target/path rebind. This is an in-process ownership change, not
+a persistence migration or an expansion of backup authority.
+
+The real mTLS/QUIC lifecycle test writes remotely, retries and reads through a
+local provider handle, deletes remotely and observes the deletion locally. The
+directory test reproduces the rejected second open, races exact retries through
+two shared handles, checks capacity and reopens after the final owner drops.
+The resolver test rejects substituted destinations, targets and generations.
+
+Local validation on 5 September 2026:
+
+- All 272 library tests in `meshspan-backup`, `meshspan-data-plane` and
+  `meshspan-daemon` passed. The daemon tests took 15.36 seconds and backup tests
+  0.76 seconds; these cases use the parallel Rust harness.
+- Warning-denied Clippy passed for those crates, all targets and all features.
+- The real mTLS/QUIC lifecycle passed locally. This proof is not a claim that
+  destination administration, retention or end-to-end disaster recovery is done.
+
 ## Remaining backup integration
 
 The schedule API does not close these separate outstanding requirements:
 
 - destination administration and automatic default policy selection;
 - one shared target capacity account for shards and backup destinations;
-- one shared provider owner for local jobs and incoming remote requests;
 - retention retirement and guarded physical reclamation;
 - product-facing restore-readiness, encrypted export and recovery workflows;
 - provider/federation destination implementations and their acceptance evidence.

@@ -3,7 +3,9 @@
 use std::cell::{Cell, RefCell};
 use std::io::{Read, Write};
 
-use meshspan_backup::{BackupFileEvidence, BackupSourceManifest, DirectoryBackupProvider};
+use meshspan_backup::{
+    BackupFileEvidence, BackupSourceManifest, DirectoryBackupProvider, SharedBackupProvider,
+};
 use meshspan_cluster::MetadataAuthorityRequestError;
 use meshspan_contracts::{
     BackupObjectReceipt, BackupProvider, BackupReadReceipt, BackupReadRequest, BackupStoreRequest,
@@ -111,7 +113,7 @@ fn resolving_writer_selects_provider_before_publication() -> Result<(), Box<dyn 
 }
 
 #[test]
-fn registered_target_resolver_opens_only_the_exact_generation()
+fn registered_target_resolver_shares_only_the_exact_destination_target_and_generation()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = Fixture::new()?;
     let directory = tempdir()?;
@@ -121,21 +123,27 @@ fn registered_target_resolver_opens_only_the_exact_generation()
         target_id,
         target_generation: 1,
     };
-    let mut resolver = RegisteredTargetBackupProviderResolver::new(
-        [RegisteredBackupTarget {
-            target_id,
-            target_generation: 1,
-            storage_path: std::fs::canonicalize(directory.path())?,
-            maximum_backup_bytes: 1_024,
-        }],
+    let shared = SharedBackupProvider::new(DirectoryBackupProvider::open(
+        directory.path(),
+        destination.destination_id,
+        1,
+        1_024,
         UnixMicros::new(1),
-    )?;
+    )?);
+    let mut resolver = RegisteredTargetBackupProviderResolver::new([RegisteredBackupTarget {
+        destination_id: destination.destination_id,
+        target_id,
+        target_generation: 1,
+        provider: shared.clone(),
+    }])?;
     let provider = resolver.resolve(&destination)?;
     assert_eq!(
         provider.describe().implementation_id,
         "meshspan-directory-backup"
     );
-    drop(provider);
+    // Both facades remain live; a resolver must not acquire a second file lock.
+    let second = resolver.resolve(&destination)?;
+    assert_eq!(provider.describe(), second.describe());
 
     let mut stale = destination;
     stale.binding = BackupDestinationBinding::RegisteredTarget {
@@ -145,6 +153,19 @@ fn registered_target_resolver_opens_only_the_exact_generation()
     assert!(matches!(
         resolver.resolve(&stale),
         Err(MetadataBackupProviderResolutionError::Stale)
+    ));
+    stale.binding = BackupDestinationBinding::RegisteredTarget {
+        target_id: meshspan_domain::TargetId::from_bytes([10; 16])?,
+        target_generation: 1,
+    };
+    assert!(matches!(
+        resolver.resolve(&stale),
+        Err(MetadataBackupProviderResolutionError::Stale)
+    ));
+    stale.destination_id = BackupDestinationId::from_bytes([11; 16])?;
+    assert!(matches!(
+        resolver.resolve(&stale),
+        Err(MetadataBackupProviderResolutionError::Unavailable)
     ));
     Ok(())
 }
