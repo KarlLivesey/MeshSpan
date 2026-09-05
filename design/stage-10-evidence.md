@@ -41,8 +41,12 @@ is claimed. Added request diagnostics leave errors fatal. A repeat passed in
 for the wider Stage 11 churn proof, not erased evidence.
 
 These are headless HTTP/DOM proofs, not a live-browser or released-artifact claim.
-The full local gate for this slice remains pending. No dependency, SQL schema,
-private protocol, release, tag, image or publication workflow changed.
+The complete NVM-default `MESHSPAN_CHECK_WORKERS=4 pnpm check` passed on `4a03236`
+in **684.38 seconds**: Rust workspace tests took 620.00 seconds and web tests took
+7.34 seconds. The new bundle build, generated drift, both licence checks,
+workspace Clippy, formatting, TypeScript/ESLint and scheduler checks all passed.
+No dependency, SQL schema, private protocol, release, tag, image or publication
+workflow changed.
 
 ## Automatic metadata-backup policy API
 
