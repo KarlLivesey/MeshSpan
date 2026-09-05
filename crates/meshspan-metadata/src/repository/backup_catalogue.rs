@@ -2,6 +2,7 @@
 
 //! Replicated metadata-backup destinations, generations and verified-copy evidence.
 
+mod failure;
 mod mutation;
 mod query;
 
@@ -78,7 +79,7 @@ pub enum BackupDestinationState {
     Retired,
 }
 
-/// One configured destination and its honest declared failure relationship.
+/// One configured destination and its current failure relationship.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BackupDestinationRecord {
     /// Stable destination identity.
@@ -89,9 +90,9 @@ pub struct BackupDestinationRecord {
     pub canonical_name: String,
     /// Exact provider binding and generation.
     pub binding: BackupDestinationBinding,
-    /// Declared relationship to source failure boundaries.
+    /// Current relationship to source failure boundaries; local targets are topology-derived.
     pub failure_relationship: BackupFailureRelationship,
-    /// Digest of separately inspectable failure evidence.
+    /// Evidence digest; local targets bind the topology and partition-membership revisions.
     pub failure_evidence_digest: [u8; 32],
     /// Current desired state.
     pub state: BackupDestinationState,

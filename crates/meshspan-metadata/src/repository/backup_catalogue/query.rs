@@ -49,7 +49,7 @@ pub(in crate::repository) fn destination(
     connection: &Connection,
     destination_id: BackupDestinationId,
 ) -> Result<Option<BackupDestinationRecord>, RepositoryError> {
-    connection
+    let record = connection
         .query_row(
             "SELECT destination_id, display_name, canonical_name, destination_kind, target_id,
                     remote_mesh_id, provider_instance_id, provider_generation,
@@ -58,8 +58,10 @@ pub(in crate::repository) fn destination(
             [destination_id.as_bytes().as_slice()],
             decode_destination,
         )
-        .optional()
-        .map_err(Into::into)
+        .optional()?;
+    record
+        .map(|record| super::failure::assess(connection, record))
+        .transpose()
 }
 
 pub(in crate::repository) fn copy(
@@ -126,6 +128,10 @@ pub(in crate::repository) fn destinations(
         destination_id: items[limit.get() - 1].destination_id,
     });
     items.truncate(limit.get());
+    let items = items
+        .into_iter()
+        .map(|record| super::failure::assess(connection, record))
+        .collect::<Result<_, _>>()?;
     Ok(Page { items, next })
 }
 

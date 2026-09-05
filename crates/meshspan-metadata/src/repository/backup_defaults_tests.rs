@@ -3,6 +3,9 @@
 use super::*;
 use crate::{ReconcileMetadataBackupDefaults, RepositoryError};
 
+#[path = "backup_failure_tests.rs"]
+mod failure;
+
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 #[test]
@@ -31,7 +34,7 @@ fn defaults_create_a_useful_single_target_schedule_once() -> TestResult {
     );
     assert_eq!(
         destinations.items[0].failure_relationship,
-        BackupFailureRelationship::Unknown
+        BackupFailureRelationship::Overlapping
     );
     assert_eq!(
         fixture.repository.metadata_backup_defaults_candidate()?,
@@ -257,7 +260,11 @@ fn defaults_prefer_separate_hosts_and_reconsider_shared_power_groups() -> TestRe
         assert!(expected.contains(&target_id));
         assert_eq!(
             destination.failure_relationship,
-            BackupFailureRelationship::Unknown
+            if target_id == fixture.target {
+                BackupFailureRelationship::Overlapping
+            } else {
+                BackupFailureRelationship::Unknown
+            }
         );
     }
     assert_eq!(
@@ -268,13 +275,24 @@ fn defaults_prefer_separate_hosts_and_reconsider_shared_power_groups() -> TestRe
 }
 
 fn add_host_target(fixture: &mut Fixture, identity: u8) -> TestResult {
-    use crate::{ActivateNode, ConsumeJoinGrant, IssueJoinGrant, JoinRoles};
+    add_host_target_with_roles(
+        fixture,
+        identity,
+        crate::JoinRoles::new(crate::JoinRoles::STORAGE)?,
+    )
+}
+
+fn add_host_target_with_roles(
+    fixture: &mut Fixture,
+    identity: u8,
+    roles: crate::JoinRoles,
+) -> TestResult {
+    use crate::{ActivateNode, ConsumeJoinGrant, IssueJoinGrant};
     use meshspan_domain::JoinGrantId;
 
     let join_grant_id = JoinGrantId::from_bytes([identity; 16])?;
     let host_id = HostId::from_bytes([identity; 16])?;
     let node_id = NodeId::from_bytes([identity; 16])?;
-    let roles = JoinRoles::new(JoinRoles::STORAGE)?;
     let private_endpoint = format!("backup-node-{identity}.meshspan.local:7443");
     apply(
         fixture,

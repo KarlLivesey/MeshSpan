@@ -117,7 +117,7 @@ fn configure_destination(
         &AuthoritativeCommand::ConfigureBackupDestination(ConfigureBackupDestination {
             destination_id: destination,
             expected_destination_revision: Revision::new(0),
-            name: RecordName::new("Independent backup folder")?,
+            name: RecordName::new("Backup folder with untrusted independence claim")?,
             binding: BackupDestinationBinding::RegisteredTarget {
                 target_id: fixture.target,
                 target_generation: 1,
@@ -206,7 +206,7 @@ fn record_and_verify_backup(
         .repository
         .metadata_backup_protection_evidence(backup)?;
     assert_eq!(evidence.verified_copies, 1);
-    assert_eq!(evidence.independent_copies, 1);
+    assert_eq!(evidence.independent_copies, 0);
     fixture.repository.apply_committed(
         LogPosition { index: 10, term: 1 },
         context(46, fixture.administrator, 47, 120, 9)?,
@@ -292,7 +292,7 @@ fn queue_and_claim(
             interval: DurationMicros::new(86_400_000_000),
             retained_generations: 3,
             minimum_verified_copies: 1,
-            minimum_independent_copies: 1,
+            minimum_independent_copies: 0,
             enabled: true,
             next_due_at: UnixMicros::new(32),
         }),
