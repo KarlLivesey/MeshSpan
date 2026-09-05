@@ -3463,6 +3463,7 @@ digest_simple_record!(
     RecordMetadataBackup,
     b"record-metadata-backup",
     |value, digest| {
+        digest.signed(value.source_created_at.get());
         digest.identifier(value.backup_id.as_bytes());
         digest.identifier(value.partition_id.as_bytes());
         digest.identifier(value.mesh_id.as_bytes());

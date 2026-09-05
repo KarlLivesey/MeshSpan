@@ -232,6 +232,8 @@ pub struct InitialBackupCopy {
 /// Exact encrypted partition backup admitted to the replicated catalogue.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecordMetadataBackup {
+    /// Capture time bound into the immutable source manifest, not publication/retry time.
+    pub source_created_at: UnixMicros,
     /// Stable backup identity.
     pub backup_id: BackupId,
     /// Source partition identity.

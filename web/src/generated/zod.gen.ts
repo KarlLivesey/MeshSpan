@@ -297,6 +297,47 @@ export const zAssignVolumeProtectionPolicyResponse = z
   .strict();
 
 /**
+ * BackupExportHeaders
+ *
+ * Headers binding a streamed encrypted container to authoritative catalogue evidence.
+ */
+export const zBackupExportHeaders = z
+  .strictObject({
+    "Content-Length": z
+      .string()
+      .min(1)
+      .max(19)
+      .regex(/^[1-9][0-9]*$/),
+    "MeshSpan-Backup-Digest": z
+      .string()
+      .length(71)
+      .regex(/^sha256:[0-9a-f]{64}$/),
+    "MeshSpan-Backup-ID": z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * BackupExportPath
+ *
+ * Exact native encrypted-export path. No provider path or private key is accepted.
+ */
+export const zBackupExportPath = z
+  .strictObject({
+    backup_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * BackupScheduleResponse
  *
  * Current backup schedule for the gateway's authoritative partition.
@@ -5927,6 +5968,22 @@ export const zConfigureBackupScheduleHeaders = z
  */
 export const zConfigureBackupScheduleResponse2 =
   zConfigureBackupScheduleResponse;
+
+export const zExportMetadataBackupPath = z
+  .object({
+    backup_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Exact encrypted container; completion requires verified bytes
+ */
+export const zExportMetadataBackupResponse = z.string();
 
 export const zListManualDnsTasksQuery = z
   .object({

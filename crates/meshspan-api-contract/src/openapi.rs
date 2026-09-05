@@ -130,6 +130,8 @@ fn components() -> Value {
             ),
             schema_request::<crate::ListBackupDestinationsQuery>("ListBackupDestinationsQuery"),
             schema_request::<crate::ListBackupRunsQuery>("ListBackupRunsQuery"),
+            schema_request::<crate::BackupExportPath>("BackupExportPath"),
+            schema_response::<crate::BackupExportHeaders>("BackupExportHeaders"),
             schema_response::<crate::ListBackupRunsResponse>("ListBackupRunsResponse"),
             schema_response::<crate::ListBackupDestinationsResponse>(
                 "ListBackupDestinationsResponse",
@@ -533,6 +535,10 @@ fn administration_paths() -> Vec<(String, Value)> {
             ("/admin/backups/schedule".to_owned(), backup_schedule_path()),
             ("/admin/backups/runs".to_owned(), backup_runs_path()),
             (
+                "/admin/backups/{backup_id}/export".to_owned(),
+                backup_export_path(),
+            ),
+            (
                 "/admin/backups/destinations".to_owned(),
                 backup_destinations_path(),
             ),
@@ -561,6 +567,40 @@ fn backup_runs_path() -> Value {
             "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
             "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
             "503": json_response("Authority temporarily unavailable", "#/components/schemas/ApiError")
+        }
+    } })
+}
+
+fn backup_export_path() -> Value {
+    let mut headers = response_headers();
+    if let Some(headers) = headers.as_object_mut() {
+        for name in [
+            "Content-Length",
+            "MeshSpan-Backup-ID",
+            "MeshSpan-Backup-Digest",
+        ] {
+            headers.insert(name.to_owned(), json!({
+                "required": true,
+                "schema": { "$ref": format!("#/components/schemas/BackupExportHeaders/properties/{name}") }
+            }));
+        }
+    }
+    json!({ "get": {
+        "operationId": "exportMetadataBackup",
+        "summary": "Stream one exact encrypted metadata-backup container",
+        "description": "Requires current system-manager authority. No query parameters, provider paths or recovery secrets are accepted. A successful header starts a transfer, not a completed backup or a restore-readiness proof. Clients must receive exactly Content-Length bytes and verify MeshSpan-Backup-Digest before retaining the download as complete. Provider or authority failure after headers terminates the stream. No ranges are supported. The daemon bounds transfer time and concurrent exports independently of ordinary connections.",
+        "x-meshspan-access": "system-manager",
+        "parameters": [{ "name": "backup_id", "in": "path", "required": true,
+            "schema": { "$ref": "#/components/schemas/BackupExportPath/properties/backup_id" } }],
+        "responses": {
+            "200": { "description": "Exact encrypted container; completion requires verified bytes", "headers": headers,
+                "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } },
+            "400": json_response("Invalid identifier or unsupported query", "#/components/schemas/ApiError"),
+            "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+            "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+            "409": json_response("Selected generation is not exportable", "#/components/schemas/ApiError"),
+            "500": json_response("Outgoing evidence failed validation", "#/components/schemas/ApiError"),
+            "503": json_response("Export capacity or authority unavailable", "#/components/schemas/ApiError")
         }
     } })
 }

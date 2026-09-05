@@ -135,6 +135,42 @@ pub(in crate::repository) fn destinations(
     Ok(Page { items, next })
 }
 
+pub(in crate::repository) fn copies(
+    connection: &Connection,
+    backup_id: BackupId,
+    after: Option<BackupDestinationCursor>,
+    limit: PageLimit,
+) -> Result<Page<BackupCopyRecord, BackupDestinationCursor>, RepositoryError> {
+    let lower = after.map_or([0; 16], |cursor| cursor.destination_id.as_bytes());
+    let fetch_limit =
+        i64::try_from(limit.get() + 1).map_err(|_| RepositoryError::InvalidPageLimit)?;
+    let mut statement = connection.prepare(
+        "SELECT backup_id, destination_id, provider_generation,
+        object_reference, byte_length, copy_digest, state, stored_at, verified_at, revision
+        FROM backup_copies WHERE backup_id = ?1 AND destination_id > ?2
+        ORDER BY destination_id LIMIT ?3",
+    )?;
+    let mut items = statement
+        .query_map(
+            params![
+                backup_id.as_bytes().as_slice(),
+                lower.as_slice(),
+                fetch_limit
+            ],
+            decode_copy,
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    let next = if items.len() > limit.get() {
+        items.truncate(limit.get());
+        items.last().map(|copy| BackupDestinationCursor {
+            destination_id: copy.destination_id,
+        })
+    } else {
+        None
+    };
+    Ok(Page { items, next })
+}
+
 fn decode_backup(row: &Row<'_>) -> rusqlite::Result<MetadataBackupRecord> {
     Ok(MetadataBackupRecord {
         backup_id: BackupId::from_bytes(blob16(row, 0)?).map_err(sql_decode_error)?,

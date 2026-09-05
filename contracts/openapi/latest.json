@@ -586,6 +586,58 @@
         "title": "AssignVolumeProtectionPolicyResponse",
         "type": "object"
       },
+      "BackupExportHeaders": {
+        "additionalProperties": false,
+        "description": "Headers binding a streamed encrypted container to authoritative catalogue evidence.",
+        "properties": {
+          "Content-Length": {
+            "description": "Exact encrypted-container length as a lossless decimal string.",
+            "maxLength": 19,
+            "minLength": 1,
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "MeshSpan-Backup-Digest": {
+            "description": "SHA-256 of the complete encrypted container, verified during streaming.",
+            "maxLength": 71,
+            "minLength": 71,
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "MeshSpan-Backup-ID": {
+            "description": "Exact generation; not a statement of current protection or restore readiness.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "MeshSpan-Backup-ID",
+          "Content-Length",
+          "MeshSpan-Backup-Digest"
+        ],
+        "title": "BackupExportHeaders",
+        "type": "object"
+      },
+      "BackupExportPath": {
+        "additionalProperties": false,
+        "description": "Exact native encrypted-export path. No provider path or private key is accepted.",
+        "properties": {
+          "backup_id": {
+            "description": "Backup generation selected from the administration history.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "backup_id"
+        ],
+        "title": "BackupExportPath",
+        "type": "object"
+      },
       "BackupScheduleResponse": {
         "additionalProperties": false,
         "description": "Current backup schedule for the gateway's authoritative partition.",
@@ -12570,6 +12622,227 @@
           }
         },
         "summary": "Replace the automatic metadata-backup policy using its observed sequence",
+        "x-meshspan-access": "system-manager"
+      }
+    },
+    "/admin/backups/{backup_id}/export": {
+      "get": {
+        "description": "Requires current system-manager authority. No query parameters, provider paths or recovery secrets are accepted. A successful header starts a transfer, not a completed backup or a restore-readiness proof. Clients must receive exactly Content-Length bytes and verify MeshSpan-Backup-Digest before retaining the download as complete. Provider or authority failure after headers terminates the stream. No ranges are supported. The daemon bounds transfer time and concurrent exports independently of ordinary connections.",
+        "operationId": "exportMetadataBackup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "backup_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/BackupExportPath/properties/backup_id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Exact encrypted container; completion requires verified bytes",
+            "headers": {
+              "Content-Length": {
+                "required": true,
+                "schema": {
+                  "$ref": "#/components/schemas/BackupExportHeaders/properties/Content-Length"
+                }
+              },
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-Backup-Digest": {
+                "required": true,
+                "schema": {
+                  "$ref": "#/components/schemas/BackupExportHeaders/properties/MeshSpan-Backup-Digest"
+                }
+              },
+              "MeshSpan-Backup-ID": {
+                "required": true,
+                "schema": {
+                  "$ref": "#/components/schemas/BackupExportHeaders/properties/MeshSpan-Backup-ID"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid identifier or unsupported query",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Selected generation is not exportable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing evidence failed validation",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Export capacity or authority unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Stream one exact encrypted metadata-backup container",
         "x-meshspan-access": "system-manager"
       }
     },

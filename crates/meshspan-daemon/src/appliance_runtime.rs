@@ -1317,7 +1317,7 @@ fn authenticated_administration_routes(
         gateway,
         now,
         private_network,
-        storage_targets,
+        Arc::clone(&storage_targets),
     )?;
     let backup = crate::backup_schedule_api_router(crate::BackupScheduleService::new(
         open_authentication_authority(local_state, authority, Arc::clone(private_network), now)?,
@@ -1331,11 +1331,52 @@ fn authenticated_administration_routes(
         open_authentication_authority(local_state, authority, Arc::clone(private_network), now)?,
         gateway,
     ))?;
+    let export = crate::backup_export_api_router(
+        crate::backup_export_service::BackupExportService::new(
+            open_authentication_authority(
+                local_state,
+                authority,
+                Arc::clone(private_network),
+                now,
+            )?,
+            gateway,
+            Arc::new(BackupExportTargetSnapshot(storage_targets)),
+            Arc::clone(private_network),
+        ),
+        std::thread::available_parallelism().unwrap_or(std::num::NonZeroUsize::MIN),
+        std::time::Duration::from_secs(3600),
+    )?;
     Ok(security
         .merge(resources)
         .merge(backup)
         .merge(destinations)
-        .merge(history))
+        .merge(history)
+        .merge(export))
+}
+
+// Clone only shared provider handles while holding the runtime lock. All export IO runs
+// after this snapshot is released, independently of registration and maintenance work.
+struct BackupExportTargetSnapshot(Arc<Mutex<StorageTargetRuntime>>);
+
+impl crate::backup_export_service::BackupExportProviders for BackupExportTargetSnapshot {
+    fn snapshot(&self) -> Result<Vec<crate::RegisteredBackupTarget>, crate::BackupExportError> {
+        let runtime = self
+            .0
+            .try_lock()
+            .map_err(|_| crate::BackupExportError::Unavailable)?;
+        Ok(runtime
+            .backup_services
+            .iter()
+            .map(
+                |((destination_id, generation), active)| crate::RegisteredBackupTarget {
+                    destination_id: *destination_id,
+                    target_id: active.target_id,
+                    target_generation: *generation,
+                    provider: active.provider.clone(),
+                },
+            )
+            .collect())
+    }
 }
 
 fn security_administration_routes(
@@ -3611,6 +3652,9 @@ pub enum DaemonProcessError {
     /// Backup schedule HTTP composition failed.
     #[error("backup schedule API construction failed")]
     BackupScheduleApi(#[from] crate::BackupScheduleApiError),
+    /// Encrypted backup export route construction failed.
+    #[error("backup export route construction failed")]
+    BackupExportApi(#[from] crate::BackupExportApiError),
     /// Backup destination routes could not be constructed.
     #[error("backup destination routes could not be constructed")]
     BackupDestinationApi(#[from] crate::BackupDestinationApiError),
