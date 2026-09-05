@@ -56,6 +56,42 @@ targets or test parallelism, so the repeated full gate retains useful failure
 details. These are real HTTPS/process tests, not browser, hardware
 or release artefact evidence.
 
+The second complete gate failed in **107.78 seconds**. Every static lane and
+the web suite passed; the Rust lane identified
+`membership_catches_up_when_every_old_phase_commit_notification_is_lost`, whose
+learner control endpoint remained connection-refused. Enhanced timeout evidence
+now includes the learner's bounded log and child exit status. The six-case
+process suite subsequently passed, as did three concurrent complete copies and
+20 focused repetitions; repetition alone did not establish a cause.
+
+A deterministic transport fault then established two real defects in the
+dedicated Stage 3 proof runtime (not the appliance metadata reactor):
+
+- Rejecting the first authenticated snapshot before installation stalled the
+  living learner indefinitely (**16.19-second failing proof**). Dispatch had
+  treated enqueue as delivery and discarded failed attempts.
+- Dropping the installation reply receiver before restore made the learner
+  exit after durable installation (**16.10-second failing proof**). A lost
+  response had incorrectly become a fatal configuration error.
+
+Snapshot delivery now retains one immutable image, observes actual transfer
+completion, retries failed/unqueued attempts with 200 ms backoff, and cancels
+obsolete IO after verified catch-up or membership retirement. Existing
+15-second operation deadlines and parallel test execution are unchanged. Lost
+installation replies do not undo durable state or terminate the learner.
+The added process case requires actual rejection/reply-loss markers on both
+learners, stable three-voter promotion, subsequent committed work on all nodes,
+and exact persisted membership after shutdown. Its first combined suite run
+also exposed a fixture ordering mistake: it stopped nodes while promotion was
+still at revision 4. The test now explicitly waits for stable epoch 5 before
+the final write/shutdown, keeping the exact revision-5 assertion.
+
+These faults reproduce the stalled-join symptom, but the original gate had no
+transfer-failure evidence; its precise initiating cause remains unconfirmed.
+The final seven-case real-process suite passed in **8.69 seconds** and
+all-target/all-feature cluster Clippy passed in **8.98 seconds**. Complete-gate
+validation of this fix is still pending.
+
 This is the metadata section of OPS-011, not completion of the full diagnostic
 bundle, local metric history/exporters, notification delivery or the operational
 dashboard. Live target health, runtime logs and the other operational sections

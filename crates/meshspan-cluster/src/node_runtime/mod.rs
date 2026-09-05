@@ -7,7 +7,9 @@ mod membership_runtime;
 mod network;
 mod proof_metadata;
 mod service;
+mod snapshot_delivery;
 mod test_plan_exit;
+mod test_snapshot_loss;
 
 use thiserror::Error;
 

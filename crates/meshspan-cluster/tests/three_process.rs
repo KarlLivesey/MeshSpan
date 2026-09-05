@@ -33,6 +33,42 @@ async fn membership_catches_up_when_every_old_phase_commit_notification_is_lost(
     prove_cluster_recovery(true).await
 }
 
+#[tokio::test]
+async fn learners_retry_rejected_snapshots_and_survive_lost_install_replies()
+-> Result<(), Box<dyn Error>> {
+    let temporary = TempDir::new()?;
+    let mut launches = build_launches(temporary.path())?;
+    for launch in &mut launches {
+        launch.reject_first_snapshot = true;
+        launch.lose_snapshot_install_reply = true;
+    }
+    let mut cluster = ProcessCluster::start(&launches)?;
+    establish_three_voters(&launches)
+        .await
+        .map_err(|error| cluster.with_process_status(error.as_ref()))?;
+    wait_for_plan_phase(&launches, 5, true).await?;
+    commit_on_nodes(&launches, 0, 6, 3).await?;
+    for launch in &launches[1..] {
+        assert_eq!(
+            fs::read_to_string(launch.state_path.with_extension("rejected-snapshot.marker"))?,
+            "rejected first authenticated snapshot before installation\n"
+        );
+        assert_eq!(
+            fs::read_to_string(
+                launch
+                    .state_path
+                    .with_extension("lost-snapshot-reply.marker")
+            )?,
+            "closed installation reply receiver before durable installation\n"
+        );
+    }
+    for number in 1_u8..=3 {
+        cluster.stop(number)?;
+    }
+    assert_promoted_membership(&launches)?;
+    Ok(())
+}
+
 async fn prove_cluster_recovery(drop_commits: bool) -> Result<(), Box<dyn Error>> {
     let temporary = TempDir::new()?;
     let mut launches = build_launches(temporary.path())?;
@@ -40,7 +76,9 @@ async fn prove_cluster_recovery(drop_commits: bool) -> Result<(), Box<dyn Error>
         launch.drop_commits = drop_commits;
     }
     let mut cluster = ProcessCluster::start(&launches)?;
-    establish_three_voters(&launches).await?;
+    establish_three_voters(&launches)
+        .await
+        .map_err(|error| cluster.with_process_status(error.as_ref()))?;
     for operation in 6_u8..=11 {
         commit_on_nodes(&launches, 0, operation, 3).await?;
     }
@@ -58,7 +96,9 @@ async fn prove_cluster_recovery(drop_commits: bool) -> Result<(), Box<dyn Error>
     abandon_response(launches[0].control_address, "PROPOSE 22").await?;
     wait_for_response(launches[1].control_address, "STATUS 22", Some("COMMITTED")).await?;
 
-    prove_leader_failover(&mut cluster, &launches).await?;
+    prove_leader_failover(&mut cluster, &launches)
+        .await
+        .map_err(|error| cluster.with_process_status(error.as_ref()))?;
     for number in 1_u8..=3 {
         cluster.stop(number)?;
     }
@@ -84,12 +124,7 @@ async fn prove_leader_failover(
         "ELECTION_STARTED"
     );
     wait_for_response(launches[1].control_address, "INFO", Some("LEADER")).await?;
-    wait_for_response(
-        launches[2].control_address,
-        "INFO",
-        Some("FOLLOWER_WITH_LEADER"),
-    )
-    .await?;
+    wait_for_node_response(&launches[2], "INFO", Some("FOLLOWER_WITH_LEADER")).await?;
     assert_eq!(
         command(launches[2].control_address, "PROPOSE 23").await?,
         "REDIRECT 2"
@@ -116,12 +151,7 @@ async fn establish_three_voters(launches: &[NodeLaunch]) -> Result<(), Box<dyn E
     for operation in [1_u8, 12, 2, 3] {
         commit_on_nodes(launches, 0, operation, 1).await?;
     }
-    wait_for_response(
-        launches[1].control_address,
-        "INFO",
-        Some("FOLLOWER_WITH_LEADER"),
-    )
-    .await?;
+    wait_for_node_response(&launches[1], "INFO", Some("FOLLOWER_WITH_LEADER")).await?;
     for operation in [1_u8, 12, 2, 3] {
         wait_for_node_response(
             &launches[1],
@@ -133,12 +163,7 @@ async fn establish_three_voters(launches: &[NodeLaunch]) -> Result<(), Box<dyn E
     for operation in 4_u8..=5 {
         commit_on_nodes(launches, 0, operation, 2).await?;
     }
-    wait_for_response(
-        launches[2].control_address,
-        "INFO",
-        Some("FOLLOWER_WITH_LEADER"),
-    )
-    .await?;
+    wait_for_node_response(&launches[2], "INFO", Some("FOLLOWER_WITH_LEADER")).await?;
     for operation in [1_u8, 12, 2, 3, 4, 5] {
         wait_for_node_response(
             &launches[2],
@@ -383,6 +408,8 @@ fn assert_promoted_membership(launches: &[NodeLaunch]) -> Result<(), Box<dyn Err
 
 struct NodeLaunch {
     drop_commits: bool,
+    reject_first_snapshot: bool,
+    lose_snapshot_install_reply: bool,
     number: u8,
     quic_address: SocketAddr,
     control_address: SocketAddr,
@@ -404,6 +431,15 @@ struct ProcessCluster {
 }
 
 impl ProcessCluster {
+    fn with_process_status(&mut self, error: &dyn Error) -> Box<dyn Error> {
+        let processes = self
+            .nodes
+            .iter_mut()
+            .map(|node| (node.number, node.child.try_wait()))
+            .collect::<Vec<_>>();
+        format!("{error}; child exit observations={processes:?}").into()
+    }
+
     fn start(launches: &[NodeLaunch]) -> Result<Self, Box<dyn Error>> {
         Self::start_count(launches, launches.len())
     }
@@ -503,6 +539,12 @@ fn spawn_node(launch: &NodeLaunch) -> Result<RunningNode, Box<dyn Error>> {
     if launch.drop_commits {
         command.env("MESHSPAN_TEST_DROP_MEMBERSHIP_COMMITS", "true");
     }
+    if launch.reject_first_snapshot {
+        command.env("MESHSPAN_TEST_REJECT_FIRST_SNAPSHOT", "true");
+    }
+    if launch.lose_snapshot_install_reply {
+        command.env("MESHSPAN_TEST_LOSE_SNAPSHOT_INSTALL_REPLY", "true");
+    }
     let child = command
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(error_log))
@@ -547,6 +589,8 @@ fn build_launches_with_exit(
             let index = usize::from(number - 1);
             NodeLaunch {
                 drop_commits: false,
+                reject_first_snapshot: false,
+                lose_snapshot_install_reply: false,
                 number,
                 quic_address: quic_addresses[index],
                 control_address: control_addresses[index],
