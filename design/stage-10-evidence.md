@@ -257,9 +257,15 @@ Local evidence for this slice:
 - The real two-daemon clean-machine HTTPS cycle passed in 12.96 seconds. Before
   any destination API mutation, it checks that the enabled daily policy and
   active automatic destinations appear through the public API.
-- Affected all-target/all-feature Clippy passed in 11.31 seconds before the final
-  atomicity/query-plan additions; the complete local gate is still to be run on
-  the final tree.
+- The production selection query-plan check passed in 0.26 seconds. Correlated
+  identity/overlap lookups use indexes; ranking requires a top-one ordering step
+  over eligible inventory, at most three times per configuration reconciliation.
+- The complete NVM-default `pnpm check` passed on the final implementation in
+  **551.45 seconds** with four workers. Rust workspace tests took 510.99 seconds,
+  web tests 4.78 seconds and workspace Clippy 22.79 seconds. Both licence gates,
+  formatting, TypeScript/ESLint and generated-contract drift also passed. This
+  run was slower than the preceding retention gate; no test-speed improvement is
+  claimed. Hardware/soak and opt-in SMB-image proofs remain separate.
 
 ## Remaining backup integration
 
