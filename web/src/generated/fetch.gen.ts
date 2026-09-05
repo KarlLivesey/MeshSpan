@@ -43,6 +43,9 @@ import type {
   CreateVolumeRequest,
   CreateVolumeResponse,
   CertificateStatusResponse,
+  BackupScheduleResponse,
+  ConfigureBackupScheduleRequest,
+  ConfigureBackupScheduleResponse,
   CurrentSessionResponse,
   DeleteObjectRequest,
   DeleteObjectResponse,
@@ -144,6 +147,9 @@ import {
   zDeleteObjectPath,
   zDeleteObjectResponse2,
   zGetCertificateStatusResponse,
+  zGetBackupScheduleResponse,
+  zConfigureBackupScheduleBody,
+  zConfigureBackupScheduleResponse2,
   zGetCurrentSessionResponse,
   zGetHealthResponse,
   zGetObjectPath,
@@ -415,6 +421,11 @@ export interface MeshSpanFetchClient {
     request: ProvisionCertificateRequest,
     csrfToken?: string,
   ): Promise<ProvisionCertificateResponse>;
+  getBackupSchedule(): Promise<BackupScheduleResponse>;
+  configureBackupSchedule(
+    request: ConfigureBackupScheduleRequest,
+    csrfToken?: string,
+  ): Promise<ConfigureBackupScheduleResponse>;
   addGroupMember(
     groupId: string,
     request: AddGroupMemberRequest,
@@ -851,6 +862,30 @@ export function createMeshSpanFetchClient(
           method: "POST",
         },
         zProvisionCertificateResponse2,
+      );
+    },
+    async getBackupSchedule(): Promise<BackupScheduleResponse> {
+      return requestJson(
+        context,
+        "/admin/backups/schedule",
+        { method: "GET" },
+        zGetBackupScheduleResponse,
+      );
+    },
+    async configureBackupSchedule(
+      request,
+      csrfToken,
+    ): Promise<ConfigureBackupScheduleResponse> {
+      const body = zConfigureBackupScheduleBody.parse(request);
+      return requestJson(
+        context,
+        "/admin/backups/schedule",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "PUT",
+        },
+        zConfigureBackupScheduleResponse2,
       );
     },
     async addGroupMember(

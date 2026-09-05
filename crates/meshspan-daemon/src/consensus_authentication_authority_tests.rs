@@ -37,6 +37,9 @@ use crate::{
     StoragePermitLoadingService, VolumeAdministrationAuthority, VolumeKeyLoadingService,
 };
 
+#[path = "backup_schedule_service_tests.rs"]
+mod backup_schedule;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn authentication_reads_and_session_mutation_share_committed_consensus_state()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -143,10 +146,15 @@ struct RunningAuthority {
 
 impl RunningAuthority {
     async fn start() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::start_with_partition(PartitionId::from_bytes([2; 16])?).await
+    }
+
+    async fn start_with_partition(
+        partition_id: PartitionId,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let database_path = directory.path().join("partition.sqlite3");
         let node_id = NodeId::from_bytes([1; 16])?;
-        let partition_id = PartitionId::from_bytes([2; 16])?;
         let plan = compile_plan(flat_plan(
             QuorumPlanId::from_bytes([3; 16])?,
             1,

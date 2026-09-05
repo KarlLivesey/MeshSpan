@@ -115,6 +115,13 @@ fn components() -> Value {
     let schemas = Map::from_iter(
         [
             schema_response::<ApiError>("ApiError"),
+            schema_request::<crate::ConfigureBackupScheduleRequest>(
+                "ConfigureBackupScheduleRequest",
+            ),
+            schema_response::<crate::ConfigureBackupScheduleResponse>(
+                "ConfigureBackupScheduleResponse",
+            ),
+            schema_response::<crate::BackupScheduleResponse>("BackupScheduleResponse"),
             schema_request::<AbortUploadRequest>("AbortUploadRequest"),
             schema_response::<AbortUploadResponse>("AbortUploadResponse"),
             schema_request::<AddGroupMemberRequest>("AddGroupMemberRequest"),
@@ -511,12 +518,49 @@ fn administration_paths() -> Vec<(String, Value)> {
                 manual_dns_tasks_path(),
             ),
             ("/admin/storage-drains".to_owned(), storage_drains_path()),
+            ("/admin/backups/schedule".to_owned(), backup_schedule_path()),
             (
                 "/admin/storage-drains/{drain_id}".to_owned(),
                 storage_drain_status_path(),
             ),
         ])
         .collect()
+}
+
+fn backup_schedule_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "getBackupSchedule",
+            "summary": "Read the current automatic metadata-backup policy",
+            "x-meshspan-access": "system-manager",
+            "responses": {
+                "200": json_response("Current policy, or null before configuration", "#/components/schemas/BackupScheduleResponse"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        },
+        "put": {
+            "operationId": "configureBackupSchedule",
+            "summary": "Replace the automatic metadata-backup policy using its observed sequence",
+            "description": "Configuration is replicated and audited. An enabled policy is immediately eligible for its next attempt. A configuration receipt does not claim that backup copies exist or meet protection thresholds. Exact retries return the original receipt, even after later policy changes.",
+            "x-meshspan-access": "system-manager",
+            "parameters": [optional_csrf_parameter()],
+            "requestBody": json_request("Complete policy and exact-retry identity", "#/components/schemas/ConfigureBackupScheduleRequest"),
+            "responses": {
+                "200": json_response("Original committed configuration receipt", "#/components/schemas/ConfigureBackupScheduleResponse"),
+                "400": json_response("Invalid policy", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "409": json_response("Changed retry or stale policy sequence", "#/components/schemas/ApiError"),
+                "413": json_response("Request body exceeds its bound", "#/components/schemas/ApiError"),
+                "415": json_response("JSON content type required", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn certificate_status_path() -> Value {

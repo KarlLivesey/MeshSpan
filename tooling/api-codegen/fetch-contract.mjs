@@ -91,6 +91,11 @@ function readAuthenticationRoutes(operations) {
 
 function readAdministrationRoutes(operations) {
   return {
+    getBackupSchedule: requireOperation(operations, "getBackupSchedule"),
+    configureBackupSchedule: requireOperation(
+      operations,
+      "configureBackupSchedule",
+    ),
     addGroupMember: requireOperation(operations, "addGroupMember"),
     createGroup: requireOperation(operations, "createGroup"),
     createFaultGroup: requireOperation(operations, "createFaultGroup"),

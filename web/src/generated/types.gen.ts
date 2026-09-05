@@ -297,6 +297,56 @@ export type AssignVolumeProtectionPolicyResponse = {
 };
 
 /**
+ * BackupScheduleResponse
+ *
+ * Current backup schedule for the gateway's authoritative partition.
+ */
+export type BackupScheduleResponse = {
+  /**
+   * Exact partition whose policy is returned.
+   */
+  partition_id: string;
+  /**
+   * Explicitly null until the first policy is configured.
+   */
+  schedule: {
+    /**
+     * Next eligible attempt time; an unfinished run can delay it.
+     */
+    next_due_at_epoch_micros: number;
+    /**
+     * Complete desired policy.
+     */
+    policy: {
+      /**
+       * Whether automatic backup attempts are enabled.
+       */
+      enabled: boolean;
+      /**
+       * Delay between completed attempts, in seconds.
+       */
+      interval_seconds: number;
+      /**
+       * Required independent copies; cannot exceed the verified-copy threshold.
+       */
+      minimum_independent_copies: number;
+      /**
+       * Verified destination copies required before reporting protection.
+       */
+      minimum_verified_copies: number;
+      /**
+       * Number of newest usable generations to retain.
+       */
+      retained_generations: number;
+    };
+    /**
+     * Immutable configuration sequence used for compare-and-swap updates.
+     */
+    sequence: number;
+  } | null;
+};
+
+/**
  * BeginStorageDrainRequest
  *
  * Exact-retry request to start one safe storage drain.
@@ -767,6 +817,67 @@ export type CommitUploadResponse = {
      */
     volume_id: string;
   };
+};
+
+/**
+ * ConfigureBackupScheduleRequest
+ *
+ * Exact-retry replacement of the current partition backup policy.
+ */
+export type ConfigureBackupScheduleRequest = {
+  /**
+   * Observed policy sequence; zero creates the first policy.
+   */
+  expected_sequence: number;
+  /**
+   * Stable logical operation identity, retained across retries.
+   */
+  operation_id: string;
+  /**
+   * Complete desired policy; omission never silently resets a field.
+   */
+  policy: {
+    /**
+     * Whether automatic backup attempts are enabled.
+     */
+    enabled: boolean;
+    /**
+     * Delay between completed attempts, in seconds.
+     */
+    interval_seconds: number;
+    /**
+     * Required independent copies; cannot exceed the verified-copy threshold.
+     */
+    minimum_independent_copies: number;
+    /**
+     * Verified destination copies required before reporting protection.
+     */
+    minimum_verified_copies: number;
+    /**
+     * Number of newest usable generations to retain.
+     */
+    retained_generations: number;
+  };
+};
+
+/**
+ * ConfigureBackupScheduleResponse
+ *
+ * Original durable configuration receipt, including when a later policy supersedes it.
+ */
+export type ConfigureBackupScheduleResponse = {
+  /**
+   * Original committed metadata revision.
+   */
+  committed_revision: number;
+  /**
+   * Original logical operation identity.
+   */
+  operation_id: string;
+  /**
+   * Immutable policy sequence created by this operation.
+   */
+  sequence: number;
 };
 
 /**
@@ -5170,6 +5281,109 @@ export type CreateAcknowledgementPolicyResponses = {
 
 export type CreateAcknowledgementPolicyResponse2 =
   CreateAcknowledgementPolicyResponses[keyof CreateAcknowledgementPolicyResponses];
+
+export type GetBackupScheduleData = {
+  body?: never;
+  path?: never;
+  query?: never;
+  url: "/admin/backups/schedule";
+};
+
+export type GetBackupScheduleErrors = {
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type GetBackupScheduleError =
+  GetBackupScheduleErrors[keyof GetBackupScheduleErrors];
+
+export type GetBackupScheduleResponses = {
+  /**
+   * Current policy, or null before configuration
+   */
+  200: BackupScheduleResponse;
+};
+
+export type GetBackupScheduleResponse =
+  GetBackupScheduleResponses[keyof GetBackupScheduleResponses];
+
+export type ConfigureBackupScheduleData = {
+  /**
+   * Complete policy and exact-retry identity
+   */
+  body: ConfigureBackupScheduleRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/admin/backups/schedule";
+};
+
+export type ConfigureBackupScheduleErrors = {
+  /**
+   * Invalid policy
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Changed retry or stale policy sequence
+   */
+  409: ApiError;
+  /**
+   * Request body exceeds its bound
+   */
+  413: ApiError;
+  /**
+   * JSON content type required
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ConfigureBackupScheduleError =
+  ConfigureBackupScheduleErrors[keyof ConfigureBackupScheduleErrors];
+
+export type ConfigureBackupScheduleResponses = {
+  /**
+   * Original committed configuration receipt
+   */
+  200: ConfigureBackupScheduleResponse;
+};
+
+export type ConfigureBackupScheduleResponse2 =
+  ConfigureBackupScheduleResponses[keyof ConfigureBackupScheduleResponses];
 
 export type ListManualDnsTasksData = {
   body?: never;

@@ -10,6 +10,7 @@ import {
   writeAtomically,
 } from "./fetch-contract.mjs";
 import { renderUploadClientMethods } from "./render-upload-client.mjs";
+import { renderBackupScheduleClientMethods } from "./render-backup-schedule-client.mjs";
 import { renderNamespaceMutationClientMethods } from "./render-namespace-mutation-client.mjs";
 import { renderFetchRuntime } from "./render-fetch-runtime.mjs";
 import {
@@ -114,6 +115,9 @@ import type {
   CreateVolumeRequest,
   CreateVolumeResponse,
   CertificateStatusResponse,
+  BackupScheduleResponse,
+  ConfigureBackupScheduleRequest,
+  ConfigureBackupScheduleResponse,
   CurrentSessionResponse,
   DeleteObjectRequest,
   DeleteObjectResponse,
@@ -215,6 +219,9 @@ import {
   zDeleteObjectPath,
   zDeleteObjectResponse2,
   zGetCertificateStatusResponse,
+  zGetBackupScheduleResponse,
+  zConfigureBackupScheduleBody,
+  zConfigureBackupScheduleResponse2,
   zGetCurrentSessionResponse,
   zGetHealthResponse,
   zGetObjectPath,
@@ -362,6 +369,7 @@ export function createMeshSpanFetchClient(
   return {
     ${renderAuthenticationClientMethods(routes)}
     ${renderCertificateClientMethods(routes)}
+    ${renderBackupScheduleClientMethods(routes)}
     ${renderIdentityAdministrationClientMethods(routes)}
     ${renderNamespaceMutationClientMethods(routes)}
     ${renderUploadClientMethods(routes)}

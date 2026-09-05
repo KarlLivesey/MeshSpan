@@ -1311,7 +1311,11 @@ fn authenticated_administration_routes(
         private_network,
         storage_targets,
     )?;
-    Ok(security.merge(resources))
+    let backup = crate::backup_schedule_api_router(crate::BackupScheduleService::new(
+        open_authentication_authority(local_state, authority, Arc::clone(private_network), now)?,
+        gateway,
+    ))?;
+    Ok(security.merge(resources).merge(backup))
 }
 
 fn security_administration_routes(
@@ -3531,6 +3535,9 @@ pub enum DaemonProcessError {
     /// Manager-only certificate-provisioning API construction failed.
     #[error("daemon certificate-provisioning API failed")]
     CertificateProvisioningApi(#[from] CertificateProvisioningApiError),
+    /// Backup schedule HTTP composition failed.
+    #[error("backup schedule API construction failed")]
+    BackupScheduleApi(#[from] crate::BackupScheduleApiError),
     /// API-key-only external certificate publisher API construction failed.
     #[error("daemon external certificate publisher API failed")]
     ExternalCertificatePublisherApi(#[from] ExternalCertificatePublisherApiError),
