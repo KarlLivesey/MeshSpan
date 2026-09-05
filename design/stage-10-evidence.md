@@ -411,6 +411,46 @@ passed on `ad592f2` in **585.84 seconds**, including Rust workspace tests
 formatting and generated-contract drift. Existing opt-in SMB container and
 hardware/soak proofs remain separate; no release or image was produced.
 
+### Recovery of empty unpublished backup reservations
+
+A real-folder regression reproduced a short upload whose temporary bytes were
+removed but whose shared target reservation survived provider restart. A new
+shard reservation still failed with `ResourceExhausted` (0.07 seconds).
+
+The directory provider now reconciles pending capacity on attachment and before
+another store. It holds exclusive destination ownership, removes only recognised
+unpublished staging, checks the exact catalogue identity and confirms absence of
+the published pathname before cancelling a hold. Directory synchronisation
+precedes cancellation. Existing files, dangling symlinks, other entries and
+catalogue evidence keep their charge. No lease timeout grants permission to free
+space or delete published bytes.
+
+The internal accounting contract exposes bounded, destination/generation-bound
+pages and exact unpublished cancellation. The target journal atomically removes
+only held reservations and their reserved-byte charge; stored and retired rows
+cannot be cancelled. Cancellation does not create a retirement tombstone: an
+exact retry must obtain fresh admission, while genuinely retired objects remain
+fenced. This is an in-process capability, not a new public or private RPC. No
+dependency or database migration was added.
+
+Seven real-folder capacity cases passed in 0.40 seconds, including restart,
+recovery before another upload, retained publication-without-catalogue bytes and
+exact retry. Six journal cases passed in 0.06 seconds, including 64-item paging,
+changed identity, stored/retired rejection and transactional fault rollback.
+The full backup/storage library suites passed (12 tests in 0.77 seconds and 30
+tests in 1.08 seconds). Affected all-target/all-feature Clippy passed in 20.53
+seconds, then 4.57 seconds after the final integration cases. The complete
+NVM-default `MESHSPAN_CHECK_WORKERS=4 pnpm check` passed on `953b47d` in
+**619.68 seconds**: Rust workspace tests took 575.63 seconds and web tests took
+5.33 seconds. Workspace Clippy, both licence gates, formatting, type checking and
+generated-contract drift passed. Existing opt-in SMB container and hardware/soak
+proofs remain separate; no release or image was produced.
+
+An unindexed published object deliberately keeps its charge and is recoverable
+by exact retry; this is not a claim that an abandoned published generation may be
+removed without authoritative retirement. That remaining interruption-recovery
+path is tracked below.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in
@@ -422,7 +462,7 @@ or image was produced; hardware/soak and opt-in SMB-image proofs remain separate
 The schedule API does not close these separate outstanding requirements:
 
 - remote/provider failure-assessment integration;
-- automatic resolution of abandoned unpublished backup holds;
+- authoritative recovery/retirement of abandoned published-but-unindexed backup objects;
 - product-facing restore-readiness, encrypted export and recovery workflows;
 - provider/federation destination implementations and their acceptance evidence.
 

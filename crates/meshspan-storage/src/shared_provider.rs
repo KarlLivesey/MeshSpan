@@ -17,6 +17,22 @@ use crate::{FolderShardStore, FolderShardStoreError};
 impl<P: StorageProvider + meshspan_contracts::BackupCapacityBudget>
     meshspan_contracts::BackupCapacityBudget for SharedStorageProvider<P>
 {
+    fn pending_holds(
+        &self,
+        destination: meshspan_domain::BackupDestinationId,
+        generation: u64,
+        after: Option<meshspan_domain::BackupId>,
+    ) -> Result<Vec<meshspan_contracts::BackupObjectIdentity>, ContractError> {
+        self.lock()?.pending_holds(destination, generation, after)
+    }
+
+    fn cancel_unpublished(
+        &mut self,
+        object: meshspan_contracts::BackupObjectIdentity,
+    ) -> Result<(), ContractError> {
+        self.lock()?.cancel_unpublished(object)
+    }
+
     fn reserve(
         &mut self,
         object: meshspan_contracts::BackupObjectIdentity,

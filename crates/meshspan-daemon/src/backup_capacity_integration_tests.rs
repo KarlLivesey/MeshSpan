@@ -25,6 +25,107 @@ type Target = SharedStorageProvider<FolderShardStore>;
 const PAYLOAD: &[u8] = b"six hundred is not needed: exact bytes suffice";
 
 #[test]
+fn restart_releases_abandoned_backup_hold_only_after_proving_no_published_bytes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let mut target = target(directory.path(), PAYLOAD.len() as u64)?;
+    let mut provider =
+        backup(directory.path(), 3)?.with_capacity_budget(Box::new(target.clone()))?;
+    assert_eq!(
+        provider.store_exact(
+            request(3, 40)?,
+            &mut Cursor::new(b"short"),
+            UnixMicros::new(2)
+        ),
+        Err(ContractError::Corrupt)
+    );
+    drop(provider);
+    assert_eq!(
+        StorageProvider::reserve(&mut target, shard_request(41, 1)?),
+        Err(ContractError::ResourceExhausted)
+    );
+    let _recovered = backup(directory.path(), 3)?.with_capacity_budget(Box::new(target.clone()))?;
+    StorageProvider::reserve(&mut target, shard_request(42, PAYLOAD.len() as u64)?)?;
+    assert_eq!(
+        StorageProvider::reserve(&mut target, shard_request(43, 1)?),
+        Err(ContractError::ResourceExhausted)
+    );
+    Ok(())
+}
+
+#[test]
+fn next_upload_recovers_empty_holds_without_restarting_the_daemon()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let target = target(directory.path(), PAYLOAD.len() as u64)?;
+    let mut provider = backup(directory.path(), 3)?.with_capacity_budget(Box::new(target))?;
+    assert_eq!(
+        provider.store_exact(
+            request(3, 44)?,
+            &mut Cursor::new(b"short"),
+            UnixMicros::new(2)
+        ),
+        Err(ContractError::Corrupt)
+    );
+    let request = request(3, 45)?;
+    assert_eq!(
+        provider
+            .store_exact(request, &mut Cursor::new(PAYLOAD), UnixMicros::new(3))?
+            .object,
+        request.object
+    );
+    Ok(())
+}
+
+#[test]
+fn published_file_without_catalogue_retains_its_hold_and_recovers_by_exact_retry()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let mut target = target(directory.path(), PAYLOAD.len() as u64)?;
+    let request = request(3, 46)?;
+    let provider = backup(directory.path(), 3)?;
+    drop(provider);
+    BackupCapacityBudget::reserve(&mut target, request.object)?;
+    // Model the exact crash boundary after file publication but before catalogue commit.
+    let objects = directory
+        .path()
+        .join("storage/.meshspan-backups")
+        .join(format!(
+            "{:032x}",
+            u128::from_be_bytes(request.object.destination_id.as_bytes())
+        ))
+        .join("objects");
+    let reference = format!(
+        "backup-{:032x}.msb",
+        u128::from_be_bytes(request.object.backup_id.as_bytes())
+    );
+    std::fs::write(objects.join(&reference), PAYLOAD)?;
+    std::fs::File::open(objects.join(&reference))?.sync_all()?;
+    std::fs::File::open(objects)?.sync_all()?;
+    let mut recovered =
+        backup(directory.path(), 3)?.with_capacity_budget(Box::new(target.clone()))?;
+    assert_eq!(
+        StorageProvider::reserve(&mut target, shard_request(47, 1)?),
+        Err(ContractError::ResourceExhausted)
+    );
+    let stored = recovered.store_exact(request, &mut Cursor::new(PAYLOAD), UnixMicros::new(3))?;
+    assert_eq!(stored.object, request.object);
+    assert_eq!(stored.object_reference.as_str(), reference);
+    let mut output = Vec::new();
+    recovered.read_exact(
+        &meshspan_contracts::BackupReadRequest {
+            context: context(48)?,
+            object: request.object,
+            object_reference: stored.object_reference,
+        },
+        &mut output,
+        UnixMicros::new(4),
+    )?;
+    assert_eq!(output, PAYLOAD);
+    Ok(())
+}
+
+#[test]
 fn deletion_retry_recovers_capacity_release_interrupted_after_provider_commit()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
@@ -66,6 +167,17 @@ fn deletion_retry_recovers_capacity_release_interrupted_after_provider_commit()
 struct FailRelease(Target);
 
 impl BackupCapacityBudget for FailRelease {
+    fn pending_holds(
+        &self,
+        destination: BackupDestinationId,
+        generation: u64,
+        after: Option<BackupId>,
+    ) -> Result<Vec<BackupObjectIdentity>, ContractError> {
+        self.0.pending_holds(destination, generation, after)
+    }
+    fn cancel_unpublished(&mut self, object: BackupObjectIdentity) -> Result<(), ContractError> {
+        self.0.cancel_unpublished(object)
+    }
     fn reserve(&mut self, object: BackupObjectIdentity) -> Result<(), ContractError> {
         BackupCapacityBudget::reserve(&mut self.0, object)
     }
