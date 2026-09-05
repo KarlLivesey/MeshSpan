@@ -178,6 +178,7 @@ mod metadata_backup_completion_tests;
 mod metadata_backup_coordinator;
 #[cfg(test)]
 mod metadata_backup_coordinator_tests;
+mod metadata_backup_defaults;
 mod metadata_backup_dispatcher;
 #[cfg(test)]
 mod metadata_backup_dispatcher_tests;

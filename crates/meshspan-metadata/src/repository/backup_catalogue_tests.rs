@@ -6,6 +6,8 @@ use meshspan_domain::{
 };
 use sha2::{Digest, Sha256};
 
+#[path = "backup_defaults_tests.rs"]
+mod defaults;
 #[path = "backup_destination_tests.rs"]
 mod destination_administration;
 #[path = "backup_retention_tests.rs"]

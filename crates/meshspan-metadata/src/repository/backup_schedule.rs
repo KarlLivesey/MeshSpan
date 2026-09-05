@@ -76,6 +76,9 @@ pub(super) fn configure(
         revision,
         current,
     )?;
+    transaction.execute("UPDATE metadata_backup_schedule_heads SET configuration_origin = 2 WHERE partition_id = ?1",
+        [partition_id.as_bytes().as_slice()])?;
+    super::backup_defaults::invalidate(transaction, revision)?;
     Ok(EntityReference {
         kind: EntityKind::MetadataBackupSchedule,
         id: partition_id.as_bytes(),

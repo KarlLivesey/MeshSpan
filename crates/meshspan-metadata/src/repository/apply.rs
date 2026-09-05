@@ -10,16 +10,16 @@ use super::receipt::{decode_receipt, encode_result, result_digest, validate_posi
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError,
     acknowledgement_policy, acme, authentication_method, authentication_method_creation,
-    authentication_policy, availability_cell, backup_catalogue, backup_reclamation,
-    backup_retention, backup_run, backup_schedule, bootstrap, cleanup_attestation,
-    cleanup_completion, cleanup_inventory, cleanup_permit, cleanup_reclamation, cluster, component,
-    external_certificate, federation_actor_attestation, federation_assignment, federation_grant,
-    federation_mutation_admission, federation_quarantine, federation_relationship,
-    federation_storage_allocation, federation_succession, identity, locality_policy,
-    maintenance_work, manual_dns_task, mesh_local_certificate, namespace, node_wrapping_key,
-    protection_policy, recovery_authority, retention, root_delegation, routing, secret_generation,
-    session, smb_export_configuration, snapshot_schedule, storage_target, tags, topology,
-    user_snapshot, version_cleanup, volume_head,
+    authentication_policy, availability_cell, backup_catalogue, backup_defaults,
+    backup_reclamation, backup_retention, backup_run, backup_schedule, bootstrap,
+    cleanup_attestation, cleanup_completion, cleanup_inventory, cleanup_permit,
+    cleanup_reclamation, cluster, component, external_certificate, federation_actor_attestation,
+    federation_assignment, federation_grant, federation_mutation_admission, federation_quarantine,
+    federation_relationship, federation_storage_allocation, federation_succession, identity,
+    locality_policy, maintenance_work, manual_dns_task, mesh_local_certificate, namespace,
+    node_wrapping_key, protection_policy, recovery_authority, retention, root_delegation, routing,
+    secret_generation, session, smb_export_configuration, snapshot_schedule, storage_target, tags,
+    topology, user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -661,6 +661,7 @@ fn is_backup_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::RecordBackupCopy(_)
             | AuthoritativeCommand::VerifyBackupCopy(_)
             | AuthoritativeCommand::RetireMetadataBackup(_)
+            | AuthoritativeCommand::ReconcileMetadataBackupDefaults(_)
             | AuthoritativeCommand::RecordBackupReclamation(_)
     )
 }
@@ -823,6 +824,9 @@ fn execute_backup_command(
         }
         AuthoritativeCommand::RetireMetadataBackup(value) => {
             backup_retention::retire(transaction, partition_id, value, revision)
+        }
+        AuthoritativeCommand::ReconcileMetadataBackupDefaults(value) => {
+            backup_defaults::reconcile(transaction, partition_id, context, *value, revision)
         }
         AuthoritativeCommand::RecordBackupReclamation(value) => {
             backup_reclamation::record(transaction, context, *value, revision)
@@ -1429,6 +1433,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::CompleteMetadataBackupRun(_) => 136,
         AuthoritativeCommand::RetireMetadataBackup(_) => 137,
         AuthoritativeCommand::RecordBackupReclamation(_) => 138,
+        AuthoritativeCommand::ReconcileMetadataBackupDefaults(_) => 139,
     }
 }
 

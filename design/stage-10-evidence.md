@@ -223,6 +223,50 @@ Focused local evidence covers:
 - real shared-folder capacity recovery after provider deletion commits but the
   target capacity release fails, including a retry that cannot release twice.
 
+## Automatic configuration defaults
+
+The daemon now reconciles backup defaults after initial storage registration and
+authoritative topology/configuration changes. A fresh appliance selects up to
+three destinations and enables a daily schedule retaining three generations.
+It prefers separate hosts/shared-failure groups and then separate known devices
+within a host. Existing choices remain stable when those preferences are equal.
+This is a small automatic destination set, not a limit on explicitly configured
+destinations or mesh size.
+
+Configuration ownership is explicit in schema 85. Existing records and direct
+administrator edits belong to the administrator; defaults never overwrite a
+custom schedule or recreate a paused destination for the same target generation.
+No longer selected automatic destinations are paused, preserving historical
+bindings and copies for restore and guarded retention. Normal file writes and
+temporary connectivity losses do not reduce the configured copy threshold.
+
+Defaults, destinations and schedule commit in one authoritative transaction with
+topology/default-state revision fences. They do not depend on cross-file
+atomicity. The private command codec adds kind 75; no public HTTPS contract or
+dependency changed. Automatic failure relationships remain `unknown`: selecting
+apparently separate locations is not proof of independence from metadata voters.
+
+Local evidence for this slice:
+
+- Seven repository tests passed in 4.86 seconds, covering single-target setup,
+  growth, known-device diversity, shared-power-group changes, explicit ownership,
+  stale topology, wire bounds, transactional interruption, replay and reopening.
+- Schema 84-to-85 migration passed in 0.26 seconds, including the committed SQL
+  fingerprint, preservation of an existing paused destination as explicit,
+  integrity and foreign-key checks.
+- The real two-daemon clean-machine HTTPS cycle passed in 12.96 seconds. Before
+  any destination API mutation, it checks that the enabled daily policy and
+  active automatic destinations appear through the public API.
+- The production selection query-plan check passed in 0.26 seconds. Correlated
+  identity/overlap lookups use indexes; ranking requires a top-one ordering step
+  over eligible inventory, at most three times per configuration reconciliation.
+- The complete NVM-default `pnpm check` passed on the final implementation in
+  **551.45 seconds** with four workers. Rust workspace tests took 510.99 seconds,
+  web tests 4.78 seconds and workspace Clippy 22.79 seconds. Both licence gates,
+  formatting, TypeScript/ESLint and generated-contract drift also passed. This
+  run was slower than the preceding retention gate; no test-speed improvement is
+  claimed. Hardware/soak and opt-in SMB-image proofs remain separate.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in
@@ -233,8 +277,7 @@ or image was produced; hardware/soak and opt-in SMB-image proofs remain separate
 
 The schedule API does not close these separate outstanding requirements:
 
-- backup panel controls, automatic destination/default policy selection and
-  topology-backed failure assessments;
+- backup panel controls and topology-backed failure assessments;
 - automatic resolution of abandoned unpublished backup holds;
 - product-facing restore-readiness, encrypted export and recovery workflows;
 - provider/federation destination implementations and their acceptance evidence.
