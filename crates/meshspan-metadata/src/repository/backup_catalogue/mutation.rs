@@ -34,6 +34,20 @@ pub(in crate::repository) fn configure_destination(
     command: &ConfigureBackupDestination,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
+    let existing = super::query::destination(transaction, command.destination_id)?;
+    let current_revision = existing
+        .as_ref()
+        .map_or(Revision::new(0), |row| row.revision);
+    if command.expected_destination_revision != current_revision {
+        return Err(RepositoryError::StaleRevision);
+    }
+    // Copy receipts resolve through this identity. Rebinding it would orphan older
+    // encrypted objects; a different provider must have a new destination identity.
+    if existing.as_ref().is_some_and(|row| {
+        row.binding != command.binding || row.state == super::BackupDestinationState::Retired
+    }) {
+        return Err(RepositoryError::InvalidCommand);
+    }
     validate_destination_binding(transaction, command.binding)?;
     let binding = binding_columns(command.binding);
     let state = if command.enabled {

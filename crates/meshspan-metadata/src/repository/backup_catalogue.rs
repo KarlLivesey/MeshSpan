@@ -10,9 +10,9 @@ use meshspan_domain::{BackupDestinationId, BackupId, MeshId, PartitionId, Revisi
 use crate::{BackupDestinationBinding, BackupFailureRelationship};
 
 pub(super) use mutation::{configure_destination, record_backup, record_copy, verify_copy};
-pub(super) use query::{active_destinations, backup, copy, destination};
+pub(super) use query::{active_destinations, backup, copy, destination, destinations};
 
-/// Stable seek position for the active backup-destination inventory.
+/// Stable seek position for a backup-destination inventory.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BackupDestinationCursor {
     /// Last destination returned by the preceding page.

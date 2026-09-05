@@ -2186,6 +2186,19 @@ impl AuthoritativeRepository {
         backup_catalogue::active_destinations(self.database.connection(), after, limit)
     }
 
+    /// Returns a bounded administration page, including paused and retired destinations.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for malformed destination records. Callers must authorise this inventory.
+    pub fn backup_destinations(
+        &self,
+        after: Option<BackupDestinationCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<BackupDestinationRecord, BackupDestinationCursor>, RepositoryError> {
+        backup_catalogue::destinations(self.database.connection(), after, limit, false)
+    }
+
     /// Returns one exact provider copy and its read-after-write state.
     ///
     /// # Errors

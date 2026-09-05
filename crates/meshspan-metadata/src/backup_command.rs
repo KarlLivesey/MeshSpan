@@ -73,6 +73,8 @@ pub enum BackupFailureRelationship {
 pub struct ConfigureBackupDestination {
     /// Stable destination identity.
     pub destination_id: BackupDestinationId,
+    /// Exact destination revision being replaced, or zero when creating it.
+    pub expected_destination_revision: Revision,
     /// Human and canonical names.
     pub name: RecordName,
     /// Exact target, remote mesh or replaceable provider binding.
