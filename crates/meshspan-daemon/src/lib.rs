@@ -37,6 +37,10 @@ mod authentication_root_loading_tests;
 mod authoritative_txt_observer;
 #[cfg(test)]
 mod backup_capacity_integration_tests;
+mod backup_destination_administration;
+mod backup_destination_api;
+#[cfg(test)]
+mod backup_destination_api_tests;
 mod backup_publication;
 #[cfg(test)]
 mod backup_publication_tests;
@@ -297,6 +301,10 @@ mod storage_drain_administration_api_tests;
 mod storage_scrub_worker;
 mod target_drain_worker;
 
+pub use backup_destination_administration::{
+    BackupDestinationController, BackupDestinationError, BackupDestinationService,
+};
+pub use backup_destination_api::{BackupDestinationApiError, backup_destination_api_router};
 pub use backup_schedule_administration::{
     BackupScheduleController, BackupScheduleError, BackupScheduleService,
 };

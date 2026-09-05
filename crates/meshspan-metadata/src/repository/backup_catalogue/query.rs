@@ -87,17 +87,33 @@ pub(in crate::repository) fn active_destinations(
     after: Option<BackupDestinationCursor>,
     limit: PageLimit,
 ) -> Result<Page<BackupDestinationRecord, BackupDestinationCursor>, RepositoryError> {
+    destinations(connection, after, limit, true)
+}
+
+pub(in crate::repository) fn destinations(
+    connection: &Connection,
+    after: Option<BackupDestinationCursor>,
+    limit: PageLimit,
+    active_only: bool,
+) -> Result<Page<BackupDestinationRecord, BackupDestinationCursor>, RepositoryError> {
     let lower = after.map_or([0; 16], |cursor| cursor.destination_id.as_bytes());
     let sql_limit = i64::try_from(limit.get().saturating_add(1))
         .map_err(|_| RepositoryError::InvalidPageLimit)?;
-    let mut statement = connection.prepare(
+    let query = if active_only {
         "SELECT destination_id, display_name, canonical_name, destination_kind, target_id,
                 remote_mesh_id, provider_instance_id, provider_generation,
                 failure_relationship, failure_evidence_digest, state, created_at, revision
          FROM backup_destinations
          WHERE state = ?1 AND destination_id > ?2
-         ORDER BY destination_id LIMIT ?3",
-    )?;
+         ORDER BY destination_id LIMIT ?3"
+    } else {
+        "SELECT destination_id, display_name, canonical_name, destination_kind, target_id,
+                remote_mesh_id, provider_instance_id, provider_generation,
+                failure_relationship, failure_evidence_digest, state, created_at, revision
+         FROM backup_destinations WHERE destination_id > ?2
+         ORDER BY destination_id LIMIT ?3"
+    };
+    let mut statement = connection.prepare(query)?;
     let rows = statement.query_map(
         params![DESTINATION_ACTIVE, lower.as_slice(), sql_limit],
         decode_destination,

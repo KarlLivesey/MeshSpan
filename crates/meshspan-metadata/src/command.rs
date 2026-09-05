@@ -3344,6 +3344,7 @@ digest_simple_record!(
     b"configure-backup-destination",
     |value, digest| {
         digest.identifier(value.destination_id.as_bytes());
+        digest.unsigned(value.expected_destination_revision.get());
         digest.name(&value.name);
         match value.binding {
             crate::BackupDestinationBinding::RegisteredTarget {

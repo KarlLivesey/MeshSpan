@@ -44,6 +44,10 @@ import type {
   CreateVolumeResponse,
   CertificateStatusResponse,
   BackupScheduleResponse,
+  ListBackupDestinationsQuery,
+  ListBackupDestinationsResponse,
+  ConfigureBackupDestinationRequest,
+  ConfigureBackupDestinationResponse,
   ConfigureBackupScheduleRequest,
   ConfigureBackupScheduleResponse,
   CurrentSessionResponse,
@@ -148,6 +152,10 @@ import {
   zDeleteObjectResponse2,
   zGetCertificateStatusResponse,
   zGetBackupScheduleResponse,
+  zListBackupDestinationsQuery,
+  zListBackupDestinationsResponse2,
+  zConfigureBackupDestinationBody,
+  zConfigureBackupDestinationResponse2,
   zConfigureBackupScheduleBody,
   zConfigureBackupScheduleResponse2,
   zGetCurrentSessionResponse,
@@ -426,6 +434,13 @@ export interface MeshSpanFetchClient {
     request: ConfigureBackupScheduleRequest,
     csrfToken?: string,
   ): Promise<ConfigureBackupScheduleResponse>;
+  listBackupDestinations(
+    query?: ListBackupDestinationsQuery,
+  ): Promise<ListBackupDestinationsResponse>;
+  configureBackupDestination(
+    request: ConfigureBackupDestinationRequest,
+    csrfToken?: string,
+  ): Promise<ConfigureBackupDestinationResponse>;
   addGroupMember(
     groupId: string,
     request: AddGroupMemberRequest,
@@ -886,6 +901,38 @@ export function createMeshSpanFetchClient(
           method: "PUT",
         },
         zConfigureBackupScheduleResponse2,
+      );
+    },
+    async listBackupDestinations(
+      query = {},
+    ): Promise<ListBackupDestinationsResponse> {
+      const input = zListBackupDestinationsQuery.parse(query);
+      const parameters = new URLSearchParams();
+      if (input.limit !== undefined)
+        parameters.set("limit", String(input.limit));
+      if (input.cursor !== undefined) parameters.set("cursor", input.cursor);
+      const suffix = parameters.toString();
+      return requestJson(
+        context,
+        "/admin/backups/destinations" + (suffix ? "?" + suffix : ""),
+        { method: "GET" },
+        zListBackupDestinationsResponse2,
+      );
+    },
+    async configureBackupDestination(
+      request,
+      csrfToken,
+    ): Promise<ConfigureBackupDestinationResponse> {
+      const body = zConfigureBackupDestinationBody.parse(request);
+      return requestJson(
+        context,
+        "/admin/backups/destinations",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "PUT",
+        },
+        zConfigureBackupDestinationResponse2,
       );
     },
     async addGroupMember(

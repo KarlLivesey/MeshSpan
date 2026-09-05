@@ -1740,6 +1740,101 @@
         "title": "CommitUploadResponse",
         "type": "object"
       },
+      "ConfigureBackupDestinationRequest": {
+        "additionalProperties": false,
+        "description": "One registered target selected for encrypted recovery copies.",
+        "properties": {
+          "destination_id": {
+            "description": "Stable destination identity. A different provider requires a new identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "enabled": {
+            "description": "Accept new backup copies when true; false pauses future copies, not deletion.",
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "description": "Observed destination revision; zero creates a destination.",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "Human-facing name, without control characters.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^\\P{Cc}+$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Stable logical identity retained across retries.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "target_generation": {
+            "description": "Observed target generation. A returned or replaced target must match it.",
+            "maxLength": 20,
+            "minLength": 1,
+            "pattern": "^[1-9][0-9]{0,19}$",
+            "type": "string"
+          },
+          "target_id": {
+            "description": "Exact registered storage target, never a raw path.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "destination_id",
+          "expected_revision",
+          "name",
+          "target_id",
+          "target_generation",
+          "enabled"
+        ],
+        "title": "ConfigureBackupDestinationRequest",
+        "type": "object"
+      },
+      "ConfigureBackupDestinationResponse": {
+        "additionalProperties": false,
+        "description": "Original durable receipt; configuration does not imply completed backup protection.",
+        "properties": {
+          "committed_revision": {
+            "description": "Destination revision created by this operation, even if later superseded.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "destination_id": {
+            "description": "Exact destination configured.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Original operation identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "destination_id",
+          "committed_revision"
+        ],
+        "title": "ConfigureBackupDestinationResponse",
+        "type": "object"
+      },
       "ConfigureBackupScheduleRequest": {
         "additionalProperties": false,
         "description": "Exact-retry replacement of the current partition backup policy.",
@@ -6078,6 +6173,208 @@
           "next_page_url"
         ],
         "title": "ListAvailabilityCellsResponse",
+        "type": "object"
+      },
+      "ListBackupDestinationsQuery": {
+        "additionalProperties": false,
+        "description": "Bounded live inventory of configured destinations, including paused entries.",
+        "properties": {
+          "cursor": {
+            "description": "Opaque continuation returned by this inventory for this caller and partition.",
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9._-]+$",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Page size; defaults to 50.",
+            "format": "uint16",
+            "maximum": 256,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "title": "ListBackupDestinationsQuery",
+        "type": "object"
+      },
+      "ListBackupDestinationsResponse": {
+        "additionalProperties": false,
+        "description": "One current-authorisation inventory page, ordered by destination identity.",
+        "properties": {
+          "destinations": {
+            "description": "At most the requested number of current destination records.",
+            "items": {
+              "additionalProperties": false,
+              "description": "Secret-free current destination configuration.",
+              "properties": {
+                "destination_id": {
+                  "description": "Stable destination identity.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "failure_relationship": {
+                  "description": "Honest failure relationship; registration alone cannot establish independence.",
+                  "oneOf": [
+                    {
+                      "const": "unknown",
+                      "description": "Independence has not been proved.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "overlapping",
+                      "description": "A declared failure boundary overlaps.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "independent",
+                      "description": "Separately recorded evidence declares independence.",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "name": {
+                  "description": "Human-facing display name.",
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^\\P{Cc}+$",
+                  "type": "string"
+                },
+                "provider": {
+                  "description": "Exact provider identity, without paths or credentials.",
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "description": "Registered storage, local or on another node in this swarm.",
+                      "properties": {
+                        "kind": {
+                          "const": "registered_target",
+                          "type": "string"
+                        },
+                        "target_id": {
+                          "description": "Registered target identity.",
+                          "maxLength": 36,
+                          "minLength": 36,
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "target_id"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "description": "Independently administered remote swarm.",
+                      "properties": {
+                        "kind": {
+                          "const": "federated_mesh",
+                          "type": "string"
+                        },
+                        "remote_mesh_id": {
+                          "description": "Remote swarm identity.",
+                          "maxLength": 36,
+                          "minLength": 36,
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "remote_mesh_id"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "description": "Replaceable installed component.",
+                      "properties": {
+                        "instance_id": {
+                          "description": "Component instance identity.",
+                          "maxLength": 36,
+                          "minLength": 36,
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "component_provider",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "instance_id"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "provider_generation": {
+                  "description": "Provider generation fenced into copy receipts.",
+                  "maxLength": 20,
+                  "minLength": 1,
+                  "pattern": "^[1-9][0-9]{0,19}$",
+                  "type": "string"
+                },
+                "revision": {
+                  "description": "Destination-specific compare-and-swap revision.",
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "state": {
+                  "description": "Current desired eligibility.",
+                  "oneOf": [
+                    {
+                      "const": "active",
+                      "description": "Eligible for new copies.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "paused",
+                      "description": "New copies are paused.",
+                      "type": "string"
+                    },
+                    {
+                      "const": "retired",
+                      "description": "Retained historical destination.",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "destination_id",
+                "name",
+                "provider",
+                "provider_generation",
+                "state",
+                "failure_relationship",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "next_page_url": {
+            "description": "Relative continuation URL, or explicitly null at the end.",
+            "maxLength": 512,
+            "pattern": "^/api/latest/admin/backups/destinations\\?limit=[0-9]+&cursor=[a-zA-Z0-9._-]+$",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "destinations",
+          "next_page_url"
+        ],
+        "title": "ListBackupDestinationsResponse",
         "type": "object"
       },
       "ListDirectoryResponse": {
@@ -11091,6 +11388,455 @@
         "summary": "Create one immutable write-acknowledgement policy",
         "x-meshspan-access": "system-manager-csrf",
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/admin/backups/destinations": {
+      "get": {
+        "operationId": "listBackupDestinations",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ListBackupDestinationsQuery/properties/limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ListBackupDestinationsQuery/properties/cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListBackupDestinationsResponse"
+                }
+              }
+            },
+            "description": "Current destination page with a relative next-page URL",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid query or substituted continuation",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List current metadata-backup destinations, including paused entries",
+        "x-meshspan-access": "system-manager"
+      },
+      "put": {
+        "description": "Replicated, audited, revision-checked configuration. A destination retains its exact provider binding; choose a new destination identity for another target or generation. Pausing stops new copies and does not delete retained backups. This endpoint records failure independence as unknown; it never treats another folder or node as proof of independence. Exact retries return the original receipt. Inventory pages are live keyset scans, not historical snapshots.",
+        "operationId": "configureBackupDestination",
+        "parameters": [
+          {
+            "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+            "in": "header",
+            "name": "MeshSpan-CSRF-Token",
+            "required": false,
+            "schema": {
+              "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "x-meshspan-sensitive": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigureBackupDestinationRequest"
+              }
+            }
+          },
+          "description": "Complete destination and exact-retry identity",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigureBackupDestinationResponse"
+                }
+              }
+            },
+            "description": "Original committed configuration receipt",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid destination",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication rejected",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "System-manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Changed retry or stale destination revision",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Request body exceeds its bound",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "JSON content type required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Outgoing contract or integrity failure",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authority temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Select a registered target or change a destination name and eligibility",
+        "x-meshspan-access": "system-manager"
       }
     },
     "/admin/backups/schedule": {

@@ -122,6 +122,16 @@ fn components() -> Value {
                 "ConfigureBackupScheduleResponse",
             ),
             schema_response::<crate::BackupScheduleResponse>("BackupScheduleResponse"),
+            schema_request::<crate::ConfigureBackupDestinationRequest>(
+                "ConfigureBackupDestinationRequest",
+            ),
+            schema_response::<crate::ConfigureBackupDestinationResponse>(
+                "ConfigureBackupDestinationResponse",
+            ),
+            schema_request::<crate::ListBackupDestinationsQuery>("ListBackupDestinationsQuery"),
+            schema_response::<crate::ListBackupDestinationsResponse>(
+                "ListBackupDestinationsResponse",
+            ),
             schema_request::<AbortUploadRequest>("AbortUploadRequest"),
             schema_response::<AbortUploadResponse>("AbortUploadResponse"),
             schema_request::<AddGroupMemberRequest>("AddGroupMemberRequest"),
@@ -520,11 +530,56 @@ fn administration_paths() -> Vec<(String, Value)> {
             ("/admin/storage-drains".to_owned(), storage_drains_path()),
             ("/admin/backups/schedule".to_owned(), backup_schedule_path()),
             (
+                "/admin/backups/destinations".to_owned(),
+                backup_destinations_path(),
+            ),
+            (
                 "/admin/storage-drains/{drain_id}".to_owned(),
                 storage_drain_status_path(),
             ),
         ])
         .collect()
+}
+
+fn backup_destinations_path() -> Value {
+    json!({
+        "get": {
+            "operationId": "listBackupDestinations",
+            "summary": "List current metadata-backup destinations, including paused entries",
+            "parameters": [
+                { "name": "limit", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/ListBackupDestinationsQuery/properties/limit" } },
+                { "name": "cursor", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/ListBackupDestinationsQuery/properties/cursor" } }
+            ],
+            "x-meshspan-access": "system-manager",
+            "responses": {
+                "200": json_response("Current destination page with a relative next-page URL", "#/components/schemas/ListBackupDestinationsResponse"),
+                "400": json_response("Invalid query or substituted continuation", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        },
+        "put": {
+            "operationId": "configureBackupDestination",
+            "summary": "Select a registered target or change a destination name and eligibility",
+            "description": "Replicated, audited, revision-checked configuration. A destination retains its exact provider binding; choose a new destination identity for another target or generation. Pausing stops new copies and does not delete retained backups. This endpoint records failure independence as unknown; it never treats another folder or node as proof of independence. Exact retries return the original receipt. Inventory pages are live keyset scans, not historical snapshots.",
+            "x-meshspan-access": "system-manager",
+            "parameters": [optional_csrf_parameter()],
+            "requestBody": json_request("Complete destination and exact-retry identity", "#/components/schemas/ConfigureBackupDestinationRequest"),
+            "responses": {
+                "200": json_response("Original committed configuration receipt", "#/components/schemas/ConfigureBackupDestinationResponse"),
+                "400": json_response("Invalid destination", "#/components/schemas/ApiError"),
+                "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+                "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+                "409": json_response("Changed retry or stale destination revision", "#/components/schemas/ApiError"),
+                "413": json_response("Request body exceeds its bound", "#/components/schemas/ApiError"),
+                "415": json_response("JSON content type required", "#/components/schemas/ApiError"),
+                "500": json_response("Outgoing contract or integrity failure", "#/components/schemas/ApiError"),
+                "503": json_response("Authority temporarily unavailable", "#/components/schemas/ApiError")
+            }
+        }
+    })
 }
 
 fn backup_schedule_path() -> Value {

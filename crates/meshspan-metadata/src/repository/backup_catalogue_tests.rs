@@ -5,6 +5,9 @@ use meshspan_domain::{
     MeshId, NodeId, OperationId, PartitionId, PrincipalId, Revision, RoleId, TargetId, UnixMicros,
 };
 use sha2::{Digest, Sha256};
+
+#[path = "backup_destination_tests.rs"]
+mod destination_administration;
 use tempfile::{TempDir, tempdir};
 
 use super::tests::{mark_test_recovery_verified, protected_bootstrap};
@@ -53,6 +56,7 @@ fn active_destinations_page_without_returning_paused_entries()
             )?,
             &AuthoritativeCommand::ConfigureBackupDestination(ConfigureBackupDestination {
                 destination_id: BackupDestinationId::from_bytes([identity; 16])?,
+                expected_destination_revision: Revision::new(0),
                 name: RecordName::new(&format!("Backup destination {identity}"))?,
                 binding: BackupDestinationBinding::RegisteredTarget {
                     target_id: fixture.target,
@@ -108,6 +112,7 @@ fn configure_destination(
         context(32, fixture.administrator, 33, 30, 2)?,
         &AuthoritativeCommand::ConfigureBackupDestination(ConfigureBackupDestination {
             destination_id: destination,
+            expected_destination_revision: Revision::new(0),
             name: RecordName::new("Independent backup folder")?,
             binding: BackupDestinationBinding::RegisteredTarget {
                 target_id: fixture.target,

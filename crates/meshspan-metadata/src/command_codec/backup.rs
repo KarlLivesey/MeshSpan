@@ -16,7 +16,8 @@ use crate::{
     RecordName, RenewMetadataBackupRun, VerifyBackupCopy,
 };
 
-pub(super) const CONFIGURE_BACKUP_DESTINATION: u16 = 63;
+// Kind 63 was the pre-alpha blind upsert. Never reinterpret its old bytes as CAS input.
+pub(super) const CONFIGURE_BACKUP_DESTINATION: u16 = 72;
 pub(super) const RECORD_METADATA_BACKUP: u16 = 64;
 pub(super) const RECORD_BACKUP_COPY: u16 = 65;
 pub(super) const VERIFY_BACKUP_COPY: u16 = 66;
@@ -280,6 +281,7 @@ fn encode_destination(
     validate_generation(value.binding.provider_generation())?;
     encoder.u16(CONFIGURE_BACKUP_DESTINATION)?;
     encoder.identifier(value.destination_id.as_bytes())?;
+    encoder.u64(value.expected_destination_revision.get())?;
     encoder.text(value.name.display(), MAXIMUM_NAME_BYTES)?;
     match value.binding {
         BackupDestinationBinding::RegisteredTarget {
@@ -316,6 +318,7 @@ fn decode_destination(
     decoder: &mut Decoder<'_>,
 ) -> Result<ConfigureBackupDestination, MetadataCommandCodecError> {
     let destination_id = BackupDestinationId::from_bytes(decoder.identifier()?)?;
+    let expected_destination_revision = Revision::new(decoder.u64()?);
     let name = RecordName::new(&decoder.text(MAXIMUM_NAME_BYTES)?)?;
     let binding = match decoder.u8()? {
         1 => BackupDestinationBinding::RegisteredTarget {
@@ -335,6 +338,7 @@ fn decode_destination(
     validate_generation(binding.provider_generation())?;
     Ok(ConfigureBackupDestination {
         destination_id,
+        expected_destination_revision,
         name,
         binding,
         failure_relationship: decode_failure_relationship(decoder.u8()?)?,

@@ -820,6 +820,62 @@ export type CommitUploadResponse = {
 };
 
 /**
+ * ConfigureBackupDestinationRequest
+ *
+ * One registered target selected for encrypted recovery copies.
+ */
+export type ConfigureBackupDestinationRequest = {
+  /**
+   * Stable destination identity. A different provider requires a new identity.
+   */
+  destination_id: string;
+  /**
+   * Accept new backup copies when true; false pauses future copies, not deletion.
+   */
+  enabled: boolean;
+  /**
+   * Observed destination revision; zero creates a destination.
+   */
+  expected_revision: number;
+  /**
+   * Human-facing name, without control characters.
+   */
+  name: string;
+  /**
+   * Stable logical identity retained across retries.
+   */
+  operation_id: string;
+  /**
+   * Observed target generation. A returned or replaced target must match it.
+   */
+  target_generation: string;
+  /**
+   * Exact registered storage target, never a raw path.
+   */
+  target_id: string;
+};
+
+/**
+ * ConfigureBackupDestinationResponse
+ *
+ * Original durable receipt; configuration does not imply completed backup protection.
+ */
+export type ConfigureBackupDestinationResponse = {
+  /**
+   * Destination revision created by this operation, even if later superseded.
+   */
+  committed_revision: number;
+  /**
+   * Exact destination configured.
+   */
+  destination_id: string;
+  /**
+   * Original operation identity.
+   */
+  operation_id: string;
+};
+
+/**
  * ConfigureBackupScheduleRequest
  *
  * Exact-retry replacement of the current partition backup policy.
@@ -2752,6 +2808,88 @@ export type ListAvailabilityCellsResponse = {
   }>;
   /**
    * Ready-to-follow same-origin URL, or null at the terminal page.
+   */
+  next_page_url: string | null;
+};
+
+/**
+ * ListBackupDestinationsQuery
+ *
+ * Bounded live inventory of configured destinations, including paused entries.
+ */
+export type ListBackupDestinationsQuery = {
+  /**
+   * Opaque continuation returned by this inventory for this caller and partition.
+   */
+  cursor?: string;
+  /**
+   * Page size; defaults to 50.
+   */
+  limit?: number;
+};
+
+/**
+ * ListBackupDestinationsResponse
+ *
+ * One current-authorisation inventory page, ordered by destination identity.
+ */
+export type ListBackupDestinationsResponse = {
+  /**
+   * At most the requested number of current destination records.
+   */
+  destinations: Array<{
+    /**
+     * Stable destination identity.
+     */
+    destination_id: string;
+    /**
+     * Honest failure relationship; registration alone cannot establish independence.
+     */
+    failure_relationship: "unknown" | "overlapping" | "independent";
+    /**
+     * Human-facing display name.
+     */
+    name: string;
+    /**
+     * Exact provider identity, without paths or credentials.
+     */
+    provider:
+      | {
+          kind: "registered_target";
+          /**
+           * Registered target identity.
+           */
+          target_id: string;
+        }
+      | {
+          kind: "federated_mesh";
+          /**
+           * Remote swarm identity.
+           */
+          remote_mesh_id: string;
+        }
+      | {
+          /**
+           * Component instance identity.
+           */
+          instance_id: string;
+          kind: "component_provider";
+        };
+    /**
+     * Provider generation fenced into copy receipts.
+     */
+    provider_generation: string;
+    /**
+     * Destination-specific compare-and-swap revision.
+     */
+    revision: number;
+    /**
+     * Current desired eligibility.
+     */
+    state: "active" | "paused" | "retired";
+  }>;
+  /**
+   * Relative continuation URL, or explicitly null at the end.
    */
   next_page_url: string | null;
 };
@@ -5281,6 +5419,122 @@ export type CreateAcknowledgementPolicyResponses = {
 
 export type CreateAcknowledgementPolicyResponse2 =
   CreateAcknowledgementPolicyResponses[keyof CreateAcknowledgementPolicyResponses];
+
+export type ListBackupDestinationsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    /**
+     * Page size; defaults to 50.
+     */
+    limit?: number;
+    /**
+     * Opaque continuation returned by this inventory for this caller and partition.
+     */
+    cursor?: string;
+  };
+  url: "/admin/backups/destinations";
+};
+
+export type ListBackupDestinationsErrors = {
+  /**
+   * Invalid query or substituted continuation
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ListBackupDestinationsError =
+  ListBackupDestinationsErrors[keyof ListBackupDestinationsErrors];
+
+export type ListBackupDestinationsResponses = {
+  /**
+   * Current destination page with a relative next-page URL
+   */
+  200: ListBackupDestinationsResponse;
+};
+
+export type ListBackupDestinationsResponse2 =
+  ListBackupDestinationsResponses[keyof ListBackupDestinationsResponses];
+
+export type ConfigureBackupDestinationData = {
+  /**
+   * Complete destination and exact-retry identity
+   */
+  body: ConfigureBackupDestinationRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/admin/backups/destinations";
+};
+
+export type ConfigureBackupDestinationErrors = {
+  /**
+   * Invalid destination
+   */
+  400: ApiError;
+  /**
+   * Authentication rejected
+   */
+  401: ApiError;
+  /**
+   * System-manager authority required
+   */
+  403: ApiError;
+  /**
+   * Changed retry or stale destination revision
+   */
+  409: ApiError;
+  /**
+   * Request body exceeds its bound
+   */
+  413: ApiError;
+  /**
+   * JSON content type required
+   */
+  415: ApiError;
+  /**
+   * Outgoing contract or integrity failure
+   */
+  500: ApiError;
+  /**
+   * Authority temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type ConfigureBackupDestinationError =
+  ConfigureBackupDestinationErrors[keyof ConfigureBackupDestinationErrors];
+
+export type ConfigureBackupDestinationResponses = {
+  /**
+   * Original committed configuration receipt
+   */
+  200: ConfigureBackupDestinationResponse;
+};
+
+export type ConfigureBackupDestinationResponse2 =
+  ConfigureBackupDestinationResponses[keyof ConfigureBackupDestinationResponses];
 
 export type GetBackupScheduleData = {
   body?: never;

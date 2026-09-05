@@ -1323,7 +1323,11 @@ fn authenticated_administration_routes(
         open_authentication_authority(local_state, authority, Arc::clone(private_network), now)?,
         gateway,
     ))?;
-    Ok(security.merge(resources).merge(backup))
+    let destinations = crate::backup_destination_api_router(crate::BackupDestinationService::new(
+        open_authentication_authority(local_state, authority, Arc::clone(private_network), now)?,
+        gateway,
+    ))?;
+    Ok(security.merge(resources).merge(backup).merge(destinations))
 }
 
 fn security_administration_routes(
@@ -2396,7 +2400,9 @@ impl StorageTargetRuntime {
             let page = self
                 .maintenance_authority
                 .reader()
-                .active_backup_destinations(after, page_limit)
+                // Pausing eligibility must not close access to retained recovery copies.
+                // Per-operation authority still rejects stores into inactive destinations.
+                .backup_destinations(after, page_limit)
                 .map_err(|_| ())?;
             for destination in page.items {
                 let BackupDestinationBinding::RegisteredTarget {
@@ -3564,6 +3570,9 @@ pub enum DaemonProcessError {
     /// Backup schedule HTTP composition failed.
     #[error("backup schedule API construction failed")]
     BackupScheduleApi(#[from] crate::BackupScheduleApiError),
+    /// Backup destination routes could not be constructed.
+    #[error("backup destination routes could not be constructed")]
+    BackupDestinationApi(#[from] crate::BackupDestinationApiError),
     /// API-key-only external certificate publisher API construction failed.
     #[error("daemon external certificate publisher API failed")]
     ExternalCertificatePublisherApi(#[from] ExternalCertificatePublisherApiError),

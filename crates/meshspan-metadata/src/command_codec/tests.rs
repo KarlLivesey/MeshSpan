@@ -121,6 +121,7 @@ fn backup_destination_bindings_round_trip_canonically() -> Result<(), Box<dyn st
             context,
             AuthoritativeCommand::ConfigureBackupDestination(crate::ConfigureBackupDestination {
                 destination_id,
+                expected_destination_revision: Revision::new(7),
                 name: RecordName::new("Encrypted recovery copies")?,
                 binding,
                 failure_relationship: crate::BackupFailureRelationship::Unknown,
