@@ -125,6 +125,8 @@ function renderClientInterface() {
   ${renderBackupScheduleClientInterface()}
   ${renderBackupDestinationClientInterface()}
   ${renderBackupHistoryClientInterface()}
+  /** Collects a bounded metadata-only diagnostic snapshot; not an availability proof. */
+  readMetadataDiagnostics(signal?: AbortSignal): Promise<MetadataDiagnosticsResponse>;
   ${renderBackupExportClientInterface()}
   ${renderIdentityAdministrationClientInterface()}
   ${renderNamespaceMutationClientInterface()}

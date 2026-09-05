@@ -3,6 +3,105 @@
 Status: **in progress**. Stage 11 has not started. Publication remains on hold
 pending the owner's dependency review.
 
+## Native metadata diagnostics
+
+`GET /api/latest/admin/diagnostics/metadata` collects a bounded, redacted local
+metadata snapshot through the ordinary system-manager API-key/session boundary.
+It returns an attachment containing daemon/mesh/node/partition identity, a local
+collection timestamp, before/after metadata revisions, configured nodes/targets
+and recent durable operation outcomes. Each inventory is limited to 100 records
+with explicit truncation. User-supplied names, paths, endpoints, actor identities,
+command inputs, result entities, credentials and file content are not projected.
+
+One fixed-size query to the existing metadata reactor adds its observed role,
+known leader, term, committed/applied positions, membership-plan identity and
+queued/pending work. It neither appends nor contacts peers. A full ingress queue,
+stopped owner or one-second timeout produces unavailable evidence, represented by
+`consensus: null`; no cached healthy result is substituted. Configured lifecycle
+is not reported as live reachability or target IO health, and a locally observed
+leader does not prove a live quorum. The sections are not one atomic swarm-wide
+read; revision bounds expose concurrent local application.
+
+Authentication precedes collection/input interpretation and is repeated with
+current time before output. Query/body input is rejected. The endpoint owns one
+diagnostic worker, a five-second response deadline and cooperative cancellation;
+the permit remains held until interrupted blocking work actually exits. It does
+not cap normal connections or affect foreground IO admission. Output is validated,
+bounded to 256 KiB and marked no-store. Rust OpenAPI generates the native Fetch
+method, Zod response schema and its independent response budget; ordinary JSON
+and error response budgets remain unchanged. No telemetry is sent elsewhere.
+
+Focused evidence so far: three reactor cases passed in **1.00 seconds**, three
+HTTP boundary/cancellation cases in **0.62 seconds**, two Rust contract cases in
+**0.03 seconds**, and four generated-client cases in **0.914 seconds** including
+the Vitest harness. Affected-crate all-target/all-feature Clippy passed in
+**10.47 seconds**, with the final changed-target pass in **12.45 seconds**.
+Web/tooling lint, TypeScript checking and generated-contract drift passed.
+The real two-daemon HTTPS operator cycle passed in **24.65
+seconds**, collecting and validating redacted snapshots from both gateways after
+create/join, storage registration, backup, users/groups, volume and file work.
+The final cycle, including diagnostics and file reads from the surviving gateway
+after killing the other daemon, passed in **25.32 seconds**. The complete local
+gate now passes. Its first run failed the Rust workspace lane and the web
+source guard. The web guard incorrectly treated the English phrase "if any" in
+a generated comment as an unsafe type; it now walks TypeScript syntax and has
+positive/negative fixtures for real type nodes versus comments, strings and
+property names. Existing TypeScript is reused; no dependency or rule is removed.
+The earlier Rust failure detail was lost in truncated output. The affected
+daemon suite subsequently passed **289 unit tests in 33.49 seconds** and all
+**three enabled process tests in 42.95 seconds** (two existing ignored tests
+remain ignored). No cause or fix for that first Rust failure is claimed. The
+canonical Cargo invocation now uses concise output without changing features,
+targets or test parallelism, so the repeated full gate retains useful failure
+details. These are real HTTPS/process tests, not browser, hardware
+or release artefact evidence.
+
+The second complete gate failed in **107.78 seconds**. Every static lane and
+the web suite passed; the Rust lane identified
+`membership_catches_up_when_every_old_phase_commit_notification_is_lost`, whose
+learner control endpoint remained connection-refused. Enhanced timeout evidence
+now includes the learner's bounded log and child exit status. The six-case
+process suite subsequently passed, as did three concurrent complete copies and
+20 focused repetitions; repetition alone did not establish a cause.
+
+A deterministic transport fault then established two real defects in the
+dedicated Stage 3 proof runtime (not the appliance metadata reactor):
+
+- Rejecting the first authenticated snapshot before installation stalled the
+  living learner indefinitely (**16.19-second failing proof**). Dispatch had
+  treated enqueue as delivery and discarded failed attempts.
+- Dropping the installation reply receiver before restore made the learner
+  exit after durable installation (**16.10-second failing proof**). A lost
+  response had incorrectly become a fatal configuration error.
+
+Snapshot delivery now retains one immutable image, observes actual transfer
+completion, retries failed/unqueued attempts with 200 ms backoff, and cancels
+obsolete IO after verified catch-up or membership retirement. Existing
+15-second operation deadlines and parallel test execution are unchanged. Lost
+installation replies do not undo durable state or terminate the learner.
+The added process case requires actual rejection/reply-loss markers on both
+learners, stable three-voter promotion, subsequent committed work on all nodes,
+and exact persisted membership after shutdown. Its first combined suite run
+also exposed a fixture ordering mistake: it stopped nodes while promotion was
+still at revision 4. The test now explicitly waits for stable epoch 5 before
+the final write/shutdown, keeping the exact revision-5 assertion.
+
+These faults reproduce the stalled-join symptom, but the original gate had no
+transfer-failure evidence; its precise initiating cause remains unconfirmed.
+The final seven-case real-process suite passed in **8.69 seconds** and
+all-target/all-feature cluster Clippy passed in **8.98 seconds**. The complete
+NVM-default `MESHSPAN_CHECK_WORKERS=4 pnpm check` passed on signed `cd670ec` in
+**631.42 seconds**: Rust workspace tests **594.06 seconds**, web tests
+**3.78 seconds**, plus generated drift, embedded web build, formatting, strict
+Rust/web lint, type checking, tooling tests and both licence gates. No release,
+tag, image or publication workflow was run.
+
+This is the metadata section of OPS-011, not completion of the full diagnostic
+bundle, local metric history/exporters, notification delivery or the operational
+dashboard. Live target health, runtime logs and the other operational sections
+still require implementation. No SQL schema, private wire message, dependency,
+release, tag, image or publication workflow is changed.
+
 ## Dependency-update admission
 
 `pnpm check:dependency-update` now runs Rust/JavaScript advisory checks before the

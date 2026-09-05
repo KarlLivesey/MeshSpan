@@ -4,6 +4,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+import ts from "typescript";
 
 import fixtureDocument from "../../contracts/fixtures/create-session.json" with { type: "json" };
 import {
@@ -41,7 +42,49 @@ describe("Rust and generated Zod contract parity", () => {
         `${generatedDirectory}/${sourceName}`,
         "utf8",
       );
-      expect(source).not.toMatch(/\bany\b/);
+      expect({
+        sourceName,
+        unsafeType: hasAnyType(sourceName, source),
+      }).toEqual({
+        sourceName,
+        unsafeType: false,
+      });
     }
   });
+
+  it("detects unsafe type syntax without rejecting comments, strings or identifiers", () => {
+    for (const source of [
+      "type Unsafe = any;",
+      "type Nested = { values: Array<any> };",
+      "declare function read(): Promise<any>;",
+    ]) {
+      expect(hasAnyType("unsafe.ts", source)).toBe(true);
+    }
+    expect(
+      hasAnyType(
+        "safe.ts",
+        `
+      // Recorded terminal time, if any.
+      type Safe = { any: unknown; description: "any" };
+    `,
+      ),
+    ).toBe(false);
+  });
 });
+
+function hasAnyType(filename: string, source: string): boolean {
+  const file = ts.createSourceFile(
+    filename,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  function visit(node: ts.Node): boolean {
+    return (
+      node.kind === ts.SyntaxKind.AnyKeyword ||
+      (ts.forEachChild(node, visit) ?? false)
+    );
+  }
+  return visit(file);
+}

@@ -29,6 +29,10 @@ const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(200);
 const DEFAULT_ELECTION_TIMEOUT: Duration = Duration::from_millis(1_200);
 const DEFAULT_ELECTION_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
+#[path = "metadata_observation.rs"]
+mod observation;
+pub use observation::MetadataAuthorityObservation;
+
 /// One authenticated peer message admitted to the local authority reactor.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PeerConsensusMessage {
@@ -220,6 +224,7 @@ enum AuthorityEvent {
     Submit(Box<AuthoritySubmission>),
     Peer(PeerConsensusMessage),
     BeginElection,
+    Observe(oneshot::Sender<MetadataAuthorityObservation>),
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -314,6 +319,9 @@ impl MetadataAuthorityRuntime {
             AuthorityEvent::Submit(submission) => self.submit(*submission)?,
             AuthorityEvent::Peer(peer) => self.receive_peer(peer)?,
             AuthorityEvent::BeginElection => self.process_input(CoreInput::ElectionTimeout)?,
+            AuthorityEvent::Observe(respond) => {
+                let _cancelled = respond.send(self.observation());
+            }
             AuthorityEvent::Shutdown(respond) => {
                 self.fail_pending();
                 let _closed = respond.send(());

@@ -4,6 +4,7 @@
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use meshspan_domain::NodeId;
@@ -32,6 +33,11 @@ pub(in crate::node_runtime) struct OutboundSnapshot {
     pub quorum_plan: Vec<u8>,
 }
 
+pub(super) struct SnapshotTransfer {
+    snapshot: Arc<OutboundSnapshot>,
+    completed: oneshot::Sender<bool>,
+}
+
 pub(in crate::node_runtime) struct ReceivedSnapshot {
     pub from: NodeId,
     pub snapshot: VerifiedSnapshot,
@@ -39,28 +45,38 @@ pub(in crate::node_runtime) struct ReceivedSnapshot {
 }
 
 impl PeerNetwork {
-    pub(in crate::node_runtime) fn send_snapshot(&self, to: NodeId, snapshot: OutboundSnapshot) {
-        if let Some(sender) = self.outbound_snapshots.get(&to) {
-            let _full_or_closed = sender.try_send(snapshot);
-        }
+    pub(in crate::node_runtime) fn send_snapshot(
+        &self,
+        to: NodeId,
+        snapshot: Arc<OutboundSnapshot>,
+    ) -> Option<oneshot::Receiver<bool>> {
+        let sender = self.outbound_snapshots.get(&to)?;
+        let (completed, result) = oneshot::channel();
+        sender
+            .try_send(SnapshotTransfer {
+                snapshot,
+                completed,
+            })
+            .ok()?;
+        Some(result)
     }
 
     pub(super) fn spawn_snapshot_worker(
         &self,
         peer: NodeId,
-        mut snapshots: mpsc::Receiver<OutboundSnapshot>,
+        mut snapshots: mpsc::Receiver<SnapshotTransfer>,
     ) {
         let network = self.clone();
         tokio::spawn(async move {
-            while let Some(snapshot) = snapshots.recv().await {
-                let result = tokio::time::timeout(
-                    SNAPSHOT_OPERATION_TIMEOUT,
-                    network.send_snapshot_to_peer(peer, &snapshot),
-                )
-                .await;
-                if matches!(result, Ok(Ok(()))) {
-                    let _cleanup = tokio::fs::remove_file(&snapshot.path).await;
-                }
+            while let Some(mut transfer) = snapshots.recv().await {
+                let delivered = tokio::select! {
+                    result = tokio::time::timeout(
+                        SNAPSHOT_OPERATION_TIMEOUT,
+                        network.send_snapshot_to_peer(peer, &transfer.snapshot),
+                    ) => matches!(result, Ok(Ok(()))),
+                    () = transfer.completed.closed() => continue,
+                };
+                let _owner_stopped = transfer.completed.send(delivered);
             }
         });
     }
@@ -204,6 +220,9 @@ impl PeerNetwork {
             return Err(NodeRuntimeError::InvalidConfiguration);
         };
         let staging_path = snapshot_staging_path(state_path, &begin.snapshot_id)?;
+        if crate::node_runtime::test_snapshot_loss::reject_first_transfer(state_path)? {
+            return Err(NodeRuntimeError::InvalidConfiguration);
+        }
         remove_stale_stage(&staging_path)?;
         let stager = SnapshotStager::begin(
             &staging_path,
@@ -215,6 +234,13 @@ impl PeerNetwork {
         let included_position = verified.included_position;
         let snapshot_id = verified.snapshot_id;
         let (installed, receive_installed) = oneshot::channel();
+        let receive_installed =
+            if crate::node_runtime::test_snapshot_loss::lose_install_reply(state_path)? {
+                drop(receive_installed);
+                None
+            } else {
+                Some(receive_installed)
+            };
         snapshots
             .send(ReceivedSnapshot {
                 from: peer,
@@ -224,6 +250,7 @@ impl PeerNetwork {
             .await
             .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
         receive_installed
+            .ok_or(NodeRuntimeError::InvalidConfiguration)?
             .await
             .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
         self.send_snapshot_result(stream, snapshot_id, included_position)

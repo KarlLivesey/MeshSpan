@@ -39,7 +39,16 @@ mod identity_administration;
 mod identity_administration_validation;
 mod manual_dns_task;
 mod manual_dns_task_validation;
+mod metadata_diagnostics;
+#[cfg(test)]
+mod metadata_diagnostics_tests;
 mod model;
+pub use metadata_diagnostics::{
+    DiagnosticConsensus, DiagnosticConsensusRole, DiagnosticCounter, DiagnosticIdentifier,
+    DiagnosticNode, DiagnosticOperation, DiagnosticSection, DiagnosticTarget,
+    MAX_METADATA_DIAGNOSTICS_BYTES, MetadataDiagnosticsResponse,
+    encode_metadata_diagnostics_response,
+};
 mod namespace_mutation;
 mod namespace_mutation_validation;
 mod node_enrolment;

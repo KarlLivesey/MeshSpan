@@ -4,6 +4,8 @@
 
 #[path = "headless_process/backup_history.rs"]
 mod backup_history;
+#[path = "headless_process/diagnostics.rs"]
+mod diagnostics;
 #[path = "support/passkey.rs"]
 mod passkey_support;
 #[path = "headless_process/stage10.rs"]
@@ -647,9 +649,12 @@ async fn clean_machine_operator_flow_uses_only_cli_and_public_https() -> Result<
         let content = b"clean machine native HTTPS round trip";
         upload_file(root.address, &root_client, api_key, &volume_id, content).await?;
         wait_for_file_surfaces(peer.address, &peer_client, api_key, &volume_id, content).await?;
+        diagnostics::verify(root.address, &root_client, api_key).await?;
+        diagnostics::verify(peer.address, &peer_client, api_key).await?;
         processes[0].kill()?;
         processes[0].wait()?;
-        assert_file_surfaces(peer.address, &peer_client, api_key, &volume_id, content).await
+        assert_file_surfaces(peer.address, &peer_client, api_key, &volume_id, content).await?;
+        diagnostics::verify(peer.address, &peer_client, api_key).await
     }
     .await;
     stop_processes(&mut processes);

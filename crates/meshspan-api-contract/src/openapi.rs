@@ -133,6 +133,7 @@ fn components() -> Value {
             schema_request::<crate::BackupExportPath>("BackupExportPath"),
             schema_response::<crate::BackupExportHeaders>("BackupExportHeaders"),
             schema_response::<crate::BackupReadinessResponse>("BackupReadinessResponse"),
+            schema_response::<crate::MetadataDiagnosticsResponse>("MetadataDiagnosticsResponse"),
             schema_response::<crate::ListBackupRunsResponse>("ListBackupRunsResponse"),
             schema_response::<crate::ListBackupDestinationsResponse>(
                 "ListBackupDestinationsResponse",
@@ -536,6 +537,10 @@ fn administration_paths() -> Vec<(String, Value)> {
             ("/admin/backups/schedule".to_owned(), backup_schedule_path()),
             ("/admin/backups/runs".to_owned(), backup_runs_path()),
             (
+                "/admin/diagnostics/metadata".to_owned(),
+                metadata_diagnostics_path(),
+            ),
+            (
                 "/admin/backups/{backup_id}/export".to_owned(),
                 backup_export_path(),
             ),
@@ -553,6 +558,24 @@ fn administration_paths() -> Vec<(String, Value)> {
             ),
         ])
         .collect()
+}
+
+fn metadata_diagnostics_path() -> Value {
+    json!({ "get": {
+        "operationId": "readMetadataDiagnostics",
+        "x-meshspan-response-max-bytes": crate::MAX_METADATA_DIAGNOSTICS_BYTES,
+        "summary": "Collect bounded, redacted local metadata diagnostics",
+        "description": "Current system-manager authority is checked before collection and again before transmission. No query or body is accepted. Each section contains at most 100 records and reports truncation. Sections are local, non-atomic observations with before/after revisions; configured lifecycle is not live reachability or IO health. A null consensus observation means the local reactor did not answer within one second. This metadata-only snapshot is not the complete appliance diagnostic bundle, a quorum/read/write/protection proof, a database backup or release provenance. Names, paths, endpoints, credentials, actor identities, input payloads and file content are omitted. No outbound telemetry is sent. Collection has one admitted worker per gateway and a five-second cooperative deadline; bounded local database IO is not forcibly interrupted.",
+        "x-meshspan-access": "system-manager",
+        "responses": {
+            "200": json_response("Redacted local metadata observations", "#/components/schemas/MetadataDiagnosticsResponse"),
+            "400": json_response("Unsupported query or body", "#/components/schemas/ApiError"),
+            "401": json_response("Authentication rejected", "#/components/schemas/ApiError"),
+            "403": json_response("System-manager authority required", "#/components/schemas/ApiError"),
+            "500": json_response("Invalid stored or outgoing observation", "#/components/schemas/ApiError"),
+            "503": json_response("Collection capacity or authority unavailable", "#/components/schemas/ApiError")
+        }
+    } })
 }
 
 fn backup_runs_path() -> Value {

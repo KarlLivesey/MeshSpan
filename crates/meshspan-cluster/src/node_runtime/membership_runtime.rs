@@ -2,7 +2,7 @@
 
 //! Learner admission, catch-up snapshots and automatic voter promotion.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use meshspan_consensus::{ActiveQuorumPlan, CoreInput, MEMBERSHIP_COMMAND_VERSION, Role};
@@ -16,6 +16,7 @@ use super::NodeRuntimeError;
 use super::config::NodeConfig;
 use super::network::{OutboundSnapshot, PeerNetwork, ReceivedSnapshot};
 use super::service::{mesh_id, node_number, now, partition_id};
+use super::snapshot_delivery::SnapshotDelivery;
 use crate::membership::{
     MembershipCoordinatorError, membership_operation_id, membership_proposal_id,
     plan_next_transition,
@@ -24,15 +25,30 @@ use crate::{DriverEffect, PartitionConsensusDriver};
 
 pub(super) struct SnapshotDispatch {
     state_path: PathBuf,
-    sent: BTreeSet<NodeId>,
+    deliveries: BTreeMap<NodeId, SnapshotDelivery>,
 }
 
 impl SnapshotDispatch {
     pub(super) fn new(state_path: PathBuf) -> Self {
         Self {
             state_path,
-            sent: BTreeSet::new(),
+            deliveries: BTreeMap::new(),
         }
+    }
+
+    fn retire_inactive(&mut self, learners: &BTreeSet<NodeId>) -> Result<(), NodeRuntimeError> {
+        let inactive: Vec<_> = self
+            .deliveries
+            .keys()
+            .filter(|node| !learners.contains(node))
+            .copied()
+            .collect();
+        for node in inactive {
+            if let Some(mut delivery) = self.deliveries.remove(&node) {
+                delivery.finish()?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -91,10 +107,10 @@ pub(super) fn install_admission_snapshot(
     if membership.admitted_learners().get(&config.node_id) != Some(&1) {
         return Err(NodeRuntimeError::InvalidConfiguration);
     }
-    received
-        .installed
-        .send(())
-        .map_err(|()| NodeRuntimeError::InvalidConfiguration)
+    // Installation is already durable. A departed response waiter is transport loss,
+    // not invalid metadata, and must not terminate the newly admitted node.
+    let _reply_lost = received.installed.send(());
+    Ok(())
 }
 
 pub(super) fn dispatch_learner_snapshots(
@@ -111,9 +127,13 @@ pub(super) fn dispatch_learner_snapshots(
     let Some(membership) = driver.persistence().partition_membership()? else {
         return Ok(());
     };
+    dispatch.retire_inactive(&plan.spec().learners)?;
     for learner in &plan.spec().learners {
-        if dispatch.sent.contains(learner) || !membership.admitted_learners().contains_key(learner)
-        {
+        if !membership.admitted_learners().contains_key(learner) {
+            continue;
+        }
+        if let Some(delivery) = dispatch.deliveries.get_mut(learner) {
+            delivery.advance(network, *learner, driver.peer_matched_index(*learner))?;
             continue;
         }
         let snapshot_id = learner_snapshot_id(plan, *learner)?;
@@ -130,15 +150,13 @@ pub(super) fn dispatch_learner_snapshots(
         let quorum_plan = ActiveQuorumPlan::Stable(plan.clone())
             .encode()
             .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
-        network.send_snapshot(
-            *learner,
-            OutboundSnapshot {
-                path: destination,
-                manifest,
-                quorum_plan,
-            },
-        );
-        dispatch.sent.insert(*learner);
+        let mut delivery = SnapshotDelivery::new(OutboundSnapshot {
+            path: destination,
+            manifest,
+            quorum_plan,
+        });
+        delivery.advance(network, *learner, driver.peer_matched_index(*learner))?;
+        dispatch.deliveries.insert(*learner, delivery);
     }
     Ok(())
 }

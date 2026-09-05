@@ -15,8 +15,9 @@ function renderJsonRuntime() {
   route: string,
   request: RequestInit,
   parser: JsonParser<T>,
+  maximumBytes = MAX_JSON_RESPONSE_BYTES,
 ): Promise<T> {
-  return (await requestJsonResponse(context, route, request, parser)).body;
+  return (await requestJsonResponse(context, route, request, parser, maximumBytes)).body;
 }
 
 type JsonResponse<T> = Readonly<{
@@ -29,6 +30,7 @@ async function requestJsonResponse<T>(
   route: string,
   request: RequestInit,
   parser: JsonParser<T>,
+  maximumBytes = MAX_JSON_RESPONSE_BYTES,
 ): Promise<JsonResponse<T>> {
   const headers = authenticatedHeaders(context.authorization, request.headers);
   headers.set("Accept", "application/json");
@@ -38,7 +40,7 @@ async function requestJsonResponse<T>(
     headers,
   });
   validateContractHeaders(response);
-  const value = await readBoundedJson(response);
+  const value = await readBoundedJson(response, response.ok ? maximumBytes : MAX_JSON_RESPONSE_BYTES);
 
   if (!response.ok) {
     const parsedError = zApiError.safeParse(value);
@@ -153,16 +155,16 @@ function validateContractHeaders(response: Response): void {
   }
 }
 
-async function readBoundedJson(response: Response): Promise<unknown> {
+async function readBoundedJson(response: Response, maximumBytes = MAX_JSON_RESPONSE_BYTES): Promise<unknown> {
   const contentType = response.headers.get("content-type");
   if (!contentType?.startsWith("application/json")) {
     throw new TypeError("response is not application/json");
   }
   rejectOversizedContentLength(
     response.headers.get("content-length"),
-    MAX_JSON_RESPONSE_BYTES,
+    maximumBytes,
   );
-  const bytes = await readBoundedBytes(response.body, MAX_JSON_RESPONSE_BYTES);
+  const bytes = await readBoundedBytes(response.body, maximumBytes);
   const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   return JSON.parse(text) as unknown;
 }`;

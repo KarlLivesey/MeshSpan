@@ -16,6 +16,93 @@ use zeroize::Zeroizing;
 use super::*;
 use crate::{ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, ConsensusPeerConfig};
 
+#[tokio::test]
+async fn observation_tracks_local_state_without_appending_or_contacting_peers()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let local = NodeId::from_bytes([31; 16])?;
+    let driver = driver(&directory.path().join("observe.sqlite3"), local)?;
+    let partition = driver.persistence().partition_id();
+    let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed_sends = Arc::clone(&sends);
+    let transport: Arc<dyn ConsensusMessageTransport> = Arc::new(move |_, _| {
+        observed_sends.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    });
+    let (authority, runtime) =
+        spawn_metadata_authority(driver, transport, MetadataAuthorityConfig::default())?;
+    let before = authority.observe().await?;
+    assert_eq!(before.partition_id, partition);
+    assert_eq!(before.node_id, local);
+    assert_eq!(before.role, Role::Follower);
+    assert_eq!(before.known_leader, None);
+    assert_eq!(
+        (before.term, before.commit_index, before.applied_index),
+        (0, 0, 0)
+    );
+    assert_eq!(authority.observe().await?, before);
+    authority.begin_election().await?;
+    let (context, command) = command(local, [32; 16])?;
+    let receipt = authority.commit_or_resolve(context, command).await?;
+    let after = authority.observe().await?;
+    assert_eq!(after.role, Role::Leader);
+    assert_eq!(after.known_leader, Some(local));
+    assert_eq!(after.term, receipt.committed_position.term);
+    assert_eq!(after.commit_index, receipt.committed_position.index);
+    assert_eq!(after.applied_index, after.commit_index);
+    assert_eq!((after.pending_operations, after.queued_operations), (0, 0));
+    assert!(!after.persistence_blocked);
+    assert_eq!(authority.observe().await?, after);
+    assert_eq!(sends.load(std::sync::atomic::Ordering::Relaxed), 0);
+    authority.shutdown().await?;
+    runtime.await??;
+    assert_eq!(
+        authority.observe().await,
+        Err(MetadataAuthorityRequestError::Unavailable)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn observation_rejects_full_ingress_without_waiting_and_detects_a_lost_responder()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (events, mut receiver) = mpsc::channel(1);
+    let authority = MetadataAuthorityHandle { events };
+    authority.begin_election().await?;
+    assert_eq!(
+        authority.observe().await,
+        Err(MetadataAuthorityRequestError::Unavailable)
+    );
+    assert!(matches!(
+        receiver.recv().await,
+        Some(AuthorityEvent::BeginElection)
+    ));
+    let observation = authority.observe();
+    tokio::pin!(observation);
+    let respond = tokio::select! {
+        result = &mut observation => return Err(format!("unexpected observation {result:?}").into()),
+        event = receiver.recv() => match event {
+            Some(AuthorityEvent::Observe(respond)) => respond,
+            _ => return Err("missing observation request".into()),
+        }
+    };
+    drop(respond);
+    assert_eq!(
+        observation.await,
+        Err(MetadataAuthorityRequestError::Unavailable)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn observation_deadline_does_not_return_a_cached_success() {
+    let (events, _receiver) = mpsc::channel(1);
+    let authority = MetadataAuthorityHandle { events };
+    assert_eq!(
+        authority.observe().await,
+        Err(MetadataAuthorityRequestError::Unavailable)
+    );
+}
+
 #[test]
 fn voters_receive_distinct_stable_election_slots() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;

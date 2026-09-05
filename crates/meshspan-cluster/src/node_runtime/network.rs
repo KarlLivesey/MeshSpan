@@ -66,7 +66,7 @@ pub(super) struct PeerNetwork {
     partition_id: PartitionId,
     wire_limits: WireLimits,
     outbound: Arc<BTreeMap<NodeId, mpsc::Sender<CoreMessage>>>,
-    outbound_snapshots: Arc<BTreeMap<NodeId, mpsc::Sender<OutboundSnapshot>>>,
+    outbound_snapshots: Arc<BTreeMap<NodeId, mpsc::Sender<snapshot::SnapshotTransfer>>>,
 }
 
 impl PeerNetwork {
