@@ -11,6 +11,7 @@ import type {
   BackupTarget,
 } from "../src/features/backup-administration/model";
 import type { BackupScheduleResponse } from "../src/generated";
+import { createMeshSpanFetchClient } from "../src/generated/fetch.gen";
 
 const ID = "00000000-0000-4000-8000-000000000001";
 const SECOND_ID = "00000000-0000-4000-8000-000000000002";
@@ -221,6 +222,9 @@ function fixture(): BackupAdministrationClient {
     getBackupSchedule: async () => currentSchedule,
     listBackupRuns: async () => ({ runs: [], next_page_url: null }),
     listNextBackupRuns: async () => ({ runs: [], next_page_url: null }),
+    metadataBackupDownloadUrl: createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+    }).metadataBackupDownloadUrl,
     listBackupDestinations: async () => ({
       destinations,
       next_page_url: null,

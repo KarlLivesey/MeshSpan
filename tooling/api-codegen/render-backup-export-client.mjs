@@ -2,7 +2,11 @@
 
 /** Exposes an explicitly incomplete, cancellable transfer rather than buffering a backup. */
 export function renderBackupExportClientInterface() {
-  return `/** Opens encrypted bytes. Consume through successful EOF for verified length and SHA-256.
+  return `/** Builds a credential-free browser download URL without making a request.
+   * Requires a browser session; API-key clients use exportMetadataBackup instead.
+   * The server reauthorises the download. A URL is not evidence of availability. */
+  metadataBackupDownloadUrl: (backupId: string) => string;
+  /** Opens encrypted bytes. Consume through successful EOF for verified length and SHA-256.
    * Partial consumption is not a complete download; this is not restore proof. */
   exportMetadataBackup(backupId: string, signal?: AbortSignal): Promise<Readonly<{
     headers: BackupExportHeaders;
@@ -12,7 +16,19 @@ export function renderBackupExportClientInterface() {
 
 /** Derives the route from Rust and validates both path and returned header evidence. */
 export function renderBackupExportClientMethods(routes) {
-  return `async exportMetadataBackup(backupId, signal): Promise<Readonly<{
+  return `metadataBackupDownloadUrl(backupId): string {
+      if (context.authorization !== undefined) {
+        throw new TypeError("API-key clients must use the authenticated backup stream");
+      }
+      const input = zBackupExportPath.parse({ backup_id: backupId });
+      const route = substitutePathParameter(${JSON.stringify(routes.exportMetadataBackup.route)}, "backup_id", input.backup_id);
+      const url = resolveRoute(context.apiRoot, route);
+      if (url.protocol !== "https:" && url.protocol !== "http:") {
+        throw new TypeError("backup downloads require an HTTP or HTTPS endpoint");
+      }
+      return url.href;
+    },
+    async exportMetadataBackup(backupId, signal): Promise<Readonly<{
       headers: BackupExportHeaders;
       body: ReadableStream<Uint8Array>;
     }>> {

@@ -5,6 +5,7 @@ import type { JSX } from "@solidjs/web";
 import { instantFromEpochMicroseconds } from "../../domain/instant";
 import type { ListBackupRunsResponse } from "../../generated";
 import { createBackupHistory, type BackupHistoryClient } from "./history";
+import { BackupExportLink } from "./BackupExportLink";
 
 type BackupRunSummary = ListBackupRunsResponse["runs"][number];
 
@@ -30,6 +31,10 @@ export function BackupHistory(
         Newest attempts first. Completed protection describes that moment; it
         does not prove a backup is recoverable now.
       </p>
+      <p>
+        Encrypted downloads are managed by your browser. Keep your offline
+        recovery bundle separately; downloading is not a restore check.
+      </p>
       <div aria-live="polite">
         <Show when={model.loading()}>
           <p>Reading backup history…</p>
@@ -52,7 +57,12 @@ export function BackupHistory(
             >
               <ol class="backup-destinations" aria-label="Backup attempts">
                 <For each={page().runs}>
-                  {(run) => <BackupHistoryEntry run={run} />}
+                  {(run) => (
+                    <BackupHistoryEntry
+                      run={run}
+                      downloadUrl={props.client.metadataBackupDownloadUrl}
+                    />
+                  )}
                 </For>
               </ol>
             </Show>
@@ -75,7 +85,10 @@ export function BackupHistory(
 }
 
 function BackupHistoryEntry(
-  props: Readonly<{ run: BackupRunSummary }>,
+  props: Readonly<{
+    run: BackupRunSummary;
+    downloadUrl: BackupHistoryClient["metadataBackupDownloadUrl"];
+  }>,
 ): JSX.Element {
   return (
     <li>
@@ -95,6 +108,12 @@ function BackupHistoryEntry(
           <p>{props.run.backup_id}</p>
           <p>Policy revision {props.run.schedule_sequence}</p>
         </details>
+        <Show when={props.run.state === "protected"}>
+          <BackupExportLink
+            backupId={props.run.backup_id}
+            downloadUrl={props.downloadUrl}
+          />
+        </Show>
       </div>
     </li>
   );
