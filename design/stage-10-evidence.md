@@ -267,6 +267,39 @@ Local evidence for this slice:
   run was slower than the preceding retention gate; no test-speed improvement is
   claimed. Hardware/soak and opt-in SMB-image proofs remain separate.
 
+## Backup administration panel
+
+`/admin/backups` now exposes the existing Rust-generated backup APIs through the
+manager-gated web panel. It shows the current schedule and paged destinations,
+supports explicit frequency/retention/copy thresholds, pauses or resumes a
+registered destination, and selects existing active storage anywhere in the mesh
+for a new destination. It never asks for provider filesystem paths or duplicate
+credentials. Advanced settings are collapsed; the ordinary view distinguishes
+configuration from proof of a completed backup and labels unknown failure
+independence honestly.
+
+Inventory loading and save/retry handling have separate responsibilities. Reads
+are coalesced while in flight; pages are requested only on demand. Paging does
+not reset partially completed forms, while successful destination creation does.
+Failed reads clear stale private inventory instead of displaying an empty mesh
+as if the query succeeded. Mutations carry CSRF and observed revisions, wait for
+matching receipts and retain the exact operation/request for in-panel retry after
+an unknown result. No optimistic saved or protected state is invented.
+
+The native-Fetch generator now includes `listNextBackupDestinations`, validating
+the continuation origin, exact endpoint, duplicate/unknown query fields and
+numeric limits before sending credentials. Generated files were regenerated,
+not hand-edited. No public API schema, Rust persistence or dependencies changed.
+
+Sixteen focused component/client tests passed in 1.53 seconds. They cover actual
+DOM form submissions, pause/resume revisions, CSRF, invalid policy, unknown
+outcomes, duplicate-click admission, invalid receipts, pagination, preservation
+of form input, large generation identifiers and failed-read clearing. These are
+headless DOM tests and generated-client transport fixtures, not a live-browser
+or real-device visual acceptance claim. TypeScript and strict ESLint passed; the
+production web build also passed before the final form-reset change. Final full
+local verification is still pending for this slice.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in
@@ -277,7 +310,7 @@ or image was produced; hardware/soak and opt-in SMB-image proofs remain separate
 
 The schedule API does not close these separate outstanding requirements:
 
-- backup panel controls and topology-backed failure assessments;
+- topology-backed failure assessments;
 - automatic resolution of abandoned unpublished backup holds;
 - product-facing restore-readiness, encrypted export and recovery workflows;
 - provider/federation destination implementations and their acceptance evidence.

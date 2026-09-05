@@ -4,6 +4,7 @@ import { For } from "solid-js";
 import type { JSX } from "@solidjs/web";
 
 type AdministrationSection =
+  | "backups"
   | "certificates"
   | "identities"
   | "operations"
@@ -30,6 +31,7 @@ const SECTIONS: readonly Readonly<{
     label: "Certificates",
   },
   { href: "/admin/operations", id: "operations", label: "Operations" },
+  { href: "/admin/backups", id: "backups", label: "Metadata backups" },
 ];
 
 export function AdministrationNavigation(

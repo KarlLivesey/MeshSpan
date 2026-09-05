@@ -68,6 +68,35 @@ describe("generated backup destination controls", () => {
 });
 
 describe("generated backup destination validation", () => {
+  it("follows only exact same-origin backup continuations with validated query fields", async () => {
+    const sent: string[] = [];
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: async (input) => {
+        sent.push(input instanceof Request ? input.url : input.toString());
+        return response({ destinations: [], next_page_url: null });
+      },
+    });
+    const next =
+      "/api/latest/admin/backups/destinations?limit=1&cursor=v1.bkd.token";
+    await client.listNextBackupDestinations(next);
+    expect(sent).toEqual([`https://node.example${next}`]);
+    for (const invalid of [
+      "https://attacker.example/steal",
+      "//attacker.example/steal",
+      "/api/latest/admin/backups/schedule",
+      `${next}&limit=2`,
+      `${next}&secret=yes`,
+      `${next}#fragment`,
+      "/api/latest/admin/backups/destinations?limit=1e2",
+      "/api/latest/admin/backups/destinations?limit=0",
+    ])
+      await expect(
+        client.listNextBackupDestinations(invalid),
+      ).rejects.toThrow();
+    expect(sent).toHaveLength(1);
+  });
+
   it("rejects unknown, missing, nullable and coerced mutation fields", () => {
     expect(zConfigureBackupDestinationBody.safeParse(request()).success).toBe(
       true,
