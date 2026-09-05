@@ -160,14 +160,21 @@ type AuthorityTask = (
     u64,
 );
 type ProductionRemoteBackupService = RemoteBackupService<
-    meshspan_backup::DirectoryBackupProvider,
+    meshspan_backup::SharedBackupProvider<meshspan_backup::DirectoryBackupProvider>,
     crate::remote_backup_authority::ConsensusRemoteBackupAuthority,
 >;
 type ProductionDataRouter = RemoteDataRouter<
     crate::LocalFolderStorageProvider,
-    meshspan_backup::DirectoryBackupProvider,
+    meshspan_backup::SharedBackupProvider<meshspan_backup::DirectoryBackupProvider>,
     crate::remote_backup_authority::ConsensusRemoteBackupAuthority,
 >;
+
+struct ActiveBackupDestination {
+    target_id: TargetId,
+    storage_path: PathBuf,
+    provider: meshspan_backup::SharedBackupProvider<meshspan_backup::DirectoryBackupProvider>,
+    service: ProductionRemoteBackupService,
+}
 
 struct StorageRuntimeComposition {
     readiness: Arc<RuntimeReadiness>,
@@ -2252,7 +2259,7 @@ struct StorageTargetRuntime {
     maintenance_progress: LocalDatabase,
     backup_worker: crate::MetadataBackupWorker,
     backup_authority: crate::remote_backup_authority::ConsensusRemoteBackupAuthority,
-    backup_services: BTreeMap<(BackupDestinationId, u64), ProductionRemoteBackupService>,
+    backup_services: BTreeMap<(BackupDestinationId, u64), ActiveBackupDestination>,
     private_network: Arc<PrivateConsensusRuntime>,
     runtime: tokio::runtime::Handle,
     state_directory: PathBuf,
@@ -2338,7 +2345,9 @@ impl StorageTargetRuntime {
         } else {
             Some(
                 RemoteBackupRouter::new(
-                    self.backup_services.values().cloned(),
+                    self.backup_services
+                        .values()
+                        .map(|entry| entry.service.clone()),
                     self.backup_services.len(),
                 )
                 .map_err(|_| ())?,
@@ -2397,19 +2406,22 @@ impl StorageTargetRuntime {
                     continue;
                 };
                 let route = (destination.destination_id, target_generation);
-                if !active_routes.insert(route) || active_routes.len() > MAXIMUM_BACKUP_DESTINATIONS
-                {
-                    return Err(());
-                }
-                if self.backup_services.contains_key(&route) {
-                    continue;
-                }
                 let Some((storage_path, target)) = self.active.iter().find(|(_, target)| {
                     let context = target.context();
                     context.target_id == target_id && context.generation == target_generation
                 }) else {
                     continue;
                 };
+                if !active_routes.insert(route) || active_routes.len() > MAXIMUM_BACKUP_DESTINATIONS
+                {
+                    return Err(());
+                }
+                if self.backup_services.get(&route).is_some_and(|entry| {
+                    entry.target_id == target_id && entry.storage_path == *storage_path
+                }) {
+                    continue;
+                }
+                self.backup_services.remove(&route);
                 let Ok(provider) = meshspan_backup::DirectoryBackupProvider::open(
                     storage_path,
                     destination.destination_id,
@@ -2420,15 +2432,24 @@ impl StorageTargetRuntime {
                     self.readiness.store_degraded(true);
                     continue;
                 };
+                let provider = meshspan_backup::SharedBackupProvider::new(provider);
                 let service = ProductionRemoteBackupService::new(
-                    provider,
+                    provider.clone(),
                     self.backup_authority.clone(),
                     target.context().mesh_id,
                     destination.destination_id,
                     target_generation,
                 )
                 .map_err(|_| ())?;
-                self.backup_services.insert(route, service);
+                self.backup_services.insert(
+                    route,
+                    ActiveBackupDestination {
+                        target_id,
+                        storage_path: storage_path.clone(),
+                        provider,
+                        service,
+                    },
+                );
             }
             let Some(next) = page.next else {
                 break;
@@ -2470,21 +2491,19 @@ impl StorageTargetRuntime {
         else {
             return Ok(());
         };
-        let local_targets = self
-            .active
-            .iter()
-            .map(|(storage_path, target)| {
-                let context = target.context();
-                Ok(crate::RegisteredBackupTarget {
-                    target_id: context.target_id,
-                    target_generation: context.generation,
-                    storage_path: storage_path.clone(),
-                    maximum_backup_bytes: target.capacity_ceiling().map_err(|_| ())?,
-                })
-            })
-            .collect::<Result<Vec<_>, ()>>()?;
-        let local = crate::RegisteredTargetBackupProviderResolver::new(local_targets, now)
-            .map_err(|_| ())?;
+        let local_targets =
+            self.backup_services
+                .iter()
+                .map(|((destination_id, target_generation), entry)| {
+                    crate::RegisteredBackupTarget {
+                        destination_id: *destination_id,
+                        target_id: entry.target_id,
+                        target_generation: *target_generation,
+                        provider: entry.provider.clone(),
+                    }
+                });
+        let local =
+            crate::RegisteredTargetBackupProviderResolver::new(local_targets).map_err(|_| ())?;
         let mut resolver = crate::cluster_backup_provider::ClusterBackupProviderResolver::new(
             mesh_id,
             self.local_node_id,

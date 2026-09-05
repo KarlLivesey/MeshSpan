@@ -236,6 +236,75 @@ fn independent_destinations_can_share_one_registered_folder()
     Ok(())
 }
 
+#[test]
+fn shared_destination_serialises_replay_and_releases_ownership_after_the_last_user()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let destination_id = BackupDestinationId::from_bytes([40; 16])?;
+    let bytes = b"one encrypted object";
+    let open = || {
+        DirectoryBackupProvider::open(
+            directory.path(),
+            destination_id,
+            1,
+            bytes.len() as u64,
+            UnixMicros::new(1),
+        )
+    };
+    let shared = crate::SharedBackupProvider::new(open()?);
+    // This is the original local-worker failure when the remote service already owns it.
+    assert!(matches!(
+        open(),
+        Err(crate::DirectoryBackupProviderError::AlreadyOwned)
+    ));
+    let store = BackupStoreRequest {
+        context: context(41, 1)?,
+        object: identity(destination_id, BackupId::from_bytes([42; 16])?, bytes),
+    };
+    let mut first = shared.clone();
+    let mut second = shared.clone();
+    let (first_receipt, second_receipt) = std::thread::scope(|scope| {
+        let first_worker = scope
+            .spawn(move || first.store_exact(store, &mut Cursor::new(bytes), UnixMicros::new(2)));
+        let second_worker = scope
+            .spawn(move || second.store_exact(store, &mut Cursor::new(bytes), UnixMicros::new(2)));
+        (first_worker.join(), second_worker.join())
+    });
+    let receipt = first_receipt.map_err(|_| "first backup worker panicked")??;
+    assert_eq!(
+        second_receipt.map_err(|_| "second backup worker panicked")??,
+        receipt
+    );
+    let mut survivor = shared.clone();
+    drop(shared);
+    assert!(matches!(
+        open(),
+        Err(crate::DirectoryBackupProviderError::AlreadyOwned)
+    ));
+    let mut excess = store;
+    excess.context = context(43, 2)?;
+    excess.object.backup_id = BackupId::from_bytes([44; 16])?;
+    assert_eq!(
+        survivor.store_exact(excess, &mut Cursor::new(bytes), UnixMicros::new(3)),
+        Err(ContractError::ResourceExhausted)
+    );
+    drop(survivor);
+    let reopened = open()?;
+    let mut returned = Vec::new();
+    let read = reopened.read_exact(
+        &BackupReadRequest {
+            context: context(45, 2)?,
+            object: store.object,
+            object_reference: receipt.object_reference,
+        },
+        &mut returned,
+        UnixMicros::new(4),
+    )?;
+    assert_eq!(returned, bytes);
+    assert_eq!(read.digest, store.object.digest);
+    Ok(())
+}
+
 fn identity(
     destination_id: BackupDestinationId,
     backup_id: BackupId,
