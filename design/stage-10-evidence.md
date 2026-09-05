@@ -42,7 +42,7 @@ seconds**, collecting and validating redacted snapshots from both gateways after
 create/join, storage registration, backup, users/groups, volume and file work.
 The final cycle, including diagnostics and file reads from the surviving gateway
 after killing the other daemon, passed in **25.32 seconds**. The complete local
-gate has not passed. Its first run failed the Rust workspace lane and the web
+gate now passes. Its first run failed the Rust workspace lane and the web
 source guard. The web guard incorrectly treated the English phrase "if any" in
 a generated comment as an unsafe type; it now walks TypeScript syntax and has
 positive/negative fixtures for real type nodes versus comments, strings and
@@ -89,8 +89,12 @@ the final write/shutdown, keeping the exact revision-5 assertion.
 These faults reproduce the stalled-join symptom, but the original gate had no
 transfer-failure evidence; its precise initiating cause remains unconfirmed.
 The final seven-case real-process suite passed in **8.69 seconds** and
-all-target/all-feature cluster Clippy passed in **8.98 seconds**. Complete-gate
-validation of this fix is still pending.
+all-target/all-feature cluster Clippy passed in **8.98 seconds**. The complete
+NVM-default `MESHSPAN_CHECK_WORKERS=4 pnpm check` passed on signed `cd670ec` in
+**631.42 seconds**: Rust workspace tests **594.06 seconds**, web tests
+**3.78 seconds**, plus generated drift, embedded web build, formatting, strict
+Rust/web lint, type checking, tooling tests and both licence gates. No release,
+tag, image or publication workflow was run.
 
 This is the metadata section of OPS-011, not completion of the full diagnostic
 bundle, local metric history/exporters, notification delivery or the operational
