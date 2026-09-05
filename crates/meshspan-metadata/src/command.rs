@@ -260,6 +260,8 @@ pub enum AuthoritativeCommand {
     ConfigureBackupDestination(ConfigureBackupDestination),
     /// Creates or replaces one partition's automatic metadata-backup schedule.
     ConfigureMetadataBackupSchedule(ConfigureMetadataBackupSchedule),
+    /// Reconciles automatically managed backup destinations and schedule from current topology.
+    ReconcileMetadataBackupDefaults(crate::ReconcileMetadataBackupDefaults),
     /// Materialises one exact due automatic metadata-backup occurrence.
     QueueMetadataBackupRun(QueueMetadataBackupRun),
     /// Fences one node as the sole producer for a queued backup occurrence.
@@ -476,6 +478,7 @@ impl AuthoritativeCommand {
             Self::RecordMetadataBackup(value) => value.update_digest(digest),
             Self::RecordBackupCopy(value) => value.update_digest(digest),
             Self::VerifyBackupCopy(value) => value.update_digest(digest),
+            Self::ReconcileMetadataBackupDefaults(value) => value.update_digest(digest),
             Self::RetireMetadataBackup(value) => value.update_digest(digest),
             Self::RecordBackupReclamation(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
@@ -3346,6 +3349,15 @@ digest_simple_record!(AssignComponent, b"assign-component", |value, digest| {
     digest.identifier(value.assignment_id);
     digest.byte(value.desired_state);
 });
+digest_simple_record!(
+    crate::ReconcileMetadataBackupDefaults,
+    b"reconcile-backup-defaults",
+    |value, digest| {
+        digest.identifier(value.partition_id.as_bytes());
+        digest.unsigned(value.expected_topology_revision.get());
+        digest.unsigned(value.expected_defaults_revision.get());
+    }
+);
 digest_simple_record!(
     ConfigureBackupDestination,
     b"configure-backup-destination",

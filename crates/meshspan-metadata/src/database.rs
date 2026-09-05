@@ -1572,6 +1572,49 @@ mod tests {
     }
 
     #[test]
+    fn backup_defaults_migration_is_fingerprinted_and_upgrades_schema_84()
+    -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(
+            crate::migration::partition_backup_defaults_migration_digest(),
+            [
+                0xe9, 0x14, 0xd7, 0xb1, 0x75, 0xff, 0x6a, 0xa8, 0xe2, 0x15, 0x6f, 0x76, 0xe3, 0xe0,
+                0xa1, 0xe7, 0xbb, 0xc1, 0x97, 0xd3, 0x09, 0x98, 0x4f, 0xc7, 0x69, 0x34, 0x83, 0x6d,
+                0x5d, 0x2f, 0x37, 0x82,
+            ]
+        );
+        let directory = tempdir()?;
+        let mut connection = open_connection(&directory.path().join("upgrade.sqlite3"))?;
+        migrate_partition_through(&mut connection, 84, 10)?;
+        connection.execute("INSERT INTO backup_destinations(destination_id, display_name, canonical_name,
+            destination_kind, remote_mesh_id, provider_generation, failure_relationship,
+            failure_evidence_digest, state, created_at, revision)
+            VALUES (?1, 'Existing paused destination', 'existing paused destination', 2, ?2, 1, 3, ?3, 2, 10, 1)",
+            rusqlite::params![[1_u8; 16].as_slice(), [2_u8; 16].as_slice(), [3_u8; 32].as_slice()])?;
+        migrate_partition(&mut connection, 20)?;
+        assert_eq!(
+            connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
+            PARTITION_SCHEMA_VERSION
+        );
+        let preserved = connection.query_row(
+            "SELECT configuration_origin, state, revision FROM backup_destinations",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )?;
+        assert_eq!(preserved, (2, 2, 1));
+        let integrity: String =
+            connection.pragma_query_value(None, "integrity_check", |row| row.get(0))?;
+        assert_eq!(integrity, "ok");
+        assert!(!connection.prepare("PRAGMA foreign_key_check")?.exists([])?);
+        Ok(())
+    }
+
+    #[test]
     fn backup_reclamation_migration_is_fingerprinted_and_upgrades_schema_83()
     -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(

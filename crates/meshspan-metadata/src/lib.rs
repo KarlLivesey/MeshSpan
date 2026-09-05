@@ -59,9 +59,9 @@ pub use backup_command::{
     BackupDestinationBinding, BackupFailureRelationship, ClaimMetadataBackupRun,
     CompleteMetadataBackupRun, ConfigureBackupDestination, ConfigureMetadataBackupSchedule,
     InitialBackupCopy, MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES, MAXIMUM_BACKUP_RETENTION_WITNESSES,
-    MetadataBackupRunClaim, MetadataBackupRunCompletion, QueueMetadataBackupRun, RecordBackupCopy,
-    RecordBackupReclamation, RecordMetadataBackup, RenewMetadataBackupRun, RetireMetadataBackup,
-    VerifyBackupCopy,
+    MetadataBackupRunClaim, MetadataBackupRunCompletion, QueueMetadataBackupRun,
+    ReconcileMetadataBackupDefaults, RecordBackupCopy, RecordBackupReclamation,
+    RecordMetadataBackup, RenewMetadataBackupRun, RetireMetadataBackup, VerifyBackupCopy,
 };
 pub use command::{
     ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,

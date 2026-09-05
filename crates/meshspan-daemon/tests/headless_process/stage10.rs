@@ -2,7 +2,10 @@
 
 //! Backup controls exercised against the real appliance HTTPS listener.
 
-use super::{ClientConfig, Error, SocketAddr, request_with_headers, require_status, response_body};
+use super::{
+    ClientConfig, Error, Instant, RETRY_INTERVAL, SocketAddr, WAIT_LIMIT, request_with_headers,
+    require_status, response_body, sleep,
+};
 use serde_json::{Value, json};
 
 const DESTINATIONS: &str = "/api/latest/admin/backups/destinations";
@@ -13,6 +16,7 @@ pub(super) async fn backup_destination_controls(
     api_key: &str,
 ) -> Result<(), Box<dyn Error>> {
     let authorization = format!("Bearer {api_key}");
+    automatic_backup_configuration(address, client, &authorization).await?;
     let response = request_with_headers(
         address,
         client,
@@ -55,21 +59,71 @@ pub(super) async fn backup_destination_controls(
     .await?;
     require_status(&response, "200 OK", "list paused backup destination")?;
     let page: Value = serde_json::from_str(response_body(&response)?)?;
-    assert_eq!(
-        page["destinations"]
-            .as_array()
-            .ok_or("destination list missing")?
-            .len(),
-        1
-    );
-    assert_eq!(page["destinations"][0]["state"], "paused");
-    assert_eq!(
-        page["destinations"][0]["revision"],
-        paused["committed_revision"]
-    );
-    assert_eq!(page["destinations"][0]["failure_relationship"], "unknown");
+    let destination = page["destinations"]
+        .as_array()
+        .ok_or("destination list missing")?
+        .iter()
+        .find(|destination| destination["destination_id"] == request["destination_id"])
+        .ok_or("explicit destination missing")?;
+    assert_eq!(destination["state"], "paused");
+    assert_eq!(destination["revision"], paused["committed_revision"]);
+    assert_eq!(destination["failure_relationship"], "unknown");
     assert!(page["next_page_url"].is_null());
     Ok(())
+}
+
+async fn automatic_backup_configuration(
+    address: SocketAddr,
+    client: &ClientConfig,
+    authorization: &str,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let response = request_with_headers(
+            address,
+            client,
+            "GET",
+            "/api/latest/admin/backups/schedule",
+            None,
+            &[("Authorization", authorization)],
+        )
+        .await?;
+        require_status(&response, "200 OK", "read automatic backup schedule")?;
+        let schedule: Value = serde_json::from_str(response_body(&response)?)?;
+        if !schedule["schedule"].is_null() {
+            let policy = &schedule["schedule"]["policy"];
+            assert_eq!(policy["interval_seconds"], 86_400);
+            assert_eq!(policy["retained_generations"], 3);
+            assert_eq!(policy["enabled"], true);
+            assert_eq!(policy["minimum_independent_copies"], 0);
+            let response = request_with_headers(
+                address,
+                client,
+                "GET",
+                DESTINATIONS,
+                None,
+                &[("Authorization", authorization)],
+            )
+            .await?;
+            require_status(&response, "200 OK", "read automatic backup destinations")?;
+            let page: Value = serde_json::from_str(response_body(&response)?)?;
+            let destinations = page["destinations"]
+                .as_array()
+                .ok_or("destinations missing")?;
+            assert!(!destinations.is_empty());
+            assert!(
+                destinations
+                    .iter()
+                    .all(|destination| destination["state"] == "active"
+                        && destination["failure_relationship"] == "unknown")
+            );
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("automatic backup configuration did not appear".into());
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
 }
 
 async fn configure(

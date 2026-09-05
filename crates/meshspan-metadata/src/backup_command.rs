@@ -11,6 +11,17 @@ pub use meshspan_contracts::MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES;
 
 use crate::RecordName;
 
+/// Reconciles appliance-managed backup configuration without replacing explicit choices.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReconcileMetadataBackupDefaults {
+    /// Owning metadata partition.
+    pub partition_id: PartitionId,
+    /// Topology/configuration revision used to request reconciliation.
+    pub expected_topology_revision: Revision,
+    /// Current defaults-state revision, or zero before first initialisation.
+    pub expected_defaults_revision: Revision,
+}
+
 /// Maximum retained-generation witness set in one automatic retirement command.
 pub const MAXIMUM_BACKUP_RETENTION_WITNESSES: usize = 1_024;
 

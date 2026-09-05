@@ -30,6 +30,7 @@ mod backup;
 mod backup_catalogue;
 #[cfg(test)]
 mod backup_catalogue_tests;
+mod backup_defaults;
 mod backup_reclamation;
 mod backup_retention;
 mod backup_run;

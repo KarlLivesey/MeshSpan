@@ -93,6 +93,13 @@ pub(in crate::repository) fn configure_destination(
     if changed != 1 {
         return Err(RepositoryError::InvalidCommand);
     }
+    // Explicit edits take ownership; automatic reconciliation deliberately marks
+    // its own writes back to automatic within the same enclosing transaction.
+    transaction.execute(
+        "UPDATE backup_destinations SET configuration_origin = 2 WHERE destination_id = ?1",
+        [command.destination_id.as_bytes().as_slice()],
+    )?;
+    super::super::backup_defaults::invalidate(transaction, revision)?;
     Ok(EntityReference {
         kind: EntityKind::BackupDestination,
         id: command.destination_id.as_bytes(),

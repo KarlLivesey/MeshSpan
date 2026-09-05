@@ -27,6 +27,7 @@ pub(super) const CLAIM_METADATA_BACKUP_RUN: u16 = 69;
 pub(super) const RENEW_METADATA_BACKUP_RUN: u16 = 70;
 pub(super) const COMPLETE_METADATA_BACKUP_RUN: u16 = 71;
 const MAXIMUM_NAME_BYTES: usize = 128;
+const RECONCILE_BACKUP_DEFAULTS: u16 = 75;
 
 pub(super) const fn is_command_kind(kind: u16) -> bool {
     matches!(
@@ -40,6 +41,7 @@ pub(super) const fn is_command_kind(kind: u16) -> bool {
             | CLAIM_METADATA_BACKUP_RUN
             | RENEW_METADATA_BACKUP_RUN
             | COMPLETE_METADATA_BACKUP_RUN
+            | RECONCILE_BACKUP_DEFAULTS
     )
 }
 
@@ -48,6 +50,15 @@ pub(super) fn encode_command(
     command: &crate::AuthoritativeCommand,
 ) -> Result<bool, MetadataCommandCodecError> {
     match command {
+        crate::AuthoritativeCommand::ReconcileMetadataBackupDefaults(value) => {
+            if value.expected_topology_revision.get() == 0 {
+                return Err(MetadataCommandCodecError::Invalid);
+            }
+            encoder.u16(RECONCILE_BACKUP_DEFAULTS)?;
+            encoder.identifier(value.partition_id.as_bytes())?;
+            encoder.u64(value.expected_topology_revision.get())?;
+            encoder.u64(value.expected_defaults_revision.get())?;
+        }
         crate::AuthoritativeCommand::ConfigureBackupDestination(value) => {
             encode_destination(encoder, value)?;
         }
@@ -83,6 +94,17 @@ pub(super) fn decode_command(
     decoder: &mut Decoder<'_>,
 ) -> Result<crate::AuthoritativeCommand, MetadataCommandCodecError> {
     match kind {
+        RECONCILE_BACKUP_DEFAULTS => {
+            let value = crate::ReconcileMetadataBackupDefaults {
+                partition_id: PartitionId::from_bytes(decoder.identifier()?)?,
+                expected_topology_revision: Revision::new(decoder.u64()?),
+                expected_defaults_revision: Revision::new(decoder.u64()?),
+            };
+            if value.expected_topology_revision.get() == 0 {
+                return Err(MetadataCommandCodecError::Invalid);
+            }
+            Ok(crate::AuthoritativeCommand::ReconcileMetadataBackupDefaults(value))
+        }
         CONFIGURE_BACKUP_DESTINATION => {
             decode_destination(decoder).map(crate::AuthoritativeCommand::ConfigureBackupDestination)
         }

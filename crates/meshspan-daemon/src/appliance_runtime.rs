@@ -2507,6 +2507,15 @@ impl StorageTargetRuntime {
         else {
             return Ok(());
         };
+        let mut random = OperatingSystemRandom;
+        if crate::metadata_backup_defaults::reconcile(
+            &self.maintenance_authority,
+            &mut random,
+            actor_principal_id,
+            now,
+        )? {
+            self.refresh_backup_services(now)?;
+        }
         let local_targets =
             self.backup_services
                 .iter()
@@ -2528,7 +2537,6 @@ impl StorageTargetRuntime {
             Arc::clone(&self.private_network),
             self.runtime.clone(),
         );
-        let mut random = OperatingSystemRandom;
         let mut cycle = crate::ComposedMetadataBackupCycle {
             authority: &self.maintenance_authority,
             local: &mut self.maintenance_progress,
