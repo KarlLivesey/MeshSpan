@@ -11,6 +11,29 @@ pub use meshspan_contracts::MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES;
 
 use crate::RecordName;
 
+/// Maximum retained-generation witness set in one automatic retirement command.
+pub const MAXIMUM_BACKUP_RETENTION_WITNESSES: usize = 1_024;
+
+/// Retires an old generation only while newer verified generations satisfy current policy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RetireMetadataBackup {
+    /// Exact older generation selected for retirement.
+    pub backup_id: BackupId,
+    /// Observed revision of that generation, not the entire partition.
+    pub expected_backup_revision: Revision,
+    /// Current retention policy sequence; a policy change invalidates the decision.
+    pub expected_schedule_sequence: u64,
+    /// Exact newer retained generations, unique and sorted by identity.
+    pub retained_backups: Vec<BackupId>,
+}
+
+/// Records provider-confirmed physical removal of one already retired copy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecordBackupReclamation {
+    /// Exact provider result; never a location-only claim or an inferred timeout outcome.
+    pub receipt: meshspan_contracts::BackupDeleteReceipt,
+}
+
 /// Replaceable destination selected for one encrypted backup copy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackupDestinationBinding {

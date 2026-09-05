@@ -248,7 +248,12 @@ pub(super) fn operation_digest(
     digest.update(request.context.operation_id.as_bytes());
     digest.update(request.context.contract_version.major.to_be_bytes());
     digest.update(request.context.contract_version.minor.to_be_bytes());
-    digest.update(request.context.deadline.get().to_be_bytes());
+    // Retirement permanently identifies deletion authority. Its network deadline
+    // belongs to one attempt, not to the durable idempotency key: a restarted
+    // worker must be able to renew that deadline and recover the same receipt.
+    if !matches!(kind, OperationKind::Delete) {
+        digest.update(request.context.deadline.get().to_be_bytes());
+    }
     digest.update(
         request
             .context

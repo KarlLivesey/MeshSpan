@@ -188,6 +188,9 @@ mod metadata_backup_preparation;
 #[cfg(test)]
 mod metadata_backup_preparation_tests;
 mod metadata_backup_provider_resolution;
+mod metadata_backup_retention;
+#[cfg(test)]
+mod metadata_backup_retention_tests;
 mod metadata_forwarding;
 mod multi_factor_session;
 mod namespace_mutation_api;

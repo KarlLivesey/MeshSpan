@@ -30,6 +30,8 @@ mod backup;
 mod backup_catalogue;
 #[cfg(test)]
 mod backup_catalogue_tests;
+mod backup_reclamation;
+mod backup_retention;
 mod backup_run;
 #[cfg(test)]
 mod backup_run_tests;
@@ -194,6 +196,7 @@ pub use backup_catalogue::{
     BackupCopyRecord, BackupCopyState, BackupDestinationCursor, BackupDestinationRecord,
     BackupDestinationState, MetadataBackupRecord, MetadataBackupState,
 };
+pub use backup_reclamation::BackupReclamationCursor;
 pub use backup_run::{
     MetadataBackupProtectionEvidence, MetadataBackupRun, MetadataBackupRunClaimRecord,
     MetadataBackupRunState,

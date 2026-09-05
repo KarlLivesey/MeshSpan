@@ -119,6 +119,54 @@ fn exact_stream_survives_restart_replays_and_retires_once() -> Result<(), Box<dy
 }
 
 #[test]
+fn deletion_retry_renews_deadline_after_restart_without_changing_authority()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let destination = BackupDestinationId::from_bytes([1; 16])?;
+    let object = identity(destination, BackupId::from_bytes([2; 16])?, b"bytes");
+    let mut provider =
+        DirectoryBackupProvider::open(directory.path(), destination, 1, 1024, UnixMicros::new(1))?;
+    let stored = provider.store_exact(
+        BackupStoreRequest {
+            context: context(3, 10)?,
+            object,
+        },
+        &mut Cursor::new(b"bytes"),
+        UnixMicros::new(2),
+    )?;
+    let mut deletion = BackupDeleteRequest {
+        context: context(4, 11)?,
+        object,
+        object_reference: stored.object_reference,
+        retirement_revision: Revision::new(11),
+    };
+    let receipt = provider.delete_exact(&deletion, UnixMicros::new(3))?;
+    drop(provider);
+    let mut reopened = DirectoryBackupProvider::open(
+        directory.path(),
+        destination,
+        1,
+        1024,
+        UnixMicros::new(101),
+    )?;
+    assert_eq!(
+        reopened.delete_exact(&deletion, UnixMicros::new(101)),
+        Err(ContractError::DeadlineExceeded)
+    );
+    deletion.context.deadline = UnixMicros::new(200);
+    assert_eq!(
+        reopened.delete_exact(&deletion, UnixMicros::new(101))?,
+        receipt
+    );
+    deletion.object.digest = [99; 32];
+    assert_eq!(
+        reopened.delete_exact(&deletion, UnixMicros::new(102)),
+        Err(ContractError::Conflict)
+    );
+    Ok(())
+}
+
+#[test]
 fn rejected_stream_and_capacity_claim_publish_nothing() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
     let destination_id = BackupDestinationId::from_bytes([10; 16])?;

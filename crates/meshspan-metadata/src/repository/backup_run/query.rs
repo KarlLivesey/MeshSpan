@@ -167,8 +167,11 @@ pub(super) fn protection_evidence(
                 c.byte_length, c.copy_digest, d.failure_relationship,
                 d.failure_evidence_digest
          FROM backup_copies c JOIN backup_destinations d USING(destination_id)
+         JOIN metadata_backups b ON b.backup_id = c.backup_id
          WHERE c.backup_id = ?1 AND c.state = 2 AND d.state IN (1, 2)
            AND c.provider_generation = d.provider_generation
+           AND b.state IN (1, 2) AND c.byte_length = b.encrypted_byte_length
+           AND c.copy_digest = b.encrypted_digest
          ORDER BY c.destination_id",
     )?;
     let rows = statement.query_map([backup_id.as_bytes().as_slice()], |row| {

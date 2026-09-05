@@ -49,7 +49,8 @@ use crate::{
 use crate::{
     ClaimMetadataBackupRun, CompleteMetadataBackupRun, ConfigureBackupDestination,
     ConfigureMetadataBackupSchedule, MetadataBackupRunCompletion, QueueMetadataBackupRun,
-    RecordBackupCopy, RecordMetadataBackup, RenewMetadataBackupRun, VerifyBackupCopy,
+    RecordBackupCopy, RecordBackupReclamation, RecordMetadataBackup, RenewMetadataBackupRun,
+    RetireMetadataBackup, VerifyBackupCopy,
 };
 use crate::{IssueFederationStorageAllocation, RevokeFederationStorageAllocation};
 use crate::{
@@ -273,6 +274,10 @@ pub enum AuthoritativeCommand {
     RecordBackupCopy(RecordBackupCopy),
     /// Records read-after-write verification of one unchanged backup copy.
     VerifyBackupCopy(VerifyBackupCopy),
+    /// Retires an old backup and its copies against current retained-generation evidence.
+    RetireMetadataBackup(RetireMetadataBackup),
+    /// Records exact physical removal after authoritative retirement.
+    RecordBackupReclamation(RecordBackupReclamation),
     /// Registers one node-local public key for encrypted secret generations.
     RegisterNodeWrappingKey(RegisterNodeWrappingKey),
     /// Commits one encrypted secret generation and every exact recipient envelope atomically.
@@ -471,6 +476,8 @@ impl AuthoritativeCommand {
             Self::RecordMetadataBackup(value) => value.update_digest(digest),
             Self::RecordBackupCopy(value) => value.update_digest(digest),
             Self::VerifyBackupCopy(value) => value.update_digest(digest),
+            Self::RetireMetadataBackup(value) => value.update_digest(digest),
+            Self::RecordBackupReclamation(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
             Self::CommitSecretGeneration(value) => value.update_digest(digest),
             Self::IssueJoinGrant(value) => value.update_digest(digest),
@@ -3485,6 +3492,32 @@ digest_simple_record!(VerifyBackupCopy, b"verify-backup-copy", |value, digest| {
     digest.unsigned(value.provider_generation);
     digest.bytes(&value.copy_digest);
 });
+digest_simple_record!(
+    RetireMetadataBackup,
+    b"retire-metadata-backup",
+    |value, digest| {
+        digest.identifier(value.backup_id.as_bytes());
+        digest.unsigned(value.expected_backup_revision.get());
+        digest.unsigned(value.expected_schedule_sequence);
+        for backup_id in &value.retained_backups {
+            digest.identifier(backup_id.as_bytes());
+        }
+    }
+);
+digest_simple_record!(
+    RecordBackupReclamation,
+    b"record-backup-reclamation",
+    |value, digest| {
+        let receipt = value.receipt;
+        digest.identifier(receipt.operation_id.as_bytes());
+        digest.identifier(receipt.object.backup_id.as_bytes());
+        digest.identifier(receipt.object.destination_id.as_bytes());
+        digest.unsigned(receipt.object.provider_generation);
+        digest.unsigned(receipt.object.byte_length);
+        digest.bytes(&receipt.object.digest);
+        digest.unsigned(receipt.retirement_revision.get());
+    }
+);
 digest_simple_record!(
     RegisterStorageTarget,
     b"register-storage-target",
