@@ -15,6 +15,30 @@ and has a bounded interface owned by MeshSpan.
 Installed versions are locked by `Cargo.lock` and `pnpm-lock.yaml`. Automated
 updates must pass the same complete local gates as a human change.
 
+Run `pnpm check:dependency-update` under the active NVM toolchain for dependency
+or toolchain candidates. It checks Rust and JavaScript advisories first, then runs
+the entire canonical local gate, including generated-contract drift, both licence
+policies, lint, formatting and all configured Rust/web tests. An unavailable audit
+service is a failed check, not a clean result. This command never publishes anything.
+
+The code generator's exact `js-yaml@5.2.0` transitive pin is overridden to the
+maintained MIT-licensed `5.2.2` patch at that one dependency edge. It addresses
+[GHSA-pm4m-ph32-ghv5](https://github.com/nodeca/js-yaml/security/advisories/GHSA-pm4m-ph32-ghv5)
+and [GHSA-724g-mxrg-4qvm](https://github.com/nodeca/js-yaml/security/advisories/GHSA-724g-mxrg-4qvm).
+This does not add a direct/runtime library. The override is restricted to the code
+generator; lint-toolchain maintenance is recorded separately below.
+Remove the scoped override when the admitted generator resolves a patched parser
+itself; generator/runtime licence and maintenance review still apply.
+
+ESLint uses the current MIT-licensed `10.10.0` line with `@eslint/js@10.0.1`;
+the former 9.x line reached [upstream end-of-life](https://eslint.org/version-support/)
+on 2026-08-06. All existing
+plugins declare compatible peers except the current `eslint-plugin-jsx-a11y@6.10.2`.
+That plugin uses the retained `context.report`, options and settings interfaces,
+not the context methods removed in ESLint 10. One exact peer-edge exception is
+owned locally, with valid/invalid strict-accessibility fixtures in the canonical
+gate. It is not a claim of upstream ESLint 10 certification or a global waiver.
+
 Version locking provides reproducibility, not permission to remain on an
 obsolete release line. MeshSpan must not resolve an incompatibility by pinning a
 version which no longer receives upstream security or bug fixes. It must move to

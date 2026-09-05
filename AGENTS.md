@@ -178,6 +178,9 @@ abstractions solely to make the crate independently publishable.
 - Every dependency change must pass `cargo deny check licenses`; the allow-only
   policy includes development dependencies and intentionally excludes plain
   `Apache-2.0`.
+- Dependency/toolchain candidates must run `pnpm check:dependency-update` under
+  the active NVM toolchain. It requires Rust and JavaScript advisory scans plus
+  the entire canonical local gate; an unavailable scan is not a passing result.
 
 ## TypeScript and ESLint contract
 

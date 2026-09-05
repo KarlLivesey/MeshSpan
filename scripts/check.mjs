@@ -103,7 +103,7 @@ if (!generation.passed) {
       ],
     },
     {
-      name: "scheduler tests",
+      name: "tooling tests",
       steps: [
         [
           process.execPath,
@@ -111,6 +111,7 @@ if (!generation.passed) {
             "--test",
             "scripts/javascript-licence-policy.test.mjs",
             "scripts/scheduler.test.mjs",
+            "tooling/eslint/compatibility.test.mjs",
           ],
         ],
       ],
