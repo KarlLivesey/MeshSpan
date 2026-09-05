@@ -260,6 +260,8 @@ pub enum AuthoritativeCommand {
     ConfigureBackupDestination(ConfigureBackupDestination),
     /// Creates or replaces one partition's automatic metadata-backup schedule.
     ConfigureMetadataBackupSchedule(ConfigureMetadataBackupSchedule),
+    /// Atomically configures an explicitly enabled, consumer-restricted metrics exporter.
+    ConfigureMetricsExporter(crate::ConfigureMetricsExporter),
     /// Reconciles automatically managed backup destinations and schedule from current topology.
     ReconcileMetadataBackupDefaults(crate::ReconcileMetadataBackupDefaults),
     /// Materialises one exact due automatic metadata-backup occurrence.
@@ -471,6 +473,17 @@ impl AuthoritativeCommand {
             }
             Self::ConfigureBackupDestination(value) => value.update_digest(digest),
             Self::ConfigureMetadataBackupSchedule(value) => value.update_digest(digest),
+            Self::ConfigureMetricsExporter(value) => {
+                digest.bytes(b"configure-metrics-exporter-v1");
+                digest.unsigned(value.expected_sequence);
+                digest.boolean(value.policy.enabled);
+                digest.unsigned(
+                    u64::try_from(value.policy.allowed_principals.len()).unwrap_or(u64::MAX),
+                );
+                for principal in &value.policy.allowed_principals {
+                    digest.identifier(principal.as_bytes());
+                }
+            }
             Self::QueueMetadataBackupRun(value) => value.update_digest(digest),
             Self::ClaimMetadataBackupRun(value) => value.update_digest(digest),
             Self::RenewMetadataBackupRun(value) => value.update_digest(digest),

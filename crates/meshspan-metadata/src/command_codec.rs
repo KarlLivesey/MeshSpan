@@ -19,6 +19,7 @@ mod identity;
 mod locality_policy;
 mod maintenance_work;
 mod mesh_local_certificate;
+mod metrics_exporter;
 mod namespace;
 mod node_wrapping_key;
 mod protection_policy;
@@ -113,6 +114,9 @@ fn encode_command(
         return Ok(());
     }
     match command {
+        AuthoritativeCommand::ConfigureMetricsExporter(value) => {
+            metrics_exporter::encode(encoder, value)
+        }
         AuthoritativeCommand::BootstrapAppliance(value) => {
             encoder.u16(1)?;
             bootstrap::encode(encoder, value)
@@ -257,6 +261,9 @@ fn decode_command(
         return Ok(command);
     }
     match kind {
+        metrics_exporter::CONFIGURE_METRICS_EXPORTER => {
+            metrics_exporter::decode(decoder).map(AuthoritativeCommand::ConfigureMetricsExporter)
+        }
         1 => bootstrap::decode(decoder)
             .map(Box::new)
             .map(AuthoritativeCommand::BootstrapAppliance),

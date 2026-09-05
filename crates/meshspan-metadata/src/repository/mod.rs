@@ -104,6 +104,9 @@ mod manual_dns_task;
 mod membership;
 mod mesh_identity;
 mod mesh_local_certificate;
+mod metrics_exporter;
+#[cfg(test)]
+mod metrics_exporter_tests;
 mod namespace;
 mod node_wrapping_key;
 #[cfg(test)]
@@ -263,6 +266,7 @@ pub use mesh_local_certificate::{
     MeshLocalCertificateAuthorityRecord, MeshLocalCertificateIssuanceRecord,
 };
 pub use meshspan_domain::AuthenticationService;
+pub use metrics_exporter::{MetricsExporterConfiguration, metrics_exporter_instance_id};
 pub use node_wrapping_key::NodeWrappingKeyRecord;
 pub use operation_status::{
     AuthoritativeOperationCursor, AuthoritativeOperationState, AuthoritativeOperationStatus,
@@ -384,6 +388,16 @@ impl AuthoritativeRepository {
     /// Fails closed if a root partition contains multiple meshes or malformed identity bytes.
     pub fn local_mesh_id(&self) -> Result<Option<meshspan_domain::MeshId>, RepositoryError> {
         mesh_identity::local_mesh_id(&self.database)
+    }
+
+    /// Reads the exact active exporter policy, or none when it has never been configured.
+    ///
+    /// # Errors
+    /// Rejects corrupt component heads, unknown versions, invalid digests and malformed policy.
+    pub fn metrics_exporter_configuration(
+        &self,
+    ) -> Result<Option<MetricsExporterConfiguration>, RepositoryError> {
+        metrics_exporter::load(self.database.connection())
     }
 
     /// Returns immutable issuance facts for one current node join grant.

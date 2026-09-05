@@ -48,17 +48,55 @@ output to 64 KiB. The only labels are the fixed histogram boundaries. There
 are no user labels, timestamps or exemplars. Integer output is exact; external
 ingestors may store numbers as floating point.
 
-## Remaining integration in this branch
+## Configuration and HTTPS
 
-- Persist explicit exporter opt-in and authorised-consumer restrictions through
-  the authoritative metadata/configuration boundary. No configuration means off.
-- Wire an authenticated HTTPS scrape endpoint to the replaceable source, with
-  early rejection, current policy revalidation and bounded owned work.
-- Expose configuration through the native API and administration panel.
-- Prove enable, scrape, revoke, disable and restart over real HTTPS.
+The exporter is off until explicitly enabled. System managers read or replace
+its policy through `GET`/`PUT /api/latest/admin/metrics/exporter`. The replacement
+binds an operation ID, the exact current sequence (zero before configuration),
+an enabled flag and at most 64 distinct existing user identities. This is a
+configuration bound, not a limit on ordinary connections. Enabling requires at
+least one consumer. Browser mutations require the current session's CSRF proof.
 
-No scrape route or exporter configuration is enabled by this initial collection
-and encoder commit. No background telemetry leaves the appliance.
+`GET /api/latest/metrics` accepts a current HTTPS-capable API key belonging to an
+explicitly allowed user. Administration grants no implicit scrape access. Cookie
+credentials, query parameters and request bodies are rejected. The endpoint
+returns only OpenMetrics 1.0 with `no-store` and `nosniff`; it does not negotiate
+other exposition formats. It neither contacts a monitoring server nor probes
+storage. Authentication and policy are checked before collection and again
+before output, against the gateway's current replicated authority. This is not
+a claim of instantaneous revocation across disconnected gateways.
+
+Each gateway admits one owned configuration/collection job with a five-second
+cooperative deadline. Cancellation does not release admission while blocking
+work continues. Configuration commits cannot be undone by cancelling HTTP;
+retrying the exact operation returns its original receipt even if another policy
+has since superseded it. A scrape's unavailable source is not an empty success.
+
+The Operations panel provides the same policy API, optional paged user selection,
+enable/disable and exact retry. No user pages are loaded until requested. It never
+uses an exporter scrape to infer protection or health. Broader metric coverage,
+local history and whole-stage acceptance remain outstanding.
+
+## Persisted and private-wire contract
+
+The typed `ConfigureMetricsExporter` command uses private command kind **76**
+inside the existing version-4 envelope, and durable operation kind **140**.
+Older implementations reject this unknown command; mixed-version compatibility
+is not claimed. There is no SQL migration or new dependency.
+
+One mesh-derived component instance uses kind 10 (observability), implementation
+`meshspan-openmetrics`, contract 1.0 and configuration schema 1. The existing
+component tables atomically advance immutable configuration heads together with
+the operation receipt and audit event. They are included in ordinary metadata
+replication and backups; metrics samples themselves are not replicated.
+
+Canonical configuration bytes are `MSM` followed by byte `01`, enabled byte
+`00`/`01`, a big-endian 16-bit consumer count, then that many 16-byte principal
+identities in strictly increasing byte order. The maximum is 1,031 bytes.
+Decoders reject unknown versions/tags, duplicates, trailing data, inconsistent
+counts, corrupt digests and invalid active heads rather than treating them as an
+unconfigured exporter. Disabling remains possible when a selected user has since
+been suspended; that user's current credentials still cannot authorise scraping.
 
 ## Remaining Stage 10 measurements
 

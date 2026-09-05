@@ -21,10 +21,51 @@ JavaScript's safe-integer range. Affected all-target/all-feature Clippy passed
 in **8.38 seconds** after correcting documentation, borrowing and test-import
 lint findings. No rule was suppressed or loosened.
 
-This is collection/encoding evidence, not a deployed exporter. Persisted opt-in,
-authenticated HTTP routing, configuration controls, the wider metric catalogue
-and whole-branch verification remain outstanding. No dependency, schema or
-private-wire change was made by this slice. No release or publication ran.
+That initial commit covered collection/encoding only. The following integration
+adds configuration and routing; the wider metric catalogue and whole-branch
+verification remain outstanding. No release or publication ran.
+
+### Replicated opt-in and authenticated exporter integration
+
+The native configuration API and scrape route are now composed into the daemon.
+The [metrics contract](metrics.md) records access, cancellation, exact-retry,
+configuration bytes and private command impacts. Default-off, consumer grants,
+current authentication and the response bound are enforced independently of any
+web client. No dependency or SQL migration was added.
+
+Focused local Rust verification:
+
+- Four metadata tests passed in **5.38 seconds**: exact receipts and CAS,
+  immutable history, all four apply-fault rollback points, reopen persistence,
+  canonical wire rejection, unknown consumers and corrupt stored evidence.
+- Two Rust API boundary tests passed in **0.09 seconds**.
+- Four daemon HTTP tests passed in **0.43 seconds**: early rejection, no implicit
+  manager scrape grant, revocation before response, invalid outgoing policy,
+  malformed/oversized mutations and owned work after client cancellation.
+- Affected all-target/all-feature Clippy passed in **34.17 seconds**.
+- The independent real-process HTTPS test
+  `metrics::exporter_policy_survives_restart_and_reaches_another_gateway`
+  passed in **16.92 seconds**. It asserts default-off, enable/disable, exact
+  original receipt replay without re-enabling, mixed-cookie rejection, actual
+  runtime counters, restart persistence, policy catch-up by another gateway and
+  scraping after the original process stops. It does not prove non-admin
+  credential enrolment, a real Prometheus ingestor, hardware failure or soak.
+
+The broad operator flow also ran and failed in **27.50 seconds** at the existing
+automatic-backup restore-readiness request with HTTP 503, before reaching metrics.
+Its root cause is not established. The metrics process case is independent so it
+can run in parallel; the original operator assertions remain intact. This failure
+is not waived and a whole-branch passing gate has not yet been recorded.
+
+The Operations panel now exposes the exporter policy through the generated
+client. Eleven focused client/panel tests passed in **4.48 seconds**, including
+default-off, on-demand bounded user pages, selections across pages, enable and
+disable, CSRF transport, Rust-derived Zod rejection, exact retry after connection
+loss, mismatched receipts, stale-policy conflict recovery, refreshed form values
+and late response suppression after unmount. TypeScript and focused ESLint
+passed with no relaxed rules. The frontend-design skill guided the existing
+restrained layout, labelled controls, optional detail and honest pending states;
+these are headless DOM checks, not browser visual or device evidence.
 
 ## Runtime diagnostic bundle and download control
 

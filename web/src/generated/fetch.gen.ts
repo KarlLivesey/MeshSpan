@@ -44,6 +44,9 @@ import type {
   CreateVolumeResponse,
   CertificateStatusResponse,
   BackupScheduleResponse,
+  MetricsExporterResponse,
+  ConfigureMetricsExporterRequest,
+  ConfigureMetricsExporterResponse,
   ListBackupDestinationsQuery,
   ListBackupRunsQuery,
   BackupExportHeaders,
@@ -158,6 +161,9 @@ import {
   zDeleteObjectResponse2,
   zGetCertificateStatusResponse,
   zGetBackupScheduleResponse,
+  zGetMetricsExporterResponse,
+  zConfigureMetricsExporterBody,
+  zConfigureMetricsExporterResponse2,
   zListBackupDestinationsQuery,
   zListBackupRunsQuery,
   zBackupExportPath,
@@ -448,6 +454,11 @@ export interface MeshSpanFetchClient {
     request: ConfigureBackupScheduleRequest,
     csrfToken?: string,
   ): Promise<ConfigureBackupScheduleResponse>;
+  getMetricsExporter(): Promise<MetricsExporterResponse>;
+  configureMetricsExporter(
+    request: ConfigureMetricsExporterRequest,
+    csrfToken?: string,
+  ): Promise<ConfigureMetricsExporterResponse>;
   listBackupDestinations(
     query?: ListBackupDestinationsQuery,
   ): Promise<ListBackupDestinationsResponse>;
@@ -948,6 +959,30 @@ export function createMeshSpanFetchClient(
           method: "PUT",
         },
         zConfigureBackupScheduleResponse2,
+      );
+    },
+    async getMetricsExporter(): Promise<MetricsExporterResponse> {
+      return requestJson(
+        context,
+        "/admin/metrics/exporter",
+        { method: "GET" },
+        zGetMetricsExporterResponse,
+      );
+    },
+    async configureMetricsExporter(
+      request,
+      csrfToken,
+    ): Promise<ConfigureMetricsExporterResponse> {
+      const body = zConfigureMetricsExporterBody.parse(request);
+      return requestJson(
+        context,
+        "/admin/metrics/exporter",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "PUT",
+        },
+        zConfigureMetricsExporterResponse2,
       );
     },
     async listBackupDestinations(

@@ -1353,6 +1353,25 @@ fn authenticated_administration_routes(
             ),
         ),
     )?;
+    let metrics = crate::metrics_exporter_api::router(
+        crate::metrics_exporter_service::MetricsExporterService::new(
+            open_authentication_authority(
+                local_state,
+                authority,
+                Arc::clone(private_network),
+                now,
+            )?,
+            gateway,
+            Arc::new(
+                storage_targets
+                    .lock()
+                    .map_err(|_| DaemonProcessError::StorageTargetTaskStopped)?
+                    .readiness
+                    .observations
+                    .clone(),
+            ),
+        ),
+    )?;
     let export_service = Arc::new(crate::backup_export_service::BackupExportService::new(
         open_authentication_authority(local_state, authority, Arc::clone(private_network), now)?,
         gateway,
@@ -1375,6 +1394,7 @@ fn authenticated_administration_routes(
         std::time::Duration::from_secs(3600),
     )?;
     Ok(security
+        .merge(metrics)
         .merge(resources)
         .merge(backup)
         .merge(destinations)

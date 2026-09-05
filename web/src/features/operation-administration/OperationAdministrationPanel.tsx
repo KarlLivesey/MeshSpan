@@ -9,9 +9,14 @@ import {
 } from "./model";
 import { OperationList } from "./OperationList";
 import { DiagnosticsDownload } from "./DiagnosticsDownload";
+import { MetricsAdministration } from "../metrics-administration/MetricsAdministration";
+import type { MetricsClient } from "../metrics-administration/model";
 
 export function OperationAdministrationPanel(
-  props: Readonly<{ client: OperationAdministrationClient }>,
+  props: Readonly<{
+    client: OperationAdministrationClient & MetricsClient;
+    csrfToken: string;
+  }>,
 ): JSX.Element {
   const directory = createOperationDirectory(() => props.client);
   void directory.loadInitial();
@@ -28,6 +33,10 @@ export function OperationAdministrationPanel(
       </header>
       <AdministrationNavigation current="operations" />
       <DiagnosticsDownload client={props.client} />
+      <MetricsAdministration
+        client={props.client}
+        csrfToken={props.csrfToken}
+      />
       <OperationList directory={directory} />
     </div>
   );

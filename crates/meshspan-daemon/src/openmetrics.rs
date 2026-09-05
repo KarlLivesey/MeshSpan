@@ -17,7 +17,7 @@ use catalogue::{Descriptor, Measurement, describe};
 pub const OPENMETRICS_CONTENT_TYPE: &str =
     "application/openmetrics-text; version=1.0.0; charset=utf-8";
 /// Hard output budget, independent of ordinary JSON response limits.
-pub const MAX_OPENMETRICS_BYTES: usize = 64 * 1024;
+pub const MAX_OPENMETRICS_BYTES: usize = meshspan_api_contract::MAX_METRICS_EXPORT_BYTES;
 
 /// Encodes a validated snapshot using fixed version-one names and histogram buckets.
 ///

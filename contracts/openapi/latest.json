@@ -2067,6 +2067,91 @@
         "title": "ConfigureBackupScheduleResponse",
         "type": "object"
       },
+      "ConfigureMetricsExporterRequest": {
+        "additionalProperties": false,
+        "description": "Exact-retry replacement of one mesh-wide exporter configuration.",
+        "properties": {
+          "expected_sequence": {
+            "description": "Zero for initial configuration; otherwise the current immutable policy sequence.",
+            "maximum": 9007199254740990,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "operation_id": {
+            "description": "Retained logical mutation identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "policy": {
+            "additionalProperties": false,
+            "description": "Complete replacement, not a patch.",
+            "properties": {
+              "allowed_principals": {
+                "description": "Existing users permitted to scrape with current HTTPS-capable API keys.\nOrder has no meaning; the server canonicalises it and rejects duplicate identities.",
+                "items": {
+                  "description": "A globally qualified principal's local UUID within the current swarm.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "type": "array"
+              },
+              "enabled": {
+                "description": "Disabled by default, including before the first configuration exists.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "enabled",
+              "allowed_principals"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "operation_id",
+          "expected_sequence",
+          "policy"
+        ],
+        "title": "ConfigureMetricsExporterRequest",
+        "type": "object"
+      },
+      "ConfigureMetricsExporterResponse": {
+        "additionalProperties": false,
+        "description": "Original durable mutation receipt, even after a later policy supersedes it.",
+        "properties": {
+          "committed_revision": {
+            "description": "Metadata revision of the original operation.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "operation_id": {
+            "description": "Original operation identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "sequence": {
+            "description": "Policy sequence created by the original operation.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "operation_id",
+          "sequence",
+          "committed_revision"
+        ],
+        "title": "ConfigureMetricsExporterResponse",
+        "type": "object"
+      },
       "ConfirmRecoveryBundleRequest": {
         "additionalProperties": false,
         "description": "One authenticated idempotent save-verification request.",
@@ -10410,6 +10495,71 @@
         "title": "MetadataDiagnosticsResponse",
         "type": "object"
       },
+      "MetricsExporterResponse": {
+        "additionalProperties": false,
+        "description": "Current mesh policy; null explicitly means never configured and disabled.",
+        "properties": {
+          "configuration": {
+            "additionalProperties": false,
+            "description": "Current configuration if explicitly committed.",
+            "properties": {
+              "committed_revision": {
+                "description": "Metadata revision which committed this configuration.",
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "policy": {
+                "additionalProperties": false,
+                "description": "Complete non-secret policy.",
+                "properties": {
+                  "allowed_principals": {
+                    "description": "Existing users permitted to scrape with current HTTPS-capable API keys.\nOrder has no meaning; the server canonicalises it and rejects duplicate identities.",
+                    "items": {
+                      "description": "A globally qualified principal's local UUID within the current swarm.",
+                      "maxLength": 36,
+                      "minLength": 36,
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "type": "array"
+                  },
+                  "enabled": {
+                    "description": "Disabled by default, including before the first configuration exists.",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "enabled",
+                  "allowed_principals"
+                ],
+                "type": "object"
+              },
+              "sequence": {
+                "description": "Exact active policy sequence.",
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "sequence",
+              "policy",
+              "committed_revision"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "configuration"
+        ],
+        "title": "MetricsExporterResponse",
+        "type": "object"
+      },
       "OperationStatusResponse": {
         "additionalProperties": false,
         "description": "Current durable state of one exact operation visible to the caller.",
@@ -17647,6 +17797,438 @@
         "summary": "Create one immutable desired-locality policy",
         "x-meshspan-access": "system-manager-csrf",
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
+      }
+    },
+    "/admin/metrics/exporter": {
+      "get": {
+        "operationId": "getMetricsExporter",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsExporterResponse"
+                }
+              }
+            },
+            "description": "Current policy, or null when disabled and never configured",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Query or body not supported",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid stored or outgoing evidence",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Current authority unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read the current metrics exporter policy",
+        "x-meshspan-access": "system-manager"
+      },
+      "put": {
+        "description": "Replicated and audited. Missing configuration is disabled. Consumer identities are canonicalised in ascending order, duplicates rejected. Scrape consumers use current HTTPS-capable API keys and need no administrator role. This is a pull exporter, not a telemetry push destination. Exact retries return the original receipt.",
+        "operationId": "configureMetricsExporter",
+        "parameters": [
+          {
+            "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+            "in": "header",
+            "name": "MeshSpan-CSRF-Token",
+            "required": false,
+            "schema": {
+              "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "x-meshspan-sensitive": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigureMetricsExporterRequest"
+              }
+            }
+          },
+          "description": "Complete policy, observed sequence and exact-retry identity",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigureMetricsExporterResponse"
+                }
+              }
+            },
+            "description": "Original committed policy receipt",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid policy, query or consumer",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Stale sequence or changed retry",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Body exceeds its bound",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "JSON content type required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid stored or outgoing evidence",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Current authority unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Replace the exporter opt-in and exact user allow-list",
+        "x-meshspan-access": "system-manager",
+        "x-meshspan-max-request-bytes": 8192
       }
     },
     "/admin/node-join-grants": {
@@ -25046,6 +25628,158 @@
         },
         "summary": "Read bounded process readiness",
         "x-meshspan-access": "anonymous"
+      }
+    },
+    "/metrics": {
+      "get": {
+        "description": "Requires a current HTTPS-capable API key whose user is on the current exporter allow-list. Cookies, queries and bodies are not accepted. Disabled or missing policy grants no access. Collection never performs provider IO or initiates maintenance. Observations are not authority or durability proof.",
+        "operationId": "scrapeMetrics",
+        "responses": {
+          "200": {
+            "content": {
+              "application/openmetrics-text; version=1.0.0; charset=utf-8": {
+                "schema": {
+                  "maxLength": 65536,
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Bounded OpenMetrics 1.0 text with explicit EOF"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Query or body not supported",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "API-key authentication required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Disabled exporter or consumer not allowed",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid source evidence",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Current authority or measurements unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Scrape explicitly enabled process-local OpenMetrics observations",
+        "x-meshspan-access": "metrics-consumer",
+        "x-meshspan-max-response-bytes": 65536
       }
     },
     "/openapi.json": {

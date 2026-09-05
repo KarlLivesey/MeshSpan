@@ -25,6 +25,7 @@ export function readRequiredRoutes(document) {
   const operations = collectOperations(document);
   return {
     ...readAdministrationRoutes(operations),
+    ...readObservabilityRoutes(operations),
     ...readAuthenticationRoutes(operations),
     ...readFileRoutes(operations),
     ...readLifecycleRoutes(operations),
@@ -91,7 +92,7 @@ function readAuthenticationRoutes(operations) {
   };
 }
 
-function readAdministrationRoutes(operations) {
+function readObservabilityRoutes(operations) {
   return {
     readMetadataDiagnostics: requireOperation(
       operations,
@@ -101,6 +102,16 @@ function readAdministrationRoutes(operations) {
       operations,
       "readDiagnosticsBundle",
     ),
+    getMetricsExporter: requireOperation(operations, "getMetricsExporter"),
+    configureMetricsExporter: requireOperation(
+      operations,
+      "configureMetricsExporter",
+    ),
+  };
+}
+
+function readAdministrationRoutes(operations) {
+  return {
     listBackupRuns: requireOperation(operations, "listBackupRuns"),
     exportMetadataBackup: requireOperation(operations, "exportMetadataBackup"),
     checkMetadataBackupReadiness: requireOperation(
