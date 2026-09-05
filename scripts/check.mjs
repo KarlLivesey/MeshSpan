@@ -121,7 +121,10 @@ if (!generation.passed) {
     {
       name: "Rust workspace tests",
       steps: [
-        ["cargo", ["test", "--workspace", "--all-targets", "--all-features"]],
+        [
+          "cargo",
+          ["test", "--workspace", "--all-targets", "--all-features", "--quiet"],
+        ],
       ],
     },
     {

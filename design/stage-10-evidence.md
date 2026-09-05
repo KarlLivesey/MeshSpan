@@ -42,7 +42,18 @@ seconds**, collecting and validating redacted snapshots from both gateways after
 create/join, storage registration, backup, users/groups, volume and file work.
 The final cycle, including diagnostics and file reads from the surviving gateway
 after killing the other daemon, passed in **25.32 seconds**. The complete local
-gate remains pending. These are real HTTPS/process tests, not browser, hardware
+gate has not passed. Its first run failed the Rust workspace lane and the web
+source guard. The web guard incorrectly treated the English phrase "if any" in
+a generated comment as an unsafe type; it now walks TypeScript syntax and has
+positive/negative fixtures for real type nodes versus comments, strings and
+property names. Existing TypeScript is reused; no dependency or rule is removed.
+The earlier Rust failure detail was lost in truncated output. The affected
+daemon suite subsequently passed **289 unit tests in 33.49 seconds** and all
+**three enabled process tests in 42.95 seconds** (two existing ignored tests
+remain ignored). No cause or fix for that first Rust failure is claimed. The
+canonical Cargo invocation now uses concise output without changing features,
+targets or test parallelism, so the repeated full gate retains useful failure
+details. These are real HTTPS/process tests, not browser, hardware
 or release artefact evidence.
 
 This is the metadata section of OPS-011, not completion of the full diagnostic
