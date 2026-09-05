@@ -21,8 +21,12 @@ uses MIT-licensed ESLint 10.10.0 and `@eslint/js` 10.0.1. Existing plugin peer r
 accept this line except the current accessibility plugin. Its one exact peer
 exception is documented and supported by source/API inspection plus two strict
 valid/invalid JSX cases (**0.565 seconds** including the Node harness). Full
-web/tooling lint passed without changing or reducing rules. The complete updated
-dependency gate remains pending; this is not independent security-review evidence.
+web/tooling lint passed without changing or reducing rules. The complete NVM-default
+`MESHSPAN_CHECK_WORKERS=4 pnpm check:dependency-update` passed on `d836156` in
+**669.64 seconds**. Rust workspace tests took **622.50 seconds**, and web tests
+took **5.86 seconds**; advisory scans, generated drift, embedded web build, both
+licence gates, formatting, Clippy, TypeScript/ESLint and tooling tests all passed.
+This is not independent security-review evidence.
 
 ## Embedded appliance panels
 
