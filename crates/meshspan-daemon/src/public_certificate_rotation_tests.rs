@@ -14,6 +14,7 @@ use meshspan_metadata::{
 use meshspan_secret_envelope::{SecretContext, WrappingPublicKey, encrypt_secret};
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
+use sha2::{Digest, Sha256};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tokio_rustls::{TlsConnector, client::TlsStream};
@@ -25,6 +26,54 @@ use crate::{
 };
 
 const CERTIFICATE_NAME: &str = "files.example.test";
+
+#[test]
+fn recipient_rewrap_advances_delivery_without_changing_the_certificate_revision()
+-> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    let local = LocalWrappingKey::open_or_create(&directory.path().join("node.key"))?;
+    let authority = CertificateAuthority::new()?;
+    let certificate = authority.issue_node(CERTIFICATE_NAME)?;
+    let different = authority.issue_node(CERTIFICATE_NAME)?;
+    let initial = reference(1);
+    let rewrapped = SecretGenerationReference {
+        generation: 2,
+        ..initial
+    };
+    let changed = SecretGenerationReference {
+        generation: 3,
+        ..initial
+    };
+    let records = vec![
+        certificate_record(initial, &certificate, local.public_key(), 17)?,
+        certificate_record(rewrapped, &certificate, local.public_key(), 41)?,
+        certificate_record(changed, &different, local.public_key(), 61)?,
+    ];
+    let loading = PublicCertificateLoadingService::new(FakeAuthority(records), &local);
+    let first = loading.load(initial)?;
+    let identity = RotatingHttpsIdentity::new(Revision::new(7), &first)?;
+    let original_pin = identity.certificate_fingerprint()?;
+    assert_eq!(
+        identity.install(Revision::new(7), &loading.load(rewrapped)?)?,
+        PublicCertificateInstallOutcome::Installed
+    );
+    assert_eq!(
+        identity.current()?.ok_or("missing selection")?.generation,
+        rewrapped
+    );
+    assert_eq!(identity.certificate_fingerprint()?, original_pin);
+    assert_eq!(
+        identity.install(Revision::new(7), &first).err(),
+        Some(PublicCertificateRotationError::StaleRevision)
+    );
+    assert_eq!(
+        identity
+            .install(Revision::new(7), &loading.load(changed)?)
+            .err(),
+        Some(PublicCertificateRotationError::ConflictingRevision)
+    );
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn live_listener_rotates_new_handshakes_without_breaking_existing_sessions()
@@ -60,6 +109,10 @@ async fn live_listener_rotates_new_handshakes_without_breaking_existing_sessions
 
     let first_session = connect(address, Arc::clone(&client_config)).await?;
     assert_eq!(peer_leaf(&first_session)?, first_der);
+    assert_eq!(
+        identity.certificate_fingerprint()?,
+        <[u8; 32]>::from(Sha256::digest(&first_der))
+    );
 
     let second_loaded = loading.load(second_reference)?;
     assert_eq!(
@@ -69,6 +122,10 @@ async fn live_listener_rotates_new_handshakes_without_breaking_existing_sessions
     assert_eq!(peer_leaf(&first_session)?, first_der);
     let second_session = connect(address, Arc::clone(&client_config)).await?;
     assert_eq!(peer_leaf(&second_session)?, second_der);
+    assert_eq!(
+        identity.certificate_fingerprint()?,
+        <[u8; 32]>::from(Sha256::digest(&second_der))
+    );
     let current = identity.current()?.ok_or("rotated identity missing")?;
     assert_eq!(current.revision, Revision::new(8));
     assert_eq!(current.generation, second_reference);

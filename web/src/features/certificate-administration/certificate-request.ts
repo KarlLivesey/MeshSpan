@@ -59,7 +59,8 @@ function readRfc2136Challenge(
   };
 }
 
-function readCertificateNames(value: string): string[] {
+/** Normalises form input; the generated schema and server still validate the request. */
+export function readCertificateNames(value: string): string[] {
   const names = value
     .split(/[\s,]+/u)
     .map(canonicalDnsName)

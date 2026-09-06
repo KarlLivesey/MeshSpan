@@ -14,6 +14,7 @@ export type CertificateAdministrationClient = Pick<
   | "listManualDnsTasks"
   | "listNextManualDnsTasks"
   | "provisionCertificate"
+  | "provisionMeshLocalCertificate"
 >;
 
 export type CertificateStatusResource = Readonly<{

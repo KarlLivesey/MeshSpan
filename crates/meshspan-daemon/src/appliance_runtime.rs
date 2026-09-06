@@ -655,6 +655,14 @@ fn compose_appliance_services(
     )?;
     let router = Router::new()
         .merge(public_contract_api_router(readiness)?)
+        .merge(join_grant_routes(
+            &node.local_state,
+            &private_authority.authority,
+            gateway,
+            &node.private_network,
+            started_at,
+            https_identity.clone(),
+        )?)
         .merge(setup_and_enrolment_routes(
             node,
             private_authority,
@@ -888,7 +896,12 @@ where
             .certificates
             .run_until(wait_for_shutdown(certificate_stop))
             .await
-            .map_err(|_| DaemonProcessError::Certificate)
+            .map_err(|error| match error {
+                crate::certificate_runtime::CertificateRuntimeError::Installation(error) => {
+                    DaemonProcessError::CertificateInstallation(error)
+                }
+                _ => DaemonProcessError::Certificate,
+            })
     });
     tokio::pin!(lifecycle);
     let first = tokio::select! {
@@ -1447,6 +1460,35 @@ impl crate::backup_export_service::BackupExportProviders for BackupExportTargetS
     }
 }
 
+fn join_grant_routes(
+    local_state: &DaemonLocalState,
+    authority: &MetadataAuthorityHandle,
+    gateway: GatewaySessionIdentity,
+    private_network: &Arc<PrivateConsensusRuntime>,
+    now: UnixMicros,
+    https_identity: RotatingHttpsIdentity,
+) -> Result<Router, DaemonProcessError> {
+    Ok(node_join_grant_api_router(
+        NodeJoinGrantIssuanceService::new(
+            open_authentication_authority(
+                local_state,
+                authority,
+                Arc::clone(private_network),
+                now,
+            )?,
+            open_authentication_authority(
+                local_state,
+                authority,
+                Arc::clone(private_network),
+                now,
+            )?,
+            local_state.open_wrapping_key()?,
+            gateway,
+            https_identity,
+        ),
+    )?)
+}
+
 fn security_administration_routes(
     local_state: &DaemonLocalState,
     authority: &MetadataAuthorityHandle,
@@ -1464,25 +1506,6 @@ fn security_administration_routes(
                     now,
                 )?,
                 gateway,
-            ),
-        )?)
-        .merge(node_join_grant_api_router(
-            NodeJoinGrantIssuanceService::new(
-                open_authentication_authority(
-                    local_state,
-                    authority,
-                    Arc::clone(private_network),
-                    now,
-                )?,
-                open_authentication_authority(
-                    local_state,
-                    authority,
-                    Arc::clone(private_network),
-                    now,
-                )?,
-                local_state.open_wrapping_key()?,
-                gateway,
-                local_state.https_certificate_fingerprint(),
             ),
         )?)
         .merge(permission_administration_api_router(
@@ -3842,7 +3865,10 @@ pub enum DaemonProcessError {
     /// The isolated HTTP-01 listener failed.
     #[error("daemon HTTP-01 listener failed")]
     Http01(#[from] Http01ServerError),
-    /// Certificate automation could not be composed or failed closed while running.
+    /// The certificate worker rejected a specific non-secret installation boundary.
+    #[error("daemon certificate installation failed: {0}")]
+    CertificateInstallation(crate::PublicCertificateInstallationWorkerError),
+    /// Certificate runtime construction or automation failed closed.
     #[error("daemon certificate runtime failed")]
     Certificate,
     /// The embedded SMB listener failed.

@@ -223,12 +223,20 @@ impl PublicCertificateInstallationAuthority for &Acknowledgements {
     fn resolve_public_certificate_installation(
         &self,
         _operation_id: OperationId,
-    ) -> Result<Option<CommandReceipt>, PublicCertificateInstallationAuthorityError> {
-        Ok(self
+    ) -> Result<
+        Option<crate::PublicCertificateInstallationReceipt>,
+        PublicCertificateInstallationAuthorityError,
+    > {
+        let state = self
             .state
             .lock()
-            .map_err(|_| PublicCertificateInstallationAuthorityError::Failed)?
-            .receipt)
+            .map_err(|_| PublicCertificateInstallationAuthorityError::Failed)?;
+        Ok(state.receipt.zip(state.context).map(|(receipt, context)| {
+            crate::PublicCertificateInstallationReceipt {
+                receipt,
+                occurred_at: context.occurred_at,
+            }
+        }))
     }
 
     fn acknowledge_public_certificate_installation(

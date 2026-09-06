@@ -10,6 +10,7 @@ use meshspan_metadata::SecretGenerationReference;
 use rustls::ServerConfig;
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::public_certificate_loading::{HTTP_1_1_ALPN, LoadedPublicCertificate};
@@ -84,6 +85,25 @@ impl RotatingHttpsIdentity {
         Arc::clone(&self.server_config)
     }
 
+    /// Returns the SHA-256 pin of the leaf selected for new TLS handshakes.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed if the resolver is unavailable or its certificate chain is empty.
+    pub fn certificate_fingerprint(&self) -> Result<[u8; 32], PublicCertificateRotationError> {
+        let installed = self
+            .state
+            .installed
+            .read()
+            .map_err(|_| PublicCertificateRotationError::Unavailable)?;
+        let leaf = installed
+            .certified_key
+            .cert
+            .first()
+            .ok_or(PublicCertificateRotationError::Configuration)?;
+        Ok(Sha256::digest(leaf.as_ref()).into())
+    }
+
     /// Returns the authoritative, non-secret identity currently selected for new handshakes.
     ///
     /// # Errors
@@ -102,8 +122,9 @@ impl RotatingHttpsIdentity {
     /// Atomically selects a newer authoritative identity for subsequent TLS handshakes.
     ///
     /// Existing TLS sessions retain the identity negotiated when they connected. A replay of the
-    /// exact current selection is idempotent. Older revisions and conflicting content at one
-    /// revision are rejected.
+    /// exact current selection is idempotent. Rewrapping the same immutable bundle for new
+    /// recipients may advance its delivery generation without changing the source revision.
+    /// Older selections and conflicting content at one revision are rejected.
     ///
     /// # Errors
     ///
@@ -120,20 +141,13 @@ impl RotatingHttpsIdentity {
             .write()
             .map_err(|_| PublicCertificateRotationError::Unavailable)?;
         if let Some(current) = installed.public {
-            if replacement
+            let candidate = replacement
                 .public
-                .is_none_or(|public| public.revision < current.revision)
+                .ok_or(PublicCertificateRotationError::Configuration)?;
+            if selection_transition(current, candidate)?
+                == PublicCertificateInstallOutcome::AlreadyCurrent
             {
-                return Err(PublicCertificateRotationError::StaleRevision);
-            }
-            if replacement.public == Some(current) {
                 return Ok(PublicCertificateInstallOutcome::AlreadyCurrent);
-            }
-            if replacement
-                .public
-                .is_some_and(|public| public.revision == current.revision)
-            {
-                return Err(PublicCertificateRotationError::ConflictingRevision);
             }
         }
         *installed = replacement;
@@ -157,6 +171,29 @@ impl RotatingHttpsIdentity {
             server_config: Arc::new(server_config),
         })
     }
+}
+
+fn selection_transition(
+    current: InstalledPublicCertificate,
+    candidate: InstalledPublicCertificate,
+) -> Result<PublicCertificateInstallOutcome, PublicCertificateRotationError> {
+    if candidate.revision < current.revision {
+        return Err(PublicCertificateRotationError::StaleRevision);
+    }
+    if candidate == current {
+        return Ok(PublicCertificateInstallOutcome::AlreadyCurrent);
+    }
+    if candidate.revision == current.revision {
+        if candidate.generation.secret_id != current.generation.secret_id
+            || candidate.bundle_digest != current.bundle_digest
+        {
+            return Err(PublicCertificateRotationError::ConflictingRevision);
+        }
+        if candidate.generation.generation < current.generation.generation {
+            return Err(PublicCertificateRotationError::StaleRevision);
+        }
+    }
+    Ok(PublicCertificateInstallOutcome::Installed)
 }
 
 struct InstalledCertificate {

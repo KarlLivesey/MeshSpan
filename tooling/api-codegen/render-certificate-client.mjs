@@ -20,7 +20,11 @@ export function renderCertificateClientInterface() {
   provisionCertificate(
     request: ProvisionCertificateRequest,
     csrfToken?: string,
-  ): Promise<ProvisionCertificateResponse>;`;
+  ): Promise<ProvisionCertificateResponse>;
+  provisionMeshLocalCertificate(
+    request: ProvisionMeshLocalCertificateRequest,
+    csrfToken?: string,
+  ): Promise<ProvisionMeshLocalCertificateResponse>;`;
 }
 
 /** Renders certificate-administration client implementations. */
@@ -61,6 +65,19 @@ export function renderCertificateClientMethods(routes) {
           method: ${JSON.stringify(routes.provisionCertificate.method)},
         },
         zProvisionCertificateResponse2,
+      );
+    },
+    async provisionMeshLocalCertificate(request, csrfToken): Promise<ProvisionMeshLocalCertificateResponse> {
+      const body = zProvisionMeshLocalCertificateBody.parse(request);
+      return requestJson(
+        context,
+        ${JSON.stringify(routes.provisionMeshLocalCertificate.route)},
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: ${JSON.stringify(routes.provisionMeshLocalCertificate.method)},
+        },
+        zProvisionMeshLocalCertificateResponse2,
       );
     },`;
 }

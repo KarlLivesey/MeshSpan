@@ -734,7 +734,8 @@ pub use protected_recovery_code_issuance::ProtectedRecoveryCodeIssuanceControlle
 pub use public_certificate_installation::{
     PublicCertificateInstallationAuthority, PublicCertificateInstallationAuthorityError,
     PublicCertificateInstallationCommit, PublicCertificateInstallationError,
-    PublicCertificateInstallationRequest, PublicCertificateInstallationService,
+    PublicCertificateInstallationReceipt, PublicCertificateInstallationRequest,
+    PublicCertificateInstallationService,
 };
 pub use public_certificate_installation_worker::{
     PublicCertificateInstallationWorker, PublicCertificateInstallationWorkerComponents,

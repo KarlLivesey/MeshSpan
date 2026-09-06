@@ -6,6 +6,7 @@ import { AdministrationNavigation } from "../administration/AdministrationNaviga
 import { CertificateProvisioningForm } from "./CertificateProvisioningForm";
 import { CertificateStatusCard } from "./CertificateStatusCard";
 import { ManualDnsTaskList } from "./ManualDnsTaskList";
+import { MeshLocalCertificateForm } from "./MeshLocalCertificateForm";
 import {
   createManualDnsTaskDirectory,
   createCertificateStatusResource,
@@ -35,6 +36,10 @@ export function CertificateAdministrationPanel(
       </header>
       <AdministrationNavigation current="certificates" />
       <CertificateStatusCard resource={status} />
+      <MeshLocalCertificateForm
+        client={props.client}
+        csrfToken={props.csrfToken}
+      />
       <CertificateProvisioningForm
         client={props.client}
         csrfToken={props.csrfToken}

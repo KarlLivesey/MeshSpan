@@ -16,9 +16,10 @@ use meshspan_secret_envelope::{SecretContext, encrypt_secret};
 
 use crate::{
     LoadedPublicCertificate, LocalWrappingKey, PublicCertificateInstallationAuthority,
-    PublicCertificateInstallationAuthorityError, PublicCertificateInstallationRequest,
-    PublicCertificateInstallationService, PublicCertificateLoadingService, RotatingHttpsIdentity,
-    SecretGenerationAuthority, SecretGenerationAuthorityError,
+    PublicCertificateInstallationAuthorityError, PublicCertificateInstallationReceipt,
+    PublicCertificateInstallationRequest, PublicCertificateInstallationService,
+    PublicCertificateLoadingService, RotatingHttpsIdentity, SecretGenerationAuthority,
+    SecretGenerationAuthorityError,
 };
 
 #[test]
@@ -63,11 +64,24 @@ fn live_installation_is_acknowledged_once_and_ambiguous_retry_resolves_exactly()
     assert_eq!(command.certificate, reference);
     assert_eq!(command.bundle_digest, bundle_digest);
 
+    let retry = PublicCertificateInstallationRequest {
+        now: UnixMicros::new(501),
+        ..request
+    };
     assert_eq!(
-        service.install_and_acknowledge(&identity, &loaded, request)?,
+        service.install_and_acknowledge(&identity, &loaded, retry)?,
         committed
     );
     assert_eq!(acknowledgements.commit_count(), 1);
+    acknowledgements
+        .state
+        .lock()
+        .map_err(|_| "acknowledgement lock failed")?
+        .occurred_at = Some(UnixMicros::new(499));
+    assert!(matches!(
+        service.install_and_acknowledge(&identity, &loaded, retry),
+        Err(crate::PublicCertificateInstallationError::Conflict)
+    ));
     Ok(())
 }
 
@@ -155,6 +169,7 @@ struct AcknowledgementAuthority {
 struct AcknowledgementState {
     command: Option<AuthoritativeCommand>,
     receipt: Option<CommandReceipt>,
+    occurred_at: Option<UnixMicros>,
     commits: usize,
 }
 
@@ -177,12 +192,23 @@ impl PublicCertificateInstallationAuthority for &AcknowledgementAuthority {
     fn resolve_public_certificate_installation(
         &self,
         _operation_id: OperationId,
-    ) -> Result<Option<CommandReceipt>, PublicCertificateInstallationAuthorityError> {
-        Ok(self
+    ) -> Result<
+        Option<PublicCertificateInstallationReceipt>,
+        PublicCertificateInstallationAuthorityError,
+    > {
+        let state = self
             .state
             .lock()
-            .map_err(|_| PublicCertificateInstallationAuthorityError::Failed)?
-            .receipt)
+            .map_err(|_| PublicCertificateInstallationAuthorityError::Failed)?;
+        Ok(state
+            .receipt
+            .zip(state.occurred_at)
+            .map(
+                |(receipt, occurred_at)| PublicCertificateInstallationReceipt {
+                    receipt,
+                    occurred_at,
+                },
+            ))
     }
 
     fn acknowledge_public_certificate_installation(
@@ -221,6 +247,7 @@ impl PublicCertificateInstallationAuthority for &AcknowledgementAuthority {
             .map_err(|_| PublicCertificateInstallationAuthorityError::Failed)?;
         state.command = Some(command.clone());
         state.receipt = Some(receipt);
+        state.occurred_at = Some(context.occurred_at);
         state.commits = state.commits.saturating_add(1);
         Ok(receipt)
     }

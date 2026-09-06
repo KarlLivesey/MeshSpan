@@ -3,6 +3,7 @@
 //! Deterministic `OpenAPI` 3.1 document generation.
 
 use serde_json::{Map, Value, json};
+use std::sync::{Arc, OnceLock};
 #[path = "openapi_metrics.rs"]
 mod metrics;
 use sha2::{Digest, Sha256};
@@ -56,14 +57,18 @@ pub const OPENAPI_PATH: &str = "contracts/openapi/latest.json";
 /// Generated document and the digest served in API response headers.
 #[derive(Clone, Debug)]
 pub struct OpenApiDocument {
-    document: Value,
+    document: Arc<Value>,
     digest: String,
 }
+
+// Rust boundary schemas are immutable for this executable. Sharing their generated document
+// avoids rebuilding every schema for each route; it never caches validation of external input.
+static OPENAPI: OnceLock<OpenApiDocument> = OnceLock::new();
 
 impl OpenApiDocument {
     /// Returns the generated `OpenAPI` JSON value.
     #[must_use]
-    pub const fn value(&self) -> &Value {
+    pub fn value(&self) -> &Value {
         &self.document
     }
 
@@ -79,7 +84,7 @@ impl OpenApiDocument {
     ///
     /// Returns an error if the JSON value cannot be serialized.
     pub fn to_pretty_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
-        let mut bytes = serde_json::to_vec_pretty(&self.document)?;
+        let mut bytes = serde_json::to_vec_pretty(self.document.as_ref())?;
         bytes.push(b'\n');
         Ok(bytes)
     }
@@ -91,6 +96,14 @@ impl OpenApiDocument {
 ///
 /// Returns an error if the deterministic document cannot be serialized for hashing.
 pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
+    if let Some(document) = OPENAPI.get() {
+        return Ok(document.clone());
+    }
+    let document = build_openapi()?;
+    Ok(OPENAPI.get_or_init(|| document).clone())
+}
+
+fn build_openapi() -> Result<OpenApiDocument, serde_json::Error> {
     let document = json!({
         "openapi": "3.1.0",
         "info": {
@@ -106,7 +119,10 @@ pub fn generate_openapi() -> Result<OpenApiDocument, serde_json::Error> {
         "components": components()
     });
     let digest = format!("sha256:{}", hex_digest(&serde_json::to_vec(&document)?));
-    Ok(OpenApiDocument { document, digest })
+    Ok(OpenApiDocument {
+        document: Arc::new(document),
+        digest,
+    })
 }
 
 #[allow(
@@ -2945,4 +2961,19 @@ fn hex_digest(bytes: &[u8]) -> String {
         output.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     output
+}
+
+#[cfg(test)]
+mod reuse_tests {
+    use super::generate_openapi;
+
+    #[test]
+    fn repeated_generation_shares_identical_immutable_schema() -> Result<(), serde_json::Error> {
+        let first = generate_openapi()?;
+        let second = generate_openapi()?;
+        assert!(std::ptr::eq(first.value(), second.value()));
+        assert_eq!(first.digest(), second.digest());
+        assert_eq!(first.to_pretty_bytes()?, second.to_pretty_bytes()?);
+        Ok(())
+    }
 }

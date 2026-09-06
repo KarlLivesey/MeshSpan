@@ -86,6 +86,8 @@ import type {
   PublishSmbExportResponse,
   ProvisionCertificateRequest,
   ProvisionCertificateResponse,
+  ProvisionMeshLocalCertificateRequest,
+  ProvisionMeshLocalCertificateResponse,
   RevokeAuthenticationMethodRequest,
   RevokeAuthenticationMethodResponse,
   RevokeCurrentSessionRequest,
@@ -236,6 +238,8 @@ import {
   zPublishSmbExportResponse2,
   zProvisionCertificateBody,
   zProvisionCertificateResponse2,
+  zProvisionMeshLocalCertificateBody,
+  zProvisionMeshLocalCertificateResponse2,
   zRevokeCurrentUserAuthenticationMethodBody,
   zRevokeCurrentUserAuthenticationMethodPath,
   zRevokeCurrentUserAuthenticationMethodResponse,
@@ -449,6 +453,10 @@ export interface MeshSpanFetchClient {
     request: ProvisionCertificateRequest,
     csrfToken?: string,
   ): Promise<ProvisionCertificateResponse>;
+  provisionMeshLocalCertificate(
+    request: ProvisionMeshLocalCertificateRequest,
+    csrfToken?: string,
+  ): Promise<ProvisionMeshLocalCertificateResponse>;
   getBackupSchedule(): Promise<BackupScheduleResponse>;
   configureBackupSchedule(
     request: ConfigureBackupScheduleRequest,
@@ -935,6 +943,22 @@ export function createMeshSpanFetchClient(
           method: "POST",
         },
         zProvisionCertificateResponse2,
+      );
+    },
+    async provisionMeshLocalCertificate(
+      request,
+      csrfToken,
+    ): Promise<ProvisionMeshLocalCertificateResponse> {
+      const body = zProvisionMeshLocalCertificateBody.parse(request);
+      return requestJson(
+        context,
+        "/admin/certificates/local",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zProvisionMeshLocalCertificateResponse2,
       );
     },
     async getBackupSchedule(): Promise<BackupScheduleResponse> {

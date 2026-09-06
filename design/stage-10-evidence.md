@@ -10,6 +10,128 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 1 — mesh-local HTTPS lifecycle and trust-download integration
+
+The new independent `headless_process::local_certificates` proof uses real child
+daemons and TLS clients, not a fake certificate authority service. It creates a
+mesh, provisions the local CA through the authenticated public API, trusts only
+the returned public anchor, rejects bootstrap-only trust on a fresh handshake,
+restarts the root, joins a gateway, rotates the leaf and restarts that gateway.
+Both stable node identity fingerprints remain unchanged. It checks exact issuance
+replay and active installation counts on both gateways.
+
+The proof exposed three concrete integration defects:
+
+- Installation operation IDs survive restart, but retry hashing used the new
+  wall-clock time instead of the original durable operation time. Resolution now
+  returns the validated receipt and original timestamp together; a changed stored
+  timestamp still fails digest validation. The focused regression failed with
+  `Conflict` in 0.05 seconds before the fix.
+- Join-grant issuance captured the bootstrap TLS pin permanently. It now reads
+  the live resolver's leaf pin when issuing an invitation. TLS pin verification
+  remains exact. Invitations remain bound to that leaf: a subsequent leaf change
+  requires a fresh invitation, not bypassing TLS checks. Preserving invitation
+  usability/exact replay across later leaf changes is not established by this proof.
+- Recipient redistribution advances the encrypted delivery generation without
+  changing the immutable certificate's source revision. Rotation now accepts a
+  strictly newer delivery of the same secret identity and bundle digest at that
+  revision, but rejects rollback or changed content. The focused regression
+  failed with `ConflictingRevision` in 0.13 seconds before the fix.
+
+Eight focused public-certificate tests passed in **0.25 seconds**, including the
+real TLS listener and rewrapping regression. The real two-daemon lifecycle passed
+in **52.89 seconds**, following a **23.05-second** incremental process-test build.
+Affected-crate Clippy across all targets/features with warnings denied passed in
+**41.30 seconds**. These are focused results, not the final integration gate.
+
+Earlier red process runs are retained: 26.18 seconds (restart acknowledgement),
+35.25 seconds (join admission), and 39.06 seconds (installation after enrolment).
+An additional run timed out at initial `claim_required` readiness in **18.82
+seconds**, before exercising certificate changes; its cause remains unresolved.
+No deadline was increased and a later green run does not close that startup
+failure. Test failures now include child exit observations; certificate-worker
+failures preserve secret-free selection/loading/conflict/acknowledgement categories.
+
+The certificate panel now offers mesh-local issuance, explains device trust and
+domain/DNS requirements, and keeps a downloadable public PEM anchor while TLS
+changes. It does not claim gateway installation from issuance alone, return a
+private key, install OS trust, or invoke the user's browser. The generated native
+Fetch method uses Rust-generated request/response Zod schemas and CSRF headers;
+the form additionally binds the response to its operation and names. Uncertain
+retries retain the operation identity, and disposed views do not offer downloads.
+The rendering and request/retry lifecycle have separate responsibilities in the
+same feature module. No dependency, SQL schema or wire-schema change was needed.
+
+Ten focused web tests passed in **1.28 seconds** across the local trust flow,
+existing ACME panel and generated certificate client. Targeted ESLint passed
+without exceptions; web TypeScript checking passed. An initial fixture incorrectly
+expected `X-CSRF-Token`; it was corrected to the existing `MeshSpan-CSRF-Token`
+contract, with assertions moved outside the UI's error-catching callback.
+
+Task 1 remains open for integration verification and resolution of the startup
+timeout. Its estimate fell from 5 to 3 points; Stage 10 from 152 to 150. Nothing
+has been released, tagged or published.
+
+### Parallel startup investigation and correction
+
+The first full local gate on `653b463` failed in **423.08 seconds**: all static,
+licence, generation and web-test lanes passed, but all five active headless tests
+timed out before initial HTTPS readiness. Observed children were alive. The 311
+daemon unit tests had passed in 59.39 seconds. This result supersedes any claim
+that the earlier isolated lifecycle pass alone closed startup reliability.
+
+A focused parallel rerun passed three workflows but timed out two joined-node
+workflows in **53.55 seconds**. Automatic native sampling then captured initial
+startup. In the third sampling window, 85 main-thread samples were in appliance
+composition and 79 in authentication-route composition; individual routes were
+repeatedly constructing/serialising the complete Rust-authored OpenAPI document.
+The retained first-failure database had all 85 migrations applied. Database-open
+work was visible too, but no database or durability policy was changed based on
+that suspicion.
+
+`generate_openapi` now shares an immutable `Arc<Value>` after successful initial
+generation. The document and header digest remain deterministic; external
+request/response validation is unchanged. A regression checks shared schema
+identity, identical digest and byte-for-byte output. The 45 API-contract tests
+passed in **0.22 seconds**. The `OpenApiDocument::value` accessor is no longer a
+const function; ordinary call signatures and wire output are unchanged.
+
+With this correction, all five active headless workflows passed together in
+**31.26 seconds**. A profiling run had separately exposed `AddrInUse` for HTTPS
+and SMB: the old bind-to-zero probe released listener ports back into the OS
+outbound pool before child binding. The harness now reads the OS ephemeral range,
+excludes it, checks candidate availability and assigns distinct candidates within
+the test process. It does not claim to reserve ports against unrelated processes.
+Linux/macOS range parsing fails closed; there is no guessed fallback range.
+
+All five workflows plus the range-parser test passed in **26.68 seconds**, with
+the two existing container-dependent tests still explicitly ignored. Affected
+API-contract/daemon Clippy across all targets/features passed in **20.70 seconds**.
+No deadlines were raised and no test was serialised. These focused results
+address the profiled startup defect; the full candidate must still pass the
+integration gate. Task 1 now has 1 point remaining; Stage 10 has 148.
+
+### Task 1 integration closure
+
+The final `pnpm check` on signed commit `b9ff3de`, tree
+`222a013b04a9b822e8700fc9d7be6bc6f11d6066`, passed in **852.44 seconds** with
+four scheduler workers under NVM Node 26.8.1 and Rust 1.98.0. All generation,
+embedded-bundle, formatting, lint, licence and typecheck lanes passed. Rust
+workspace tests passed in **796.77 seconds** and web tests in **9.35 seconds**.
+There were no implementation edits during this run. The earlier failures are
+resolved by the profiled schema-generation correction, listener allocation fix,
+focused parallel proof and this final integration pass, not by a blind retry.
+The two existing container-dependent headless cases remain ignored; this is not
+container, hardware or public-CA evidence. The full feedback cycle remains long;
+no test-speed improvement beyond the measured startup correction is claimed.
+
+Task 1 is recorded complete: **0 points remaining**, Stage 10 **147 points**.
+Task 2 is current with **8 points remaining**. Initial tracing found that the
+retry service accepts CA retry deadlines, but the ACME executor reduces remote
+failures to a generic protocol error and the driver supplies no retry guidance.
+That boundary needs a regression and correction before claiming rate-limit
+acceptance. No release, tag, package/image publication or Actions run occurred.
+
 ## Target accounting and selected maintenance measurements
 
 The [metrics catalogue](metrics.md) now includes seven target-accounting gauges

@@ -109,7 +109,7 @@ where
                 return Ok(PublicCertificateInstallationWorkerOutcome::Deferred);
             }
             Err(PublicCertificateSelectionAuthorityError::Failed) => {
-                return Err(PublicCertificateInstallationWorkerError::Failed);
+                return Err(PublicCertificateInstallationWorkerError::Selection);
             }
         };
         if self.acknowledged == Some(selection) {
@@ -124,7 +124,7 @@ where
             ) => return Ok(PublicCertificateInstallationWorkerOutcome::Deferred),
             Err(
                 PublicCertificateLoadingError::InvalidInput | PublicCertificateLoadingError::Failed,
-            ) => return Err(PublicCertificateInstallationWorkerError::Failed),
+            ) => return Err(PublicCertificateInstallationWorkerError::Loading),
         };
         if loaded.generation() != selection.certificate
             || loaded.bundle_digest() != selection.bundle_digest
@@ -148,7 +148,10 @@ where
                 Err(PublicCertificateInstallationError::Unavailable) => {
                     return Ok(PublicCertificateInstallationWorkerOutcome::Deferred);
                 }
-                Err(_) => return Err(PublicCertificateInstallationWorkerError::Failed),
+                Err(PublicCertificateInstallationError::Conflict) => {
+                    return Err(PublicCertificateInstallationWorkerError::Conflict);
+                }
+                Err(_) => return Err(PublicCertificateInstallationWorkerError::Acknowledgement),
             };
         self.acknowledged = Some(selection);
         Ok(PublicCertificateInstallationWorkerOutcome::Installed(
@@ -184,6 +187,18 @@ pub enum PublicCertificateSelectionAuthorityError {
 /// Closed worker failure without certificate or private-key material.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum PublicCertificateInstallationWorkerError {
+    /// The authoritative certificate selection could not be validated.
+    #[error("public certificate selection failed closed")]
+    Selection,
+    /// The selected encrypted certificate could not be loaded or validated.
+    #[error("public certificate loading failed closed")]
+    Loading,
+    /// Live rotation or its receipt conflicts with committed state.
+    #[error("public certificate acknowledgement conflicts with committed state")]
+    Conflict,
+    /// Live installation or durable acknowledgement failed validation.
+    #[error("public certificate acknowledgement failed closed")]
+    Acknowledgement,
     /// Gateway identity or incarnation is invalid.
     #[error("public certificate installation worker input is invalid")]
     InvalidInput,

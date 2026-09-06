@@ -25,7 +25,7 @@ use crate::{
     AuthenticationRuntimeKeys, BrowserAuthenticationError, BrowserRequestProtection,
     BrowserSessionAuthenticator, BrowserSessionAuthority, FileApiAuthenticationError,
     GatewaySessionIdentity, IdentityAdministrator, NativeApiKeyAuthenticator,
-    NativeApiKeyAuthority, SecretGenerationDecryptor,
+    NativeApiKeyAuthority, RotatingHttpsIdentity, SecretGenerationDecryptor,
 };
 
 const AUDIT_ID_DOMAIN: &[u8] = b"meshspan.enrolment.join-grant-audit-id.v1\0";
@@ -115,24 +115,24 @@ pub struct NodeJoinGrantIssuanceService<A, R, D> {
     authority: A,
     roots: AuthenticationRootLoadingService<R, D>,
     gateway: GatewaySessionIdentity,
-    gateway_certificate_fingerprint: [u8; 32],
+    https_identity: RotatingHttpsIdentity,
 }
 
 impl<A, R, D> NodeJoinGrantIssuanceService<A, R, D> {
-    /// Binds one gateway identity, its public certificate pin and current replicated authority.
+    /// Binds one gateway, its live TLS identity and current replicated authority.
     #[must_use]
     pub const fn new(
         authority: A,
         root_authority: R,
         decryptor: D,
         gateway: GatewaySessionIdentity,
-        gateway_certificate_fingerprint: [u8; 32],
+        https_identity: RotatingHttpsIdentity,
     ) -> Self {
         Self {
             authority,
             roots: AuthenticationRootLoadingService::new(root_authority, decryptor),
             gateway,
-            gateway_certificate_fingerprint,
+            https_identity,
         }
     }
 }
@@ -176,7 +176,9 @@ where
             administrator.principal_id,
             normalized.operation_id,
             &request.enrolment_endpoint,
-            self.gateway_certificate_fingerprint,
+            self.https_identity
+                .certificate_fingerprint()
+                .map_err(|_| NodeJoinGrantIssuanceError::Unavailable)?,
         )
         .map_err(|_| NodeJoinGrantIssuanceError::Failed)?;
         let existing = self
