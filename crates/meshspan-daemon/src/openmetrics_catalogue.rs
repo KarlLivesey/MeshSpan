@@ -5,9 +5,13 @@
 use meshspan_contracts::{LatencyHistogram, RuntimeMetric};
 use std::time::Duration;
 
+#[path = "openmetrics_operational.rs"]
+mod operational;
+
 pub(super) enum Measurement<'a> {
     Counter(u64),
     Gauge(u64),
+    Bytes(u64),
     Seconds(Duration),
     Latency(&'a LatencyHistogram),
 }
@@ -30,6 +34,8 @@ pub(super) fn describe(sample: &RuntimeMetric) -> Descriptor<'_> {
 // Keep the versioned public vocabulary separate from typed numeric representation.
 fn name_and_help(sample: &RuntimeMetric) -> (&'static str, &'static str) {
     match sample {
+        RuntimeMetric::Maintenance(kind, value) => operational::maintenance(*kind, value),
+        RuntimeMetric::StorageUsage(value) => operational::usage(value),
         RuntimeMetric::Uptime(_) => ("uptime_seconds", "Monotonic process lifetime."),
         RuntimeMetric::DroppedObservations(_) => (
             "observation_drops",
@@ -124,6 +130,26 @@ fn name_and_help(sample: &RuntimeMetric) -> (&'static str, &'static str) {
 
 fn measurement(sample: &RuntimeMetric) -> Measurement<'_> {
     match sample {
+        RuntimeMetric::Maintenance(_, value) => match value {
+            meshspan_contracts::MaintenanceMetric::Attempts(value)
+            | meshspan_contracts::MaintenanceMetric::Failures(value) => {
+                Measurement::Counter(*value)
+            }
+            meshspan_contracts::MaintenanceMetric::Duration(value) => Measurement::Latency(value),
+        },
+        RuntimeMetric::StorageUsage(value) => match value {
+            meshspan_contracts::StorageUsageMetric::Age(value) => Measurement::Seconds(*value),
+            meshspan_contracts::StorageUsageMetric::SampledTargets(value)
+            | meshspan_contracts::StorageUsageMetric::UnavailableTargets(value) => {
+                Measurement::Gauge(*value)
+            }
+            meshspan_contracts::StorageUsageMetric::CommittedBytes(value)
+            | meshspan_contracts::StorageUsageMetric::ReservedBytes(value)
+            | meshspan_contracts::StorageUsageMetric::ConfiguredLimitBytes(value)
+            | meshspan_contracts::StorageUsageMetric::RepairReserveBytes(value) => {
+                Measurement::Bytes(*value)
+            }
+        },
         RuntimeMetric::Uptime(value) | RuntimeMetric::LastReconciliationAge(value) => {
             Measurement::Seconds(*value)
         }

@@ -37,6 +37,7 @@ async fn exporter_policy_survives_restart_and_reaches_another_gateway() -> Resul
         processes[0] = root.start()?;
         super::wait_for_status(root.address, &client, "configured").await?;
         verify(root.address, &client, api_key).await?;
+        verify_storage_measurements(root.address, &client, api_key).await?;
         let join_code = super::issue_join_code(&root, &client, api_key).await?;
         processes.push(peer.start_join(&join_code)?);
         let peer_client = super::wait_for_client(&peer.identity_path).await?;
@@ -223,6 +224,56 @@ async fn configure(
         request["operation_id"].as_str().ok_or("operation absent")?
     );
     Ok(receipt)
+}
+
+async fn verify_storage_measurements(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+) -> Result<(), Box<dyn Error>> {
+    let authorization = format!("Bearer {api_key}");
+    let deadline = tokio::time::Instant::now() + super::WAIT_LIMIT;
+    loop {
+        let response = request_with_headers(
+            address,
+            client,
+            "GET",
+            SCRAPE,
+            None,
+            &[("Authorization", &authorization)],
+        )
+        .await?;
+        require_status(&response, "200 OK", "scrape restored target accounting")?;
+        let body = response_body(&response)?;
+        let count = |name: &str| {
+            body.lines()
+                .find_map(|line| line.strip_prefix(name))
+                .and_then(|value| value.parse::<u64>().ok())
+        };
+        if count("meshspan_v1_storage_usage_sampled_targets ").is_some_and(|value| value > 0)
+            && count("meshspan_v1_storage_usage_unavailable_targets ") == Some(0)
+            && count("meshspan_v1_maintenance_reconcile_attempts_total ")
+                .is_some_and(|value| value > 0)
+        {
+            assert!(
+                count("meshspan_v1_storage_configured_limit_bytes ").is_some_and(|value| value > 0)
+            );
+            assert!(count("meshspan_v1_storage_accounted_committed_bytes ").is_some());
+            assert!(count("meshspan_v1_storage_accounted_reserved_bytes ").is_some());
+            assert!(body.contains("# UNIT meshspan_v1_storage_accounted_committed_bytes bytes\n"));
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!(
+                "restored target measurements unavailable: sampled={:?}, unavailable={:?}, reconcile_attempts={:?}, configured_limit={:?}",
+                count("meshspan_v1_storage_usage_sampled_targets "),
+                count("meshspan_v1_storage_usage_unavailable_targets "),
+                count("meshspan_v1_maintenance_reconcile_attempts_total "),
+                count("meshspan_v1_storage_configured_limit_bytes "),
+            ).into());
+        }
+        tokio::time::sleep(super::RETRY_INTERVAL).await;
+    }
 }
 
 async fn verify_gateway_dispatches(

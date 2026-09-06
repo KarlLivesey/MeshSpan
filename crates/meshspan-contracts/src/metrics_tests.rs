@@ -98,3 +98,43 @@ fn gateway_histograms_are_revalidated_at_the_snapshot_boundary() {
         );
     }
 }
+
+#[test]
+fn operational_families_keep_kind_and_measurement_identity() -> Result<(), ContractError> {
+    let repair = RuntimeMetric::Maintenance(
+        MaintenanceMetricKind::Repair,
+        MaintenanceMetric::Attempts(1),
+    );
+    let scrub =
+        RuntimeMetric::Maintenance(MaintenanceMetricKind::Scrub, MaintenanceMetric::Attempts(2));
+    let failures = RuntimeMetric::Maintenance(
+        MaintenanceMetricKind::Repair,
+        MaintenanceMetric::Failures(0),
+    );
+    let bytes = RuntimeMetric::StorageUsage(StorageUsageMetric::CommittedBytes(3));
+    let reserved = RuntimeMetric::StorageUsage(StorageUsageMetric::ReservedBytes(4));
+    let samples = vec![repair.clone(), scrub, failures, bytes.clone(), reserved];
+    assert_eq!(
+        RuntimeMetricSnapshot::new(samples.clone())?.samples(),
+        samples
+    );
+    for duplicate in [repair, bytes] {
+        let mut repeated = samples.clone();
+        repeated.push(duplicate);
+        assert_eq!(
+            RuntimeMetricSnapshot::new(repeated),
+            Err(ContractError::InvalidInput)
+        );
+    }
+    assert_eq!(
+        RuntimeMetricSnapshot::new(vec![RuntimeMetric::Maintenance(
+            MaintenanceMetricKind::Drain,
+            MaintenanceMetric::Duration(LatencyHistogram {
+                buckets: [1; 8],
+                ..LatencyHistogram::default()
+            })
+        )]),
+        Err(ContractError::InvalidInput)
+    );
+    Ok(())
+}

@@ -171,8 +171,9 @@ fn runtime_observation_contention_and_invalid_clocks_do_not_block_domain_work()
 fn runtime_metrics_omit_unobserved_gauges_and_include_all_recorded_families()
 -> Result<(), Box<dyn std::error::Error>> {
     let store = RuntimeObservations::default();
-    // Five last-cycle gauges are absent until a cycle exists; lifetime counters start at zero.
-    assert_eq!(store.collect_metrics()?.samples().len(), 18);
+    // Last-cycle and usage gauges are absent until sampled; lifetime counters start at zero.
+    assert_eq!(store.collect_metrics()?.samples().len(), 33);
+    store.record_storage_usage(super::StorageUsagePass::default());
     store.record_cycle(
         cycle(2),
         Duration::from_millis(8),

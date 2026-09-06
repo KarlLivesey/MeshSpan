@@ -11,7 +11,7 @@ The current source reads the existing process-local observation store without
 provider IO, network requests or waiting for the storage worker. Contention
 returns unavailable evidence, not a synthetic empty/healthy snapshot.
 
-The current catalogue has 23 distinct families. Names carry `meshspan_v1_`;
+The current catalogue has 45 distinct families. Names carry `meshspan_v1_`;
 counter samples additionally carry `_total`.
 
 | Family suffix                             | Type      | Meaning                                                   |
@@ -39,6 +39,49 @@ counter samples additionally carry `_total`.
 | `smb_dispatch_errors`                     | Counter   | Handler errors, not ordinary SMB error-status responses    |
 | `smb_cancelled_dispatches`                | Counter   | Dispatch futures dropped before returning                 |
 | `smb_dispatch_duration_seconds`           | Histogram | SMB payload handler lifetime, not socket writes            |
+| `storage_usage_age_seconds`               | Gauge     | Age since the most recent target-usage sampling pass began |
+| `storage_usage_sampled_targets`           | Gauge     | Open targets included in that pass                        |
+| `storage_usage_unavailable_targets`       | Gauge     | Open targets whose usage could not be included             |
+| `storage_accounted_committed_bytes`       | Gauge     | Accounted committed shard and backup payload bytes         |
+| `storage_accounted_reserved_bytes`        | Gauge     | Active shard and backup holds                             |
+| `storage_configured_limit_bytes`          | Gauge     | Summed configured ceilings, not physically available space |
+| `storage_repair_reserve_bytes`            | Gauge     | Configured repair headroom, not occupied bytes             |
+
+The five fixed maintenance kinds are `repair`, `drain`, `rebalance`, `reconcile`
+and `scrub`. Each has three families: `maintenance_<kind>_attempts` (counter),
+`maintenance_<kind>_failures` (counter) and `maintenance_<kind>_duration_seconds`
+(histogram). These are literal catalogue names, not dynamic labels. Attempts
+begin only after work selection (and, for drains, after establishing pending
+attestation or completion recovery). Failed/interrupted attempts are included;
+an empty scheduler tick is not an attempt. A successful page or step can still
+leave a job unfinished. These measurements never replace durable job outcomes,
+and their timing excludes queue residence and selection.
+
+## Target accounting scope
+
+`StorageUsageSource` reads the existing target journal and configured policy on
+the storage IO worker. Shared providers skip contended locks. The exporter only
+reads cached observations; it does not perform provider IO. The worker samples
+with its ordinary health-probe pass and refreshes after targets are opened or
+registered. Registration itself only marks observations dirty, rather than
+scanning other providers on the administration request path.
+
+Accounted bytes include the target's shared shard/backup holds and committed
+payload accounting. They exclude filesystem metadata, pack overhead and dead
+pack space, and are not filesystem allocation measurements. Pending holds can
+include interrupted work with an unknown publication outcome. Repair headroom
+is a policy budget, not occupied space. Several targets can share a physical
+filesystem: summed target ceilings must never be labelled free or usable space.
+
+Each pass covers the open target set at its sampling time, not every configured
+target or the whole mesh. Targets are read sequentially, not in one cross-target
+transaction. Age and sample coverage accompany totals. If any target is busy,
+unavailable or makes aggregation overflow, all four byte gauges are absent;
+partial totals are never represented as complete. A later successful pass
+restores them. Before the first pass all seven usage gauges are absent. A pass
+over no open targets reports zero with zero coverage, not a healthy mesh.
+
+## Histogram and encoding rules
 
 The histograms aggregate the process lifetime, independently of eviction from
 the diagnostic windows. Inclusive finite buckets are 0.001, 0.005, 0.025, 0.1,
@@ -121,8 +164,9 @@ been suspended; that user's current credentials still cannot authorise scraping.
 
 ## Remaining Stage 10 measurements
 
-This initial catalogue is not completion of OPS-019. Protection/locality debt,
-capacity/reservations, repair/scrub/drain/rebalance work, target IO/integrity,
+This catalogue is not completion of OPS-019. Protection/locality debt,
+physical-space attribution, queue/debt/completion state beyond selected maintenance
+attempts, target IO/integrity beyond health probes,
 HTTPS/SMB transfer throughput and operation outcomes beyond dispatch,
 consensus/catch-up, coding/degraded reads, packs/deduplication,
 federation backlog, authentication rejection, certificates, backups, updates,

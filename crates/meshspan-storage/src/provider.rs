@@ -553,6 +553,22 @@ impl FolderShardStore {
     }
 }
 
+impl meshspan_contracts::StorageUsageSource for FolderShardStore {
+    fn observe_usage(&self) -> Result<meshspan_contracts::StorageUsageObservation, ContractError> {
+        let capacity = self
+            .journal
+            .capacity()
+            .map_err(FolderShardStoreError::from)
+            .map_err(contract_error)?;
+        Ok(meshspan_contracts::StorageUsageObservation {
+            committed_bytes: capacity.committed_bytes,
+            reserved_bytes: capacity.reserved_bytes,
+            configured_limit_bytes: self.capacity_ceiling().map_err(contract_error)?,
+            repair_reserve_bytes: capacity.repair_reserve_bytes,
+        })
+    }
+}
+
 impl StorageProvider for FolderShardStore {
     fn describe(&self) -> ImplementationDescriptor {
         ImplementationDescriptor {

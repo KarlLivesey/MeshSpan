@@ -80,6 +80,8 @@ impl StorageTargetRuntime {
             canonical_path.clone(),
             NativeStorageTarget::new(context, provider),
         );
+        // The existing storage worker refreshes accounting; administration does not scan providers.
+        self.usage_dirty = true;
         if !self.configured_paths.contains(&canonical_path) {
             self.configured_paths.push(canonical_path);
         }
