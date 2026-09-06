@@ -12,6 +12,64 @@ not close an unexplained failure.
 
 ## Task 2 — interrupted challenge recovery
 
+### Retry guidance survives parsing and terminal certificate refusal
+
+Signed, pushed, GitHub-verified commit
+`9ff95fe08f21d086f3894842d1b17acefb3f32e4`, tree
+`8e44e2c8aee7a1ca31cd8f6541d984bef6d78adc`, corrects the response-parsing gap
+identified in PR #249. [PR #250](https://github.com/KarlLivesey/MeshSpan/pull/250)
+contains this candidate. The full NVM-default gate passed on that source in
+**619.72 seconds**: Rust workspace tests **568.60 seconds**, web tests **8.40
+seconds**, Rust lint **20.61 seconds**, and web lint **24.61 seconds**. Generated
+drift, embedded bundle, formatting, both licence checks, TypeScript and tooling
+tests also passed. The command was
+`CARGO_BUILD_JOBS=4 MESHSPAN_CHECK_WORKERS=4 rustup run 1.98.0 pnpm check` after
+initialising NVM. Closing edits are evidence only; the tested implementation
+did not change after the final gate.
+Both opt-in real-time process-recovery cases passed in parallel in **337.22
+seconds**, selected through the rebuilt executable with
+`acme_lifecycle:: --ignored --test-threads=4`. Actual lease-expiry takeover and
+rejected-order cleanup/reissuance after restart both pass without shortening
+the production lease or backoff.
+
+Every remote ACME step now validates retry guidance before parsing its response
+fields. Valid guidance survives a malformed body or missing required response
+field; absent or malformed/duplicate guidance does not invent a deadline or
+trigger an inline retry. The shared parser still returns typed events only for
+valid responses. Terminal certificate downloads carry receipt-time guidance
+through certificate parsing, name/key/lifetime checks and trust verification.
+If those checks reject the certificate, the ordinary authoritative retry keeps
+the later CA deadline. The accepted download checkpoint remains intact and no
+unvalidated certificate is committed.
+
+The trust result also separates `UntrustedCertificate` from `InvalidTrust`.
+Remote trust refusal now queues certificate retry; an unusable local trust-anchor
+configuration still fails construction. This fixes the previously escaping
+`Result(InvalidTrust)` without masking local configuration failure.
+
+The initial executor regression failed because malformed success returned
+`Protocol` without its valid delay. All three initial driver regressions failed:
+malformed bodies and malformed certificates used only local backoff instead of
+the CA's two-hour deadline, and an otherwise valid untrusted chain escaped as
+`Result(InvalidTrust)`. After correction, **62 ACME tests passed in 0.16 seconds**
+(**3.63-second build**) and **52 focused daemon tests passed in 0.58 seconds**
+(**17.06-second build**). Vectors cover all ten current remote action forms,
+relative/absolute hints, absent/invalid/duplicate hints, malformed certificates,
+untrusted chains, unchanged checkpoint bytes and exact retry receipts. A real
+TLS success with an invalid body advances the controlled clock from request time
+to response time and verifies the resulting exact queued deadline with only one
+network request. Existing bad-nonce and successful-polling regressions pass.
+Affected all-target/all-feature Clippy passed in **9.05 seconds**. Rebuilt normal
+HTTP-01 and RFC 2136 DNS-01 daemon lifecycles passed in **20.42 seconds**.
+
+No dependency, database, checkpoint encoding or wire-format change was needed.
+The Rust terminal-step result adds an optional receipt-time retry deadline and
+the Rust result error distinguishes remote trust refusal. Task 2 remains **2
+points**, Stage 10 **141**, Stage 11 **126**: DNS-provider process lifecycles and
+active-gateway challenge distribution still remain, with live-CA acceptance a
+separate task. The earlier unexplained cluster timeout remains open. No release,
+tag, package/image publication or GitHub Actions were run.
+
 ### Rejected CA responses retain accepted state
 
 Signed, pushed, GitHub-verified commit
