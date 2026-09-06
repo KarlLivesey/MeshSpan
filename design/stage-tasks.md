@@ -113,8 +113,14 @@ the stage; publication-dependent acceptance remains held separately and visible.
    HTTP challenge restoration and completion of the same CA order. Its final
    opt-in run passed in **325.02 seconds**, and the full gate on `86be66f` passed
    in **792.30 seconds** (Rust **717.65**, web **9.94**), closing **4 → 3 points**.
-   Expired publication/terminal CA order recovery, remaining DNS-provider process
-   lifecycles and active-gateway challenge distribution remain outstanding.
+   [Explicit retirement and atomic fresh retry](stage-10-evidence.md#exact-retirement-and-atomic-fresh-order-retry)
+   now handles exhausted publication budgets and terminal CA resource rejection,
+   keeping exact cleanup and CA deadlines through restart. Its full local gate on
+   `6dc6dbe` passed in **590.19 seconds** (Rust **536.36**, web **6.19**), including
+   the focused transaction-fault/reopen and daemon recovery checks. Whole-process
+   rejected-order/reissuance acceptance, remaining CA error-response handling,
+   DNS-provider process lifecycles and active-gateway challenge distribution remain
+   outstanding; task 2 stays **3 points** until those acceptance gaps close.
 
 3. **Encrypted certificate delivery and rotation — Partial.** **5 points remaining.**
    PKI-001/002/005/007/010; accepted decisions §7.

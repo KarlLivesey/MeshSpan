@@ -14,6 +14,18 @@ not close an unexplained failure.
 
 ### Exact retirement and atomic fresh-order retry
 
+The final full NVM-default local gate passed on signed, pushed, GitHub-verified
+commit `6dc6dbeb6a2e72a8d99beb7a95fd411624e9f0de`, tree
+`6a8770f56b492a64b3065a1ddd9b4dec8483ac1e`, in **590.19 seconds**. The command was
+`CARGO_BUILD_JOBS=4 MESHSPAN_CHECK_WORKERS=4 rustup run 1.98.0 pnpm check` after
+initialising NVM. Rust workspace tests took **536.36 seconds**, web tests **6.19
+seconds**, Rust lint **25.60 seconds**, and web lint **21.36 seconds**. Generated
+drift, embedded web build, both licence checks, formatting, TypeScript and tooling
+tests also passed. No implementation changes followed this gate. The closing
+commit updates evidence only. [PR #247](https://github.com/KarlLivesey/MeshSpan/pull/247)
+contains this slice; the open validation statement below records its pre-gate
+state, not a remaining integration-check failure.
+
 The `codex/stage10-task2-order-retirement` candidate distinguishes ordinary
 transport retry from abandoning an unusable protocol attempt. Terminal
 authorisation rejection and an invalid CA order now produce a retirement state,
@@ -67,12 +79,15 @@ arms, documentation, a boolean expression and the expanded transition function;
 normal and retired cleanup now share their publication lifecycle owner. None of
 these results closes the earlier unexplained cluster timeout.
 
-Full integration validation and merge are still pending for this candidate.
+At the initial progress commit, full integration validation and merge were pending.
 This is not a new whole-process CA rejection/reissuance proof, live public-CA
 acceptance, support for every CA error response, or completion of the remaining
 DNS-provider lifecycle and active-gateway challenge distribution work. No
 release, tag, package/image publication or GitHub Actions were run. Estimates
-remain task 2 **3**, Stage 10 **142**, Stage 11 **126** pending integration.
+remain task 2 **3**, Stage 10 **142**, Stage 11 **126**: the production retirement
+path and its focused persistence proof are integrated, but the whole-process
+rejected-order/reissuance acceptance still needs to close alongside the other
+remaining task-2 work. No unit-test result is being presented as that proof.
 
 ### Integrated independent-lifetime and takeover proof
 
