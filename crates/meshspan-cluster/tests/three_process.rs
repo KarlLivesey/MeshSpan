@@ -76,9 +76,13 @@ async fn prove_cluster_recovery(drop_commits: bool) -> Result<(), Box<dyn Error>
         launch.drop_commits = drop_commits;
     }
     let mut cluster = ProcessCluster::start(&launches)?;
-    establish_three_voters(&launches)
-        .await
-        .map_err(|error| cluster.with_process_status(error.as_ref()))?;
+    if let Err(error) = establish_three_voters(&launches).await {
+        return Err(retain_failed_cluster(
+            temporary,
+            &mut cluster,
+            error.as_ref(),
+        ));
+    }
     for operation in 6_u8..=11 {
         commit_on_nodes(&launches, 0, operation, 3).await?;
     }
@@ -96,9 +100,13 @@ async fn prove_cluster_recovery(drop_commits: bool) -> Result<(), Box<dyn Error>
     abandon_response(launches[0].control_address, "PROPOSE 22").await?;
     wait_for_response(launches[1].control_address, "STATUS 22", Some("COMMITTED")).await?;
 
-    prove_leader_failover(&mut cluster, &launches)
-        .await
-        .map_err(|error| cluster.with_process_status(error.as_ref()))?;
+    if let Err(error) = prove_leader_failover(&mut cluster, &launches).await {
+        return Err(retain_failed_cluster(
+            temporary,
+            &mut cluster,
+            error.as_ref(),
+        ));
+    }
     for number in 1_u8..=3 {
         cluster.stop(number)?;
     }
@@ -112,6 +120,20 @@ async fn prove_cluster_recovery(drop_commits: bool) -> Result<(), Box<dyn Error>
         );
     }
     Ok(())
+}
+
+fn retain_failed_cluster(
+    temporary: TempDir,
+    cluster: &mut ProcessCluster,
+    error: &dyn Error,
+) -> Box<dyn Error> {
+    let retained = temporary.keep();
+    format!(
+        "{}; retained failed proof state at {}",
+        cluster.with_process_status(error),
+        retained.display(),
+    )
+    .into()
 }
 
 async fn prove_leader_failover(
@@ -669,8 +691,9 @@ async fn wait_for_node_response(
             let log_result = fs::File::open(&launch.log_path)
                 .and_then(|file| file.take(8_192).read_to_string(&mut log));
             Err(format!(
-                "node {}: {error}; log read={log_result:?}; log={log:?}",
-                launch.number
+                "node {}: {error}; state exists={:?}; log read={log_result:?}; log={log:?}",
+                launch.number,
+                launch.state_path.try_exists(),
             )
             .into())
         }

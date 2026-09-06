@@ -81,6 +81,46 @@ original-publication checkpoint recovery and manual-DNS process acceptance remai
 open; task and stage estimates are unchanged. Broader validation and integration
 will be recorded below when they actually finish.
 
+Affected all-target/all-feature Clippy passed in **15.53 seconds** after that
+test-transport correction. The 27 daemon certificate-order regressions passed
+in **0.19 seconds**, following a 1-minute-8-second build. Commit `8136ac8` was
+signed, pushed and verified by GitHub; PR #243 is open, not merged.
+
+The full local gate on `8136ac8cd372c820391df8d4852c9c96df5b36c0`, tree
+`1df930f4dbe64a8ac9ad82ec96019e3d63053e2c`, **failed in 610.81 seconds**. All
+static/licence lanes and web tests (10.87 seconds) passed. Rust workspace tests
+failed after **442.13 seconds** in the three-process cluster suite: six cases
+passed, but `three_process_cluster_survives_lost_reply_and_leader_restart` timed
+out waiting for node 2's `FOLLOWER_WITH_LEADER` response. Its control connection
+was refused, its log was empty and all three children were still alive.
+
+That proof node binds its control listener only after learner snapshot admission
+and repository restoration. The available evidence therefore does not distinguish
+process startup, snapshot delivery and installation. The targeted recovery proof
+now retains its owned temporary state on admission/failover failure and reports
+whether the node database exists. No timeout, concurrency, protocol or acceptance
+assertion was weakened. A passing diagnostic rerun alone cannot close this failure;
+the candidate remains unmerged and the goal remains active.
+
+The diagnostic three-process suite passed all **seven cases in 24.39 seconds**
+with four test threads and the unchanged 15-second per-operation wait, after a
+2-minute-56-second build. No failed workspace was retained because no case failed.
+The initial diagnostic command stopped at Rust formatting; formatting was applied
+before the actual test run. This successful rerun does not identify or fix the
+full-gate failure.
+
+A read-only host observation during that diagnostic build reported 12 logical
+CPUs and load averages **252.95 / 210.47 / 128.38**, with 3,109,958 compressed-memory
+pages at 16,384 bytes per page. Those observations make timing/performance
+comparisons unreliable; they are context, not proof that host load caused the
+earlier failed admission. No unrelated process, host setting, wait limit or test
+concurrency was changed. The proof executable's CPU-sized Tokio worker pools are
+an investigation lead, not an implemented correction or established root cause.
+The diagnostic harness passed affected all-feature Clippy in **39.03 seconds**,
+with this owned compiler invocation bounded by `CARGO_BUILD_JOBS=4`. Rust
+formatting and `git diff --check` passed. No second full-gate retry was run and no
+merge is claimed.
+
 ## Task 2 — real DNS-01 issuance, restart and gateway delivery
 
 The existing real-process lifecycle now also runs RFC 2136 DNS-01 through the
