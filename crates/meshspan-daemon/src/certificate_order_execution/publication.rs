@@ -25,6 +25,13 @@ impl<T: AcmeTransport, C: CertificateChallenge> CertificateOrderExecution<T, C> 
         let Some(action) = self.machine.publication_action()? else {
             return Ok(None);
         };
+        let challenge_expires_at = self
+            .assignment
+            .checkpoint
+            .as_ref()
+            .filter(|_| self.machine.publication_epoch().is_some())
+            .and_then(|checkpoint| checkpoint.legacy_lease_expiry_candidate)
+            .unwrap_or(challenge_expires_at);
         let publication = self.executor.prepare_publication(
             &action,
             AcmeChallengeExecution {

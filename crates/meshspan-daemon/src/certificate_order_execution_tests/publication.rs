@@ -7,6 +7,8 @@ use meshspan_acme::{
 
 use super::*;
 
+mod legacy;
+
 #[tokio::test]
 async fn exact_challenge_material_is_checkpointed_before_publisher_io()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -231,6 +233,12 @@ fn replace_worker(
 
 async fn published_order()
 -> Result<(PreparedCertificateOrder, Http01Challenge), Box<dyn std::error::Error>> {
+    published_order_with_expiry(80).await
+}
+
+async fn published_order_with_expiry(
+    expires_at: i64,
+) -> Result<(PreparedCertificateOrder, Http01Challenge), Box<dyn std::error::Error>> {
     let challenge = Http01Challenge::new();
     let authority = RecordingCheckpointAuthority::default();
     let mut execution = CertificateOrderExecution::new(
@@ -247,7 +255,7 @@ async fn published_order()
                 PrincipalId::from_bytes([2; 16])?,
                 &FixedClock(UnixMicros::new(20)),
                 context,
-                UnixMicros::new(80),
+                UnixMicros::new(expires_at),
             )
             .await?;
     }

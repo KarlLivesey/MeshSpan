@@ -68,6 +68,7 @@ fn preparation_creates_one_encrypted_leaf_key_then_reuses_it_after_worker_replac
     assert_eq!(authority.commit_count(), 1);
     let fingerprint = first.certificate_key.public_key_fingerprint();
     let checkpoint = CertificateOrderCheckpointRecord {
+        legacy_lease_expiry_candidate: None,
         order_id,
         claim_generation: 1,
         worker_node_id: NodeId::from_bytes([6; 16])?,

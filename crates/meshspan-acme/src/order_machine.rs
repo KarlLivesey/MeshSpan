@@ -347,11 +347,8 @@ impl AcmeOrderMachine {
         if order_epoch == 0 || self.phase == Phase::Complete {
             return Err(AcmeMachineError::InvalidInput);
         }
-        if self.has_challenge_phase() && matches!(self.publication, PublicationState::Unprepared) {
-            self.publication = PublicationState::Legacy {
-                order_epoch: self.order_epoch,
-            };
-        }
+        // An unprepared format-3 challenge has never permitted provider IO. Legacy formats
+        // are decoded with their original epoch explicitly; do not invent legacy evidence here.
         self.order_epoch = order_epoch;
         self.action_for_phase().map(|_| ())
     }

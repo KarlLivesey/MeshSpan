@@ -35,6 +35,17 @@ fn every_order_phase_round_trips_as_the_same_next_action() -> Result<(), Box<dyn
         replay_nonce: "nonce-4".to_owned(),
     })?;
     assert_round_trip(&machine)?;
+    let mut unprepared_replacement =
+        AcmeOrderMachine::decode_checkpoint(&machine.encode_checkpoint()?)?;
+    unprepared_replacement.resume_under_fence(18)?;
+    assert_eq!(unprepared_replacement.publication_epoch(), None);
+    assert!(matches!(
+        unprepared_replacement.action()?,
+        crate::AcmeMachineAction::PublishChallenge {
+            order_epoch: 18,
+            ..
+        }
+    ));
     machine.advance(AcmeMachineEvent::ChallengePublished {
         publication_digest: [7; 32],
     })?;

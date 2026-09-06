@@ -14,6 +14,76 @@ use meshspan_contracts::{
 use super::*;
 
 #[test]
+fn legacy_expiry_candidate_belongs_to_the_original_claim_not_the_replacement()
+-> Result<(), Box<dyn Error>> {
+    let (fixture, original) = interrupted_task()?;
+    let checkpoint = fixture
+        .repository
+        .certificate_order_checkpoint(original.order_id)?
+        .ok_or("missing checkpoint")?;
+    assert_eq!(checkpoint.legacy_lease_expiry_candidate, None);
+    // An explicit old-format fixture, independent of the current checkpoint encoder.
+    let bytes = LEGACY_CHECKPOINT;
+    AcmeOrderMachine::decode_checkpoint(bytes)?;
+    let digest: [u8; 32] = Sha256::digest(bytes).into();
+    fixture.repository.database.connection().execute(
+        "UPDATE certificate_order_checkpoints SET checkpoint = ?1, checkpoint_digest = ?2 WHERE order_id = ?3",
+        params![bytes, digest.as_slice(), original.order_id.as_bytes().as_slice()],
+    )?;
+    let loaded = fixture
+        .repository
+        .certificate_order_checkpoint(original.order_id)?
+        .ok_or("missing legacy checkpoint")?;
+    assert_eq!(
+        loaded.legacy_lease_expiry_candidate,
+        Some(UnixMicros::new(100))
+    );
+    assert_eq!(loaded.checkpoint, bytes);
+    assert_eq!(loaded.checkpoint_digest, digest);
+    assert_eq!(
+        fixture
+            .repository
+            .certificate_order(original.order_id)?
+            .ok_or("missing order")?
+            .claim
+            .ok_or("missing claim")?
+            .lease_expires_at,
+        UnixMicros::new(200)
+    );
+    Ok(())
+}
+
+const LEGACY_CHECKPOINT: &[u8] = br#"{
+  "version": 2,
+  "machine": {
+    "directory_url": "https://acme.example.test/directory",
+    "request": {"dns_names": ["files.example.test"]},
+    "preference": "dns01", "order_epoch": 901, "phase": "publish_challenge",
+    "directory": {
+      "new_nonce": "https://acme.example.test/nonce",
+      "new_account": "https://acme.example.test/account",
+      "new_order": "https://acme.example.test/new-order"
+    },
+    "nonce": "nonce-4", "account_url": "https://acme.example.test/account/1",
+    "order_url": "https://acme.example.test/order/1",
+    "order": {
+      "status": "pending", "dns_names": ["files.example.test"],
+      "authorizations": ["https://acme.example.test/authorization/1"],
+      "finalize": "https://acme.example.test/finalize/1", "certificate": null
+    },
+    "authorization_index": 0, "authorized_names": [],
+    "authorization": {
+      "dns_name": "files.example.test", "wildcard": false, "status": "pending",
+      "challenges": [{"kind": "dns-01", "url": "https://acme.example.test/challenge/1",
+                      "token": "token-1", "status": "pending"}]
+    },
+    "challenge": {"kind": "dns-01", "url": "https://acme.example.test/challenge/1",
+                  "token": "token-1", "status": "pending"},
+    "publication_digest": null, "certificate": null, "poll_not_before": null
+  }
+}"#;
+
+#[test]
 fn replacement_claim_advances_the_exact_retained_task_without_recreating_it()
 -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;

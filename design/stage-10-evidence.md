@@ -12,6 +12,53 @@ not close an unexplained failure.
 
 ## Task 2 — interrupted challenge recovery
 
+### Verified legacy publication lifetime
+
+The checkpoint reader now exposes the original publication claim's retained
+lease end as a read-only recovery candidate. It looks up the original opaque
+publication fence, not the current worker's fence. The checkpoint bytes and
+digest remain unchanged by this read. The executor verifies that candidate
+against the original publisher receipt before checkpointing recovered material
+or performing publisher IO. Missing or mismatched receipt evidence cannot be
+silently replaced with the new worker's lifetime. This is not universal legacy
+recovery: renewed original leases or different original publication lifetimes
+still require exact evidence, and expired pending challenges remain separate work.
+
+Format-3 `unprepared` state now remains unprepared when a worker changes: provider
+IO was never permitted for that state. Its first publication uses the new worker
+identity. Formats 1 and 2 retain their explicitly decoded legacy epoch. After a
+recovered challenge finishes, its old lifetime candidate must not affect a new
+unprepared challenge in the same execution. No SQL schema, wire command, HTTP
+contract or dependency changed; the candidate is a Rust read-model addition.
+
+The metadata regression first failed with `None` instead of the original
+100-microsecond lease end in **0.24 seconds** (5.47-second build). The daemon
+recovery regression failed with `InvalidInput` in **0.04 seconds** (21.75-second
+build). A further regression caught the previous lifetime leaking into a fresh
+challenge: **100 instead of 180**, in **0.05 seconds** (9.61-second build). After
+the fixes, **12 execution tests passed in 0.10 seconds**, **22 ACME metadata tests
+in 14.22 seconds**, and **58 ACME tests in 0.07 seconds**. The tests check the
+unchanged protocol action/receipt, original publication epoch and expiry, current
+worker fence, checkpoint-before-IO ordering and rejection without side effects.
+They use checkpoint reconstruction/recording authority, not a daemon crash proof.
+
+Affected all-target/all-feature Clippy passed in **10.83 seconds** after removing
+an unnecessary reference in the historical fixture. The exact new SQL query was
+extracted from source and explained against all current partition migrations
+using NVM Node's in-memory SQLite: it uses the unique `(order_id, fence)` index,
+without scanning claim history. That is query-shape evidence, not a benchmark of
+the bundled Rust database. Both real-daemon HTTP-01/DNS-01 lifecycle cases passed
+in **20.12 seconds** after a 23.55-second build, including post-issuance restart,
+cleanup and second-gateway installation without another CA order. They still do
+not interrupt unfinished authorisation. The final integration gate is outstanding.
+
+This resolves the ordinary legacy-candidate integration gap recorded below,
+alongside the retained manual-task ownership work. It does not close all of task
+2: long-running publication/claim handling, interrupted real-process issuance,
+remaining provider lifecycle proofs and active-gateway challenge distribution
+remain. Task 2 stays **4 points**, Stage 10 **143**, Stage 11 **126**. Publication
+remains prohibited.
+
 ### Manual-DNS task continuation across worker claims
 
 The next increment on `codex/stage10-task2-publication-handoff` separates current
