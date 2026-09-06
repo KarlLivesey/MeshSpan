@@ -92,6 +92,26 @@ An intermediate system-process listing was incorrectly attributed to a Node
 child of this suite. Inspection confirms its panel checks use Rust over HTTPS;
 no such Node child is launched. Node version is not an established failure cause.
 
+The focused database regressions both reproduced `DatabaseBusy` on a current
+database reopen while another connection held a writer transaction (**5.49 seconds**,
+43.67-second build). Binding now reads the existing identity/schema first and
+does not rewrite an already-current marker. Creation, migration, mismatched
+identity rejection and full existing integrity checks remain intact. All **49
+database tests passed in 13.28 seconds** after correction (5.75-second build).
+The parallel process effect and full integration still require verification;
+this evidence does not yet close the startup or backup-transfer failures.
+
+The first unprofiled parallel run after that correction passed all startup,
+join and certificate workflows in **31.57 seconds**; seven cases passed, while
+the operator workflow now failed at restore-readiness with HTTP 503 after its
+encrypted export passed. Both child processes remained alive. Affected metadata
+and daemon all-target/all-feature Clippy passed with warnings denied in **33.58
+seconds**. The no-op writer-lock defect is reproduced and corrected, but this
+single run is not a claim of exhaustive startup proof. Inspection of the backup
+path found that provider snapshots use `try_lock` on the entire storage runtime,
+so ordinary maintenance contention can become an export/restore failure. That
+boundary is the next focused investigation, not an accepted 503 workaround.
+
 No dependency, schema or protocol changed. Full local
 integration remains incomplete for the corrected slice; task 2 stays at **6 points** and Stage
 10 at **145** until that gate passes. Cloudflare/webhook/manual lifecycle,
