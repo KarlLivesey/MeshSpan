@@ -107,8 +107,20 @@ after correction in **0.02 seconds** (21.28-second build). Broader evidence:
   propagate, and a named absent/present field enum expresses the three states;
   no lint suppression was added.
 
-Full integration validation and merge of this polling candidate are still
-pending. Task estimates remain unchanged until that evidence is recorded.
+The final full local gate passed on signed commit
+`c48a0781dfb7282022a5be7a67e2c46a500aafb4`, tree
+`87fff0bbe5e5b9fcd7b7d823d9f5b9ddafb61276`, in **751.75 seconds**. Rust workspace
+tests passed in **688.03 seconds** and web tests in **5.69 seconds**; every
+generated/static/licence lane passed. The exact invocation was the non-login
+Bash/NVM/rustup command recorded above, with four compiler jobs and four harness
+workers. The source candidate stayed frozen. This is not a controlled performance
+comparison with earlier runs or an explanation of their admission failure.
+
+This closes successful-response polling guidance: Task 2 **5 → 4 points**, Stage
+10 **144 → 143**, Stage 11 unchanged at **126**. PR #244 contains this candidate.
+Original publication identity/expiry across handoff, long-running claims/manual
+tasks, remaining provider process lifecycles and active-gateway challenge sharing
+remain required; no external CA, physical failure or publication gate is closed.
 
 Manual-DNS polling now checks the exact retained task and live claim before
 proposing another transition. The claim and task are read in one SQLite read
