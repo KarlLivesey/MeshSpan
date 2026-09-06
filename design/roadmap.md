@@ -484,65 +484,29 @@ Requirements: DAT-007–014, OPS-004, OPS-005, TST-006.
 
 **Depends on:** Stages 6–9.
 
-Build:
+**Status:** in progress. Use the single numbered
+[Stage 10 task list](stage-tasks.md#stage-10--certificates-packaging-and-operations)
+for task status, remaining work and completion evidence. It incorporates the
+certificate, backup, operations, metrics, update and packaging deliverables and
+their live-CA, gateway-generation, real-artefact and dependency-admission gates.
+The [evidence log](stage-10-evidence.md) retains detailed historical results; it
+is not a second current task list. Publication-dependent acceptance remains held
+until the owner explicitly permits publication.
 
-- ACME HTTP-01 and DNS-01 with fenced single-worker orders;
-- a self-contained mesh-local CA, downloadable public trust anchor and automatic
-  encrypted gateway certificate issuance for installations without a domain;
-- per-node encrypted certificate/private-key distribution and rotation;
-- operational health, protection, capacity, security and audit panels;
-- native artefacts for accepted platforms and a minimal container image;
-- complete local signed release/update scripts, checksums, provenance and
-  dependency update policy without GitHub Actions;
-- mesh-wide rolling update, migration, automatic metadata backup/restore and
-  explicitly unsupported pre-`1.0` downgrade handling;
-- automated external-certificate publication plus bounded local metrics and
-  optional authenticated exporters.
-
-Exit evidence:
-
-- real ACME staging tests cover both challenges, failover and renewal;
-- every gateway installs the same generation without broadcasting plaintext key
-  material;
-- published artefacts execute the complete HTTPS and SMB acceptance cycle;
-- dependency/toolchain update candidates run the complete applicable automated
-  suite before acceptance.
-
-Requirements: PKI-001–010, PER-003–007, REL-001, REL-003, TST-007.
+Requirements: PKI-001–010, OPS-001–020, PER-003–007, REL-001, REL-003/004,
+TST-007/009 and accepted Stage 6–11 decisions §§7–8.
 
 ## Stage 11 — minimal useful product proof
 
 **Depends on:** every prior stage.
 
-This gate is the first `0.1.0` candidate, not a stable API promise.
-
-Required evidence:
-
-- one-node, two-node growth-state and supported redundant topologies;
-- real six-machine survival of two simultaneous machine failures;
-- real corruption, full-disk, partial-write, abrupt power-loss and network
-  partition injection;
-- repeated cable, device and node churn plus multi-way partition/rejoin with
-  deterministic automatic branch convergence and no lost acknowledgement;
-- a two-node Home/Office mesh loses its link for one hour, accepts real HTTPS
-  and SMB eventual writes on both sides through restarts, then reconnects and
-  converges without an administrator or lost version;
-- a multi-cell campus scenario where one building loses its uplink, keeps its
-  owned scopes serving locally and catches remote replicas up automatically;
-- strong writes requiring two selected zones wait for exactly those zones while
-  other eventual zones do not hold acknowledgement;
-- real HTTPS and SMB full cycles for users, groups, permissions, volumes, files,
-  failures, repair and deletion;
-- backup/restore plus upgrade and every explicitly supported recovery path from
-  published artefacts;
-- ACME challenge, renewal and gateway-key-distribution cycles;
-- long-duration repair/certificate/churn soak;
-- heterogeneous-drive and foreground/degraded/repair performance results against
-  the accepted targets;
-- container and accepted native artefacts with signed tag, checksums and
-  provenance.
-- a seven-day release-candidate soak with reproducible out-of-band evidence and
-  an independent security review closing every critical/high finding.
+**Status:** not started as a stage. This gate proves the first `0.1.0` candidate,
+not a stable API promise. Use the single numbered
+[Stage 11 task list](stage-tasks.md#stage-11--minimal-useful-product-proof)
+for the topology, physical-fault, partition, protocol, federation, recovery,
+certificate, performance, soak and independent-review gates. Earlier-stage tests
+can supply evidence, but do not automatically close the integrated candidate
+proof. Publishing or tagging the candidate remains prohibited pending approval.
 
 Requirements: all non-deferred requirement IDs.
 
@@ -550,27 +514,12 @@ Requirements: all non-deferred requirement IDs.
 
 **Depends on:** Stage 11 measurement evidence. **Required before `1.0`.**
 
-This is deliberately not a `0.1.0` blocker, but it is near-term pre-`1.0` work,
-not an indefinite optimisation.
-
-Build:
-
-- capacity-normalised load/headroom measurements per authoritative group;
-- automatic group creation and directly routed operation/key-range delegation;
-- online split, merge and rebalance with epoch-fenced single-writer handoff;
-- automatic eligible voter placement against shared-failure groups; and
-- stable hysteresis using measured migration cost, locality and resource class.
-
-Exit evidence:
-
-- deterministic and process tests interrupt every prepare, copy, fence,
-  activation and retirement boundary without dual writers or unroutable scopes;
-- split/merge decisions improve a measured bottleneck and reverse safely when
-  load changes;
-- Raspberry Pi-class and server-class groups use measured capacity rather than
-  node count or one hardware-independent operations threshold; and
-- ordinary filesystem/API semantics and root-owned swarm identity/enrolment/
-  federation authority remain unchanged.
+**Status:** not started. This is deliberately not a `0.1.0` blocker, but is
+near-term pre-`1.0` work, not an indefinite optimisation. Use the single numbered
+[Stage 12 task list](stage-tasks.md#stage-12--automatic-metadata-group-scaling)
+for measurements, group creation, split/merge/rebalance, voter placement and
+interruption/performance proof. Existing delegation contracts do not constitute
+automatic scaling implementation.
 
 Requirements: SCL-010, SCL-013, SCL-014, DEF-005.
 

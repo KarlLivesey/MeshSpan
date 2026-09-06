@@ -3,6 +3,13 @@
 Status: **in progress**. Stage 11 has not started. Publication remains on hold
 pending the owner's dependency review.
 
+Current task status and outstanding acceptance live in the single numbered
+[Stage 10 task list](stage-tasks.md#stage-10--certificates-packaging-and-operations).
+This file is a historical evidence log: earlier statements such as “unmerged”
+or “remaining” describe their recorded point in time, not necessarily current
+status. Later evidence must resolve them explicitly; a passing retry alone does
+not close an unexplained failure.
+
 ## Target accounting and selected maintenance measurements
 
 The [metrics catalogue](metrics.md) now includes seven target-accounting gauges

@@ -2,6 +2,13 @@
 
 Status: **draft for review**.
 
+For current implementation progress, use the separate numbered lists for
+[Stage 10](stage-tasks.md#stage-10--certificates-packaging-and-operations),
+[Stage 11](stage-tasks.md#stage-11--minimal-useful-product-proof) and
+[Stage 12](stage-tasks.md#stage-12--automatic-metadata-group-scaling).
+Each task records status, outstanding acceptance and evidence; task numbers stay
+stable. Historical stage evidence is not a second current backlog.
+
 This folder separates what MeshSpan must do from how it will be built. A proposal in these files is
 not a locked decision until it is moved to the accepted section of [decisions.md](decisions.md).
 
