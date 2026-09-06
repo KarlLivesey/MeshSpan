@@ -14,6 +14,7 @@ mod action;
 mod checkpoint;
 #[cfg(test)]
 mod checkpoint_tests;
+mod polling;
 
 /// Configured challenge family for one immutable order.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -245,6 +246,7 @@ pub struct AcmeOrderMachine {
     challenge: Option<AcmeChallengeRecord>,
     publication_digest: Option<[u8; 32]>,
     certificate: Option<Vec<u8>>,
+    poll_not_before: Option<i64>,
 }
 
 impl AcmeOrderMachine {
@@ -280,6 +282,7 @@ impl AcmeOrderMachine {
             challenge: None,
             publication_digest: None,
             certificate: None,
+            poll_not_before: None,
         })
     }
 
@@ -449,6 +452,7 @@ impl AcmeOrderMachine {
             }
             _ => return Err(AcmeMachineError::InvalidTransition),
         }
+        self.poll_not_before = None;
         Ok(())
     }
 

@@ -38,7 +38,7 @@ where
                 replay_nonce,
             }
         };
-        Ok(AcmeStepOutcome::Advanced(event))
+        progress_with_retry(event, &response)
     }
 
     pub(super) async fn notify_challenge(
@@ -53,11 +53,12 @@ where
                 AcmeWire::challenge_ready(url, fresh_nonce, &binding, signer)
             })
             .await?;
-        Ok(AcmeStepOutcome::Advanced(
+        progress_with_retry(
             AcmeMachineEvent::ChallengeNotified {
                 replay_nonce: AcmeWire::challenge_acknowledgement(&response)?,
             },
-        ))
+            &response,
+        )
     }
 
     pub(super) async fn finalize(
@@ -73,12 +74,13 @@ where
                 AcmeWire::finalize(url, fresh_nonce, &binding, csr_der, signer)
             })
             .await?;
-        Ok(AcmeStepOutcome::Advanced(
+        progress_with_retry(
             AcmeMachineEvent::OrderFinalized {
                 order: AcmeWire::order(&response)?,
                 replay_nonce: AcmeWire::replay_nonce(&response)?,
             },
-        ))
+            &response,
+        )
     }
 
     pub(super) async fn poll_order(
@@ -93,10 +95,13 @@ where
                 AcmeWire::post_as_get(url, fresh_nonce, &binding, signer)
             })
             .await?;
-        Ok(AcmeStepOutcome::Advanced(AcmeMachineEvent::OrderPolled {
-            order: AcmeWire::order(&response)?,
-            replay_nonce: AcmeWire::replay_nonce(&response)?,
-        }))
+        progress_with_retry(
+            AcmeMachineEvent::OrderPolled {
+                order: AcmeWire::order(&response)?,
+                replay_nonce: AcmeWire::replay_nonce(&response)?,
+            },
+            &response,
+        )
     }
 
     pub(super) async fn download_certificate(
@@ -115,4 +120,14 @@ where
             AcmeMachineEvent::CertificateDownloaded(AcmeWire::certificate(&response)?),
         ))
     }
+}
+
+pub(super) fn progress_with_retry(
+    event: AcmeMachineEvent,
+    response: &crate::AcmeHttpResponse,
+) -> Result<AcmeStepOutcome, AcmeWorkerError> {
+    Ok(match response.headers.retry_after()? {
+        Some(retry_after) => AcmeStepOutcome::AdvancedWithRetry { event, retry_after },
+        None => AcmeStepOutcome::Advanced(event),
+    })
 }

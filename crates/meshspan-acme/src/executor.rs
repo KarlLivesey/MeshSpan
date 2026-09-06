@@ -69,6 +69,13 @@ pub struct AcmeChallengeExecution<'a> {
 pub enum AcmeStepOutcome {
     /// Feed this proven event into the state machine.
     Advanced(AcmeMachineEvent),
+    /// Successful progress with CA guidance for the next poll, resolved at receipt time.
+    AdvancedWithRetry {
+        /// Validated remote result, still requiring an authoritative checkpoint.
+        event: AcmeMachineEvent,
+        /// Validated relative or absolute HTTP polling guidance.
+        retry_after: crate::AcmeRetryAfter,
+    },
     /// Publication visibility or requested removal is not yet proven.
     Pending,
     /// No side effect remains; certificate bytes are ready for validation and completion.
@@ -248,11 +255,14 @@ where
                 AcmeWire::new_order(url, fresh_nonce, &binding, order, signer)
             })
             .await?;
-        Ok(AcmeStepOutcome::Advanced(AcmeMachineEvent::OrderCreated {
-            order_url: AcmeWire::resource_location(&response)?,
-            order: AcmeWire::order(&response)?,
-            replay_nonce: AcmeWire::replay_nonce(&response)?,
-        }))
+        remote_steps::progress_with_retry(
+            AcmeMachineEvent::OrderCreated {
+                order_url: AcmeWire::resource_location(&response)?,
+                order: AcmeWire::order(&response)?,
+                replay_nonce: AcmeWire::replay_nonce(&response)?,
+            },
+            &response,
+        )
     }
 
     async fn post_signed<F>(

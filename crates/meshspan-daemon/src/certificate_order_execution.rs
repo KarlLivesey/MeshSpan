@@ -120,6 +120,13 @@ where
         if context.deadline <= now || challenge_expires_at <= now {
             return Err(CertificateOrderExecutionError::DeadlineElapsed);
         }
+        if self
+            .machine
+            .poll_not_before()
+            .is_some_and(|instant| now < instant)
+        {
+            return Ok(CertificateOrderStepResult::Pending);
+        }
         let action = self.machine.action()?;
         let remaining_micros = u64::try_from(context.deadline.get() - now.get())
             .map_err(|_| CertificateOrderExecutionError::InvalidInput)?;
@@ -145,33 +152,32 @@ where
         if received_at >= context.deadline {
             return Err(CertificateOrderExecutionError::DeadlineElapsed);
         }
-        match outcome {
-            AcmeStepOutcome::Pending => Ok(CertificateOrderStepResult::Pending),
+        let (event, retry_after) = match outcome {
+            AcmeStepOutcome::Pending => return Ok(CertificateOrderStepResult::Pending),
             AcmeStepOutcome::Complete(certificate_chain) => {
-                Ok(CertificateOrderStepResult::ReadyForCompletion { certificate_chain })
+                return Ok(CertificateOrderStepResult::ReadyForCompletion { certificate_chain });
             }
-            AcmeStepOutcome::Advanced(event) => {
-                self.machine.advance(event)?;
-                if let meshspan_acme::AcmeMachineAction::Complete { certificate } =
-                    self.machine.action()?
-                {
-                    return Ok(CertificateOrderStepResult::ReadyForCompletion {
-                        certificate_chain: certificate,
-                    });
-                }
-                let checkpoint = checkpoint_service.checkpoint(
-                    actor_principal_id,
-                    received_at,
-                    &CertificateOrderCheckpoint {
-                        order_id: self.assignment.order.order_id,
-                        claim,
-                        certificate_key: self.certificate_key_reference,
-                        machine: &self.machine,
-                    },
-                )?;
-                Ok(CertificateOrderStepResult::Checkpointed(checkpoint))
-            }
+            AcmeStepOutcome::Advanced(event) => (event, None),
+            AcmeStepOutcome::AdvancedWithRetry { event, retry_after } => (event, Some(retry_after)),
+        };
+        self.machine
+            .advance_with_retry(event, received_at, retry_after)?;
+        if let meshspan_acme::AcmeMachineAction::Complete { certificate } = self.machine.action()? {
+            return Ok(CertificateOrderStepResult::ReadyForCompletion {
+                certificate_chain: certificate,
+            });
         }
+        let checkpoint = checkpoint_service.checkpoint(
+            actor_principal_id,
+            received_at,
+            &CertificateOrderCheckpoint {
+                order_id: self.assignment.order.order_id,
+                claim,
+                certificate_key: self.certificate_key_reference,
+                machine: &self.machine,
+            },
+        )?;
+        Ok(CertificateOrderStepResult::Checkpointed(checkpoint))
     }
 }
 

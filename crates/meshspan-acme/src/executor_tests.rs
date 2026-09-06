@@ -16,6 +16,8 @@ use crate::{
     Http01Challenge,
 };
 
+mod polling;
+
 #[tokio::test]
 async fn executor_maps_unsigned_transport_steps_to_validated_events()
 -> Result<(), Box<dyn std::error::Error>> {

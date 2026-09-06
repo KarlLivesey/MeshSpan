@@ -54,6 +54,62 @@ Stage 11 **126**. Original publication identity/lifetime across worker handoff,
 long-running manual tasks, successful-response polling guidance, remaining DNS
 provider process proofs and active-gateway challenge distribution remain open.
 
+PR #243 subsequently merged into `main` at
+`026e9e8e66e11117a9d503c123d21488487fdab0`; GitHub verified the signed evidence
+commit and merge. Both local and remote completed branches were removed.
+
+### Successful-response polling guidance
+
+The next candidate carries validated `Retry-After` from successful order,
+challenge-notification, authorisation and finalisation responses into the order
+machine. When polling remains necessary, the checkpoint retains an absolute
+not-before instant derived from response receipt time, not request start. The
+daemon returns pending without CA IO or another checkpoint until that instant;
+it does not sleep inside the worker or spend its step budget polling the CA.
+Completion of validation/issuance clears the delay so cleanup/download can
+proceed immediately. This follows the processing/polling guidance in
+[RFC 8555 §§7.4 and 7.5.1](https://www.rfc-editor.org/rfc/rfc8555.html#section-7.4).
+
+Checkpoint format **2** adds the explicitly nullable `poll_not_before` field.
+The decoder still reads every original format-1 phase without that field and
+rejects missing format-2 fields, version substitution, malformed timestamps and
+deadlines attached to impossible phases. Reading format 1 does not rewrite its
+stored bytes or digest; the next normal authoritative checkpoint writes format 2.
+Old binaries cannot read the new format: this is an explicit pre-alpha forward
+format change, not a claim of mixed-version downgrade compatibility. SQL schema,
+HTTP API shapes and dependencies are unchanged. The in-process executor gains
+an explicit progress-with-retry outcome.
+
+The immediate-poll regression first failed with `Worker(Transport)` in **0.03
+seconds**, after a 24.31-second build: a single successful response requested a
+120-second wait, but the worker immediately requested another response. It passed
+after correction in **0.02 seconds** (21.28-second build). Broader evidence:
+
+- Five execution cases passed in **0.05 seconds**. A response received at second
+  21 with a 120-second hint retains second 141 through checkpoint decoding and
+  a replacement fence. Calls before that exact instant produce no extra requests
+  or commits; the request at second 141 proceeds. Malformed guidance leaves the
+  machine and authority unchanged. This uses a recording authority/transport,
+  not a physical crash or on-disk recovery proof.
+- All **30 certificate-order daemon tests passed in 0.20 seconds**. Final ACME
+  coverage passed **55 tests in 0.07 seconds**, after a 3.89-second build. It
+  includes all successful polling transitions, both time forms, duplicate hints,
+  old checkpoint compatibility and immediate cleanup/download after success.
+- Both existing real-process HTTP-01/DNS-01 lifecycles passed in **19.94 seconds**
+  after a 37.38-second build. Their TLS CA now announces two-second delays after
+  notification and finalisation and permanently records any early request as a
+  failed proof. Both deadlines must be observed alongside exact one-order/
+  one-finalisation issuance, cleanup, restart and gateway delivery. These are
+  local CA proofs; the process restart is after issuance, not during a delayed poll.
+- Final affected all-target/all-feature Clippy passed in **22.22 seconds**;
+  formatting and diff checks passed. Earlier lint failures rejected a test-fixture
+  `expect` and nested options at the versioned decoder boundary. Errors now
+  propagate, and a named absent/present field enum expresses the three states;
+  no lint suppression was added.
+
+Full integration validation and merge of this polling candidate are still
+pending. Task estimates remain unchanged until that evidence is recorded.
+
 Manual-DNS polling now checks the exact retained task and live claim before
 proposing another transition. The claim and task are read in one SQLite read
 transaction; a satisfied phase creates no operation, audit entry or revision.
