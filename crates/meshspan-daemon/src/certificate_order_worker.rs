@@ -340,11 +340,14 @@ fn random_claim_identity(
     let audit_bytes = copy_identifier(&bytes[16..32])?;
     let operation = uuid_v8(operation_bytes);
     let audit = uuid_v8(audit_bytes);
+    // SQLite-compatible metadata represents fences as positive signed 64-bit integers.
+    // Keep 63 unpredictable bits; generating an unsigned high bit makes a valid claim fail
+    // at persistence rather than increasing its fencing strength.
     let fence = u64::from_be_bytes(
         bytes[32..]
             .try_into()
             .map_err(|_| CertificateOrderDispatchError::InvalidInput)?,
-    );
+    ) & 0x7fff_ffff_ffff_ffff;
     if operation == audit || fence == 0 {
         return Err(CertificateOrderDispatchError::InvalidInput);
     }

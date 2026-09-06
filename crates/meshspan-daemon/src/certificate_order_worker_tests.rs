@@ -19,6 +19,30 @@ use crate::{
 };
 
 #[test]
+fn generated_claim_fences_fit_the_authoritative_sql_integer_range()
+-> Result<(), Box<dyn std::error::Error>> {
+    for seed in [1, 128, 200] {
+        let authority = FakeAuthority::new(queued_order()?, None, CommitMode::Success)?;
+        let mut random = IncrementingRandom(seed);
+        let assignment = CertificateOrderDispatcher::new(
+            &authority,
+            &mut random,
+            NodeId::from_bytes([21; 16])?,
+            1,
+        )
+        .claim_next(UnixMicros::new(20), DurationMicros::new(1_000), None, 1)?
+        .ok_or("assignment missing")?;
+        let fence = assignment.order.claim.ok_or("claim missing")?.fence;
+        assert!(
+            i64::try_from(fence).is_ok(),
+            "seed {seed} generated unpersistable fence {fence}"
+        );
+        assert_ne!(fence, 0);
+    }
+    Ok(())
+}
+
+#[test]
 fn due_order_is_claimed_then_returned_with_exact_configuration_and_checkpoint()
 -> Result<(), Box<dyn std::error::Error>> {
     let candidate = queued_order()?;

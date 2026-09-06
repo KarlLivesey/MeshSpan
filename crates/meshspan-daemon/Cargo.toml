@@ -53,11 +53,13 @@ tokio-rustls.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+base64 = "0.22.1"
 meshspan-test-certificates = { path = "../meshspan-test-certificates" }
 p256.workspace = true
 sha1.workspace = true
 tempfile = "3.27.0"
 tower.workspace = true
+x509-parser.workspace = true
 
 [lints]
 workspace = true

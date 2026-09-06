@@ -47,6 +47,44 @@ mod backup_schedule;
 mod remote_backup_identity;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blocking_certificate_worker_can_commit_inside_its_async_transport_context()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = RunningAuthority::start().await?;
+    let reader = fixture.reader.take().ok_or("missing reader")?;
+    let handle = fixture.handle.clone();
+    let runtime = tokio::runtime::Handle::current();
+    let context = command_context(fixture.administrator_id, 20, 21, 40, None)?;
+    let command = user_creation(20, "Certificate worker context")?;
+    let expected_digest = command.request_digest(context);
+    let result = tokio::task::spawn_blocking(move || {
+        let authority = ConsensusAuthenticationAuthority::new(reader, handle, runtime.clone());
+        runtime.block_on(async {
+            tokio::task::yield_now().await;
+            let receipt = authority.commit_authoritative(context, &command)?;
+            let replay = authority.commit_authoritative(context, &command)?;
+            Ok::<_, meshspan_cluster::MetadataAuthorityRequestError>((receipt, replay))
+        })
+    })
+    .await;
+    fixture.shutdown().await?;
+    let (receipt, replay) = result??;
+    assert_eq!(
+        receipt.disposition,
+        meshspan_metadata::ApplyDisposition::Applied
+    );
+    assert_eq!(
+        replay,
+        meshspan_metadata::CommandReceipt {
+            disposition: meshspan_metadata::ApplyDisposition::Replayed,
+            ..receipt
+        }
+    );
+    assert_eq!(receipt.committed_revision, Revision::new(2));
+    assert_eq!(receipt.request_digest, expected_digest);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn authentication_reads_and_session_mutation_share_committed_consensus_state()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = RunningAuthority::start().await?;

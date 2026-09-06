@@ -25,6 +25,64 @@ use crate::{
 };
 
 #[tokio::test]
+async fn downloaded_chain_goes_to_terminal_validation_not_an_incomplete_checkpoint()
+-> Result<(), Box<dyn std::error::Error>> {
+    use meshspan_acme::{AcmeDirectory, AcmeMachineEvent, AcmeOrder, AcmeResourceStatus};
+
+    let mut prepared = prepared(CertificateOrderId::from_bytes([1; 16])?)?;
+    prepared
+        .machine
+        .advance(AcmeMachineEvent::DirectoryDiscovered(AcmeDirectory {
+            new_nonce: "https://ca.example.test/nonce".to_owned(),
+            new_account: "https://ca.example.test/account".to_owned(),
+            new_order: "https://ca.example.test/new-order".to_owned(),
+        }))?;
+    prepared
+        .machine
+        .advance(AcmeMachineEvent::NonceAcquired("nonce_1".to_owned()))?;
+    prepared.machine.advance(AcmeMachineEvent::AccountCreated {
+        account_url: "https://ca.example.test/account/1".to_owned(),
+        replay_nonce: "nonce_2".to_owned(),
+    })?;
+    prepared.machine.advance(AcmeMachineEvent::OrderCreated {
+        order_url: "https://ca.example.test/order/1".to_owned(),
+        replay_nonce: "nonce_3".to_owned(),
+        order: AcmeOrder {
+            status: AcmeResourceStatus::Valid,
+            dns_names: prepared.assignment.configuration.certificate_names.clone(),
+            authorizations: vec!["https://ca.example.test/authorization/1".to_owned()],
+            finalize: "https://ca.example.test/finalize/1".to_owned(),
+            certificate: Some("https://ca.example.test/certificate/1".to_owned()),
+        },
+    })?;
+    let expected = b"downloaded chain awaiting trust validation".to_vec();
+    let transport = OneResponseTransport(Some(AcmeHttpResponse::new(
+        200,
+        AcmeResponseHeaders::default(),
+        expected.clone(),
+    )?));
+    let authority = RecordingCheckpointAuthority::default();
+    let mut execution = CertificateOrderExecution::new(prepared, transport, Http01Challenge::new());
+    let result = execution
+        .execute_step(
+            &CertificateOrderCheckpointService::new(&authority),
+            PrincipalId::from_bytes([2; 16])?,
+            UnixMicros::new(20),
+            request_context()?,
+            UnixMicros::new(80),
+        )
+        .await?;
+    assert_eq!(
+        result,
+        CertificateOrderStepResult::ReadyForCompletion {
+            certificate_chain: expected
+        }
+    );
+    assert_eq!(authority.commit_count(), 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn validated_remote_step_advances_then_commits_before_next_action()
 -> Result<(), Box<dyn std::error::Error>> {
     let order_id = CertificateOrderId::from_bytes([1; 16])?;
