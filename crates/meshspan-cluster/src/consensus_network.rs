@@ -2,6 +2,7 @@
 
 //! Production-configurable authenticated QUIC transport for consensus messages.
 
+mod control_connection_use;
 mod snapshot;
 
 use std::collections::BTreeMap;
@@ -400,14 +401,16 @@ impl ConsensusNetwork {
         request: &ControlEnvelope,
     ) -> Result<meshspan_protocol::ValidatedControlEnvelope, ConsensusNetworkError> {
         let connection = self.control_connection(to).await?;
+        let mut usage = control_connection_use::ControlConnectionUse::new(
+            &self.control_connections,
+            to,
+            connection.stable_id(),
+        );
         let result = self
             .request_control_on_connection(to, request, &connection)
             .await;
-        if result.is_err() {
-            self.control_connections
-                .lock()
-                .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
-                .remove(&to);
+        if result.is_ok() {
+            usage.confirm_response();
         }
         result
     }

@@ -142,8 +142,13 @@ the stage; publication-dependent acceptance remains held separately and visible.
    now passes a real CA probe of both active gateways, exact cleanup and gateway
    restart with one issuance. It also fixes the missing founding-node endpoint
    which prevented a joined gateway restoring its private route after restart.
-   All three normal ACME process scenarios passed together in **23.30 seconds**;
-   full integration and opt-in recovery verification are pending on this source.
+   The first full integration run **failed in 353.00 seconds**. The
+   [recovery corrections](stage-10-evidence.md#recovery-corrections-awaiting-final-integration)
+   address cross-process port collisions, cancelled control-connection reuse,
+   election-timer suppression and a backup-provider refresh race. The strengthened
+   headless suite passed **10 enabled tests in 36.64 seconds** before the final
+   wrong-plan timer regression. Final-source integration remains pending;
+   PR #251 is not merged and these findings are not waived.
    DNS-provider process lifecycles remain open; the estimate is unchanged.
 
 3. **Encrypted certificate delivery and rotation — Partial.** **5 points remaining.**

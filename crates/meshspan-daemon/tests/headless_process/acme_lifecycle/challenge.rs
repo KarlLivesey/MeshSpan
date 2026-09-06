@@ -83,7 +83,7 @@ async fn validate_http(address: SocketAddr, key_authorisation: &str) -> Result<(
 async fn assert_http_removed(address: SocketAddr, key_authorisation: &str) -> Result<(), Failure> {
     let response = read_challenge(address, token(key_authorisation)?).await?;
     super::require_status(&response, "404 Not Found", "completed challenge cleanup")
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("{address}: {error}"))?;
     Ok(())
 }
 
@@ -103,7 +103,7 @@ pub(super) async fn wait_for_removed_after_restart(address: SocketAddr) -> Resul
         )
         .map_err(|error| error.to_string())?;
         if super::Instant::now() >= deadline {
-            return Err("restarted HTTP-01 gateway did not regain private lookup readiness".into());
+            return Err(format!("{address}: HTTP-01 gateway did not regain private lookup readiness after peer restart").into());
         }
         super::sleep(super::RETRY_INTERVAL).await;
     }

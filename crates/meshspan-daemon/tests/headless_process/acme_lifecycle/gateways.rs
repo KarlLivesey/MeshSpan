@@ -99,6 +99,7 @@ async fn prove_shared_challenge(
         .await
         .map_err(|error| format!("pre-restart cleanup: {error}"))?;
     ca.assert_issued_once()?;
+    wait_for_two_voters([root, peer]).await?;
     processes[1].kill()?;
     processes[1].wait()?;
     processes[1] = peer
@@ -106,12 +107,72 @@ async fn prove_shared_challenge(
         .env("SSL_CERT_FILE", root.temporary.path().join("test-ca.pem"))
         .spawn()?;
     wait_for_active(peer.address, &issued, key, 2).await?;
-    challenge::wait_for_removed_after_restart(peer.http01_address)
-        .await
-        .map_err(|error| error.to_string())?;
-    ca.assert_challenge_removed()
-        .await
-        .map_err(|error| format!("post-restart cleanup: {error}"))?;
+    // Losing a voter can also interrupt the surviving gateway's leader discovery. Both
+    // gateways must recover within the same bounded window, without serving removed proof.
+    tokio::try_join!(
+        challenge::wait_for_removed_after_restart(root.http01_address),
+        challenge::wait_for_removed_after_restart(peer.http01_address),
+    )
+    .map_err(|error| format!("post-restart cleanup: {error}"))?;
+    // A public proof read is not consensus health: require a fresh committed administration
+    // write as well, so read-only fallback cannot hide a permanently broken voter connection.
+    wait_for_committed_group(root.address, &issued, key).await?;
     ca.assert_issued_once()?;
     Ok(())
+}
+
+async fn wait_for_two_voters(fixtures: [&ProcessFixture; 2]) -> Result<(), Box<dyn Error>> {
+    let readers = fixtures.map(|fixture| {
+        meshspan_metadata::PartitionDatabase::open_existing(
+            &fixture.state_path.join("root-authority.sqlite3"),
+            meshspan_domain::UnixMicros::new(1),
+        )
+        .map(meshspan_metadata::AuthoritativeRepository::new)
+    });
+    let [root, peer] = readers;
+    let readers = [root?, peer?];
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        let mut ready = true;
+        for reader in &readers {
+            ready &= matches!(
+                reader.load_active_consensus_quorum_plan()?,
+                Some(meshspan_consensus::ActiveQuorumPlan::Stable(plan))
+                    if plan.spec().voters.len() == 2
+            );
+        }
+        if ready {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(
+                "both gateways did not converge to two active voters before restart".into(),
+            );
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+}
+
+async fn wait_for_committed_group(
+    address: SocketAddr,
+    client: &ClientConfig,
+    key: &str,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        // The fixture retains the exact operation ID and body across retries. A public proof
+        // query can recover before an election; only a committed mutation closes this proof.
+        match create_group(address, client, key).await {
+            Ok(_) => return Ok(()),
+            Err(error)
+                if Instant::now() < deadline
+                    && error.to_string().starts_with(
+                        "create managed group returned HTTP/1.1 503 Service Unavailable:",
+                    ) =>
+            {
+                sleep(RETRY_INTERVAL).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }

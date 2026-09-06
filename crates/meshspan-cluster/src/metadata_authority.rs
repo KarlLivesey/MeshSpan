@@ -476,11 +476,16 @@ impl MetadataAuthorityRuntime {
         &mut self,
         peer: PeerConsensusMessage,
     ) -> Result<(), MetadataAuthorityRuntimeError> {
-        let previous_term = self.driver.current_term();
-        let is_current_leader_contact = matches!(
-            &peer.message,
-            CoreMessage::AppendRequest(request) if request.term >= previous_term
-        );
+        let contacted_term = match &peer.message {
+            CoreMessage::AppendRequest(request) => (request.membership_epoch
+                == self.driver.active_plan().membership_epoch()
+                && request.plan_digest == self.driver.active_plan().proof_digest())
+            .then_some(request.term),
+            CoreMessage::VoteRequest(_)
+            | CoreMessage::VoteResponse(_)
+            | CoreMessage::AppendResponse(_)
+            | CoreMessage::CommittedPrefix(_) => None,
+        };
         let peer_id = peer.from;
         let effects = match self.driver.step(
             CoreInput::Message {
@@ -505,8 +510,12 @@ impl MetadataAuthorityRuntime {
                 } if *to == peer_id && response.granted
             )
         });
-        let term_advanced = self.driver.current_term() > previous_term;
-        if is_current_leader_contact || granted_vote || term_advanced {
+        let is_current_leader_contact = contacted_term == Some(self.driver.current_term())
+            && self.driver.leader_id() == Some(peer_id);
+        // Persisting a higher term is mandatory, but denying that candidate is not evidence
+        // of a viable leader. Resetting here would let an outdated, faster candidate keep
+        // every up-to-date voter from ever campaigning.
+        if is_current_leader_contact || granted_vote {
             self.reset_election_deadline();
         }
         self.process_effects(effects, None)

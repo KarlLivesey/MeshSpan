@@ -2702,14 +2702,15 @@ impl StorageTargetRuntime {
             return Ok(());
         };
         let mut random = OperatingSystemRandom;
-        if crate::metadata_backup_defaults::reconcile(
+        crate::metadata_backup_defaults::reconcile(
             &self.maintenance_authority,
             &mut random,
             actor_principal_id,
             now,
-        )? {
-            self.refresh_backup_services(now)?;
-        }
+        )?;
+        // Another voter may have committed the destination defaults. Refresh this worker's
+        // providers from the resulting projection even when it made no defaults transition.
+        self.refresh_backup_services(now)?;
         let local_targets = crate::backup_export_service::BackupExportProviders::snapshot(
             &BackupExportTargetSnapshot(Arc::clone(&self.backup_services)),
         )

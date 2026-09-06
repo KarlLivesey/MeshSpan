@@ -49,6 +49,45 @@ the private temporary directories `.tmp3IEjub` and `.tmp6zqGWd`. A later passing
 operator flow does not establish the cause or close this finding. Neither this
 failure nor the earlier independent cluster timeout is waived for integration.
 
+### Recovery corrections awaiting final integration
+
+The port fix is signed, pushed and GitHub-verified as
+`09119037c1a589664c5d7e3b96f6827dcc83fc3b`. Further diagnosis identified three
+separate ownership defects; none is addressed by extending test deadlines:
+
+- An outer request deadline cancelled `request_control` before its ordinary error
+  path could evict the cached connection. Repeated lookups reused that uncertain
+  connection. A real-QUIC regression failed in **0.12 seconds**. Cancellation now
+  evicts only the exact connection used by that request, without closing other
+  streams, automatically retrying a mutation or implying remote rollback. A
+  second regression protects a newer replacement from an older cancelled call.
+  All five focused network tests passed in **0.23 seconds**.
+- A higher-term but log-stale candidate reset the receiver's election deadline
+  even when refused a vote. With fixed election slots, the quicker outdated node
+  could repeatedly postpone a viable candidate. The direct reactor regression
+  failed in **0.30 seconds**. Higher terms remain durably persisted, but timer
+  resets require a granted vote or validated current-leader contact. The latter
+  binds both membership epoch and plan digest: a previously recognised leader
+  sending the wrong plan must not reset the timer either. That additional
+  regression failed in **0.28 seconds** before its binding correction.
+- The retained backup claim belonged to the peer while only the root destination
+  had a verified copy. A worker refreshed its local backup providers only when
+  it personally committed the defaults transition. A peer claiming work after
+  another node's transition could therefore lack its own destination indefinitely.
+  Provider refresh now follows the replicated projection on every backup pass,
+  regardless of which node committed the defaults.
+
+The gateway proof now waits for two stable voters before killing the peer, checks
+bounded recovery of both public challenge listeners, and requires a new committed
+administration write afterwards. The exact operation ID/body are retained while
+retrying temporary `503` responses; any other failure still fails immediately.
+This distinguishes public-proof availability from restored consensus. The
+parallel headless run passed **10 enabled tests in 36.64 seconds**, after an
+**18.06-second build**, including two-copy backup completion. Four opt-in tests
+were not run by that command. This preceded the final wrong-plan timer check;
+final-source integration and opt-in recovery must still pass before PR #251 merges.
+The earlier unrelated cluster-start timeout is not claimed fixed.
+
 ### Candidate behaviour and focused evidence
 
 The current candidate makes public HTTP-01 material available independently of

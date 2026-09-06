@@ -16,6 +16,8 @@ use zeroize::Zeroizing;
 use super::*;
 use crate::{ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, ConsensusPeerConfig};
 
+mod election_deadline;
+
 #[tokio::test]
 async fn observation_tracks_local_state_without_appending_or_contacting_peers()
 -> Result<(), Box<dyn std::error::Error>> {
