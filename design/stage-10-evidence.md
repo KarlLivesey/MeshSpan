@@ -108,6 +108,31 @@ test state on failure and reports child exit observations; successful fixtures a
 still removed. Inspection found the local encrypted copy but no remote provider
 object. That remaining failure is not explained or waived by the snapshot fix.
 
+### Bootstrap-node remote backup identity
+
+The retained backup run was claimed by the original bootstrap node. Its local
+copy was verified, while the second node's provider remained empty. Remote backup
+authorisation incorrectly required a `node_activations` join receipt, which the
+original node never has: bootstrap commits it directly as an active node.
+
+The identity check now reads the current incarnation together with the active
+certificate and active-node predicate in one indexed query. Bootstrap and joined
+nodes therefore use the same current identity boundary; neither gets an exemption
+from certificate, incarnation, expiry, destination or backup-claim checks.
+
+A regression using the real bootstrap metadata/consensus fixture failed with
+`Unauthorized` before the correction and passed in **0.31 seconds** afterwards.
+It rejects a changed incarnation, fingerprint, unknown node and expired
+certificate. A separate persistence test passed in **0.27 seconds**, checking
+inactive node states, current-incarnation changes and certificate revocation.
+Affected all-target/all-feature Clippy passed in **5.87 seconds**. This adds one
+field to the internal Rust certificate projection, not a SQL migration, public
+API or wire change. After rebuilding, all **four** ordinary process tests passed
+in parallel in **22.63 seconds**, including automatic multi-node backup placement,
+encrypted download and restore-readiness, node joining, restart and original-node
+loss. The two opt-in SMB-container cases were ignored, not executed. The final
+complete local gate remains pending before branch integration.
+
 ## Runtime diagnostic bundle and download control
 
 `GET /api/latest/admin/diagnostics/bundle` combines the existing metadata

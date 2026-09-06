@@ -14,7 +14,7 @@ use meshspan_metadata::{
     BackupDestinationRecord, BackupDestinationState, MetadataBackupRecord, MetadataBackupState,
     RepositoryError,
 };
-use meshspan_transport::AuthenticatedPeer;
+use meshspan_transport::{AuthenticatedPeer, PeerBinding};
 
 /// Cloneable, serialised read boundary over one SQLite-compatible authority projection.
 #[derive(Clone)]
@@ -44,7 +44,15 @@ impl RemoteBackupAuthority for ConsensusRemoteBackupAuthority {
             .repository
             .lock()
             .map_err(|_| ContractError::Unavailable)?;
-        validate_peer(&repository, peer, observed_at)?;
+        validate_peer_identity(
+            &repository,
+            PeerBinding {
+                node_id: peer.node_id(),
+                incarnation: peer.incarnation(),
+                certificate_fingerprint: peer.certificate_fingerprint(),
+            },
+            observed_at,
+        )?;
         match request {
             RemoteBackupAuthorisation::Store(request) => {
                 validate_destination(
@@ -99,21 +107,19 @@ impl RemoteBackupAuthority for ConsensusRemoteBackupAuthority {
     }
 }
 
-fn validate_peer(
+pub(crate) fn validate_peer_identity(
     repository: &AuthoritativeRepository,
-    peer: AuthenticatedPeer,
+    peer: PeerBinding,
     observed_at: UnixMicros,
 ) -> Result<(), ContractError> {
-    let activation = repository
-        .node_activation(peer.node_id())
-        .map_err(|error| map_repository_error(&error))?
-        .ok_or(ContractError::Unauthorized)?;
+    // Bootstrap activates its initial node directly; join-activation receipts exist
+    // only for later nodes. Current node state and certificate are the common authority.
     let certificate = repository
-        .active_node_certificate(peer.node_id())
+        .active_node_certificate(peer.node_id)
         .map_err(|error| map_repository_error(&error))?
         .ok_or(ContractError::Unauthorized)?;
-    if activation.incarnation == peer.incarnation()
-        && certificate.certificate_fingerprint == peer.certificate_fingerprint()
+    if certificate.incarnation == peer.incarnation
+        && certificate.certificate_fingerprint == peer.certificate_fingerprint
         && certificate.valid_until > observed_at
     {
         Ok(())
