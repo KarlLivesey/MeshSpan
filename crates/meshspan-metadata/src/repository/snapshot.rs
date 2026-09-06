@@ -44,13 +44,33 @@ pub(super) fn create_snapshot(
     plan: &CompiledQuorumPlan,
     created_at: UnixMicros,
 ) -> Result<PartitionSnapshotManifest, RepositoryError> {
+    create_snapshot_observed(database, snapshot_id, destination, plan, created_at, || {
+        Ok(())
+    })
+}
+
+// The observer permits a deterministic concurrent commit at the capture boundary in tests.
+// Production supplies a no-op; it never changes snapshot contents or validation.
+fn create_snapshot_observed(
+    database: &PartitionDatabase,
+    snapshot_id: SnapshotId,
+    destination: &Path,
+    plan: &CompiledQuorumPlan,
+    created_at: UnixMicros,
+    after_state_read: impl FnOnce() -> Result<(), RepositoryError>,
+) -> Result<PartitionSnapshotManifest, RepositoryError> {
+    // Pin consensus reads and SQLite's online copy to the same WAL read view.
+    // Other connections may still commit; no writer lock or network IO is held.
+    let read_view = database.connection().unchecked_transaction()?;
     let membership_epoch = plan.spec().membership_epoch;
     let consensus = load_state(database, membership_epoch).map_err(snapshot_store_error)?;
     validate_snapshot_state(&consensus)?;
+    after_state_read()?;
     let backup_id = BackupId::from_bytes(snapshot_id.as_bytes())
         .map_err(|_| RepositoryError::SnapshotMismatch)?;
     let backup = create_partition_backup(database, backup_id, destination, created_at)?;
     validate_applied_position(&consensus, backup.applied_position)?;
+    read_view.commit()?;
     Ok(PartitionSnapshotManifest {
         snapshot_id,
         backup,
@@ -165,3 +185,7 @@ fn validate_applied_position(
 fn snapshot_store_error(_: super::ConsensusStoreError) -> RepositoryError {
     RepositoryError::SnapshotMismatch
 }
+
+#[cfg(test)]
+#[path = "snapshot_capture_tests.rs"]
+mod tests;

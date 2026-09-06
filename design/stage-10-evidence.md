@@ -22,8 +22,8 @@ in **8.38 seconds** after correcting documentation, borrowing and test-import
 lint findings. No rule was suppressed or loosened.
 
 That initial commit covered collection/encoding only. The following integration
-adds configuration and routing; the wider metric catalogue and whole-branch
-verification remain outstanding. No release or publication ran.
+adds configuration and routing; the wider metric catalogue remains outstanding.
+No release or publication ran.
 
 ### Replicated opt-in and authenticated exporter integration
 
@@ -55,7 +55,7 @@ The broad operator flow also ran and failed in **27.50 seconds** at the existing
 automatic-backup restore-readiness request with HTTP 503, before reaching metrics.
 Its root cause is not established. The metrics process case is independent so it
 can run in parallel; the original operator assertions remain intact. This failure
-is not waived and a whole-branch passing gate has not yet been recorded.
+is not waived or described as fixed by a later passing run.
 
 The Operations panel now exposes the exporter policy through the generated
 client. Eleven focused client/panel tests passed in **4.48 seconds**, including
@@ -66,6 +66,47 @@ and late response suppression after unmount. TypeScript and focused ESLint
 passed with no relaxed rules. The frontend-design skill guided the existing
 restrained layout, labelled controls, optional detail and honest pending states;
 these are headless DOM checks, not browser visual or device evidence.
+
+The complete NVM-default `pnpm check` subsequently passed in **1,149.60 seconds**
+with four workers. Rust workspace/all-target/all-feature tests took **1,026.21
+seconds**; web tests took **25.75 seconds**. Generated-contract drift, embedded
+web build, Rust format, workspace Clippy, Rust and JavaScript licence checks,
+workspace format, full ESLint, TypeScript and tooling tests all passed. The
+operator flow's earlier HTTP 503 did not recur in this gate. This is full local
+integration evidence, not a root-cause resolution of that intermittent result.
+
+A fresh final debug-bundle build succeeded, but its subsequent parallel
+`headless_process` run failed in **44.83 seconds**: two cases timed out waiting
+for joining daemons' HTTPS listeners (`Connection refused`), while the metrics
+case and standalone restart case passed. Two external SMB-container cases were
+explicitly ignored. The branch remains unmerged pending diagnosis; the earlier
+full passing gate does not override these later failures.
+
+### Snapshot capture race isolated
+
+Inspection of a retained failed join found committed node activation on the
+existing node but no installed authority database on its peer. Snapshot creation
+sampled the live consensus position before making an online database copy, then
+compared that old position against the newer copy. A concurrent commit could
+therefore reject a valid copy with `SnapshotMismatch`.
+
+A deterministic regression places a separate-connection commit exactly between
+those operations. It failed with `SnapshotMismatch` before the correction and
+passed in **0.38 seconds** afterwards. Capture now holds one SQLite read view
+across consensus inspection and copying; the test proves that the other connection
+still commits and that the captured older position restores correctly. The existing
+receiver-vote preservation case passed in **0.36 seconds**. Affected all-target,
+all-feature Clippy passed in **14.03 seconds**. No timeout was increased, no tests
+were serialised, and no schema or protocol was changed.
+
+After rebuilding the daemon, parallel process verification completed in **28.90
+seconds**: standalone restart, metrics gateway catch-up and three-node original-node
+loss passed. The operator case joined successfully but reproduced the separate
+backup failure: its run remained `Recorded` with only one verified destination.
+Both children were still running before cleanup. The fixture now retains private
+test state on failure and reports child exit observations; successful fixtures are
+still removed. Inspection found the local encrypted copy but no remote provider
+object. That remaining failure is not explained or waived by the snapshot fix.
 
 ## Runtime diagnostic bundle and download control
 
