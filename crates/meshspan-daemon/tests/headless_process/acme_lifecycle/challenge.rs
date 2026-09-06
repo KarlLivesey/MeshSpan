@@ -14,6 +14,7 @@ use super::{CERTIFICATE_NAME, Duration, Error, SocketAddr};
 
 type Failure = Box<dyn Error + Send + Sync>;
 pub(super) const TOKEN: &str = "meshspan_lifecycle_challenge_token";
+pub(super) const REPLACEMENT_TOKEN: &str = "meshspan_replacement_challenge_token";
 
 #[derive(Clone, Copy)]
 pub(super) enum ValidationTarget {
@@ -32,7 +33,7 @@ impl ValidationTarget {
     pub async fn validate(self, key_authorisation: &str) -> Result<(), Failure> {
         match self {
             Self::Http01(address) => {
-                let response = read_challenge(address).await?;
+                let response = read_challenge(address, token(key_authorisation)?).await?;
                 super::require_status(&response, "200 OK", "CA HTTP-01 probe")
                     .map_err(|error| error.to_string())?;
                 if super::response_body(&response).map_err(|error| error.to_string())?
@@ -53,7 +54,7 @@ impl ValidationTarget {
     pub async fn assert_removed(self, key_authorisation: &str) -> Result<(), Failure> {
         match self {
             Self::Http01(address) => {
-                let response = read_challenge(address).await?;
+                let response = read_challenge(address, token(key_authorisation)?).await?;
                 super::require_status(&response, "404 Not Found", "completed challenge cleanup")
                     .map_err(|error| error.to_string())?;
             }
@@ -79,10 +80,17 @@ async fn contains_dns_proof(address: SocketAddr, key_authorisation: &str) -> Res
         .await?)
 }
 
-async fn read_challenge(address: SocketAddr) -> Result<String, Failure> {
+fn token(key_authorisation: &str) -> Result<&str, Failure> {
+    key_authorisation
+        .split_once('.')
+        .map(|(token, _)| token)
+        .ok_or_else(|| "missing challenge token".into())
+}
+
+async fn read_challenge(address: SocketAddr, token: &str) -> Result<String, Failure> {
     tokio::time::timeout(Duration::from_secs(2), async {
         let mut stream = TcpStream::connect(address).await?;
-        stream.write_all(format!("GET /.well-known/acme-challenge/{TOKEN} HTTP/1.1\r\nHost: {CERTIFICATE_NAME}\r\nConnection: close\r\n\r\n").as_bytes()).await?;
+        stream.write_all(format!("GET /.well-known/acme-challenge/{token} HTTP/1.1\r\nHost: {CERTIFICATE_NAME}\r\nConnection: close\r\n\r\n").as_bytes()).await?;
         let mut bytes = Vec::new();
         stream.take(8192).read_to_end(&mut bytes).await?;
         Ok(String::from_utf8(bytes)?)

@@ -6,6 +6,8 @@
 mod authority;
 #[path = "acme_lifecycle/challenge.rs"]
 mod challenge;
+#[path = "acme_lifecycle/rejection.rs"]
+mod rejection;
 // Reuse the independent signed-DNS transcript verifier, without a production fixture export.
 #[path = "../../../meshspan-acme/src/rfc2136_test_server.rs"]
 mod rfc2136_test_server;
@@ -17,12 +19,25 @@ use serde_json::json;
 
 use super::*;
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RecoveryScenario {
+    Normal,
+    ProcessLoss,
+    RejectedOrder,
+}
+
 #[tokio::test]
 async fn http01_issuance_survives_restart_and_gateway_join_without_another_order()
 -> Result<(), Box<dyn Error>> {
     let root = ProcessFixture::new()?;
     let target = challenge::ValidationTarget::Http01(root.http01_address);
-    prove_lifecycle(root, target, json!({"kind": "http01"}), false).await
+    prove_lifecycle(
+        root,
+        target,
+        json!({"kind": "http01"}),
+        RecoveryScenario::Normal,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -31,7 +46,28 @@ async fn http01_authorization_recovers_after_process_loss_and_real_lease_expiry(
 -> Result<(), Box<dyn Error>> {
     let root = ProcessFixture::new()?;
     let target = challenge::ValidationTarget::Http01(root.http01_address);
-    prove_lifecycle(root, target, json!({"kind": "http01"}), true).await
+    prove_lifecycle(
+        root,
+        target,
+        json!({"kind": "http01"}),
+        RecoveryScenario::ProcessLoss,
+    )
+    .await
+}
+
+#[tokio::test]
+#[ignore = "waits for real five-to-six-minute retry backoff; run separately from the fast suite"]
+async fn rejected_http01_order_is_cleaned_and_reissued_after_queued_daemon_restart()
+-> Result<(), Box<dyn Error>> {
+    let root = ProcessFixture::new()?;
+    let target = challenge::ValidationTarget::Http01(root.http01_address);
+    prove_lifecycle(
+        root,
+        target,
+        json!({"kind": "http01"}),
+        RecoveryScenario::RejectedOrder,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -49,7 +85,13 @@ async fn dns01_issuance_survives_restart_and_gateway_join_without_another_order(
         "algorithm": "hmac_sha256",
         "secret": "0123456789abcdef0123456789abcdef"
     });
-    let proof = prove_lifecycle(ProcessFixture::new()?, target, settings, false).await;
+    let proof = prove_lifecycle(
+        ProcessFixture::new()?,
+        target,
+        settings,
+        RecoveryScenario::Normal,
+    )
+    .await;
     let dns_result = dns.finish().await.map_err(|error| error.to_string());
     proof.map_err(|error| format!("{error}; DNS transcript result: {dns_result:?}"))?;
     dns_result?;
@@ -60,7 +102,7 @@ async fn prove_lifecycle(
     mut root: ProcessFixture,
     target: challenge::ValidationTarget,
     settings: serde_json::Value,
-    interrupt_authorization: bool,
+    scenario: RecoveryScenario,
 ) -> Result<(), Box<dyn Error>> {
     let mut peer = ProcessFixture::new()?;
     // This proof never connects to SMB. Bind it atomically to an OS-selected port instead of
@@ -68,9 +110,12 @@ async fn prove_lifecycle(
     root.smb_address.set_port(0);
     peer.smb_address.set_port(0);
     let ca = authority::TestAuthority::start(target).await?;
-    let interruption = interrupt_authorization
+    let interruption = (scenario == RecoveryScenario::ProcessLoss)
         .then(|| ca.interrupt_authorization())
         .transpose()?;
+    if scenario == RecoveryScenario::RejectedOrder {
+        ca.reject_first_authorization()?;
+    }
     let trust_file = root.temporary.path().join("test-ca.pem");
     fs::write(&trust_file, &ca.anchor_pem)?;
     let mut processes = vec![root.command().env("SSL_CERT_FILE", &trust_file).spawn()?];
@@ -170,6 +215,8 @@ async fn await_issuance(
                 .count(),
             1
         );
+    } else if ca.expects_replacement()? {
+        rejection::await_reissuance(root, ca, key, process).await?;
     } else {
         wait_for_active(root.address, &issued, key, 1).await?;
     }
