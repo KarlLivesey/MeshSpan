@@ -194,6 +194,25 @@ timeouts remain observed evidence for startup-cost and scale measurements. It
 does not establish a maximum supported mesh size. The combined candidate still
 needs the complete local integration gate before `main` integration.
 
+The complete local `MESHSPAN_CHECK_WORKERS=4 pnpm check` then passed on signed
+commit `510748ff7ece1404ec7fee47b402f34cea7b8476`, tree
+`1dc4a5c18fdebe9e9c51a164eb8b7be1d165258c`, in **892.62 seconds** under NVM
+Node 26.8.1 and pnpm 11.19.0. Rust workspace/all-target/all-feature tests passed
+in **803.13 seconds**; web tests passed in **6.69 seconds**. Generated drift,
+embedded bundle, Rust/web formatting, Clippy, ESLint, TypeScript, both licence
+checks and tooling tests passed. The tested source remained unchanged throughout,
+and no competing Cargo build ran. This is successful bounded integration, not a
+claimed test-speed improvement or closure of higher-concurrency startup costs.
+
+This closes the basic DNS-01 issuance/restart/gateway-delivery slice alongside
+the tested response-deadline and backup/database corrections. Task 2 decreases
+**6 → 5 points** and Stage 10 **145 → 144**; the remaining certificate lifecycle
+and delivery tasks remain open. The two container-dependent SMB cases were not
+part of this proof: a read-only Docker inspection confirmed the named local
+`meshspan-smbclient-test:bookworm` image is absent. No live-CA, physical-hardware,
+soak or publication proof is claimed. No releases, tags, images or Actions were
+published or run.
+
 ## Task 2 — real HTTP-01 issuance, restart and gateway delivery
 
 The new `headless_process::acme_lifecycle` proof runs real child daemons and a
