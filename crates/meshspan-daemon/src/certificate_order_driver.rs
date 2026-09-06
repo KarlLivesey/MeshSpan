@@ -272,6 +272,12 @@ where
             CertificateOrderExecutionError::Worker(AcmeWorkerError::Protocol) => {
                 (CertificateOrderFailureClass::Protocol, None)
             }
+            CertificateOrderExecutionError::RejectedResponse {
+                retry_not_before, ..
+            } => (
+                CertificateOrderFailureClass::Protocol,
+                retry_not_before.filter(|instant| *instant > now),
+            ),
             CertificateOrderExecutionError::Worker(AcmeWorkerError::RemoteRetry {
                 retry_after,
             }) => (

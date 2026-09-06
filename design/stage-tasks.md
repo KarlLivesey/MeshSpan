@@ -126,6 +126,12 @@ the stage; publication-dependent acceptance remains held separately and visible.
    **5.09**), closing this slice **3 → 2 points**. Remaining CA error-response
    handling, DNS-provider process lifecycles and active-gateway challenge
    distribution are still outstanding.
+   [Semantic CA-response rejection](stage-10-evidence.md#rejected-ca-responses-retain-accepted-state)
+   now queues retry without replacing accepted state or masking local corruption.
+   Its full gate on `17e633d` passed in **489.14 seconds**, and both opt-in
+   process-recovery cases passed in parallel in **336.74 seconds**. Valid retry
+   guidance on malformed successful-response bodies still needs a separate
+   correction; this does not close the remaining task-2 scope or reduce its estimate.
 
 3. **Encrypted certificate delivery and rotation — Partial.** **5 points remaining.**
    PKI-001/002/005/007/010; accepted decisions §7.
