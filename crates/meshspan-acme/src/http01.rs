@@ -6,10 +6,10 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use meshspan_contracts::{
-    CertificateChallenge, CertificateChallengeKind, CertificateChallengeReceipt,
-    CertificateChallengeRequest, ComponentConfiguration, ComponentLifecycle, ComponentObservation,
-    ComponentTransition, ContractError, ContractKind, ContractLimits, ContractVersion,
-    ImplementationDescriptor,
+    CertificateChallenge, CertificateChallengeCleanup, CertificateChallengeKind,
+    CertificateChallengeReceipt, CertificateChallengeRequest, ComponentConfiguration,
+    ComponentLifecycle, ComponentObservation, ComponentTransition, ContractError, ContractKind,
+    ContractLimits, ContractVersion, ImplementationDescriptor,
 };
 use meshspan_domain::{Revision, UnixMicros};
 use sha2::{Digest, Sha256};
@@ -182,8 +182,12 @@ impl CertificateChallenge for Http01Challenge {
         &mut self,
         request: &CertificateChallengeRequest,
         receipt: CertificateChallengeReceipt,
-    ) -> impl std::future::Future<Output = Result<(), ContractError>> + Send {
-        std::future::ready(self.cleanup_now(request, receipt))
+    ) -> impl std::future::Future<Output = Result<CertificateChallengeCleanup, ContractError>> + Send
+    {
+        std::future::ready(
+            self.cleanup_now(request, receipt)
+                .map(|()| CertificateChallengeCleanup::Complete),
+        )
     }
 }
 

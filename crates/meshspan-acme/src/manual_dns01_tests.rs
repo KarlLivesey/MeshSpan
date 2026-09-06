@@ -8,18 +8,110 @@ use std::{
 };
 
 use meshspan_contracts::{
-    BoundedBytes, CertificateChallenge, CertificateChallengeKind, CertificateChallengeRequest,
-    ContractError, ContractVersion, RequestContext,
+    BoundedBytes, CertificateChallenge, CertificateChallengeCleanup, CertificateChallengeKind,
+    CertificateChallengeRequest, ContractError, ContractVersion, RequestContext,
 };
 use meshspan_domain::{OperationId, Revision, UnixMicros};
 
 use crate::{
-    AuthoritativeTxtObserver, Dns01Payload, ManualDns01Challenge, ManualDnsTask,
-    ManualDnsTaskAuthority, ManualDnsTaskPhase,
+    AcmeAccountKey, AcmeChallengeExecution, AcmeChallengeRecord, AcmeHttpResponse,
+    AcmeMachineAction, AcmeMachineEvent, AcmeStepExecutor, AcmeStepOutcome, AcmeTransport,
+    AcmeTransportError, AcmeTransportRequest, AuthoritativeTxtObserver, Dns01Payload,
+    ManualDns01Challenge, ManualDnsTask, ManualDnsTaskAuthority, ManualDnsTaskPhase,
 };
 
 type Tasks = Arc<Mutex<BTreeMap<[u8; 32], ManualDnsTask>>>;
 type Records = Arc<Mutex<BTreeMap<String, Vec<u8>>>>;
+
+#[tokio::test]
+async fn executor_waits_for_manual_removal_and_resumes_after_provider_restart()
+-> Result<(), Box<dyn Error>> {
+    let tasks = Tasks::default();
+    let records = Records::default();
+    let mut executor = AcmeStepExecutor::new(
+        NoCaRequests,
+        AcmeAccountKey::from_secret_bytes(&[1; 32])?,
+        challenge(tasks.clone(), records.clone()),
+    );
+    let selected = AcmeChallengeRecord {
+        kind: "dns-01".to_owned(),
+        url: "https://ca.example.test/challenge/1".to_owned(),
+        token: "token_dns".to_owned(),
+        status: crate::AcmeResourceStatus::Pending,
+    };
+    let publish = AcmeMachineAction::PublishChallenge {
+        dns_name: "files.example.test".to_owned(),
+        wildcard: false,
+        challenge: selected.clone(),
+        order_epoch: 9,
+    };
+    let execution = AcmeChallengeExecution {
+        context: request()?.context,
+        challenge_expires_at: UnixMicros::new(200),
+        csr_der: &[],
+    };
+    assert_eq!(
+        executor.execute(&publish, execution).await?,
+        AcmeStepOutcome::Pending
+    );
+    let task = only_task(&tasks)?;
+    records
+        .lock()
+        .map_err(|_| "record lock failed")?
+        .insert(task.record_name, task.record_value);
+    let AcmeStepOutcome::Advanced(AcmeMachineEvent::ChallengePublished { publication_digest }) =
+        executor.execute(&publish, execution).await?
+    else {
+        return Err("observed publication must advance".into());
+    };
+    let cleanup = AcmeMachineAction::CleanupChallenge {
+        dns_name: "files.example.test".to_owned(),
+        wildcard: false,
+        challenge: selected,
+        publication_digest,
+        order_epoch: 9,
+    };
+    let mut removal = execution;
+    removal.context.deadline = UnixMicros::new(300);
+    assert_eq!(
+        executor.execute(&cleanup, removal).await?,
+        AcmeStepOutcome::Pending
+    );
+    assert_eq!(
+        only_task(&tasks)?.phase,
+        ManualDnsTaskPhase::AwaitingRemoval
+    );
+    let (transport, signer, old_provider) = executor.into_parts();
+    drop(old_provider);
+    let mut recovered =
+        AcmeStepExecutor::new(transport, signer, challenge(tasks.clone(), records.clone()));
+    assert_eq!(
+        recovered.execute(&cleanup, removal).await?,
+        AcmeStepOutcome::Pending
+    );
+    records.lock().map_err(|_| "record lock failed")?.clear();
+    assert_eq!(
+        recovered.execute(&cleanup, removal).await?,
+        AcmeStepOutcome::Advanced(AcmeMachineEvent::ChallengeCleaned)
+    );
+    assert_eq!(
+        recovered.execute(&cleanup, removal).await?,
+        AcmeStepOutcome::Advanced(AcmeMachineEvent::ChallengeCleaned)
+    );
+    assert_eq!(only_task(&tasks)?.phase, ManualDnsTaskPhase::Complete);
+    Ok(())
+}
+
+struct NoCaRequests;
+
+impl AcmeTransport for NoCaRequests {
+    fn send(
+        &mut self,
+        _request: &AcmeTransportRequest,
+    ) -> impl Future<Output = Result<AcmeHttpResponse, AcmeTransportError>> + Send {
+        std::future::ready(Err(AcmeTransportError::Unavailable))
+    }
+}
 
 #[tokio::test]
 async fn task_survives_restart_and_advances_through_exact_dns_observation()
@@ -44,10 +136,16 @@ async fn task_survives_restart_and_advances_through_exact_dns_observation()
     assert_phase(&tasks, ManualDnsTaskPhase::PublicationObserved)?;
     let mut cleanup = request.clone();
     cleanup.context.deadline = UnixMicros::new(300);
-    recovered.cleanup(&cleanup, receipt).await?;
+    assert_eq!(
+        recovered.cleanup(&cleanup, receipt).await?,
+        CertificateChallengeCleanup::Pending
+    );
     assert_phase(&tasks, ManualDnsTaskPhase::AwaitingRemoval)?;
     records.lock().map_err(|_| "record lock failed")?.clear();
-    recovered.cleanup(&cleanup, receipt).await?;
+    assert_eq!(
+        recovered.cleanup(&cleanup, receipt).await?,
+        CertificateChallengeCleanup::Complete
+    );
     assert_phase(&tasks, ManualDnsTaskPhase::Complete)?;
     Ok(())
 }
@@ -77,13 +175,26 @@ fn request() -> Result<CertificateChallengeRequest, Box<dyn Error>> {
 }
 
 fn assert_phase(tasks: &Tasks, expected: ManualDnsTaskPhase) -> Result<(), Box<dyn Error>> {
-    let tasks = tasks.lock().map_err(|_| "task lock failed")?;
-    let task = tasks.values().next().ok_or("missing task")?;
+    let task = only_task(tasks)?;
     assert_eq!(task.phase, expected);
     assert_eq!(task.record_name, "_acme-challenge.files.example.test");
     assert_eq!(task.record_value, b"txt-value");
     assert_eq!(task.expires_at, UnixMicros::new(200));
     Ok(())
+}
+
+fn only_task(tasks: &Tasks) -> Result<ManualDnsTask, Box<dyn Error>> {
+    let tasks = tasks.lock().map_err(|_| "task lock failed")?;
+    assert_eq!(
+        tasks.len(),
+        1,
+        "one publication must retain exactly one task"
+    );
+    tasks
+        .values()
+        .next()
+        .cloned()
+        .ok_or_else(|| "missing task".into())
 }
 
 struct MemoryAuthority(Tasks);

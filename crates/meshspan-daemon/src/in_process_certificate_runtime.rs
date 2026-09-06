@@ -11,9 +11,9 @@ use meshspan_acme::{
     RustlsWebhookHttpTransport, WebhookDnsProvider, WebhookV1Api,
 };
 use meshspan_contracts::{
-    CertificateChallenge, CertificateChallengeReceipt, CertificateChallengeRequest,
-    ComponentConfiguration, ComponentLifecycle, ComponentObservation, ComponentTransition,
-    ContractError, ImplementationDescriptor,
+    CertificateChallenge, CertificateChallengeCleanup, CertificateChallengeReceipt,
+    CertificateChallengeRequest, ComponentConfiguration, ComponentLifecycle, ComponentObservation,
+    ComponentTransition, ContractError, ImplementationDescriptor,
 };
 use meshspan_domain::{Clock, RandomSource, Revision, UnixMicros};
 use meshspan_metadata::AcmeChallengeKind;
@@ -200,7 +200,7 @@ where
         &mut self,
         request: &CertificateChallengeRequest,
         receipt: CertificateChallengeReceipt,
-    ) -> Result<(), ContractError> {
+    ) -> Result<CertificateChallengeCleanup, ContractError> {
         match self {
             Self::Http01(value) => value.cleanup(request, receipt).await,
             Self::Rfc2136(value) => value.cleanup(request, receipt).await,

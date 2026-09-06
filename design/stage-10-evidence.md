@@ -57,6 +57,30 @@ and diff checks passed. The checkpoint still needs to supply the original
 publication fields during worker replacement; this does not close that remaining
 integration requirement. No persisted shape or dependency changed.
 
+Manual DNS cleanup now distinguishes a durable removal request from confirmed
+removal. The challenge-provider contract returns an explicit `Pending` or
+`Complete`; the executor emits `ChallengeCleaned` only for the latter. The daemon
+forwards that result through every built-in provider choice. HTTP and automatic
+DNS retain their synchronous removal behaviour, while manual DNS waits for an
+authoritative observation that the exact TXT value is absent.
+
+The executor regression first failed with `Advanced(ChallengeCleaned)` where
+`Pending` was required (**0.01 seconds**, 2-minute-14-second build). It now checks
+pending removal, reconstruction of the manual provider with the same task,
+continued pending status, observed absence, and exact completed-cleanup replay.
+Unexpected CA transport calls fail the test. Existing manual-provider coverage
+also asserts the explicit pending/completed results. All **50 ACME tests passed
+in 0.06 seconds**. The first affected lint run rejected an unnecessarily async
+test transport; it now returns a ready future without a lint suppression. The
+post-correction ACME run again passed all 50 tests in **0.06 seconds**.
+
+This changes the in-process Rust provider interface, not SQL, persisted
+checkpoints, network messages or dependencies. Provider reconstruction in this
+focused test is not a daemon crash or durable metadata proof. Long-running claims,
+original-publication checkpoint recovery and manual-DNS process acceptance remain
+open; task and stage estimates are unchanged. Broader validation and integration
+will be recorded below when they actually finish.
+
 ## Task 2 — real DNS-01 issuance, restart and gateway delivery
 
 The existing real-process lifecycle now also runs RFC 2136 DNS-01 through the

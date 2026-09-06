@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_contracts::{
-    BoundedBytes, CertificateChallengeKind, CertificateChallengeReceipt,
-    CertificateChallengeRequest,
+    BoundedBytes, CertificateChallengeCleanup, CertificateChallengeKind,
+    CertificateChallengeReceipt, CertificateChallengeRequest,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -74,10 +74,12 @@ where
             order_epoch,
             publication_digest,
         };
-        self.challenge.cleanup(&request, receipt).await?;
-        Ok(AcmeStepOutcome::Advanced(
-            AcmeMachineEvent::ChallengeCleaned,
-        ))
+        match self.challenge.cleanup(&request, receipt).await? {
+            CertificateChallengeCleanup::Pending => Ok(AcmeStepOutcome::Pending),
+            CertificateChallengeCleanup::Complete => Ok(AcmeStepOutcome::Advanced(
+                AcmeMachineEvent::ChallengeCleaned,
+            )),
+        }
     }
 }
 

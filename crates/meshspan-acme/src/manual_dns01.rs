@@ -5,9 +5,10 @@
 use std::future::Future;
 
 use meshspan_contracts::{
-    CertificateChallenge, CertificateChallengeKind, CertificateChallengeReceipt,
-    CertificateChallengeRequest, ComponentConfiguration, ComponentLifecycle, ComponentObservation,
-    ComponentTransition, ContractError, ImplementationDescriptor,
+    CertificateChallenge, CertificateChallengeCleanup, CertificateChallengeKind,
+    CertificateChallengeReceipt, CertificateChallengeRequest, ComponentConfiguration,
+    ComponentLifecycle, ComponentObservation, ComponentTransition, ContractError,
+    ImplementationDescriptor,
 };
 use meshspan_domain::{Revision, UnixMicros};
 use sha2::{Digest, Sha256};
@@ -172,7 +173,7 @@ where
         &mut self,
         request: &CertificateChallengeRequest,
         receipt: CertificateChallengeReceipt,
-    ) -> Result<(), ContractError> {
+    ) -> Result<CertificateChallengeCleanup, ContractError> {
         validate_cleanup_request(request, CertificateChallengeKind::Dns01)?;
         let payload =
             Dns01Payload::decode(&request.challenge).map_err(|_| ContractError::InvalidInput)?;
@@ -188,7 +189,12 @@ where
         };
         self.authority
             .advance(&Self::task(request, &payload, phase))
-            .await
+            .await?;
+        Ok(if visible {
+            CertificateChallengeCleanup::Pending
+        } else {
+            CertificateChallengeCleanup::Complete
+        })
     }
 }
 

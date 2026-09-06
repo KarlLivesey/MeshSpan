@@ -92,6 +92,15 @@ pub struct CertificateChallengeReceipt {
     pub publication_digest: [u8; 32],
 }
 
+/// Whether exact challenge removal has finished, rather than merely been requested.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CertificateChallengeCleanup {
+    /// Removal is durably requested but not yet confirmed; retry the same receipt later.
+    Pending,
+    /// The exact publication was removed or its absence was proved.
+    Complete,
+}
+
 /// HTTP-01 or DNS-01 publication without certificate private-key access.
 pub trait CertificateChallenge: ComponentLifecycle {
     /// Publishes one exact fenced challenge idempotently.
@@ -118,7 +127,8 @@ pub trait CertificateChallenge: ComponentLifecycle {
     /// Removes only the exact fenced publication represented by the receipt.
     /// The request retains the original publication expiry even when it is in the past;
     /// its current operation deadline is independent. Exact absence permits an idempotent
-    /// success, never deletion of a replacement publication.
+    /// completion, never deletion of a replacement publication. A durable removal task
+    /// without confirmed removal returns `Pending`, not `Complete`.
     ///
     /// # Errors
     ///
@@ -127,5 +137,5 @@ pub trait CertificateChallenge: ComponentLifecycle {
         &mut self,
         request: &CertificateChallengeRequest,
         receipt: CertificateChallengeReceipt,
-    ) -> impl Future<Output = Result<(), ContractError>> + Send;
+    ) -> impl Future<Output = Result<CertificateChallengeCleanup, ContractError>> + Send;
 }
