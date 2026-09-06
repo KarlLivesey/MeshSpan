@@ -6,7 +6,7 @@ use meshspan_acme::{
     AcmeChallengeExecution, AcmeStepExecutor, AcmeStepOutcome, AcmeTransport, AcmeWorkerError,
 };
 use meshspan_contracts::{CertificateChallenge, RequestContext};
-use meshspan_domain::{PrincipalId, UnixMicros};
+use meshspan_domain::{Clock, PrincipalId, UnixMicros};
 use thiserror::Error;
 
 use crate::{
@@ -89,6 +89,8 @@ where
     /// Downloaded chains instead pass to terminal validation and its atomic completion command.
     /// Until that commits, recovery retains the prior download checkpoint, never an unvalidated
     /// terminal certificate. Re-downloading after interruption does not create another CA order.
+    /// The caller's clock is read again after external IO: a late response never advances local
+    /// state, and a successful checkpoint uses receipt time rather than request-start time.
     ///
     /// # Errors
     ///
@@ -98,35 +100,51 @@ where
         &mut self,
         checkpoint_service: &CertificateOrderCheckpointService<A>,
         actor_principal_id: PrincipalId,
-        now: UnixMicros,
+        clock: &impl Clock,
         context: RequestContext,
         challenge_expires_at: UnixMicros,
     ) -> Result<CertificateOrderStepResult, CertificateOrderExecutionError> {
+        let now = clock.now();
         let claim = self
             .assignment
             .order
             .claim
             .ok_or(CertificateOrderExecutionError::InvalidInput)?;
-        if context.deadline <= now
+        if now.get() < 0
             || context.deadline > claim.lease_expires_at
             || context.expected_revision != Some(self.assignment.configuration.revision)
-            || challenge_expires_at <= now
             || challenge_expires_at > claim.lease_expires_at
         {
             return Err(CertificateOrderExecutionError::InvalidInput);
         }
+        if context.deadline <= now || challenge_expires_at <= now {
+            return Err(CertificateOrderExecutionError::DeadlineElapsed);
+        }
         let action = self.machine.action()?;
-        let outcome = self
-            .executor
-            .execute(
+        let remaining_micros = u64::try_from(context.deadline.get() - now.get())
+            .map_err(|_| CertificateOrderExecutionError::InvalidInput)?;
+        // The worker owns the deadline, even when a replaceable transport/provider does not.
+        // Only the external action is cancellable here; authoritative checkpointing is not.
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_micros(remaining_micros),
+            self.executor.execute(
                 &action,
                 AcmeChallengeExecution {
                     context,
                     challenge_expires_at,
                     csr_der: &self.csr_der,
                 },
-            )
-            .await?;
+            ),
+        )
+        .await
+        .map_err(|_| CertificateOrderExecutionError::DeadlineElapsed)??;
+        let received_at = clock.now();
+        if received_at < now {
+            return Err(CertificateOrderExecutionError::InvalidInput);
+        }
+        if received_at >= context.deadline {
+            return Err(CertificateOrderExecutionError::DeadlineElapsed);
+        }
         match outcome {
             AcmeStepOutcome::Pending => Ok(CertificateOrderStepResult::Pending),
             AcmeStepOutcome::Complete(certificate_chain) => {
@@ -143,7 +161,7 @@ where
                 }
                 let checkpoint = checkpoint_service.checkpoint(
                     actor_principal_id,
-                    now,
+                    received_at,
                     &CertificateOrderCheckpoint {
                         order_id: self.assignment.order.order_id,
                         claim,
@@ -160,6 +178,9 @@ where
 /// Closed failure from one composed ACME worker step.
 #[derive(Debug, Error)]
 pub enum CertificateOrderExecutionError {
+    /// The owned deadline elapsed before a response could safely advance the machine.
+    #[error("certificate order execution deadline elapsed")]
+    DeadlineElapsed,
     /// Claim, deadline, expiry or configuration revision is stale or contradictory.
     #[error("certificate order execution input is invalid")]
     InvalidInput,

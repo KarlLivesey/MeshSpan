@@ -139,6 +139,37 @@ integration remains incomplete for the corrected slice; task 2 stays at **6 poin
 interrupted and long-running orders, successful polling hints and active gateway
 challenge distribution remain open. No publication or Actions ran.
 
+## Task 2 — response-time deadlines and normal claim expiry
+
+The certificate driver now owns cancellation of each external action rather than
+relying on a replaceable transport to honour its deadline. It rereads the supplied
+clock after IO, rejects late responses before advancing the machine and timestamps
+successful checkpoints at receipt time. Expired claims yield a normal outcome
+that clears the active execution for fenced admission on the next worker pass;
+they do not submit checkpoint, completion or retry commands under expired authority.
+Corrupt state and ambiguous authoritative commits still fail closed.
+
+Five original regressions all failed before implementation in **0.13 seconds**
+(88-second build): stale checkpoint time, accepted late response, mutation after
+claim expiry, fatal pre-expired claim and an unbounded transport future. The
+corrected certificate-order suite first passed 25 tests in **0.20 seconds**.
+Two additional exact-boundary regressions then reproduced fatal `InvalidInput`
+when the lease elapsed between admission and execution (**0.04 seconds**) and
+when only its last microsecond remained (**0.08 seconds**, six other cases passed).
+Expired execution deadlines are now distinct from invalid structure; the last
+microsecond waits without starting an impossible challenge-request interval.
+
+`cargo test -p meshspan-daemon --lib certificate_order_ -- --nocapture` passed
+all **27 tests in 0.39 seconds**, after a 37.94-second build. Tests use per-test
+clocks, exact mutation counts and observed future cancellation, not global time
+changes or provider sleeps. The stalled transport's worker deadline remains
+10 milliseconds; its separate two-second deadlock watchdog is not a performance
+claim. Affected all-target/all-feature Clippy with warnings denied passed in
+**134 seconds**. Rust formatting and `git diff --check` passed. No dependency,
+schema or wire format changed. Full local integration remains required before
+merge. Lease renewal, interrupted challenge
+recovery and successful CA polling hints remain separate open task-2 scope.
+
 ## Task 2 — real HTTP-01 issuance, restart and gateway delivery
 
 The new `headless_process::acme_lifecycle` proof runs real child daemons and a

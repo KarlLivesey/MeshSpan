@@ -53,6 +53,9 @@ impl CertificateOrderDrivePolicy {
 /// Authoritative outcome from one bounded worker pass.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CertificateOrderDriveOutcome {
+    /// The lease ended; discard local execution and let normal fenced admission resume it.
+    /// No checkpoint, completion or retry is submitted under an expired claim.
+    ClaimExpired,
     /// External challenge or CA state is not yet observable; retry the same live execution later.
     Pending,
     /// The step budget was consumed after every transition was durably checkpointed.
@@ -138,8 +141,15 @@ where
     {
         for completed_steps in 0..self.policy.maximum_steps {
             let now = self.clock.now();
+            if claim_expired(execution, now)? {
+                return Ok(CertificateOrderDriveOutcome::ClaimExpired);
+            }
             let actor_principal_id = execution.assignment().configuration.configured_by;
-            let context = self.request_context(execution, now)?;
+            let Some(context) = self.request_context(execution, now)? else {
+                // Challenge visibility must outlive its request. At the last clock tick
+                // there is no valid interval; the next pass releases the expired claim.
+                return Ok(CertificateOrderDriveOutcome::Pending);
+            };
             let challenge_expires_at = execution
                 .assignment()
                 .order
@@ -150,7 +160,7 @@ where
                 .execute_step(
                     &self.checkpoint,
                     actor_principal_id,
-                    now,
+                    &self.clock,
                     context,
                     challenge_expires_at,
                 )
@@ -167,7 +177,7 @@ where
                     }
                 }
                 Ok(CertificateOrderStepResult::ReadyForCompletion { certificate_chain }) => {
-                    return self.complete_or_retry(execution, now, &certificate_chain);
+                    return self.complete_or_retry(execution, self.clock.now(), &certificate_chain);
                 }
                 Err(error) => return self.execution_failure(execution, self.clock.now(), error),
             }
@@ -179,7 +189,7 @@ where
         &mut self,
         execution: &CertificateOrderExecution<T, Challenge>,
         now: UnixMicros,
-    ) -> Result<RequestContext, CertificateOrderDriverError> {
+    ) -> Result<Option<RequestContext>, CertificateOrderDriverError> {
         let claim = execution
             .assignment()
             .order
@@ -195,17 +205,20 @@ where
             .ok_or(CertificateOrderDriverError::InvalidInput)?
             .get();
         let deadline = UnixMicros::new(requested_deadline.min(latest_deadline));
-        if now.get() < 0 || deadline <= now {
+        if now.get() < 0 {
             return Err(CertificateOrderDriverError::InvalidInput);
+        }
+        if deadline <= now {
+            return Ok(None);
         }
         let mut bytes = [0_u8; 16];
         self.operation_random.fill_bytes(&mut bytes)?;
-        Ok(RequestContext {
+        Ok(Some(RequestContext {
             contract_version: ContractVersion::V1_0,
             operation_id: OperationId::from_bytes(uuid_v8(bytes))?,
             deadline,
             expected_revision: Some(execution.assignment().configuration.revision),
-        })
+        }))
     }
 
     fn execution_failure<T, Challenge>(
@@ -215,7 +228,8 @@ where
         error: CertificateOrderExecutionError,
     ) -> Result<CertificateOrderDriveOutcome, CertificateOrderDriverError> {
         let (failure_class, retry_after) = match error {
-            CertificateOrderExecutionError::Worker(AcmeWorkerError::Transport) => {
+            CertificateOrderExecutionError::DeadlineElapsed
+            | CertificateOrderExecutionError::Worker(AcmeWorkerError::Transport) => {
                 (CertificateOrderFailureClass::Transport, None)
             }
             CertificateOrderExecutionError::Worker(AcmeWorkerError::Protocol) => {
@@ -232,6 +246,9 @@ where
             }
             other => return Err(other.into()),
         };
+        if claim_expired(execution, now)? {
+            return Ok(CertificateOrderDriveOutcome::ClaimExpired);
+        }
         self.retry(execution, now, failure_class, retry_after)
     }
 
@@ -241,6 +258,9 @@ where
         now: UnixMicros,
         certificate_chain: &[u8],
     ) -> Result<CertificateOrderDriveOutcome, CertificateOrderDriverError> {
+        if claim_expired(execution, now)? {
+            return Ok(CertificateOrderDriveOutcome::ClaimExpired);
+        }
         match self.result.complete(
             &mut self.completion,
             execution.assignment().configuration.configured_by,
@@ -281,6 +301,21 @@ where
             commit,
         })
     }
+}
+
+fn claim_expired<T, Challenge>(
+    execution: &CertificateOrderExecution<T, Challenge>,
+    now: UnixMicros,
+) -> Result<bool, CertificateOrderDriverError> {
+    let claim = execution
+        .assignment()
+        .order
+        .claim
+        .ok_or(CertificateOrderDriverError::InvalidInput)?;
+    if now.get() < 0 {
+        return Err(CertificateOrderDriverError::InvalidInput);
+    }
+    Ok(now >= claim.lease_expires_at)
 }
 
 /// Closed failure from composing one prepared certificate-order execution.

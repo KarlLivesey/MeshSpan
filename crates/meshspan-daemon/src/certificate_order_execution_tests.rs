@@ -67,7 +67,7 @@ async fn downloaded_chain_goes_to_terminal_validation_not_an_incomplete_checkpoi
         .execute_step(
             &CertificateOrderCheckpointService::new(&authority),
             PrincipalId::from_bytes([2; 16])?,
-            UnixMicros::new(20),
+            &FixedClock(UnixMicros::new(20)),
             request_context()?,
             UnixMicros::new(80),
         )
@@ -98,7 +98,7 @@ async fn validated_remote_step_advances_then_commits_before_next_action()
         .execute_step(
             &CertificateOrderCheckpointService::new(&authority),
             PrincipalId::from_bytes([2; 16])?,
-            UnixMicros::new(20),
+            &FixedClock(UnixMicros::new(20)),
             request_context()?,
             UnixMicros::new(80),
         )
@@ -192,6 +192,14 @@ fn request_context() -> Result<RequestContext, Box<dyn std::error::Error>> {
 }
 
 struct OneResponseTransport(Option<AcmeHttpResponse>);
+
+struct FixedClock(UnixMicros);
+
+impl meshspan_domain::Clock for FixedClock {
+    fn now(&self) -> UnixMicros {
+        self.0
+    }
+}
 
 impl AcmeTransport for OneResponseTransport {
     fn send(
