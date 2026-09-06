@@ -78,7 +78,8 @@ pub use metrics::{
 pub use observability::{EventSeverity, ObservabilityReceipt, ObservabilitySink, RedactedEvent};
 pub use security::{
     AuthenticationAttempt, AuthenticationHandler, AuthenticationOutcome, CertificateChallenge,
-    CertificateChallengeKind, CertificateChallengeReceipt, CertificateChallengeRequest,
+    CertificateChallengeCleanup, CertificateChallengeKind, CertificateChallengeReceipt,
+    CertificateChallengeRequest,
 };
 pub use storage::{
     InventoryEntry, InventoryPage, PutShardRequest, ReclamationReceipt, RemovalAuthorityFence,

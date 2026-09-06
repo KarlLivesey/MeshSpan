@@ -32,6 +32,8 @@ use crate::{
     SecretGenerationReference,
 };
 
+mod manual_dns_transition;
+
 #[test]
 fn mesh_local_authority_is_atomic_immutable_and_bound_to_its_encrypted_key()
 -> Result<(), Box<dyn std::error::Error>> {

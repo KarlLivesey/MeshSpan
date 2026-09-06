@@ -10,6 +10,194 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 2 — interrupted challenge recovery
+
+### Integrated cleanup and manual-DNS polling candidate
+
+The complete local gate passed on signed commit
+`cf277358f2a0a5ddf7cf888aafb55da84731c957`, tree
+`dfca2f599625d426f447a7d03cbe57608cd9eef0`, in **1,011.68 seconds**.
+Rust workspace tests passed in **886.89 seconds** and web tests in **9.57 seconds**.
+Generated drift (2.75 seconds), embedded bundle (1.45), Rust format (3.62), Rust
+lint (82.42), Rust licences (0.68), JavaScript licences (1.27), workspace format
+(5.03), web lint (33.86), web typecheck (11.69) and tooling tests (1.61) passed.
+The candidate remained unchanged throughout this run. Ignored or external tests
+are not covered by this result; publication remains prohibited.
+
+The exact invocation, from a non-login Bash shell after sourcing NVM and selecting
+the repository default (Node 26.8.1, pnpm 11.19.0), was:
+
+```sh
+CARGO_BUILD_JOBS=4 MESHSPAN_CHECK_WORKERS=4 \
+  /Users/karllivesey/.cargo/bin/rustup run 1.98.0 pnpm check
+```
+
+Read-only investigation found that login shells selected Homebrew Rust while
+non-login shells selected rustup. Although both reported Rust 1.98.0 and the same
+upstream commit, their Cargo compiler fingerprints differed. Alternating them
+invalidated compiler caches and made prior timing comparisons inconsistent. This
+gate explicitly used rustup for the harness and its children; no global shell or
+tool installation was changed. This finding does **not** explain or close the
+earlier cluster-admission timeout. Its diagnostic state retention stays in place;
+no timeout or concurrency assertion was relaxed to obtain this pass.
+
+The two exact manual-DNS runtime queries were also extracted and explained against
+all current partition migration SQL in an in-memory system SQLite database.
+Claim validation used indexed order/fence, order identity and configuration
+identity lookups; task observation used the existing order/fence/task-digest
+index. There was no task-history scan. This checks query shape on system SQLite,
+not bundled-engine performance or a real daemon restart.
+
+This closes validation of the current cleanup and no-op polling slice, not all
+interrupted-order recovery. Task 2 remains **5 points**, Stage 10 **144**, and
+Stage 11 **126**. Original publication identity/lifetime across worker handoff,
+long-running manual tasks, successful-response polling guidance, remaining DNS
+provider process proofs and active-gateway challenge distribution remain open.
+
+Manual-DNS polling now checks the exact retained task and live claim before
+proposing another transition. The claim and task are read in one SQLite read
+transaction; a satisfied phase creates no operation, audit entry or revision.
+An absent task or genuinely later phase still goes through the normal
+authoritative command and its receipt checks. Identity mismatch, expired or
+replaced claims, superseded tasks and unavailable observations cannot take the
+no-op path. This is not an in-memory success cache, lease renewal or a new grant
+of authority; subsequent writes retain their normal authoritative checks.
+
+The old timestamp-derived operation identity caused two commits when the same
+request was polled at times 10 and 11. The regression failed in **0.01 seconds**
+after a 2-minute-25-second build. It now passes with one commit across advancing
+clocks and adapter reconstruction. A separate SQL regression proved that manual
+task writes were incorrectly accepted exactly at claim expiry (**0.63 seconds**,
+38.65-second build); both observation and mutation now use exclusive lease
+expiry. Cleanup still permits the original publication expiry to be in the past.
+
+Verification for this slice:
+
+- Seven focused metadata cases passed in **5.03 seconds** after a 13.94-second
+  build. They cover every claim/publication field, missing tasks, unchanged
+  revisions, later/earlier phases, expiry and hostile superseded state.
+- Eight daemon manual-DNS, projection and API cases passed in **0.19 seconds**
+  after a 24.63-second build. Lost commit replies recover from confirmed task
+  state without another write; unavailable/stale reads do not fall back to writes.
+- All 19 ACME metadata cases passed in **17.41 seconds**. Affected all-target/
+  all-feature Clippy passed first in 1 minute 15 seconds, then in **13.42 seconds**
+  after the additional tests. Formatting and diff checks passed.
+
+The database cases use the existing SQLite fixtures, and adapter reconstruction
+uses a recording authority; these are not a full daemon restart or manual-DNS
+wire-lifecycle proof. No schema, persisted record format, wire message or dependency
+changed. Task 2 remains **5 points**, Stage 10 **144**. The failed full gate recorded
+below remains unresolved, and this slice has not been merged.
+
+After the preceding candidate reached `main`, two new HTTP-01 cleanup regressions
+failed with `NotFound` in **0.00 seconds** (18.69-second build): replay after a
+successful removal, and receipt validation against an empty restarted catalogue.
+Cleanup now verifies the complete request-derived receipt before inventory lookup,
+then accepts exact absence. An existing replacement publication still returns
+`Stale` and its exact response bytes remain unchanged. This does not accept an
+unknown or mismatched receipt merely because its token is absent.
+
+All **47 ACME tests passed in 0.06 seconds** after the correction (3.56-second
+build); all-target/all-feature ACME Clippy passed in **18.35 seconds**. Formatting
+and diff checks passed. No dependency, schema or wire shape changed. This is a
+focused provider correction, not complete interrupted-order recovery or a fresh
+full integration gate. Task 2 remains **5 points**, Stage 10 **144**.
+
+The next recovery boundary must separate a live worker claim from the original
+publication identity, receipt and expiry retained for cleanup. A new claim must
+not reconstruct an old publication with new expiry/fence values, nor send a
+completed authorisation back through notification merely to obtain a new receipt.
+Coverage must include already-valid authorisation cleanup, same-worker restart,
+replacement-worker restart, stale cleanup against a replacement, and checkpoint
+round-trips. Persisted-state handling must be explicit before changing the
+checkpoint shape; this is not permission to discard a checkpoint or weaken its
+authority binding.
+
+Cleanup now has separate expiry validation from publication/visibility. Its
+current operation deadline may outlive the original publication expiry, while
+the original expiry remains part of the exact receipt identity. HTTP-01,
+automatic DNS-01 and manual DNS-01 share this rule; they continue rejecting
+invalid identity/configuration, non-positive time fields and mismatched receipts.
+Publication and visibility still require expiry beyond the request deadline.
+
+Four provider regressions failed with `InvalidInput` before that change
+(**0.07 seconds**, 2.37-second build), including real signed RFC 2136 removal
+after provider reconstruction at a later supplied clock time. An initial test
+compile failure shadowed the settings helper; the fixture binding was renamed
+before collecting those regression results. All 48 cases then passed in
+0.06 seconds. A separate executor regression reproduced its duplicate expiry
+guard (**0.00 seconds**, 2.38-second build). That guard now applies to publication,
+not cleanup; the executor test verifies retained-receipt cleanup without any CA
+request or republication. The final **49 ACME tests passed in 0.11 seconds**
+(4.48-second build), and affected Clippy passed in **3.22 seconds**. Formatting
+and diff checks passed. The checkpoint still needs to supply the original
+publication fields during worker replacement; this does not close that remaining
+integration requirement. No persisted shape or dependency changed.
+
+Manual DNS cleanup now distinguishes a durable removal request from confirmed
+removal. The challenge-provider contract returns an explicit `Pending` or
+`Complete`; the executor emits `ChallengeCleaned` only for the latter. The daemon
+forwards that result through every built-in provider choice. HTTP and automatic
+DNS retain their synchronous removal behaviour, while manual DNS waits for an
+authoritative observation that the exact TXT value is absent.
+
+The executor regression first failed with `Advanced(ChallengeCleaned)` where
+`Pending` was required (**0.01 seconds**, 2-minute-14-second build). It now checks
+pending removal, reconstruction of the manual provider with the same task,
+continued pending status, observed absence, and exact completed-cleanup replay.
+Unexpected CA transport calls fail the test. Existing manual-provider coverage
+also asserts the explicit pending/completed results. All **50 ACME tests passed
+in 0.06 seconds**. The first affected lint run rejected an unnecessarily async
+test transport; it now returns a ready future without a lint suppression. The
+post-correction ACME run again passed all 50 tests in **0.06 seconds**.
+
+This changes the in-process Rust provider interface, not SQL, persisted
+checkpoints, network messages or dependencies. Provider reconstruction in this
+focused test is not a daemon crash or durable metadata proof. Long-running claims,
+original-publication checkpoint recovery and manual-DNS process acceptance remain
+open; task and stage estimates are unchanged. Broader validation and integration
+will be recorded below when they actually finish.
+
+Affected all-target/all-feature Clippy passed in **15.53 seconds** after that
+test-transport correction. The 27 daemon certificate-order regressions passed
+in **0.19 seconds**, following a 1-minute-8-second build. Commit `8136ac8` was
+signed, pushed and verified by GitHub; PR #243 is open, not merged.
+
+The full local gate on `8136ac8cd372c820391df8d4852c9c96df5b36c0`, tree
+`1df930f4dbe64a8ac9ad82ec96019e3d63053e2c`, **failed in 610.81 seconds**. All
+static/licence lanes and web tests (10.87 seconds) passed. Rust workspace tests
+failed after **442.13 seconds** in the three-process cluster suite: six cases
+passed, but `three_process_cluster_survives_lost_reply_and_leader_restart` timed
+out waiting for node 2's `FOLLOWER_WITH_LEADER` response. Its control connection
+was refused, its log was empty and all three children were still alive.
+
+That proof node binds its control listener only after learner snapshot admission
+and repository restoration. The available evidence therefore does not distinguish
+process startup, snapshot delivery and installation. The targeted recovery proof
+now retains its owned temporary state on admission/failover failure and reports
+whether the node database exists. No timeout, concurrency, protocol or acceptance
+assertion was weakened. A passing diagnostic rerun alone cannot close this failure;
+the candidate remains unmerged and the goal remains active.
+
+The diagnostic three-process suite passed all **seven cases in 24.39 seconds**
+with four test threads and the unchanged 15-second per-operation wait, after a
+2-minute-56-second build. No failed workspace was retained because no case failed.
+The initial diagnostic command stopped at Rust formatting; formatting was applied
+before the actual test run. This successful rerun does not identify or fix the
+full-gate failure.
+
+A read-only host observation during that diagnostic build reported 12 logical
+CPUs and load averages **252.95 / 210.47 / 128.38**, with 3,109,958 compressed-memory
+pages at 16,384 bytes per page. Those observations make timing/performance
+comparisons unreliable; they are context, not proof that host load caused the
+earlier failed admission. No unrelated process, host setting, wait limit or test
+concurrency was changed. The proof executable's CPU-sized Tokio worker pools are
+an investigation lead, not an implemented correction or established root cause.
+The diagnostic harness passed affected all-feature Clippy in **39.03 seconds**,
+with this owned compiler invocation bounded by `CARGO_BUILD_JOBS=4`. Rust
+formatting and `git diff --check` passed. No second full-gate retry was run and no
+merge is claimed.
+
 ## Task 2 — real DNS-01 issuance, restart and gateway delivery
 
 The existing real-process lifecycle now also runs RFC 2136 DNS-01 through the
@@ -212,6 +400,12 @@ part of this proof: a read-only Docker inspection confirmed the named local
 `meshspan-smbclient-test:bookworm` image is absent. No live-CA, physical-hardware,
 soak or publication proof is claimed. No releases, tags, images or Actions were
 published or run.
+
+PR **#241** merged into `main` at `eae170a2774a028aee22cfc5da95c1946b01ad6f`;
+GitHub reports that merge signature verified. PR **#242** also reports merged
+through the contained signed merge `9942e63`. Both feature heads are ancestors
+of `main`. Their local and remote branches were removed, along with the clean
+temporary deadline worktree; committed source and evidence remain in `main`.
 
 ## Task 2 — real HTTP-01 issuance, restart and gateway delivery
 

@@ -9,7 +9,8 @@ use meshspan_acme::{ManualDnsTask, ManualDnsTaskAuthority, ManualDnsTaskPhase};
 use meshspan_cluster::MetadataAuthorityRequestError;
 use meshspan_contracts::ContractError;
 use meshspan_domain::{
-    AuditEventId, CertificateOrderId, Clock, OperationId, PrincipalId, Revision, uuid_v8,
+    AuditEventId, CertificateOrderId, Clock, OperationId, PrincipalId, Revision, UnixMicros,
+    uuid_v8,
 };
 use meshspan_metadata::{
     AdvanceManualDnsTask, AuthoritativeCommand, CertificateOrderClaim, CommandContext,
@@ -24,6 +25,20 @@ const AUDIT_ID_DOMAIN: &[u8] = b"meshspan.manual-dns-task.audit.v1\0";
 
 /// Authoritative reads and writes required by manual DNS task publication.
 pub trait ManualDnsTaskCommitAuthority {
+    /// Checks whether this exact publication already reached the requested phase.
+    ///
+    /// The retained task and live claim must be checked in one read view. This is
+    /// evidence of an existing transition, never a new lease or permission grant.
+    ///
+    /// # Errors
+    ///
+    /// Rejects expired/replaced claims, conflicting task identity and corrupt state.
+    fn manual_dns_task_transition_satisfied(
+        &self,
+        now: UnixMicros,
+        transition: &AdvanceManualDnsTask,
+    ) -> Result<bool, ContractError>;
+
     /// Resolves a potentially committed task transition after an ambiguous response.
     ///
     /// # Errors
@@ -47,6 +62,16 @@ pub trait ManualDnsTaskCommitAuthority {
 }
 
 impl ManualDnsTaskCommitAuthority for ConsensusAuthenticationAuthority {
+    fn manual_dns_task_transition_satisfied(
+        &self,
+        now: UnixMicros,
+        transition: &AdvanceManualDnsTask,
+    ) -> Result<bool, ContractError> {
+        self.reader()
+            .manual_dns_task_transition_satisfied(now, transition)
+            .map_err(|error| map_repository_error(&error))
+    }
+
     fn resolve_manual_dns_task(
         &self,
         operation_id: OperationId,
@@ -87,6 +112,17 @@ impl SharedManualDnsTaskAuthority {
 }
 
 impl ManualDnsTaskCommitAuthority for SharedManualDnsTaskAuthority {
+    fn manual_dns_task_transition_satisfied(
+        &self,
+        now: UnixMicros,
+        transition: &AdvanceManualDnsTask,
+    ) -> Result<bool, ContractError> {
+        self.inner
+            .lock()
+            .map_err(|_| ContractError::Unavailable)?
+            .manual_dns_task_transition_satisfied(now, transition)
+    }
+
     fn resolve_manual_dns_task(
         &self,
         operation_id: OperationId,
@@ -157,10 +193,17 @@ impl<A: ManualDnsTaskCommitAuthority, C: Clock> ConsensusManualDnsTaskAuthority<
             return Err(ContractError::Stale);
         }
         let now = self.clock.now();
+        let transition = self.transition(task);
+        if self
+            .authority
+            .manual_dns_task_transition_satisfied(now, &transition)?
+        {
+            return Ok(());
+        }
         let operation_id = derived_id(OPERATION_ID_DOMAIN, task, now)?;
         let audit_event_id = AuditEventId::from_bytes(derived_bytes(AUDIT_ID_DOMAIN, task, now))
             .map_err(|_| ContractError::InvalidInput)?;
-        let command = self.command(task);
+        let command = AuthoritativeCommand::AdvanceManualDnsTask(transition);
         let context = CommandContext {
             operation_id,
             actor_principal_id: self.actor_principal_id,
@@ -176,8 +219,8 @@ impl<A: ManualDnsTaskCommitAuthority, C: Clock> ConsensusManualDnsTaskAuthority<
         validate_receipt(receipt, operation_id, expected_digest, self.order_id)
     }
 
-    fn command(&self, task: &ManualDnsTask) -> AuthoritativeCommand {
-        AuthoritativeCommand::AdvanceManualDnsTask(AdvanceManualDnsTask {
+    fn transition(&self, task: &ManualDnsTask) -> AdvanceManualDnsTask {
+        AdvanceManualDnsTask {
             task_digest: task.task_digest,
             order_id: self.order_id,
             claim_generation: self.claim.generation,
@@ -193,7 +236,7 @@ impl<A: ManualDnsTaskCommitAuthority, C: Clock> ConsensusManualDnsTaskAuthority<
                 ManualDnsTaskPhase::AwaitingRemoval => MetadataTaskPhase::AwaitingRemoval,
                 ManualDnsTaskPhase::Complete => MetadataTaskPhase::Complete,
             },
-        })
+        }
     }
 }
 
@@ -250,6 +293,7 @@ fn validate_receipt(
 
 fn map_repository_error(error: &RepositoryError) -> ContractError {
     match error {
+        RepositoryError::InvalidCommand => ContractError::Stale,
         RepositoryError::Store(_) | RepositoryError::Sqlite(_) | RepositoryError::Io(_) => {
             ContractError::Unavailable
         }

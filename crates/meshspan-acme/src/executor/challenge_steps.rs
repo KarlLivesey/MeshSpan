@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_contracts::{
-    BoundedBytes, CertificateChallengeKind, CertificateChallengeReceipt,
-    CertificateChallengeRequest,
+    BoundedBytes, CertificateChallengeCleanup, CertificateChallengeKind,
+    CertificateChallengeReceipt, CertificateChallengeRequest,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -26,6 +26,9 @@ where
         order_epoch: u64,
         execution: AcmeChallengeExecution<'_>,
     ) -> Result<AcmeStepOutcome, AcmeWorkerError> {
+        if execution.challenge_expires_at <= execution.context.deadline {
+            return Err(AcmeWorkerError::InvalidInput);
+        }
         let request = challenge_request(
             &self.signer,
             dns_name,
@@ -71,10 +74,12 @@ where
             order_epoch,
             publication_digest,
         };
-        self.challenge.cleanup(&request, receipt).await?;
-        Ok(AcmeStepOutcome::Advanced(
-            AcmeMachineEvent::ChallengeCleaned,
-        ))
+        match self.challenge.cleanup(&request, receipt).await? {
+            CertificateChallengeCleanup::Pending => Ok(AcmeStepOutcome::Pending),
+            CertificateChallengeCleanup::Complete => Ok(AcmeStepOutcome::Advanced(
+                AcmeMachineEvent::ChallengeCleaned,
+            )),
+        }
     }
 }
 
@@ -88,7 +93,8 @@ fn challenge_request(
 ) -> Result<CertificateChallengeRequest, AcmeWorkerError> {
     if order_epoch == 0
         || execution.context.expected_revision.is_none()
-        || execution.challenge_expires_at <= execution.context.deadline
+        || execution.challenge_expires_at.get() <= 0
+        || execution.context.deadline.get() <= 0
     {
         return Err(AcmeWorkerError::InvalidInput);
     }

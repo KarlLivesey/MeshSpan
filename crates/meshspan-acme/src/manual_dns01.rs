@@ -5,9 +5,10 @@
 use std::future::Future;
 
 use meshspan_contracts::{
-    CertificateChallenge, CertificateChallengeKind, CertificateChallengeReceipt,
-    CertificateChallengeRequest, ComponentConfiguration, ComponentLifecycle, ComponentObservation,
-    ComponentTransition, ContractError, ImplementationDescriptor,
+    CertificateChallenge, CertificateChallengeCleanup, CertificateChallengeKind,
+    CertificateChallengeReceipt, CertificateChallengeRequest, ComponentConfiguration,
+    ComponentLifecycle, ComponentObservation, ComponentTransition, ContractError,
+    ImplementationDescriptor,
 };
 use meshspan_domain::{Revision, UnixMicros};
 use sha2::{Digest, Sha256};
@@ -15,7 +16,7 @@ use sha2::{Digest, Sha256};
 use crate::{AuthoritativeTxtObserver, Dns01Payload};
 use crate::{
     component::Lifecycle,
-    http01::{descriptor, validate_request},
+    http01::{descriptor, validate_cleanup_request, validate_request},
 };
 
 /// Durable operator-facing phase for one exact manual DNS record.
@@ -130,7 +131,9 @@ where
         request: &CertificateChallengeRequest,
     ) -> Result<CertificateChallengeReceipt, ContractError> {
         self.lifecycle.require_active()?;
-        let payload = validated_payload(request)?;
+        validate_request(request, CertificateChallengeKind::Dns01)?;
+        let payload =
+            Dns01Payload::decode(&request.challenge).map_err(|_| ContractError::InvalidInput)?;
         self.authority
             .advance(&Self::task(
                 request,
@@ -146,7 +149,9 @@ where
         request: &CertificateChallengeRequest,
         receipt: CertificateChallengeReceipt,
     ) -> Result<bool, ContractError> {
-        let payload = validated_payload(request)?;
+        validate_request(request, CertificateChallengeKind::Dns01)?;
+        let payload =
+            Dns01Payload::decode(&request.challenge).map_err(|_| ContractError::InvalidInput)?;
         Self::validate_receipt(request, &payload, receipt)?;
         let visible = self
             .observer
@@ -168,8 +173,10 @@ where
         &mut self,
         request: &CertificateChallengeRequest,
         receipt: CertificateChallengeReceipt,
-    ) -> Result<(), ContractError> {
-        let payload = validated_payload(request)?;
+    ) -> Result<CertificateChallengeCleanup, ContractError> {
+        validate_cleanup_request(request, CertificateChallengeKind::Dns01)?;
+        let payload =
+            Dns01Payload::decode(&request.challenge).map_err(|_| ContractError::InvalidInput)?;
         Self::validate_receipt(request, &payload, receipt)?;
         let visible = self
             .observer
@@ -182,7 +189,12 @@ where
         };
         self.authority
             .advance(&Self::task(request, &payload, phase))
-            .await
+            .await?;
+        Ok(if visible {
+            CertificateChallengeCleanup::Pending
+        } else {
+            CertificateChallengeCleanup::Complete
+        })
     }
 }
 
@@ -220,11 +232,6 @@ impl<A, O> ComponentLifecycle for ManualDns01Challenge<A, O> {
     fn observe(&self, observed_at: UnixMicros) -> ComponentObservation {
         self.lifecycle.observe(observed_at)
     }
-}
-
-fn validated_payload(request: &CertificateChallengeRequest) -> Result<Dns01Payload, ContractError> {
-    validate_request(request, CertificateChallengeKind::Dns01)?;
-    Dns01Payload::decode(&request.challenge).map_err(|_| ContractError::InvalidInput)
 }
 
 fn task_digest(request: &CertificateChallengeRequest, payload: &Dns01Payload) -> [u8; 32] {

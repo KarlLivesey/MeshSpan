@@ -69,7 +69,7 @@ pub struct AcmeChallengeExecution<'a> {
 pub enum AcmeStepOutcome {
     /// Feed this proven event into the state machine.
     Advanced(AcmeMachineEvent),
-    /// Publication exists but external visibility is not proven yet.
+    /// Publication visibility or requested removal is not yet proven.
     Pending,
     /// No side effect remains; certificate bytes are ready for validation and completion.
     Complete(Vec<u8>),

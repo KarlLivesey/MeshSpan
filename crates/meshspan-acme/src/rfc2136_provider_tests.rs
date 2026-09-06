@@ -46,9 +46,9 @@ async fn invalid_authoritative_time_fails_before_network_io() -> Result<(), Test
 #[tokio::test]
 async fn publishes_probes_and_removes_through_real_dns_sockets() -> Result<(), TestError> {
     let server = Rfc2136TestServer::start("example.test", 30, 1, Some(1_700_000_000)).await?;
-    let settings = settings(server.address())?;
+    let provider_settings = settings(server.address())?;
     let provider = Rfc2136DnsProvider::new(
-        settings,
+        provider_settings,
         FixedRandom,
         FixedClock(UnixMicros::new(1_700_000_000_000_000)),
         Rfc2136ProviderPolicy::new(Duration::from_secs(2), 30, 300)?,
@@ -70,8 +70,17 @@ async fn publishes_probes_and_removes_through_real_dns_sockets() -> Result<(), T
     };
     let receipt = challenge.publish(&request).await?;
     assert!(challenge.is_visible(&request, receipt).await?);
-    challenge.cleanup(&request, receipt).await?;
-    assert!(!challenge.is_visible(&request, receipt).await?);
+    drop(challenge);
+    let mut recovered = Dns01Challenge::new(Rfc2136DnsProvider::new(
+        settings(server.address())?,
+        FixedRandom,
+        FixedClock(UnixMicros::new(1_700_000_030_000_000)),
+        Rfc2136ProviderPolicy::new(Duration::from_secs(2), 30, 300)?,
+    )?);
+    let mut cleanup = request.clone();
+    cleanup.context.deadline = UnixMicros::new(1_700_000_040_000_000);
+    recovered.cleanup(&cleanup, receipt).await?;
+    assert!(!recovered.is_visible(&request, receipt).await?);
     server.finish().await?;
     Ok(())
 }

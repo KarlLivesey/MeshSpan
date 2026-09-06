@@ -103,7 +103,7 @@ pub(super) fn advance(
     value: &AdvanceManualDnsTask,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
-    validate_live_manual_claim(transaction, context, value)?;
+    validate_live_manual_claim(transaction, context.occurred_at, value)?;
     let existing = load_existing(transaction, value)?;
     match existing {
         None => create(transaction, context, value, revision)?,
@@ -124,9 +124,10 @@ pub(super) fn advance(
 
 fn validate_live_manual_claim(
     transaction: &Transaction<'_>,
-    context: CommandContext,
+    now: UnixMicros,
     value: &AdvanceManualDnsTask,
 ) -> Result<(), RepositoryError> {
+    validate_task_shape(now, value)?;
     let valid: i64 = transaction.query_row(
         "SELECT EXISTS(
             SELECT 1 FROM certificate_orders o
@@ -135,7 +136,7 @@ fn validate_live_manual_claim(
             WHERE o.order_id = ?1 AND o.state = ?2
               AND c.claim_generation = ?3 AND c.worker_node_id = ?4
               AND c.worker_incarnation = ?5 AND c.fence = ?6 AND c.state = ?7
-              AND c.lease_expires_at >= ?8 AND a.challenge_kind = ?9
+              AND c.lease_expires_at > ?8 AND a.challenge_kind = ?9
               AND a.challenge_settings_secret_id IS NULL
         )",
         params![
@@ -146,18 +147,34 @@ fn validate_live_manual_claim(
             to_i64(value.worker_incarnation)?,
             to_i64(value.fence)?,
             CLAIM_ACTIVE,
-            context.occurred_at.get(),
+            now.get(),
             DNS_01,
         ],
         |row| row.get(0),
     )?;
     if valid != 1
-        || value.fence == 0
-        || value.expires_at.get() <= 0
         || matches!(
             value.phase,
             ManualDnsTaskPhase::AwaitingPublication | ManualDnsTaskPhase::PublicationObserved
-        ) && value.expires_at <= context.occurred_at
+        ) && value.expires_at <= now
+    {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    Ok(())
+}
+
+fn validate_task_shape(
+    now: UnixMicros,
+    value: &AdvanceManualDnsTask,
+) -> Result<(), RepositoryError> {
+    if now.get() < 0
+        || value.task_digest == [0; 32]
+        || value.fence == 0
+        || value.claim_generation == 0
+        || value.worker_incarnation == 0
+        || value.expires_at.get() <= 0
+        || value.record_value.len() > crate::MAXIMUM_MANUAL_DNS_VALUE_BYTES
+        || meshspan_acme::Dns01Payload::new(&value.record_name, &value.record_value).is_err()
     {
         return Err(RepositoryError::InvalidCommand);
     }
@@ -170,7 +187,7 @@ fn load_existing(
 ) -> Result<Option<i64>, RepositoryError> {
     transaction
         .query_row(
-            "SELECT phase FROM manual_dns_tasks
+            "SELECT phase, revision, created_at, transitioned_at FROM manual_dns_tasks
              WHERE task_digest = ?1 AND order_id = ?2 AND claim_generation = ?3
                AND worker_node_id = ?4 AND worker_incarnation = ?5 AND fence = ?6
                AND record_name = ?7 AND record_value = ?8 AND expires_at = ?9",
@@ -185,7 +202,17 @@ fn load_existing(
                 value.record_value,
                 value.expires_at.get(),
             ],
-            |row| row.get(0),
+            |row| {
+                let phase: i64 = row.get(0)?;
+                let revision: i64 = row.get(1)?;
+                let created_at: i64 = row.get(2)?;
+                let transitioned_at: i64 = row.get(3)?;
+                parse_state(phase)?;
+                if revision <= 0 || created_at < 0 || transitioned_at < created_at {
+                    return Err(rusqlite::Error::InvalidQuery);
+                }
+                Ok(phase)
+            },
         )
         .optional()
         .map_err(RepositoryError::from)
@@ -278,6 +305,37 @@ fn to_i64(value: u64) -> Result<i64, RepositoryError> {
 }
 
 impl AuthoritativeRepository {
+    /// Reports whether an exact, still-live manual task already reached a phase.
+    ///
+    /// Claim and task reads share one SQLite read snapshot. This performs no mutation,
+    /// advances no revision and cannot renew a claim. A later write still needs its
+    /// normal authoritative checks; this observation does not reserve authority.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed requests, expired/replaced claims, substituted task identity,
+    /// superseded tasks and corrupt retained state.
+    pub fn manual_dns_task_transition_satisfied(
+        &self,
+        now: UnixMicros,
+        value: &AdvanceManualDnsTask,
+    ) -> Result<bool, RepositoryError> {
+        let read_view = self.database.connection().unchecked_transaction()?;
+        validate_live_manual_claim(&read_view, now, value)?;
+        let satisfied = match load_existing(&read_view, value)? {
+            Some(TASK_SUPERSEDED) => return Err(RepositoryError::InvalidCommand),
+            Some(phase) => phase >= phase_code(value.phase),
+            None => {
+                if self.manual_dns_task(value.task_digest)?.is_some() {
+                    return Err(RepositoryError::InvalidCommand);
+                }
+                false
+            }
+        };
+        read_view.commit()?;
+        Ok(satisfied)
+    }
+
     /// Returns one exact manual DNS task.
     ///
     /// # Errors

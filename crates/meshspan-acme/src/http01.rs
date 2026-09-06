@@ -6,10 +6,10 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use meshspan_contracts::{
-    CertificateChallenge, CertificateChallengeKind, CertificateChallengeReceipt,
-    CertificateChallengeRequest, ComponentConfiguration, ComponentLifecycle, ComponentObservation,
-    ComponentTransition, ContractError, ContractKind, ContractLimits, ContractVersion,
-    ImplementationDescriptor,
+    CertificateChallenge, CertificateChallengeCleanup, CertificateChallengeKind,
+    CertificateChallengeReceipt, CertificateChallengeRequest, ComponentConfiguration,
+    ComponentLifecycle, ComponentObservation, ComponentTransition, ContractError, ContractKind,
+    ContractLimits, ContractVersion, ImplementationDescriptor,
 };
 use meshspan_domain::{Revision, UnixMicros};
 use sha2::{Digest, Sha256};
@@ -138,17 +138,22 @@ impl Http01Challenge {
         request: &CertificateChallengeRequest,
         receipt: CertificateChallengeReceipt,
     ) -> Result<(), ContractError> {
-        validate_request(request, CertificateChallengeKind::Http01)?;
+        validate_cleanup_request(request, CertificateChallengeKind::Http01)?;
         let payload =
             Http01Payload::decode(&request.challenge).map_err(|_| ContractError::InvalidInput)?;
+        if receipt != Self::receipt(request, &payload) {
+            return Err(ContractError::Stale);
+        }
         let mut records = self
             .records
             .write()
             .map_err(|_| ContractError::Unavailable)?;
-        let current = records
-            .get(payload.token())
-            .ok_or(ContractError::NotFound)?;
-        if current.receipt != receipt || current.receipt != Self::receipt(request, &payload) {
+        let Some(current) = records.get(payload.token()) else {
+            // Removal may have succeeded before its checkpoint, or restart may have
+            // discarded this process-local catalogue. Exact absence is successful cleanup.
+            return Ok(());
+        };
+        if current.receipt != receipt {
             return Err(ContractError::Stale);
         }
         records.remove(payload.token());
@@ -177,8 +182,12 @@ impl CertificateChallenge for Http01Challenge {
         &mut self,
         request: &CertificateChallengeRequest,
         receipt: CertificateChallengeReceipt,
-    ) -> impl std::future::Future<Output = Result<(), ContractError>> + Send {
-        std::future::ready(self.cleanup_now(request, receipt))
+    ) -> impl std::future::Future<Output = Result<CertificateChallengeCleanup, ContractError>> + Send
+    {
+        std::future::ready(
+            self.cleanup_now(request, receipt)
+                .map(|()| CertificateChallengeCleanup::Complete),
+        )
     }
 }
 
@@ -222,6 +231,19 @@ pub(crate) fn validate_request(
     request: &CertificateChallengeRequest,
     expected_kind: CertificateChallengeKind,
 ) -> Result<(), ContractError> {
+    validate_cleanup_request(request, expected_kind)?;
+    if request.expires_at <= request.context.deadline {
+        return Err(ContractError::InvalidInput);
+    }
+    Ok(())
+}
+
+// Cleanup binds the original publication expiry, not a renewed lifetime. Its
+// separately authorised request can therefore finish after that publication expired.
+pub(crate) fn validate_cleanup_request(
+    request: &CertificateChallengeRequest,
+    expected_kind: CertificateChallengeKind,
+) -> Result<(), ContractError> {
     if request.context.contract_version != ContractVersion::V1_0 {
         return Err(ContractError::UnsupportedVersion);
     }
@@ -231,7 +253,8 @@ pub(crate) fn validate_request(
         || !request.identifier.as_slice().is_ascii()
         || !valid_identifier(request.identifier.as_slice(), expected_kind)
         || request.order_epoch == 0
-        || request.expires_at <= request.context.deadline
+        || request.expires_at.get() <= 0
+        || request.context.deadline.get() <= 0
         || request
             .context
             .expected_revision

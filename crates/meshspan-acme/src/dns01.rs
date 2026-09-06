@@ -3,16 +3,17 @@
 //! DNS-01 adapter over a narrow replaceable TXT publication boundary.
 
 use meshspan_contracts::{
-    CertificateChallenge, CertificateChallengeKind, CertificateChallengeReceipt,
-    CertificateChallengeRequest, ComponentConfiguration, ComponentLifecycle, ComponentObservation,
-    ComponentTransition, ContractError, ImplementationDescriptor,
+    CertificateChallenge, CertificateChallengeCleanup, CertificateChallengeKind,
+    CertificateChallengeReceipt, CertificateChallengeRequest, ComponentConfiguration,
+    ComponentLifecycle, ComponentObservation, ComponentTransition, ContractError,
+    ImplementationDescriptor,
 };
 use meshspan_domain::{Revision, UnixMicros};
 use sha2::{Digest, Sha256};
 
 use crate::Dns01Payload;
 use crate::component::Lifecycle;
-use crate::http01::{descriptor, validate_request};
+use crate::http01::{descriptor, validate_cleanup_request, validate_request};
 
 /// Deterministic provider identity of one exact fenced TXT publication.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -166,8 +167,8 @@ impl<P: DnsTxtProvider + Send + Sync> CertificateChallenge for Dns01Challenge<P>
         &mut self,
         request: &CertificateChallengeRequest,
         receipt: CertificateChallengeReceipt,
-    ) -> Result<(), ContractError> {
-        validate_request(request, CertificateChallengeKind::Dns01)?;
+    ) -> Result<CertificateChallengeCleanup, ContractError> {
+        validate_cleanup_request(request, CertificateChallengeKind::Dns01)?;
         let payload =
             Dns01Payload::decode(&request.challenge).map_err(|_| ContractError::InvalidInput)?;
         if receipt.order_epoch != request.order_epoch {
@@ -184,7 +185,7 @@ impl<P: DnsTxtProvider + Send + Sync> CertificateChallenge for Dns01Challenge<P>
         self.provider
             .remove_txt(payload.record_name(), payload.record_value(), provider)
             .await?;
-        Ok(())
+        Ok(CertificateChallengeCleanup::Complete)
     }
 }
 
