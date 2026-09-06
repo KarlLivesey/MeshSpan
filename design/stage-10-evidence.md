@@ -81,6 +81,37 @@ opt-in ACME recovery pair separately passed in **339.64 seconds**; that binary
 preceded this backup correction. Final corrected-source integration is pending,
 and PR #252 remains unmerged.
 
+### Final provider integration
+
+Signed, pushed and GitHub-verified source
+`4449f5dc4c7e1e49f643935dbfce25e151a915d2`
+(tree `c29984249e51df053b0ece4ac8776ca5d5105b87`) passed the full local gate in
+**601.03 seconds**: Rust workspace tests **564.43 seconds**, web tests **4.82
+seconds**, and every generated, formatting, lint, licence, TypeScript and tooling
+lane passed. This used NVM Node **26.8.1**, pnpm **11.19.0**, Rust **1.98.0**,
+`CARGO_BUILD_JOBS=4` and `MESHSPAN_CHECK_WORKERS=4` with `pnpm check`.
+
+On that corrected source, `pnpm check:dns-providers` passed after a **27.71-second
+Linux build**: manual DNS **13.30 seconds**, Cloudflare **18.16 seconds** and
+webhook **18.27 seconds**, running concurrently in the isolated networks described
+above. Both opt-in real-time ACME cases passed together in **340.25 seconds** on
+the final rebuilt all-feature headless binary, selecting the exact lease-loss and
+rejected-order recovery tests with `--ignored --test-threads=4`. The newer Linux-only
+provider cases were not selected by this macOS command.
+
+The remote-backup defect now has a failing-before/passing-after regression and
+passing full integration; the clean-machine workflow verifies the same exported
+backup through both gateways. The older independent cluster-startup timeout is
+not claimed resolved. Task 2 drops **2 → 1 points**, Stage 10 **141 → 140**;
+advance renewal notification delivery remains required through task 21. Stage 11
+remains **126 points**. No publication or GitHub Actions occurred.
+
+A separate diagnostic ran all **406 metadata library tests** successfully in the
+same offline Linux image in **150.38 seconds**, after a **22.88-second build**, with
+four test workers. It ran alongside the macOS gate using a separate Cargo target.
+This is an additional platform result, not a controlled speed comparison or a
+replacement for the macOS gate.
+
 ## Task 2 — shared HTTP-01 gateway challenges
 
 ### Final recovery integration

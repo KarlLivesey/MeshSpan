@@ -17,7 +17,7 @@ Update the relevant task when work changes its status. Report the current task,
 what behaviour changed, what remains and what was tested. Do not replace this
 with “nearly done”, a count of commits or an unweighted completion percentage.
 
-Remaining-effort estimate, 2026-09-06: **Stage 10: 141 points; Stage 11: 126
+Remaining-effort estimate, 2026-09-07: **Stage 10: 140 points; Stage 11: 126
 points; Stage 12: 55 points.** These are preliminary engineering judgements from
 the task scope and recorded gaps, not measured hours or completion guarantees.
 Uncertainty is high until the open integration/proof work is exercised.
@@ -71,7 +71,7 @@ the stage; publication-dependent acceptance remains held separately and visible.
    and task acceptance; it does not establish invitation continuity across later
    leaf changes. The estimate fell 5 → 3 → 1 → 0 as this scope was verified.
 
-2. **Automatic ACME and DNS challenge handling — Partial; current task.** **2 points remaining.**
+2. **Automatic ACME and DNS challenge handling — Partial; notification dependency remains.** **1 point remaining.**
    PKI-003/004/006/010; accepted decisions §7.
    [ACME components](../crates/meshspan-acme/src/lib.rs) and
    [renewal scheduling](../crates/meshspan-daemon/src/certificate_renewal_scheduler.rs)
@@ -159,7 +159,11 @@ the stage; publication-dependent acceptance remains held separately and visible.
    The first integration gate failed at an existing nested-runtime backup export;
    its [focused correction](stage-10-evidence.md#provider-integration-finding--remote-backup-export)
    now passes the operator proof through both gateways in **16.88 seconds**.
-   Final corrected-source integration is pending. Advance renewal notification delivery
+   [Final corrected-source integration](stage-10-evidence.md#final-provider-integration)
+   on `4449f5d` passed in **601.03 seconds** (Rust **564.43**, web **4.82**).
+   All three isolated provider cases passed on that source, as did both real-time
+   ACME recovery cases together in **340.25 seconds**. This closes the provider
+   lifecycle slice **2 → 1 points**. Advance renewal notification delivery
    remains an explicit dependency on task 21; it is not waived or replaced by
    simply listing tasks in the panel.
 
