@@ -17,7 +17,7 @@ Update the relevant task when work changes its status. Report the current task,
 what behaviour changed, what remains and what was tested. Do not replace this
 with “nearly done”, a count of commits or an unweighted completion percentage.
 
-Remaining-effort estimate, 2026-09-06: **Stage 10: 148 points; Stage 11: 126
+Remaining-effort estimate, 2026-09-06: **Stage 10: 147 points; Stage 11: 126
 points; Stage 12: 55 points.** These are preliminary engineering judgements from
 the task scope and recorded gaps, not measured hours or completion guarantees.
 Uncertainty is high until the open integration/proof work is exercised.
@@ -52,12 +52,11 @@ unavailable until actually obtained, not replaced with simulated evidence.
 Status: **in progress**. Finish and verify the open scope below before closing
 the stage; publication-dependent acceptance remains held separately and visible.
 
-1. **Mesh-local CA and domain-free HTTPS — Partial; current task.** **1 point remaining.**
+1. **Mesh-local CA and domain-free HTTPS — Recorded complete.** **0 points remaining.**
    PKI-001/002/008. [CA implementation](../crates/meshspan-certificates/src/mesh_local_ca.rs)
-   exists. Close with recorded create/join/restart and trust-bundle download
-   acceptance, automatic gateway issuance and clear domain guidance, without
-   weakening private node identity. Existing certificate code is not yet linked
-   to a complete Stage 10 acceptance record. The real-process provisioning,
+   is linked to the [lifecycle evidence](stage-10-evidence.md#task-1-integration-closure):
+   create/join/restart, trust-bundle download, automatic gateway delivery and
+   clear domain guidance without weakening private node identity. The real-process provisioning,
    trust, join, rotation and restart test passed in 52.89 seconds after correcting
    original receipt timestamps, stale join-code TLS pins and same-certificate
    recipient rewrapping. Eight focused certificate tests passed in 0.25 seconds.
@@ -67,9 +66,12 @@ the stage; publication-dependent acceptance remains held separately and visible.
    workflows then passed in parallel. OS-aware listener-port allocation also
    removes the observed collision with the outbound ephemeral pool; six tests
    (including its range parser) pass in 26.68 seconds. The final integration gate
-   remains. The estimate fell 5 → 3 → 1 points as this scope was verified.
+   on `b9ff3de` passed in 852.44 seconds, including Rust workspace tests in 796.77
+   seconds and web tests in 9.35 seconds. This closes the profiled startup issue
+   and task acceptance; it does not establish invitation continuity across later
+   leaf changes. The estimate fell 5 → 3 → 1 → 0 as this scope was verified.
 
-2. **Automatic ACME and DNS challenge handling — Partial.** **8 points remaining.**
+2. **Automatic ACME and DNS challenge handling — Partial; current task.** **8 points remaining.**
    PKI-003/004/006/010; accepted decisions §7.
    [ACME components](../crates/meshspan-acme/src/lib.rs) and
    [renewal scheduling](../crates/meshspan-daemon/src/certificate_renewal_scheduler.rs)

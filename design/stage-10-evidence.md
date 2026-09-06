@@ -111,6 +111,27 @@ No deadlines were raised and no test was serialised. These focused results
 address the profiled startup defect; the full candidate must still pass the
 integration gate. Task 1 now has 1 point remaining; Stage 10 has 148.
 
+### Task 1 integration closure
+
+The final `pnpm check` on signed commit `b9ff3de`, tree
+`222a013b04a9b822e8700fc9d7be6bc6f11d6066`, passed in **852.44 seconds** with
+four scheduler workers under NVM Node 26.8.1 and Rust 1.98.0. All generation,
+embedded-bundle, formatting, lint, licence and typecheck lanes passed. Rust
+workspace tests passed in **796.77 seconds** and web tests in **9.35 seconds**.
+There were no implementation edits during this run. The earlier failures are
+resolved by the profiled schema-generation correction, listener allocation fix,
+focused parallel proof and this final integration pass, not by a blind retry.
+The two existing container-dependent headless cases remain ignored; this is not
+container, hardware or public-CA evidence. The full feedback cycle remains long;
+no test-speed improvement beyond the measured startup correction is claimed.
+
+Task 1 is recorded complete: **0 points remaining**, Stage 10 **147 points**.
+Task 2 is current with **8 points remaining**. Initial tracing found that the
+retry service accepts CA retry deadlines, but the ACME executor reduces remote
+failures to a generic protocol error and the driver supplies no retry guidance.
+That boundary needs a regression and correction before claiming rate-limit
+acceptance. No release, tag, package/image publication or Actions run occurred.
+
 ## Target accounting and selected maintenance measurements
 
 The [metrics catalogue](metrics.md) now includes seven target-accounting gauges
