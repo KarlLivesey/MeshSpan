@@ -39,6 +39,10 @@ use super::{
 
 type Failure = Box<dyn Error + Send + Sync>;
 
+#[path = "authority/interruption.rs"]
+mod interruption;
+pub(super) use interruption::AuthorizationInterruption;
+
 pub(super) struct TestAuthority {
     pub endpoint: String,
     pub anchor_pem: String,
@@ -62,6 +66,7 @@ struct AuthorityState {
     finalisations: usize,
     observations: Vec<String>,
     polls: PollSchedule,
+    interruption: Option<Arc<interruption::AuthorizationInterruption>>,
 }
 
 impl TestAuthority {
@@ -92,6 +97,7 @@ impl TestAuthority {
             finalisations: 0,
             observations: Vec::new(),
             polls: PollSchedule::default(),
+            interruption: None,
         }));
         let router = Router::new()
             .fallback(handle)
@@ -176,7 +182,18 @@ async fn handle(
     uri: Uri,
     body: Bytes,
 ) -> Response {
-    match respond(&state, &method, uri.path(), &body).await {
+    let outcome = async {
+        if interruption::before_request(&state, &method, uri.path()).await? {
+            return Ok((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "interrupted before processing",
+            )
+                .into_response());
+        }
+        respond(&state, &method, uri.path(), &body).await
+    }
+    .await;
+    match outcome {
         Ok(response) => response,
         Err(error) => {
             if let Ok(mut state) = state.lock() {

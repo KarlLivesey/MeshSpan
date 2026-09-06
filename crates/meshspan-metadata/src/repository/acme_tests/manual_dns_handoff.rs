@@ -14,6 +14,69 @@ use meshspan_contracts::{
 use super::*;
 
 #[test]
+fn manual_task_survives_database_restart_and_natural_claim_expiry() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    let database_path = directory.path().join("metadata.sqlite");
+    let (mut fixture, original) = published_task_in(Fixture::at(&database_path)?, 1_000)?;
+    drop(fixture.repository);
+    fixture.repository = AuthoritativeRepository::new(PartitionDatabase::open(
+        &database_path,
+        PartitionId::from_bytes([1; 16])?,
+        UnixMicros::new(100),
+    )?);
+    fixture.apply(
+        8,
+        100,
+        &AuthoritativeCommand::ClaimCertificateOrder(fixture.claim(original.order_id, 2, 7, 200)),
+    )?;
+    let replacement = replacement(&original);
+    assert!(!fixture.repository.manual_dns_task_transition_satisfied(
+        UnixMicros::new(150),
+        &replacement,
+        901,
+    )?);
+    fixture.apply(
+        9,
+        150,
+        &AuthoritativeCommand::AdvanceManualDnsTask(replacement.clone()),
+    )?;
+    let task = fixture
+        .repository
+        .manual_dns_task(original.task_digest)?
+        .ok_or("task lost")?;
+    assert_eq!(task.state, ManualDnsTaskState::PublicationObserved);
+    assert_eq!(task.task_digest, original.task_digest);
+    assert_eq!(task.fence, 901);
+    assert_eq!(task.expires_at, UnixMicros::new(1_000));
+    assert_eq!(task.created_at, UnixMicros::new(11));
+    assert_eq!(task.record_name, "_acme-challenge.files.example.test");
+    assert_eq!(task.record_value, b"txt-value");
+    assert!(fixture.repository.manual_dns_task_transition_satisfied(
+        UnixMicros::new(151),
+        &replacement,
+        901,
+    )?);
+    assert_eq!(fixture.repository.current_revision()?, Revision::new(9));
+    assert!(matches!(
+        fixture.repository.manual_dns_task_transition_satisfied(
+            UnixMicros::new(151),
+            &original,
+            901,
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    assert!(matches!(
+        fixture.repository.manual_dns_task_transition_satisfied(
+            UnixMicros::new(200),
+            &replacement,
+            901,
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    Ok(())
+}
+
+#[test]
 fn legacy_expiry_candidate_belongs_to_the_original_claim_not_the_replacement()
 -> Result<(), Box<dyn Error>> {
     let (fixture, original) = interrupted_task()?;
@@ -239,7 +302,26 @@ fn interrupted_task() -> Result<(Fixture, AdvanceManualDnsTask), Box<dyn Error>>
 }
 
 fn interrupted_task_in(
+    fixture: Fixture,
+) -> Result<(Fixture, AdvanceManualDnsTask), Box<dyn Error>> {
+    let (mut fixture, task) = published_task_in(fixture, 80)?;
+    let order_id = task.order_id;
+    fixture.apply(
+        8,
+        12,
+        &AuthoritativeCommand::CompleteCertificateOrder(fixture.retry(order_id, 1, 901, 20)),
+    )?;
+    fixture.apply(
+        9,
+        20,
+        &AuthoritativeCommand::ClaimCertificateOrder(fixture.claim(order_id, 2, 7, 200)),
+    )?;
+    Ok((fixture, task))
+}
+
+fn published_task_in(
     mut fixture: Fixture,
+    publication_expires_at: i64,
 ) -> Result<(Fixture, AdvanceManualDnsTask), Box<dyn Error>> {
     let config_id = AcmeConfigurationId::from_bytes([90; 16])?;
     let order_id = CertificateOrderId::from_bytes([91; 16])?;
@@ -275,11 +357,11 @@ fn interrupted_task_in(
             1,
             901,
             certificate_key,
-            challenge_machine(80)?.encode_checkpoint()?,
+            challenge_machine(publication_expires_at)?.encode_checkpoint()?,
         ),
     )?;
     let identity = ManualDnsTask::from_challenge_request(
-        &publication_request(80)?,
+        &publication_request(publication_expires_at)?,
         meshspan_acme::ManualDnsTaskPhase::AwaitingPublication,
     )?;
     let task = AdvanceManualDnsTask {
@@ -298,16 +380,6 @@ fn interrupted_task_in(
         7,
         11,
         &AuthoritativeCommand::AdvanceManualDnsTask(task.clone()),
-    )?;
-    fixture.apply(
-        8,
-        12,
-        &AuthoritativeCommand::CompleteCertificateOrder(fixture.retry(order_id, 1, 901, 20)),
-    )?;
-    fixture.apply(
-        9,
-        20,
-        &AuthoritativeCommand::ClaimCertificateOrder(fixture.claim(order_id, 2, 7, 200)),
     )?;
     Ok((fixture, task))
 }

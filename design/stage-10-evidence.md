@@ -12,6 +12,92 @@ not close an unexplained failure.
 
 ## Task 2 — interrupted challenge recovery
 
+### Integrated independent-lifetime and takeover proof
+
+The final opt-in HTTP-01 process-loss test passed in **325.02 seconds** on signed,
+pushed, GitHub-verified commit `86be66f3876ed874944fe243e5352464982378ed`, tree
+`0e5623d2d4be484c3be579c77d92fe9fcb47bc0e`. It ran the rebuilt test executable's
+exact `acme_lifecycle::http01_authorization_recovers_after_process_loss_and_real_lease_expiry`
+case with `--ignored --test-threads 4`. This replaces the earlier fixture replay
+gap below. No production lease, clock or timeout was shortened: `SIGKILL`, real
+disk state and the five-minute claim-expiry path were exercised before the
+replacement restored the exact challenge and finished the same order.
+
+The full NVM-default local command
+`CARGO_BUILD_JOBS=4 MESHSPAN_CHECK_WORKERS=4 rustup run 1.98.0 pnpm check` passed
+on that same source in **792.30 seconds**. Rust workspace tests took **717.65
+seconds**, web tests **9.94 seconds**, Rust lint **45.33 seconds**, and web lint
+**23.47 seconds**. Generated drift, embedded bundle, both licence gates,
+formatting, TypeScript and tooling tests also passed. The isolated long-running
+test used its already-built executable alongside the gate, avoiding a second
+Cargo build competing for the build lock. No implementation edits followed the
+gate; the closing changes are prose only.
+
+[PR #246](https://github.com/KarlLivesey/MeshSpan/pull/246) integrates this slice.
+The basic interrupted HTTP-01 process/lease takeover and independent publication
+lifetime are now demonstrated: task 2 decreases **4 → 3 points**, Stage 10
+**143 → 142**; Stage 11 remains **126**. This is not live-CA acceptance, a
+multi-gateway challenge-distribution proof, an interrupted manual-DNS/Cloudflare/
+webhook lifecycle or proof of publication-deadline exhaustion. The historical
+unexplained cluster timeout is still an open Stage 11 finding; a passing gate
+does not erase it. SMB-image, hardware and soak gates remain separate.
+
+The next recovery boundary is explicit cleanup/retirement and authoritative
+retry of unusable CA orders. Currently terminal machine errors can propagate
+out of automation, and an expired retained publication cannot simply acquire a
+new lifetime. That follow-up must keep ordinary transport retries distinct from
+fresh-order retries, retain exact cleanup evidence and never treat a timeout as
+proof that an order is invalid. No release, tag, package/image publication or
+GitHub Actions were run; the publication hold remains in force.
+
+### Independent publication lifetime and real expired-lease takeover
+
+The `codex/stage10-task2-challenge-lifetime` candidate separates a publication's
+retained lifetime from the current worker lease. The runtime proposes **24 hours**
+for new challenge material. The internal drive policy accepts an explicit bounded
+lifetime, longer than its request timeout and no longer than **seven days**. This
+is a local publication budget, not a statement that the CA considers an order or
+authorisation valid for that duration. The first authoritative checkpoint fixes
+the exact expiry; later worker scheduling or replacement cannot extend it.
+
+Requests remain bounded by the current claim. While a retained publication is
+still live, the driver also caps the request deadline before that publication's
+expiry. Claim expiration still discards the old execution and uses ordinary
+fenced admission; no lease duration was increased and no automatic deadline
+extension was substituted for takeover. The policy constructor gains a lifetime
+argument; no SQL, HTTP or private wire format, dependency or persisted checkpoint
+shape changes in this increment.
+
+The new regression failed with `InvalidInput` in **0.02 seconds** after a
+30.12-second build because publication could not outlive a claim. With the fix,
+the final **39 certificate-order tests passed in 0.27 seconds** (10.41-second
+build). The replacement restores the same original receipt, opaque epoch, exact
+HTTP body and expiry after the old claim has expired. **Four metadata handoff
+tests passed in 3.02 seconds** (16.04-second build), including an on-disk close /
+reopen followed by natural lease expiry, one unchanged manual-DNS task, exact
+TXT material/creation time/expiry, no-op replay and rejection of expired workers.
+Affected all-target/all-feature Clippy passed in **2.02 seconds** after replacing
+a seconds multiplication with `Duration::from_mins`; no suppression was added.
+
+A new opt-in real-process test pauses the local TLS CA before processing an
+authorisation poll or consuming its nonce, kills the daemon, restarts it, and
+waits for the **actual five-minute lease** to expire. The CA independently probes
+the restarted HTTP listener before accepting its next poll. It requires the exact
+account-derived proof, one challenge notification, one order, one finalisation,
+cleanup, another post-issuance restart and a second gateway receiving the same
+certificate. The first execution passed in **322.28 seconds**, after a 17.23-second
+build. Issuance orchestration was then separated from gateway-join orchestration
+in the fixture; the final fixture replay and complete integration gate are still
+pending. This test is deliberately outside the fast default suite and must be
+invoked explicitly with `--ignored`; its ignored status is not itself evidence.
+
+Remaining: publication-deadline exhaustion and invalid/expired CA order recovery,
+manual-DNS and other provider full-process lifecycles, active HTTP challenge
+distribution to other gateways and the separately tracked live-CA proof. No task
+is closed by this candidate yet: task 2 remains **4 points**, Stage 10 **143** and
+Stage 11 **126**. No release, tag, package/image publication or GitHub Actions were
+run.
+
 ### Integrated publication recovery candidate
 
 The complete local integration gate passed on signed, pushed and GitHub-verified

@@ -147,7 +147,11 @@ async fn unresponsive_transport_is_cancelled_at_the_owned_request_deadline()
     let mut worker = driver_with_policy(
         authority.clone(),
         FixedClock(UnixMicros::new(20_000_000)),
-        CertificateOrderDrivePolicy::new(DurationMicros::new(10_000), 1)?,
+        CertificateOrderDrivePolicy::new(
+            DurationMicros::new(10_000),
+            DurationMicros::new(20_000),
+            1,
+        )?,
     )?;
     // This outer bound only detects a stuck test. The independently configured worker owns
     // the 10ms cancellation; OS scheduling latency is not a throughput assertion here.

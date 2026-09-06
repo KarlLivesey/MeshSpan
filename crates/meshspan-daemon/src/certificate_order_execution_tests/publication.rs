@@ -10,6 +10,40 @@ use super::*;
 mod legacy;
 
 #[tokio::test]
+async fn retained_publication_outlives_the_worker_claim_without_extending_on_takeover()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (mut prepared, _) = published_order_with_expiry(1_000).await?;
+    let original_digest = prepared.machine.publication_digest();
+    replace_worker(&mut prepared)?;
+    let challenge = Http01Challenge::new();
+    let mut execution =
+        CertificateOrderExecution::new(prepared, OneResponseTransport(None), challenge.clone());
+    let authority = RecordingCheckpointAuthority::default();
+    let mut context = request_context()?;
+    context.deadline = UnixMicros::new(180);
+    let outcome = execution
+        .execute_step(
+            &CertificateOrderCheckpointService::new(&authority),
+            PrincipalId::from_bytes([2; 16])?,
+            &FixedClock(UnixMicros::new(150)),
+            context,
+            UnixMicros::new(2_000),
+        )
+        .await?;
+    assert_eq!(outcome, CertificateOrderStepResult::Pending);
+    assert_eq!(execution.machine().publication_digest(), original_digest);
+    assert_eq!(execution.machine().publication_epoch(), Some(55));
+    assert_eq!(execution.machine().order_epoch(), 7);
+    assert_eq!(authority.commit_count()?, 0);
+    assert_eq!(
+        challenge.response("token-1", UnixMicros::new(999))?,
+        Some(b"token-1.xx0BcA-wMohw8atYDJOe6peGModklG2wRHBlXHMvl0M".to_vec())
+    );
+    assert_eq!(challenge.response("token-1", UnixMicros::new(1_000))?, None);
+    Ok(())
+}
+
+#[tokio::test]
 async fn exact_challenge_material_is_checkpointed_before_publisher_io()
 -> Result<(), Box<dyn std::error::Error>> {
     let challenge = Http01Challenge::new();
