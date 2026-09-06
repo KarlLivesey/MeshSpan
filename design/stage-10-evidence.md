@@ -10,6 +10,68 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 1 — mesh-local HTTPS lifecycle and trust-download integration
+
+The new independent `headless_process::local_certificates` proof uses real child
+daemons and TLS clients, not a fake certificate authority service. It creates a
+mesh, provisions the local CA through the authenticated public API, trusts only
+the returned public anchor, rejects bootstrap-only trust on a fresh handshake,
+restarts the root, joins a gateway, rotates the leaf and restarts that gateway.
+Both stable node identity fingerprints remain unchanged. It checks exact issuance
+replay and active installation counts on both gateways.
+
+The proof exposed three concrete integration defects:
+
+- Installation operation IDs survive restart, but retry hashing used the new
+  wall-clock time instead of the original durable operation time. Resolution now
+  returns the validated receipt and original timestamp together; a changed stored
+  timestamp still fails digest validation. The focused regression failed with
+  `Conflict` in 0.05 seconds before the fix.
+- Join-grant issuance captured the bootstrap TLS pin permanently. It now reads
+  the live resolver's leaf pin when issuing an invitation. TLS pin verification
+  remains exact. Invitations remain bound to that leaf: a subsequent leaf change
+  requires a fresh invitation, not bypassing TLS checks. Preserving invitation
+  usability/exact replay across later leaf changes is not established by this proof.
+- Recipient redistribution advances the encrypted delivery generation without
+  changing the immutable certificate's source revision. Rotation now accepts a
+  strictly newer delivery of the same secret identity and bundle digest at that
+  revision, but rejects rollback or changed content. The focused regression
+  failed with `ConflictingRevision` in 0.13 seconds before the fix.
+
+Eight focused public-certificate tests passed in **0.25 seconds**, including the
+real TLS listener and rewrapping regression. The real two-daemon lifecycle passed
+in **52.89 seconds**, following a **23.05-second** incremental process-test build.
+Affected-crate Clippy across all targets/features with warnings denied passed in
+**41.30 seconds**. These are focused results, not the final integration gate.
+
+Earlier red process runs are retained: 26.18 seconds (restart acknowledgement),
+35.25 seconds (join admission), and 39.06 seconds (installation after enrolment).
+An additional run timed out at initial `claim_required` readiness in **18.82
+seconds**, before exercising certificate changes; its cause remains unresolved.
+No deadline was increased and a later green run does not close that startup
+failure. Test failures now include child exit observations; certificate-worker
+failures preserve secret-free selection/loading/conflict/acknowledgement categories.
+
+The certificate panel now offers mesh-local issuance, explains device trust and
+domain/DNS requirements, and keeps a downloadable public PEM anchor while TLS
+changes. It does not claim gateway installation from issuance alone, return a
+private key, install OS trust, or invoke the user's browser. The generated native
+Fetch method uses Rust-generated request/response Zod schemas and CSRF headers;
+the form additionally binds the response to its operation and names. Uncertain
+retries retain the operation identity, and disposed views do not offer downloads.
+The rendering and request/retry lifecycle have separate responsibilities in the
+same feature module. No dependency, SQL schema or wire-schema change was needed.
+
+Ten focused web tests passed in **1.28 seconds** across the local trust flow,
+existing ACME panel and generated certificate client. Targeted ESLint passed
+without exceptions; web TypeScript checking passed. An initial fixture incorrectly
+expected `X-CSRF-Token`; it was corrected to the existing `MeshSpan-CSRF-Token`
+contract, with assertions moved outside the UI's error-catching callback.
+
+Task 1 remains open for integration verification and resolution of the startup
+timeout. Its estimate fell from 5 to 3 points; Stage 10 from 152 to 150. Nothing
+has been released, tagged or published.
+
 ## Target accounting and selected maintenance measurements
 
 The [metrics catalogue](metrics.md) now includes seven target-accounting gauges

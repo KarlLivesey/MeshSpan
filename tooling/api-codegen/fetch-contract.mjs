@@ -164,6 +164,10 @@ function readAdministrationRoutes(operations) {
     listVolumes: requireOperation(operations, "listVolumes"),
     publishSmbExport: requireOperation(operations, "publishSmbExport"),
     provisionCertificate: requireOperation(operations, "provisionCertificate"),
+    provisionMeshLocalCertificate: requireOperation(
+      operations,
+      "provisionMeshLocalCertificate",
+    ),
     removeGroupMember: requireOperation(operations, "removeGroupMember"),
     setFaultGroupMembership: requireOperation(
       operations,

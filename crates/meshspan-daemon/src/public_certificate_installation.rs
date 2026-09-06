@@ -46,6 +46,15 @@ pub struct PublicCertificateInstallationCommit {
     pub acknowledgement_revision: Revision,
 }
 
+/// Original durable receipt and timestamp needed to validate an installation retry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PublicCertificateInstallationReceipt {
+    /// Exact committed operation receipt, including its canonical request digest.
+    pub receipt: CommandReceipt,
+    /// Original operation time; a later retry must not substitute its current clock.
+    pub occurred_at: UnixMicros,
+}
+
 /// Consensus operations required after the node-local live resolver has switched.
 pub trait PublicCertificateInstallationAuthority {
     /// Resolves an exact prior acknowledgement after an ambiguous response or process restart.
@@ -56,7 +65,10 @@ pub trait PublicCertificateInstallationAuthority {
     fn resolve_public_certificate_installation(
         &self,
         operation_id: OperationId,
-    ) -> Result<Option<CommandReceipt>, PublicCertificateInstallationAuthorityError>;
+    ) -> Result<
+        Option<PublicCertificateInstallationReceipt>,
+        PublicCertificateInstallationAuthorityError,
+    >;
 
     /// Commits or exactly resolves one gateway installation acknowledgement.
     ///
@@ -145,7 +157,7 @@ where
             }
         };
         let operation_id = derived_id(OPERATION_ID_DOMAIN, certificate, request)?;
-        let context = CommandContext {
+        let mut context = CommandContext {
             operation_id,
             actor_principal_id: request.actor_principal_id,
             audit_event_id: AuditEventId::from_bytes(derived_bytes(
@@ -156,16 +168,19 @@ where
             occurred_at: request.now,
             expected_revision: None,
         };
-        let expected_digest = command.request_digest(context);
         let receipt = match self
             .authority
             .resolve_public_certificate_installation(operation_id)?
         {
-            Some(receipt) => receipt,
+            Some(stored) => {
+                context.occurred_at = stored.occurred_at;
+                stored.receipt
+            }
             None => self
                 .authority
                 .acknowledge_public_certificate_installation(context, &command)?,
         };
+        let expected_digest = command.request_digest(context);
         validate_receipt(receipt, operation_id, expected_digest, request.source)?;
         Ok(PublicCertificateInstallationCommit {
             certificate: certificate.generation(),

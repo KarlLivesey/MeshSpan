@@ -23,14 +23,14 @@ use crate::{
     MeshLocalCertificateProvisioningAuthority, NodeWrappingKeyRegistrationAuthority,
     NodeWrappingKeyRegistrationAuthorityError, OnlineAuthorityLoadingAuthority,
     PublicCertificateInstallationAuthority, PublicCertificateInstallationAuthorityError,
-    PublicCertificateSelectionAuthority, PublicCertificateSelectionAuthorityError,
-    RecoveryBundleVerificationAuthority, RecoveryBundleVerificationAuthorityError,
-    RecoveryBundleVerificationCommit, SecretGenerationAuthority, SecretGenerationAuthorityError,
-    StoragePermitAuthority, StorageTargetRegistrationAuthority,
-    StorageTargetRegistrationAuthorityError, SystemManagerAuthenticationError,
-    SystemManagerAuthority, VolumeAdministrationAuthority, VolumeAdministrationAuthorityError,
-    VolumeAdministrationCommit, VolumeInventoryAuthority, VolumeInventoryAuthorityError,
-    VolumeKeyAuthority,
+    PublicCertificateInstallationReceipt, PublicCertificateSelectionAuthority,
+    PublicCertificateSelectionAuthorityError, RecoveryBundleVerificationAuthority,
+    RecoveryBundleVerificationAuthorityError, RecoveryBundleVerificationCommit,
+    SecretGenerationAuthority, SecretGenerationAuthorityError, StoragePermitAuthority,
+    StorageTargetRegistrationAuthority, StorageTargetRegistrationAuthorityError,
+    SystemManagerAuthenticationError, SystemManagerAuthority, VolumeAdministrationAuthority,
+    VolumeAdministrationAuthorityError, VolumeAdministrationCommit, VolumeInventoryAuthority,
+    VolumeInventoryAuthorityError, VolumeKeyAuthority,
 };
 
 impl SystemManagerAuthority for ConsensusAuthenticationAuthority {
@@ -227,12 +227,31 @@ impl PublicCertificateInstallationAuthority for ConsensusAuthenticationAuthority
         &self,
         operation_id: meshspan_domain::OperationId,
     ) -> Result<
-        Option<meshspan_metadata::CommandReceipt>,
+        Option<PublicCertificateInstallationReceipt>,
         PublicCertificateInstallationAuthorityError,
     > {
-        self.reader()
+        let Some(receipt) = self
+            .reader()
             .resolve_operation(operation_id)
-            .map_err(|error| map_installation_repository_error(&error))
+            .map_err(|error| map_installation_repository_error(&error))?
+        else {
+            return Ok(None);
+        };
+        let status = self
+            .reader()
+            .operation_status(operation_id)
+            .map_err(|error| map_installation_repository_error(&error))?
+            .ok_or(PublicCertificateInstallationAuthorityError::Failed)?;
+        if status.state != meshspan_metadata::AuthoritativeOperationState::Succeeded
+            || status.result != Some(receipt.entity)
+            || status.revision != receipt.committed_revision
+        {
+            return Err(PublicCertificateInstallationAuthorityError::Failed);
+        }
+        Ok(Some(PublicCertificateInstallationReceipt {
+            receipt,
+            occurred_at: status.started_at,
+        }))
     }
 
     fn acknowledge_public_certificate_installation(

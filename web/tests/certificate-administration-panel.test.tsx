@@ -38,6 +38,9 @@ describe("certificate administration panel", () => {
         tasks: [],
       }),
       provisionCertificate,
+      provisionMeshLocalCertificate: async () => {
+        throw new Error("local provisioning was not requested");
+      },
     });
     await settle();
 

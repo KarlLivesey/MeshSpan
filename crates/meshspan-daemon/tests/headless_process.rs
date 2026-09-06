@@ -6,6 +6,8 @@
 mod backup_history;
 #[path = "headless_process/diagnostics.rs"]
 mod diagnostics;
+#[path = "headless_process/local_certificates.rs"]
+mod local_certificates;
 #[path = "headless_process/metrics.rs"]
 mod metrics;
 #[path = "support/passkey.rs"]
