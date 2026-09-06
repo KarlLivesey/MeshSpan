@@ -104,8 +104,13 @@ the stage; publication-dependent acceptance remains held separately and visible.
    with no early CA requests. Real HTTP-01/DNS-01 lifecycles enforce notification
    and finalisation delays. The full gate on `c48a078` passed in **751.75 seconds**
    (Rust **688.03**, web **5.69**), closing this scope **5 → 4 points**.
-   Original publication identity/lifetime, long-running manual orders, remaining
-   DNS provider process proof and active-gateway challenge distribution remain.
+   [Publication recovery integration](stage-10-evidence.md#integrated-publication-recovery-candidate)
+   retains original material/receipt/lifetime, continues the same manual task under
+   replacement claims and verifies ordinary legacy lifetime candidates. The full
+   gate on `aa4f5e8` passed in **748.09 seconds** (Rust **687.72**, web **5.46**).
+   This does not close interrupted real-process issuance, long-running or expired
+   pending challenges, remaining DNS-provider process proof or active-gateway
+   challenge distribution; these remain within the current **4 points**.
 
 3. **Encrypted certificate delivery and rotation — Partial.** **5 points remaining.**
    PKI-001/002/005/007/010; accepted decisions §7.

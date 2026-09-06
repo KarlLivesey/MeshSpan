@@ -10,6 +10,8 @@ use super::{
 };
 use crate::{AdvanceManualDnsTask, CommandContext, ManualDnsTaskPhase, PartitionDatabase};
 
+mod handoff;
+
 const ORDER_CLAIMED: i64 = 2;
 const CLAIM_ACTIVE: i64 = 1;
 const DNS_01: i64 = 2;
@@ -104,7 +106,8 @@ pub(super) fn advance(
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
     validate_live_manual_claim(transaction, context.occurred_at, value)?;
-    let existing = load_existing(transaction, value)?;
+    let retained = handoff::retained_publication_epoch(transaction, value)?;
+    let existing = load_existing(transaction, value, retained.is_some())?;
     match existing {
         None => create(transaction, context, value, revision)?,
         Some(phase) => advance_existing(transaction, context, value, phase, revision)?,
@@ -184,13 +187,18 @@ fn validate_task_shape(
 fn load_existing(
     transaction: &Transaction<'_>,
     value: &AdvanceManualDnsTask,
+    retained_publication: bool,
 ) -> Result<Option<i64>, RepositoryError> {
     transaction
         .query_row(
-            "SELECT phase, revision, created_at, transitioned_at FROM manual_dns_tasks
-             WHERE task_digest = ?1 AND order_id = ?2 AND claim_generation = ?3
-               AND worker_node_id = ?4 AND worker_incarnation = ?5 AND fence = ?6
-               AND record_name = ?7 AND record_value = ?8 AND expires_at = ?9",
+            "SELECT t.phase, t.revision, t.created_at, t.transitioned_at FROM manual_dns_tasks t
+             JOIN certificate_order_claims c ON c.order_id = t.order_id
+               AND c.claim_generation = t.claim_generation AND c.worker_node_id = t.worker_node_id
+               AND c.worker_incarnation = t.worker_incarnation AND c.fence = t.fence
+             WHERE t.task_digest = ?1 AND t.order_id = ?2
+               AND ((t.claim_generation = ?3 AND t.worker_node_id = ?4
+                     AND t.worker_incarnation = ?5 AND t.fence = ?6) OR ?10)
+               AND t.record_name = ?7 AND t.record_value = ?8 AND t.expires_at = ?9",
             params![
                 value.task_digest.as_slice(),
                 value.order_id.as_bytes().as_slice(),
@@ -201,6 +209,7 @@ fn load_existing(
                 value.record_name,
                 value.record_value,
                 value.expires_at.get(),
+                retained_publication,
             ],
             |row| {
                 let phase: i64 = row.get(0)?;
@@ -307,7 +316,8 @@ fn to_i64(value: u64) -> Result<i64, RepositoryError> {
 impl AuthoritativeRepository {
     /// Reports whether an exact, still-live manual task already reached a phase.
     ///
-    /// Claim and task reads share one SQLite read snapshot. This performs no mutation,
+    /// The publication epoch identifies the original challenge, independently of `value.fence`.
+    /// Claim, checkpoint and task reads share one SQLite read snapshot. This performs no mutation,
     /// advances no revision and cannot renew a claim. A later write still needs its
     /// normal authoritative checks; this observation does not reserve authority.
     ///
@@ -319,10 +329,15 @@ impl AuthoritativeRepository {
         &self,
         now: UnixMicros,
         value: &AdvanceManualDnsTask,
+        publication_epoch: u64,
     ) -> Result<bool, RepositoryError> {
         let read_view = self.database.connection().unchecked_transaction()?;
         validate_live_manual_claim(&read_view, now, value)?;
-        let satisfied = match load_existing(&read_view, value)? {
+        let retained = handoff::retained_publication_epoch(&read_view, value)?;
+        if publication_epoch != retained.unwrap_or(value.fence) {
+            return Err(RepositoryError::InvalidCommand);
+        }
+        let satisfied = match load_existing(&read_view, value, retained.is_some())? {
             Some(TASK_SUPERSEDED) => return Err(RepositoryError::InvalidCommand),
             Some(phase) => phase >= phase_code(value.phase),
             None => {

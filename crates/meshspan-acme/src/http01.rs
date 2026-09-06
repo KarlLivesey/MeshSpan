@@ -162,6 +162,16 @@ impl Http01Challenge {
 }
 
 impl CertificateChallenge for Http01Challenge {
+    fn expected_receipt(
+        &self,
+        request: &CertificateChallengeRequest,
+    ) -> Result<CertificateChallengeReceipt, ContractError> {
+        validate_cleanup_request(request, CertificateChallengeKind::Http01)?;
+        let payload =
+            Http01Payload::decode(&request.challenge).map_err(|_| ContractError::InvalidInput)?;
+        Ok(Self::receipt(request, &payload))
+    }
+
     fn publish(
         &mut self,
         request: &CertificateChallengeRequest,

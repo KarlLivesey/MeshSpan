@@ -60,6 +60,8 @@ pub struct AcmeChallengeExecution<'a> {
     pub context: RequestContext,
     /// Exclusive expiry for a challenge publication.
     pub challenge_expires_at: UnixMicros,
+    /// Exact checkpointed material when resuming publication or cleanup; overrides a new expiry.
+    pub publication: Option<&'a crate::AcmeChallengePublication>,
     /// DER-encoded CSR generated for this exact immutable name set.
     pub csr_der: &'a [u8],
 }

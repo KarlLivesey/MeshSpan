@@ -12,6 +12,185 @@ not close an unexplained failure.
 
 ## Task 2 — interrupted challenge recovery
 
+### Integrated publication recovery candidate
+
+The complete local integration gate passed on signed, pushed and GitHub-verified
+commit `aa4f5e8bdeaed2685d744e4f33c32777285f8305`, tree
+`d012ed17b32415f8133c170da19797d4281f541e`, in **748.09 seconds**. Command:
+NVM-default `CARGO_BUILD_JOBS=4 MESHSPAN_CHECK_WORKERS=4 rustup run 1.98.0 pnpm check`.
+Rust workspace tests passed in **687.72 seconds**, web tests in **5.46 seconds**,
+workspace Clippy in **34.53 seconds** and web lint in **20.27 seconds**. Generated
+drift, embedded bundle, both licence gates, formatting, TypeScript and tooling
+tests also passed. No source changes followed this gate; the integration evidence
+and task-list updates are prose only.
+
+[PR #245](https://github.com/KarlLivesey/MeshSpan/pull/245) integrates the three
+recovery increments below: publication material retained before IO, exact
+manual-task continuation across claims, and receipt-verified ordinary legacy
+lifetime recovery. This supersedes their earlier unintegrated status; it does not
+claim universal interrupted-order recovery. The historical unexplained cluster
+timeout remains an open Stage 11 finding despite this passing run. Ignored SMB
+image cases, live CA, hardware and soak proofs are not provided by this gate.
+
+Task 2 remains **4 points**, Stage 10 **143**, Stage 11 **126**. The next lifecycle
+work separates challenge lifetime from the five-minute worker lease and tests
+expired/taken-over work without renewing old publication identity by assumption.
+Actual interrupted-process issuance, remaining DNS-provider lifecycles and
+active-gateway challenge distribution are still outstanding. Publication remains
+on hold; no release, tag, package/image publication or GitHub Actions were run.
+
+### Verified legacy publication lifetime
+
+The checkpoint reader now exposes the original publication claim's retained
+lease end as a read-only recovery candidate. It looks up the original opaque
+publication fence, not the current worker's fence. The checkpoint bytes and
+digest remain unchanged by this read. The executor verifies that candidate
+against the original publisher receipt before checkpointing recovered material
+or performing publisher IO. Missing or mismatched receipt evidence cannot be
+silently replaced with the new worker's lifetime. This is not universal legacy
+recovery: renewed original leases or different original publication lifetimes
+still require exact evidence, and expired pending challenges remain separate work.
+
+Format-3 `unprepared` state now remains unprepared when a worker changes: provider
+IO was never permitted for that state. Its first publication uses the new worker
+identity. Formats 1 and 2 retain their explicitly decoded legacy epoch. After a
+recovered challenge finishes, its old lifetime candidate must not affect a new
+unprepared challenge in the same execution. No SQL schema, wire command, HTTP
+contract or dependency changed; the candidate is a Rust read-model addition.
+
+The metadata regression first failed with `None` instead of the original
+100-microsecond lease end in **0.24 seconds** (5.47-second build). The daemon
+recovery regression failed with `InvalidInput` in **0.04 seconds** (21.75-second
+build). A further regression caught the previous lifetime leaking into a fresh
+challenge: **100 instead of 180**, in **0.05 seconds** (9.61-second build). After
+the fixes, **12 execution tests passed in 0.10 seconds**, **22 ACME metadata tests
+in 14.22 seconds**, and **58 ACME tests in 0.07 seconds**. The tests check the
+unchanged protocol action/receipt, original publication epoch and expiry, current
+worker fence, checkpoint-before-IO ordering and rejection without side effects.
+They use checkpoint reconstruction/recording authority, not a daemon crash proof.
+
+Affected all-target/all-feature Clippy passed in **10.83 seconds** after removing
+an unnecessary reference in the historical fixture. The exact new SQL query was
+extracted from source and explained against all current partition migrations
+using NVM Node's in-memory SQLite: it uses the unique `(order_id, fence)` index,
+without scanning claim history. That is query-shape evidence, not a benchmark of
+the bundled Rust database. Both real-daemon HTTP-01/DNS-01 lifecycle cases passed
+in **20.12 seconds** after a 23.55-second build, including post-issuance restart,
+cleanup and second-gateway installation without another CA order. They still do
+not interrupt unfinished authorisation. The final integration gate is outstanding.
+
+This resolves the ordinary legacy-candidate integration gap recorded below,
+alongside the retained manual-task ownership work. It does not close all of task
+2: long-running publication/claim handling, interrupted real-process issuance,
+remaining provider lifecycle proofs and active-gateway challenge distribution
+remain. Task 2 stays **4 points**, Stage 10 **143**, Stage 11 **126**. Publication
+remains prohibited.
+
+### Manual-DNS task continuation across worker claims
+
+The next increment on `codex/stage10-task2-publication-handoff` separates current
+worker authority from the task's original creator. Both the observation/no-op
+path and mutation path validate the live claim and exact checkpointed publication
+inside their SQLite transaction. The original task must also match a retained
+creator claim. A replacement worker can advance that same task without changing
+its digest, creator fence, original creation time or expiry. The stale worker
+remains rejected, and a satisfied phase still creates no revision or operation.
+
+The metadata reader now receives the original publication epoch separately from
+the current claim fence. It verifies that epoch against retained publication
+material, including the actual immutable configuration revision and canonical
+DNS owner name. The epoch is checked dynamically for each task: an order can
+finish a handed-off challenge and subsequently publish another authorisation
+under its current worker. No adapter-wide original-epoch cache is introduced.
+Missing or substituted evidence cannot authorise cross-claim task continuation.
+Legacy same-claim transitions remain supported; complete legacy lifetime
+recovery and long-running publication handling are still unfinished.
+
+Operation and audit identity domain **2** includes the order and complete current
+claim identity as well as the task, phase and occurrence time. Two workers at the
+same clock instant must not share an operation identity merely because they now
+share the original publication. Previously committed phases are still resolved
+by the authoritative no-op observation. Task digests, authoritative command
+encoding and SQL tables are unchanged; no migration or dependency was added.
+
+The handoff regression failed at the exact replacement-task observation in
+**0.24 seconds**, after a 12.11-second build; a diagnostic-only rerun confirmed
+that the fixture itself had succeeded. After the fix, all **21 ACME metadata
+tests passed in 13.10 seconds** (3.41-second build). The handoff case was then
+extended to close and reopen an on-disk SQLite database; both handoff acceptance
+cases passed in **0.95 seconds** (3.47-second build). They assert one unchanged
+task identity, original creator/expiry, exact phase/revision, no-op replay, stale
+worker rejection, wrong publication-epoch rejection, and refusal of missing or
+substituted checkpoints. A rejection fixture initially skipped a log index and
+therefore returned `InvalidLogPosition`; its input sequence was corrected before
+asserting the intended `InvalidCommand`, without changing production behaviour.
+
+The daemon's **9 manual-DNS cases passed in 0.09 seconds** after a 35.52-second
+build. All **58 ACME cases passed in 0.07 seconds** after a 7.55-second build.
+Affected all-target/all-feature Clippy passed in **30.22 seconds**; formatting and
+diff checks passed. The exact revised task query was extracted from source and
+explained against the current migrations in in-memory system SQLite: it uses
+the task-digest primary-key index and the historical claim's order/fence index,
+without scanning task history. This is query-shape evidence, not a throughput
+benchmark or a real multi-daemon manual-DNS interruption proof.
+
+This remains an in-progress branch without a final full integration gate. Task 2
+stays **4 points**, Stage 10 **143**, Stage 11 **126**. No release, tag, package,
+image publication or GitHub Actions were run.
+
+### Publication identity handoff — in-progress branch
+
+The current `codex/stage10-task2-publication-handoff` candidate checkpoints exact
+HTTP/DNS publication material before publisher IO. It retains the original
+identifier, payload/version, provider revision, opaque publication epoch and
+expiry independently of the current worker claim. Later scheduling inputs do
+not extend that expiry. Signer-derived material must still match the retained
+record before publication or cleanup. Providers expose a pure expected-receipt
+calculation; calculating it is not evidence that anything was published, became
+visible or was removed.
+
+A replacement worker keeps the original CA phase. Restoration of a lost HTTP
+catalogue republishes and verifies the exact retained material without notifying
+the CA again, changing its polling schedule or checkpointing fictitious progress.
+A valid authorisation instead stays in cleanup, using its original receipt even
+after expiry. Candidate machine changes become locally executable only after
+their checkpoint succeeds; failed prepublication commits remain unpublished on
+retry. These changes are not yet a complete manual-DNS handoff implementation.
+
+Checkpoint format **3** adds an explicit publication-state field. Formats 1 and 2
+remain readable in every original phase; absent old publication material is
+represented as legacy evidence, not silently replaced by the new worker's
+identity. New binaries write format 3 on their next authoritative checkpoint;
+old binaries cannot read it. No SQL migration, dependency or HTTP API changed.
+Recovery of legacy lifetimes across claim changes is still incomplete: a
+candidate lifetime cannot be bound to a published legacy record unless its exact
+expected receipt matches. This branch must not be merged as completed handoff
+work before that integration and manual-task ownership are addressed.
+
+The daemon prepublication regression first failed in **0.02 seconds** after a
+37.78-second build: the HTTP response was already visible before its material
+had been checkpointed. After the change, **34 certificate-order daemon tests
+passed in 0.23 seconds** (34.00-second build), and **57 ACME tests passed in 0.08
+seconds** (5.73-second build). Tests cover checkpoint failure and retry, exact
+expiry despite changed scheduling inputs, a lower-valued replacement fence,
+catalogue reconstruction without another CA request, and expired cleanup with
+both populated and empty catalogues. These handoff cases use recording authority
+and checkpoint encode/decode, not real consensus/process-crash proof.
+
+Both real-daemon HTTP-01/DNS-01 issuance, post-issuance restart and gateway-join
+tests also passed in **20.07 seconds**, after a 38.36-second build. They preserve
+the existing one-order/one-finalisation and successful-response polling checks.
+They do not yet interrupt the daemon during an unfinished authorisation.
+
+Affected all-target/all-feature Clippy passed in **17.00 seconds** after fixing
+collapsible conditionals, duplicate match arms and a runtime wildcard import;
+no suppression was added. Formatting passed. The current branch has not passed
+the full integration gate. Task 2 remains **4 points**, Stage 10 **143**, Stage 11
+**126**: legacy lifetime recovery, long-running publication/claim handling,
+manual-task ownership transfer, remaining provider process proofs and active
+gateway challenge distribution remain open. No release, tag, package/image
+publication or GitHub Actions were run.
+
 ### Integrated cleanup and manual-DNS polling candidate
 
 The complete local gate passed on signed commit

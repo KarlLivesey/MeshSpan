@@ -23,6 +23,27 @@ use crate::{
 type Tasks = Arc<Mutex<BTreeMap<[u8; 32], ManualDnsTask>>>;
 type Records = Arc<Mutex<BTreeMap<String, Vec<u8>>>>;
 
+#[test]
+fn task_reconstruction_is_expiry_independent_and_rejects_an_unrelated_dns_owner()
+-> Result<(), Box<dyn Error>> {
+    let original = request()?;
+    let original_task =
+        ManualDnsTask::from_challenge_request(&original, ManualDnsTaskPhase::AwaitingPublication)?;
+    let mut expired = original;
+    expired.context.deadline = UnixMicros::new(300);
+    let cleanup_task =
+        ManualDnsTask::from_challenge_request(&expired, ManualDnsTaskPhase::AwaitingRemoval)?;
+    assert_eq!(cleanup_task.task_digest, original_task.task_digest);
+    assert_eq!(cleanup_task.order_epoch, 9);
+    assert_eq!(cleanup_task.expires_at, UnixMicros::new(200));
+    expired.identifier = BoundedBytes::copy_from(b"another.example.test", 253)?;
+    assert_eq!(
+        ManualDnsTask::from_challenge_request(&expired, ManualDnsTaskPhase::Complete),
+        Err(ContractError::InvalidInput)
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn executor_waits_for_manual_removal_and_resumes_after_provider_restart()
 -> Result<(), Box<dyn Error>> {
@@ -46,6 +67,7 @@ async fn executor_waits_for_manual_removal_and_resumes_after_provider_restart()
         order_epoch: 9,
     };
     let execution = AcmeChallengeExecution {
+        publication: None,
         context: request()?.context,
         challenge_expires_at: UnixMicros::new(200),
         csr_der: &[],

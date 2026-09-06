@@ -21,6 +21,7 @@ use crate::{
 
 pub use order_checkpoint::CertificateOrderCheckpointRecord;
 pub(super) use order_checkpoint::checkpoint;
+pub(super) use order_checkpoint::load_checkpoint;
 pub use query::{
     AcmeConfigurationRecord, CertificateRenewalCandidate, DueCertificateOrderCursor,
     DueCertificateRenewalCursor, PublicCertificateSelection, PublicCertificateSource,

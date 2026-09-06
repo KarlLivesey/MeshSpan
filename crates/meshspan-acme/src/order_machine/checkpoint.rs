@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 use super::{
     AcmeAuthorization, AcmeChallengePreference, AcmeChallengeRecord, AcmeDirectory,
     AcmeMachineError, AcmeOrder, AcmeOrderMachine, AcmeOrderRequest, AcmeResourceStatus, Phase,
-    select_challenge, validate_nonce,
+    PublicationState, select_challenge, validate_nonce,
 };
 
-const CHECKPOINT_VERSION: u8 = 2;
+const CHECKPOINT_VERSION: u8 = 3;
 pub(super) const MAXIMUM_CHECKPOINT_BYTES: usize = 8 * 1_024 * 1_024;
 
 #[derive(Serialize)]
@@ -45,22 +45,24 @@ struct MachineFields {
     challenge: Option<AcmeChallengeRecord>,
     publication_digest: Option<[u8; 32]>,
     certificate: Option<Vec<u8>>,
-    #[serde(default, deserialize_with = "present_poll_deadline")]
-    poll_not_before: PollDeadlineField,
+    #[serde(default)]
+    poll_not_before: CheckpointField<Option<i64>>,
+    #[serde(default)]
+    publication: CheckpointField<PublicationState>,
 }
 
-// Distinguish the absent v1 field from the explicitly nullable v2 field.
+// Field presence is versioned independently of each value's nullable/domain shape.
 #[derive(Default)]
-enum PollDeadlineField {
+enum CheckpointField<T> {
     #[default]
     Absent,
-    Present(Option<i64>),
+    Present(T),
 }
 
-fn present_poll_deadline<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<PollDeadlineField, D::Error> {
-    Option::<i64>::deserialize(deserializer).map(PollDeadlineField::Present)
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for CheckpointField<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        T::deserialize(deserializer).map(Self::Present)
+    }
 }
 
 const DIRECTORY_PRESENT: u16 = 1 << 0;
@@ -97,8 +99,18 @@ impl AcmeOrderMachine {
         let checkpoint: Checkpoint =
             serde_json::from_slice(bytes).map_err(|_| AcmeMachineError::CorruptState)?;
         if !matches!(
-            (checkpoint.version, &checkpoint.machine.poll_not_before),
-            (1, PollDeadlineField::Absent) | (CHECKPOINT_VERSION, PollDeadlineField::Present(_))
+            (
+                checkpoint.version,
+                &checkpoint.machine.poll_not_before,
+                &checkpoint.machine.publication
+            ),
+            (1, CheckpointField::Absent, CheckpointField::Absent)
+                | (2, CheckpointField::Present(_), CheckpointField::Absent)
+                | (
+                    CHECKPOINT_VERSION,
+                    CheckpointField::Present(_),
+                    CheckpointField::Present(_)
+                )
         ) {
             return Err(AcmeMachineError::CorruptState);
         }
@@ -119,6 +131,7 @@ impl AcmeOrderMachine {
         self.validate_optional_resources()?;
         self.validate_progress()?;
         self.validate_poll_schedule()?;
+        self.validate_publication()?;
         self.action_for_phase().map(|_| ())
     }
 
@@ -248,8 +261,25 @@ impl MachineFields {
             publication_digest: self.publication_digest,
             certificate: self.certificate,
             poll_not_before: match self.poll_not_before {
-                PollDeadlineField::Absent => None,
-                PollDeadlineField::Present(value) => value,
+                CheckpointField::Absent => None,
+                CheckpointField::Present(value) => value,
+            },
+            publication: match self.publication {
+                CheckpointField::Present(publication) => publication,
+                CheckpointField::Absent
+                    if matches!(
+                        self.phase,
+                        Phase::PublishChallenge
+                            | Phase::NotifyChallenge
+                            | Phase::PollAuthorization
+                            | Phase::CleanupChallenge
+                    ) =>
+                {
+                    PublicationState::Legacy {
+                        order_epoch: self.order_epoch,
+                    }
+                }
+                CheckpointField::Absent => PublicationState::Unprepared,
             },
         }
     }

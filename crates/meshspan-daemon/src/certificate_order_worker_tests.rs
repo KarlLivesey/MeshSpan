@@ -150,6 +150,7 @@ fn previous_checkpoint(
     order_id: CertificateOrderId,
 ) -> Result<CertificateOrderCheckpointRecord, Box<dyn std::error::Error>> {
     Ok(CertificateOrderCheckpointRecord {
+        legacy_lease_expiry_candidate: None,
         order_id,
         claim_generation: 1,
         worker_node_id: NodeId::from_bytes([34; 16])?,

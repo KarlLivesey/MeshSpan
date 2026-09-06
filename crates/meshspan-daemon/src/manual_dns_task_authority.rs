@@ -20,15 +20,15 @@ use sha2::{Digest as _, Sha256};
 
 use crate::ConsensusAuthenticationAuthority;
 
-const OPERATION_ID_DOMAIN: &[u8] = b"meshspan.manual-dns-task.operation.v1\0";
-const AUDIT_ID_DOMAIN: &[u8] = b"meshspan.manual-dns-task.audit.v1\0";
+const OPERATION_ID_DOMAIN: &[u8] = b"meshspan.manual-dns-task.operation.v2\0";
+const AUDIT_ID_DOMAIN: &[u8] = b"meshspan.manual-dns-task.audit.v2\0";
 
 /// Authoritative reads and writes required by manual DNS task publication.
 pub trait ManualDnsTaskCommitAuthority {
     /// Checks whether this exact publication already reached the requested phase.
     ///
-    /// The retained task and live claim must be checked in one read view. This is
-    /// evidence of an existing transition, never a new lease or permission grant.
+    /// The original publication epoch, retained task and live claim must be checked in one
+    /// read view. This is evidence of an existing transition, never a new lease or permission grant.
     ///
     /// # Errors
     ///
@@ -37,6 +37,7 @@ pub trait ManualDnsTaskCommitAuthority {
         &self,
         now: UnixMicros,
         transition: &AdvanceManualDnsTask,
+        publication_epoch: u64,
     ) -> Result<bool, ContractError>;
 
     /// Resolves a potentially committed task transition after an ambiguous response.
@@ -66,9 +67,10 @@ impl ManualDnsTaskCommitAuthority for ConsensusAuthenticationAuthority {
         &self,
         now: UnixMicros,
         transition: &AdvanceManualDnsTask,
+        publication_epoch: u64,
     ) -> Result<bool, ContractError> {
         self.reader()
-            .manual_dns_task_transition_satisfied(now, transition)
+            .manual_dns_task_transition_satisfied(now, transition, publication_epoch)
             .map_err(|error| map_repository_error(&error))
     }
 
@@ -116,11 +118,12 @@ impl ManualDnsTaskCommitAuthority for SharedManualDnsTaskAuthority {
         &self,
         now: UnixMicros,
         transition: &AdvanceManualDnsTask,
+        publication_epoch: u64,
     ) -> Result<bool, ContractError> {
         self.inner
             .lock()
             .map_err(|_| ContractError::Unavailable)?
-            .manual_dns_task_transition_satisfied(now, transition)
+            .manual_dns_task_transition_satisfied(now, transition, publication_epoch)
     }
 
     fn resolve_manual_dns_task(
@@ -189,20 +192,34 @@ where
 
 impl<A: ManualDnsTaskCommitAuthority, C: Clock> ConsensusManualDnsTaskAuthority<A, C> {
     fn advance_sync(&self, task: &ManualDnsTask) -> Result<(), ContractError> {
-        if task.order_epoch != self.claim.fence || task.task_digest == [0; 32] {
+        if task.order_epoch == 0 || task.task_digest == [0; 32] {
             return Err(ContractError::Stale);
         }
         let now = self.clock.now();
         let transition = self.transition(task);
-        if self
-            .authority
-            .manual_dns_task_transition_satisfied(now, &transition)?
-        {
+        if self.authority.manual_dns_task_transition_satisfied(
+            now,
+            &transition,
+            task.order_epoch,
+        )? {
             return Ok(());
         }
-        let operation_id = derived_id(OPERATION_ID_DOMAIN, task, now)?;
-        let audit_event_id = AuditEventId::from_bytes(derived_bytes(AUDIT_ID_DOMAIN, task, now))
-            .map_err(|_| ContractError::InvalidInput)?;
+        let operation_id = OperationId::from_bytes(derived_bytes(
+            OPERATION_ID_DOMAIN,
+            task,
+            now,
+            self.order_id,
+            self.claim,
+        ))
+        .map_err(|_| ContractError::InvalidInput)?;
+        let audit_event_id = AuditEventId::from_bytes(derived_bytes(
+            AUDIT_ID_DOMAIN,
+            task,
+            now,
+            self.order_id,
+            self.claim,
+        ))
+        .map_err(|_| ContractError::InvalidInput)?;
         let command = AuthoritativeCommand::AdvanceManualDnsTask(transition);
         let context = CommandContext {
             operation_id,
@@ -240,22 +257,20 @@ impl<A: ManualDnsTaskCommitAuthority, C: Clock> ConsensusManualDnsTaskAuthority<
     }
 }
 
-fn derived_id(
-    domain: &[u8],
-    task: &ManualDnsTask,
-    now: meshspan_domain::UnixMicros,
-) -> Result<OperationId, ContractError> {
-    OperationId::from_bytes(derived_bytes(domain, task, now))
-        .map_err(|_| ContractError::InvalidInput)
-}
-
 fn derived_bytes(
     domain: &[u8],
     task: &ManualDnsTask,
     now: meshspan_domain::UnixMicros,
+    order_id: CertificateOrderId,
+    claim: CertificateOrderClaim,
 ) -> [u8; 16] {
     let mut digest = Sha256::new();
     digest.update(domain);
+    digest.update(order_id.as_bytes());
+    digest.update(claim.generation.to_be_bytes());
+    digest.update(claim.worker_node_id.as_bytes());
+    digest.update(claim.worker_incarnation.to_be_bytes());
+    digest.update(claim.fence.to_be_bytes());
     digest.update(task.task_digest);
     digest.update([phase_code(task.phase)]);
     digest.update(now.get().to_be_bytes());

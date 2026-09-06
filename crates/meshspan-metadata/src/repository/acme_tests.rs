@@ -32,6 +32,7 @@ use crate::{
     SecretGenerationReference,
 };
 
+mod manual_dns_handoff;
 mod manual_dns_transition;
 
 #[test]
@@ -1342,10 +1343,14 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::at(std::path::Path::new(":memory:"))
+    }
+
+    fn at(database_path: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
         let administrator = PrincipalId::from_bytes([2; 16])?;
         let node = NodeId::from_bytes([6; 16])?;
         let database = PartitionDatabase::open(
-            std::path::Path::new(":memory:"),
+            database_path,
             PartitionId::from_bytes([1; 16])?,
             UnixMicros::new(1),
         )?;

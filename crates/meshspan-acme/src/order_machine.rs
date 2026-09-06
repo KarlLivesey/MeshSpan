@@ -15,6 +15,8 @@ mod checkpoint;
 #[cfg(test)]
 mod checkpoint_tests;
 mod polling;
+mod publication;
+use publication::PublicationState;
 
 /// Configured challenge family for one immutable order.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -247,6 +249,7 @@ pub struct AcmeOrderMachine {
     publication_digest: Option<[u8; 32]>,
     certificate: Option<Vec<u8>>,
     poll_not_before: Option<i64>,
+    publication: PublicationState,
 }
 
 impl AcmeOrderMachine {
@@ -283,6 +286,7 @@ impl AcmeOrderMachine {
             publication_digest: None,
             certificate: None,
             poll_not_before: None,
+            publication: PublicationState::Unprepared,
         })
     }
 
@@ -333,9 +337,8 @@ impl AcmeOrderMachine {
 
     /// Rebinds a restored checkpoint to a replacement worker's authoritative fence.
     ///
-    /// An in-progress challenge publication is deliberately returned to publication: the new
-    /// worker must obtain its own fenced visibility receipt, while cleanup by the stale worker is
-    /// rejected by the challenge provider.
+    /// Publication identity and the current phase remain unchanged. The owner must revalidate
+    /// or restore visibility separately; a validated authorisation stays in exact cleanup.
     ///
     /// # Errors
     ///
@@ -344,15 +347,8 @@ impl AcmeOrderMachine {
         if order_epoch == 0 || self.phase == Phase::Complete {
             return Err(AcmeMachineError::InvalidInput);
         }
-        if order_epoch != self.order_epoch
-            && matches!(
-                self.phase,
-                Phase::NotifyChallenge | Phase::PollAuthorization | Phase::CleanupChallenge
-            )
-        {
-            self.publication_digest = None;
-            self.phase = Phase::PublishChallenge;
-        }
+        // An unprepared format-3 challenge has never permitted provider IO. Legacy formats
+        // are decoded with their original epoch explicitly; do not invent legacy evidence here.
         self.order_epoch = order_epoch;
         self.action_for_phase().map(|_| ())
     }
@@ -411,6 +407,11 @@ impl AcmeOrderMachine {
                     return Err(AcmeMachineError::InvalidInput);
                 }
                 self.publication_digest = Some(publication_digest);
+                if matches!(self.publication, PublicationState::Unprepared) {
+                    self.publication = PublicationState::Legacy {
+                        order_epoch: self.order_epoch,
+                    };
+                }
                 self.phase = Phase::NotifyChallenge;
             }
             (Phase::NotifyChallenge, AcmeMachineEvent::ChallengeNotified { replay_nonce }) => {
@@ -620,6 +621,7 @@ impl AcmeOrderMachine {
         self.authorization = None;
         self.challenge = None;
         self.publication_digest = None;
+        self.publication = PublicationState::Unprepared;
     }
 }
 

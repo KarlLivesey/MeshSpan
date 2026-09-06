@@ -35,6 +35,9 @@ pub struct CertificateOrderCheckpointRecord {
     pub checkpoint: Vec<u8>,
     /// SHA-256 digest of `checkpoint`.
     pub checkpoint_digest: [u8; 32],
+    /// Original publication claim's retained lease end, if old checkpoint material is missing.
+    /// This read-only candidate may reflect a renewal; verify the exact receipt before using it.
+    pub legacy_lease_expiry_candidate: Option<meshspan_domain::UnixMicros>,
     /// Latest authoritative revision.
     pub revision: Revision,
 }
@@ -111,24 +114,31 @@ impl AuthoritativeRepository {
         &self,
         order_id: CertificateOrderId,
     ) -> Result<Option<CertificateOrderCheckpointRecord>, RepositoryError> {
-        let record = self
-            .database
-            .connection()
-            .query_row(
-                "SELECT order_id, claim_generation, worker_node_id, worker_incarnation, fence,
+        load_checkpoint(self.database.connection(), order_id)
+    }
+}
+
+pub(in crate::repository) fn load_checkpoint(
+    connection: &rusqlite::Connection,
+    order_id: CertificateOrderId,
+) -> Result<Option<CertificateOrderCheckpointRecord>, RepositoryError> {
+    let mut record = connection
+        .query_row(
+            "SELECT order_id, claim_generation, worker_node_id, worker_incarnation, fence,
                         certificate_key_secret_kind, certificate_key_secret_id,
                         certificate_key_secret_generation, checkpoint, checkpoint_digest, revision
                  FROM certificate_order_checkpoints WHERE order_id = ?1",
-                [order_id.as_bytes().as_slice()],
-                decode_checkpoint,
-            )
-            .optional()
-            .map_err(RepositoryError::from)?;
-        if let Some(value) = &record {
-            validate_checkpoint_record_binding(self.database.connection(), value)?;
-        }
-        Ok(record)
+            [order_id.as_bytes().as_slice()],
+            decode_checkpoint,
+        )
+        .optional()
+        .map_err(RepositoryError::from)?;
+    if let Some(value) = &mut record {
+        let machine = validate_checkpoint_record_binding(connection, value)?;
+        value.legacy_lease_expiry_candidate =
+            legacy_lease_candidate(connection, value.order_id, &machine)?;
     }
+    Ok(record)
 }
 
 fn validate_checkpoint_binding(
@@ -154,13 +164,42 @@ fn validate_checkpoint_binding(
 fn validate_checkpoint_record_binding(
     connection: &rusqlite::Connection,
     value: &CertificateOrderCheckpointRecord,
-) -> Result<(), RepositoryError> {
+) -> Result<meshspan_acme::AcmeOrderMachine, RepositoryError> {
     let machine = meshspan_acme::AcmeOrderMachine::decode_checkpoint(&value.checkpoint)
         .map_err(|_| RepositoryError::CorruptState)?;
     if machine.order_epoch() != value.fence {
         return Err(RepositoryError::CorruptState);
     }
-    validate_machine_configuration(connection, value.order_id, &machine)
+    validate_machine_configuration(connection, value.order_id, &machine)?;
+    Ok(machine)
+}
+
+fn legacy_lease_candidate(
+    connection: &rusqlite::Connection,
+    order_id: CertificateOrderId,
+    machine: &meshspan_acme::AcmeOrderMachine,
+) -> Result<Option<meshspan_domain::UnixMicros>, RepositoryError> {
+    if machine.publication().is_some() {
+        return Ok(None);
+    }
+    let Some(epoch) = machine.publication_epoch() else {
+        return Ok(None);
+    };
+    let (expires_at, claimed_at): (i64, i64) = connection
+        .query_row(
+            "SELECT lease_expires_at, claimed_at FROM certificate_order_claims
+         WHERE order_id = ?1 AND fence = ?2",
+            params![order_id.as_bytes().as_slice(), to_i64(epoch)?],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?
+        .ok_or(RepositoryError::CorruptState)?;
+    if claimed_at < 0 || expires_at <= claimed_at {
+        return Err(RepositoryError::CorruptState);
+    }
+    // This projection is not part of the retained checkpoint or its digest. Only a matching
+    // original provider receipt can prove that the lease end was the publication's lifetime.
+    Ok(Some(meshspan_domain::UnixMicros::new(expires_at)))
 }
 
 fn validate_machine_configuration(
@@ -233,6 +272,7 @@ fn decode_checkpoint_inner(
         certificate_key,
         checkpoint,
         checkpoint_digest,
+        legacy_lease_expiry_candidate: None,
         revision: Revision::new(positive(row.get(10)?)?),
     })
 }

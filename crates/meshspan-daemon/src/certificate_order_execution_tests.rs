@@ -25,6 +25,7 @@ use crate::{
 };
 
 mod polling;
+mod publication;
 
 #[tokio::test]
 async fn downloaded_chain_goes_to_terminal_validation_not_an_incomplete_checkpoint()

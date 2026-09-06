@@ -49,6 +49,51 @@ pub struct ManualDnsTask {
     pub phase: ManualDnsTaskPhase,
 }
 
+impl ManualDnsTask {
+    /// Reconstructs the exact task identity from original publication material, without IO.
+    ///
+    /// Expired material remains valid for removal. A task identity does not grant authority
+    /// to publish or advance it; the receiving authority must verify the current order claim.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed DNS publication material, including an unrelated TXT owner name.
+    pub fn from_challenge_request(
+        request: &CertificateChallengeRequest,
+        phase: ManualDnsTaskPhase,
+    ) -> Result<Self, ContractError> {
+        validate_cleanup_request(request, CertificateChallengeKind::Dns01)?;
+        let payload =
+            Dns01Payload::decode(&request.challenge).map_err(|_| ContractError::InvalidInput)?;
+        let identifier = std::str::from_utf8(request.identifier.as_slice())
+            .map_err(|_| ContractError::InvalidInput)?;
+        if payload.record_name()
+            != format!(
+                "_acme-challenge.{}",
+                identifier.strip_prefix("*.").unwrap_or(identifier)
+            )
+        {
+            return Err(ContractError::InvalidInput);
+        }
+        Ok(Self::from_payload(request, &payload, phase))
+    }
+
+    fn from_payload(
+        request: &CertificateChallengeRequest,
+        payload: &Dns01Payload,
+        phase: ManualDnsTaskPhase,
+    ) -> Self {
+        Self {
+            task_digest: task_digest(request, payload),
+            record_name: payload.record_name().to_owned(),
+            record_value: payload.record_value().to_vec(),
+            expires_at: request.expires_at,
+            order_epoch: request.order_epoch,
+            phase,
+        }
+    }
+}
+
 /// Consensus-backed task boundary used by the manual DNS challenge implementation.
 pub trait ManualDnsTaskAuthority {
     /// Idempotently creates or advances one exact task without allowing phase regression.
@@ -76,21 +121,6 @@ impl<A, O> ManualDns01Challenge<A, O> {
             lifecycle: Lifecycle::default(),
             authority,
             observer,
-        }
-    }
-
-    fn task(
-        request: &CertificateChallengeRequest,
-        payload: &Dns01Payload,
-        phase: ManualDnsTaskPhase,
-    ) -> ManualDnsTask {
-        ManualDnsTask {
-            task_digest: task_digest(request, payload),
-            record_name: payload.record_name().to_owned(),
-            record_value: payload.record_value().to_vec(),
-            expires_at: request.expires_at,
-            order_epoch: request.order_epoch,
-            phase,
         }
     }
 
@@ -126,6 +156,16 @@ where
     A: ManualDnsTaskAuthority + Send + Sync,
     O: AuthoritativeTxtObserver + Send + Sync,
 {
+    fn expected_receipt(
+        &self,
+        request: &CertificateChallengeRequest,
+    ) -> Result<CertificateChallengeReceipt, ContractError> {
+        validate_cleanup_request(request, CertificateChallengeKind::Dns01)?;
+        let payload =
+            Dns01Payload::decode(&request.challenge).map_err(|_| ContractError::InvalidInput)?;
+        Ok(Self::receipt(request, &payload))
+    }
+
     async fn publish(
         &mut self,
         request: &CertificateChallengeRequest,
@@ -135,7 +175,7 @@ where
         let payload =
             Dns01Payload::decode(&request.challenge).map_err(|_| ContractError::InvalidInput)?;
         self.authority
-            .advance(&Self::task(
+            .advance(&ManualDnsTask::from_payload(
                 request,
                 &payload,
                 ManualDnsTaskPhase::AwaitingPublication,
@@ -159,7 +199,7 @@ where
             .await?;
         if visible {
             self.authority
-                .advance(&Self::task(
+                .advance(&ManualDnsTask::from_payload(
                     request,
                     &payload,
                     ManualDnsTaskPhase::PublicationObserved,
@@ -188,7 +228,7 @@ where
             ManualDnsTaskPhase::Complete
         };
         self.authority
-            .advance(&Self::task(request, &payload, phase))
+            .advance(&ManualDnsTask::from_payload(request, &payload, phase))
             .await?;
         Ok(if visible {
             CertificateChallengeCleanup::Pending

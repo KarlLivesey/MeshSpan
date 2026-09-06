@@ -35,7 +35,7 @@ impl AcmeOrderMachine {
                     dns_name: authorization.dns_name.clone(),
                     wildcard: authorization.wildcard,
                     challenge: self.challenge()?,
-                    order_epoch: self.order_epoch,
+                    order_epoch: self.publication_epoch().unwrap_or(self.order_epoch),
                 })
             }
             Phase::NotifyChallenge => Ok(AcmeMachineAction::NotifyChallenge {
@@ -57,7 +57,7 @@ impl AcmeOrderMachine {
                     publication_digest: self
                         .publication_digest
                         .ok_or(AcmeMachineError::CorruptState)?,
-                    order_epoch: self.order_epoch,
+                    order_epoch: self.publication_epoch().unwrap_or(self.order_epoch),
                 })
             }
             Phase::FinalizeOrder => Ok(AcmeMachineAction::FinalizeOrder {

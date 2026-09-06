@@ -26,11 +26,11 @@ fn repeated_phase_observation_never_advances_authoritative_state() -> Result<(),
     let (mut fixture, task) = published_task()?;
     let original = fixture.repository.manual_dns_task(task.task_digest)?;
     for now in 12..90 {
-        assert!(
-            fixture
-                .repository
-                .manual_dns_task_transition_satisfied(UnixMicros::new(now), &task)?
-        );
+        assert!(fixture.repository.manual_dns_task_transition_satisfied(
+            UnixMicros::new(now),
+            &task,
+            task.fence
+        )?);
     }
     assert_eq!(fixture.repository.current_revision()?, Revision::new(6));
     assert_eq!(
@@ -39,29 +39,29 @@ fn repeated_phase_observation_never_advances_authoritative_state() -> Result<(),
     );
     let mut observed = task.clone();
     observed.phase = ManualDnsTaskPhase::PublicationObserved;
-    assert!(
-        !fixture
-            .repository
-            .manual_dns_task_transition_satisfied(UnixMicros::new(90), &observed)?
-    );
+    assert!(!fixture.repository.manual_dns_task_transition_satisfied(
+        UnixMicros::new(90),
+        &observed,
+        observed.fence
+    )?);
     fixture.apply(
         7,
         90,
         &AuthoritativeCommand::AdvanceManualDnsTask(observed.clone()),
     )?;
     for candidate in [&task, &observed] {
-        assert!(
-            fixture
-                .repository
-                .manual_dns_task_transition_satisfied(UnixMicros::new(91), candidate)?
-        );
+        assert!(fixture.repository.manual_dns_task_transition_satisfied(
+            UnixMicros::new(91),
+            candidate,
+            candidate.fence
+        )?);
     }
     observed.phase = ManualDnsTaskPhase::AwaitingRemoval;
-    assert!(
-        !fixture
-            .repository
-            .manual_dns_task_transition_satisfied(UnixMicros::new(92), &observed)?
-    );
+    assert!(!fixture.repository.manual_dns_task_transition_satisfied(
+        UnixMicros::new(92),
+        &observed,
+        observed.fence
+    )?);
     assert_eq!(fixture.repository.current_revision()?, Revision::new(7));
     Ok(())
 }
@@ -82,19 +82,21 @@ fn every_claim_and_publication_field_is_bound_before_skipping_a_transition()
     changed[8].task_digest = [0; 32];
     for candidate in changed {
         assert!(matches!(
-            fixture
-                .repository
-                .manual_dns_task_transition_satisfied(UnixMicros::new(12), &candidate),
+            fixture.repository.manual_dns_task_transition_satisfied(
+                UnixMicros::new(12),
+                &candidate,
+                candidate.fence
+            ),
             Err(RepositoryError::InvalidCommand)
         ));
     }
     let mut absent = task;
     absent.task_digest = [2; 32];
-    assert!(
-        !fixture
-            .repository
-            .manual_dns_task_transition_satisfied(UnixMicros::new(12), &absent)?
-    );
+    assert!(!fixture.repository.manual_dns_task_transition_satisfied(
+        UnixMicros::new(12),
+        &absent,
+        absent.fence
+    )?);
     assert_eq!(fixture.repository.current_revision()?, Revision::new(6));
     Ok(())
 }
@@ -102,16 +104,18 @@ fn every_claim_and_publication_field_is_bound_before_skipping_a_transition()
 #[test]
 fn phase_observation_rechecks_claim_and_publication_expiry() -> Result<(), Box<dyn Error>> {
     let (mut fixture, mut task) = published_task()?;
-    assert!(
-        fixture
-            .repository
-            .manual_dns_task_transition_satisfied(UnixMicros::new(99), &task)?
-    );
+    assert!(fixture.repository.manual_dns_task_transition_satisfied(
+        UnixMicros::new(99),
+        &task,
+        task.fence
+    )?);
     for now in [100, 101] {
         assert!(matches!(
-            fixture
-                .repository
-                .manual_dns_task_transition_satisfied(UnixMicros::new(now), &task),
+            fixture.repository.manual_dns_task_transition_satisfied(
+                UnixMicros::new(now),
+                &task,
+                task.fence
+            ),
             Err(RepositoryError::InvalidCommand)
         ));
     }
@@ -127,27 +131,29 @@ fn phase_observation_rechecks_claim_and_publication_expiry() -> Result<(), Box<d
         &AuthoritativeCommand::AdvanceManualDnsTask(task.clone()),
     )?;
     assert!(matches!(
-        fixture
-            .repository
-            .manual_dns_task_transition_satisfied(UnixMicros::new(150), &task),
+        fixture.repository.manual_dns_task_transition_satisfied(
+            UnixMicros::new(150),
+            &task,
+            task.fence
+        ),
         Err(RepositoryError::InvalidCommand)
     ));
     task.phase = ManualDnsTaskPhase::AwaitingRemoval;
-    assert!(
-        !fixture
-            .repository
-            .manual_dns_task_transition_satisfied(UnixMicros::new(150), &task)?
-    );
+    assert!(!fixture.repository.manual_dns_task_transition_satisfied(
+        UnixMicros::new(150),
+        &task,
+        task.fence
+    )?);
     fixture.apply(
         9,
         150,
         &AuthoritativeCommand::AdvanceManualDnsTask(task.clone()),
     )?;
-    assert!(
-        fixture
-            .repository
-            .manual_dns_task_transition_satisfied(UnixMicros::new(151), &task)?
-    );
+    assert!(fixture.repository.manual_dns_task_transition_satisfied(
+        UnixMicros::new(151),
+        &task,
+        task.fence
+    )?);
     Ok(())
 }
 
@@ -161,9 +167,11 @@ fn superseded_state_is_not_a_later_successful_phase() -> Result<(), Box<dyn Erro
         [task.task_digest.as_slice()],
     )?;
     assert!(matches!(
-        fixture
-            .repository
-            .manual_dns_task_transition_satisfied(UnixMicros::new(12), &task),
+        fixture.repository.manual_dns_task_transition_satisfied(
+            UnixMicros::new(12),
+            &task,
+            task.fence
+        ),
         Err(RepositoryError::InvalidCommand)
     ));
     Ok(())
