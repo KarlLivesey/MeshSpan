@@ -126,6 +126,16 @@ where
     A: ManualDnsTaskAuthority + Send + Sync,
     O: AuthoritativeTxtObserver + Send + Sync,
 {
+    fn expected_receipt(
+        &self,
+        request: &CertificateChallengeRequest,
+    ) -> Result<CertificateChallengeReceipt, ContractError> {
+        validate_cleanup_request(request, CertificateChallengeKind::Dns01)?;
+        let payload =
+            Dns01Payload::decode(&request.challenge).map_err(|_| ContractError::InvalidInput)?;
+        Ok(Self::receipt(request, &payload))
+    }
+
     async fn publish(
         &mut self,
         request: &CertificateChallengeRequest,

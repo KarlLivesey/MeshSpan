@@ -15,6 +15,8 @@ use crate::{
     CertificateOrderCheckpointService, PreparedCertificateOrder,
 };
 
+mod publication;
+
 /// Durable result of executing exactly one current machine action.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CertificateOrderStepResult {
@@ -37,6 +39,7 @@ pub struct CertificateOrderExecution<T, C> {
     certificate_key_reference: meshspan_metadata::SecretGenerationReference,
     csr_der: Vec<u8>,
     executor: AcmeStepExecutor<T, meshspan_acme::AcmeAccountKey, C>,
+    publication_visible: bool,
 }
 
 impl<T, C> CertificateOrderExecution<T, C> {
@@ -50,6 +53,7 @@ impl<T, C> CertificateOrderExecution<T, C> {
             certificate_key_reference: prepared.certificate_key_reference,
             csr_der: prepared.csr_der,
             executor: AcmeStepExecutor::new(transport, prepared.account_key, challenge),
+            publication_visible: false,
         }
     }
 
@@ -120,6 +124,19 @@ where
         if context.deadline <= now || challenge_expires_at <= now {
             return Err(CertificateOrderExecutionError::DeadlineElapsed);
         }
+        if let Some(candidate) = self.prepare_publication(context, challenge_expires_at)? {
+            return self.checkpoint_candidate(
+                checkpoint_service,
+                actor_principal_id,
+                now,
+                candidate,
+            );
+        }
+        if self.needs_publication_restore()? {
+            return self
+                .restore_publication(clock, context, challenge_expires_at)
+                .await;
+        }
         if self
             .machine
             .poll_not_before()
@@ -139,6 +156,7 @@ where
                 AcmeChallengeExecution {
                     context,
                     challenge_expires_at,
+                    publication: self.machine.publication(),
                     csr_der: &self.csr_der,
                 },
             ),
@@ -160,23 +178,50 @@ where
             AcmeStepOutcome::Advanced(event) => (event, None),
             AcmeStepOutcome::AdvancedWithRetry { event, retry_after } => (event, Some(retry_after)),
         };
-        self.machine
-            .advance_with_retry(event, received_at, retry_after)?;
-        if let meshspan_acme::AcmeMachineAction::Complete { certificate } = self.machine.action()? {
+        let publication_visible = matches!(
+            event,
+            meshspan_acme::AcmeMachineEvent::ChallengePublished { .. }
+        );
+        let mut candidate = self.machine.clone();
+        candidate.advance_with_retry(event, received_at, retry_after)?;
+        if let meshspan_acme::AcmeMachineAction::Complete { certificate } = candidate.action()? {
             return Ok(CertificateOrderStepResult::ReadyForCompletion {
                 certificate_chain: certificate,
             });
         }
-        let checkpoint = checkpoint_service.checkpoint(
+        let result = self.checkpoint_candidate(
+            checkpoint_service,
             actor_principal_id,
             received_at,
+            candidate,
+        )?;
+        self.publication_visible |= publication_visible;
+        Ok(result)
+    }
+
+    fn checkpoint_candidate<A: CertificateOrderCheckpointAuthority>(
+        &mut self,
+        checkpoint_service: &CertificateOrderCheckpointService<A>,
+        actor_principal_id: PrincipalId,
+        now: UnixMicros,
+        candidate: meshspan_acme::AcmeOrderMachine,
+    ) -> Result<CertificateOrderStepResult, CertificateOrderExecutionError> {
+        let checkpoint = checkpoint_service.checkpoint(
+            actor_principal_id,
+            now,
             &CertificateOrderCheckpoint {
                 order_id: self.assignment.order.order_id,
-                claim,
+                claim: self
+                    .assignment
+                    .order
+                    .claim
+                    .ok_or(CertificateOrderExecutionError::InvalidInput)?,
                 certificate_key: self.certificate_key_reference,
-                machine: &self.machine,
+                machine: &candidate,
             },
         )?;
+        // An unsuccessful or ambiguous commit must not become executable local state.
+        self.machine = candidate;
         Ok(CertificateOrderStepResult::Checkpointed(checkpoint))
     }
 }

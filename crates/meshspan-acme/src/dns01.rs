@@ -111,6 +111,24 @@ impl<P> Dns01Challenge<P> {
 }
 
 impl<P: DnsTxtProvider + Send + Sync> CertificateChallenge for Dns01Challenge<P> {
+    fn expected_receipt(
+        &self,
+        request: &CertificateChallengeRequest,
+    ) -> Result<CertificateChallengeReceipt, ContractError> {
+        validate_cleanup_request(request, CertificateChallengeKind::Dns01)?;
+        let payload =
+            Dns01Payload::decode(&request.challenge).map_err(|_| ContractError::InvalidInput)?;
+        Ok(Self::receipt(
+            request,
+            &payload,
+            self.provider.receipt(
+                payload.record_name(),
+                payload.record_value(),
+                request.order_epoch,
+            ),
+        ))
+    }
+
     async fn publish(
         &mut self,
         request: &CertificateChallengeRequest,

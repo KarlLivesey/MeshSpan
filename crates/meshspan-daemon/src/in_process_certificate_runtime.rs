@@ -169,6 +169,19 @@ where
     R: RandomSource + Send,
     C: Clock + Send + Sync,
 {
+    fn expected_receipt(
+        &self,
+        request: &CertificateChallengeRequest,
+    ) -> Result<CertificateChallengeReceipt, ContractError> {
+        match self {
+            Self::Http01(value) => value.expected_receipt(request),
+            Self::Rfc2136(value) => value.expected_receipt(request),
+            Self::Cloudflare(value) => value.expected_receipt(request),
+            Self::Webhook(value) => value.expected_receipt(request),
+            Self::ManualDns(value) => value.expected_receipt(request),
+        }
+    }
+
     async fn publish(
         &mut self,
         request: &CertificateChallengeRequest,

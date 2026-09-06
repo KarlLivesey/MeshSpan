@@ -46,6 +46,7 @@ async fn executor_waits_for_manual_removal_and_resumes_after_provider_restart()
         order_epoch: 9,
     };
     let execution = AcmeChallengeExecution {
+        publication: None,
         context: request()?.context,
         challenge_expires_at: UnixMicros::new(200),
         csr_der: &[],

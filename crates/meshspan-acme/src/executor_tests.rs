@@ -235,6 +235,7 @@ async fn executor_publishes_the_exact_dns01_digest() -> Result<(), Box<dyn std::
 
 fn execution() -> Result<AcmeChallengeExecution<'static>, Box<dyn std::error::Error>> {
     Ok(AcmeChallengeExecution {
+        publication: None,
         context: RequestContext {
             contract_version: ContractVersion::V1_0,
             operation_id: OperationId::from_bytes([7; 16])?,

@@ -103,6 +103,20 @@ pub enum CertificateChallengeCleanup {
 
 /// HTTP-01 or DNS-01 publication without certificate private-key access.
 pub trait CertificateChallenge: ComponentLifecycle {
+    /// Calculates the receipt identity for exact publication inputs without external IO.
+    ///
+    /// This does not prove publication, visibility, removal or authority to perform any action.
+    /// Recovery uses it only to compare retained evidence before any provider mutation.
+    /// Original publication expiry may be in the past.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unsupported or malformed requests and invalid provider configuration.
+    fn expected_receipt(
+        &self,
+        request: &CertificateChallengeRequest,
+    ) -> Result<CertificateChallengeReceipt, ContractError>;
+
     /// Publishes one exact fenced challenge idempotently.
     ///
     /// # Errors

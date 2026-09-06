@@ -12,6 +12,59 @@ not close an unexplained failure.
 
 ## Task 2 — interrupted challenge recovery
 
+### Publication identity handoff — in-progress branch
+
+The current `codex/stage10-task2-publication-handoff` candidate checkpoints exact
+HTTP/DNS publication material before publisher IO. It retains the original
+identifier, payload/version, provider revision, opaque publication epoch and
+expiry independently of the current worker claim. Later scheduling inputs do
+not extend that expiry. Signer-derived material must still match the retained
+record before publication or cleanup. Providers expose a pure expected-receipt
+calculation; calculating it is not evidence that anything was published, became
+visible or was removed.
+
+A replacement worker keeps the original CA phase. Restoration of a lost HTTP
+catalogue republishes and verifies the exact retained material without notifying
+the CA again, changing its polling schedule or checkpointing fictitious progress.
+A valid authorisation instead stays in cleanup, using its original receipt even
+after expiry. Candidate machine changes become locally executable only after
+their checkpoint succeeds; failed prepublication commits remain unpublished on
+retry. These changes are not yet a complete manual-DNS handoff implementation.
+
+Checkpoint format **3** adds an explicit publication-state field. Formats 1 and 2
+remain readable in every original phase; absent old publication material is
+represented as legacy evidence, not silently replaced by the new worker's
+identity. New binaries write format 3 on their next authoritative checkpoint;
+old binaries cannot read it. No SQL migration, dependency or HTTP API changed.
+Recovery of legacy lifetimes across claim changes is still incomplete: a
+candidate lifetime cannot be bound to a published legacy record unless its exact
+expected receipt matches. This branch must not be merged as completed handoff
+work before that integration and manual-task ownership are addressed.
+
+The daemon prepublication regression first failed in **0.02 seconds** after a
+37.78-second build: the HTTP response was already visible before its material
+had been checkpointed. After the change, **34 certificate-order daemon tests
+passed in 0.23 seconds** (34.00-second build), and **57 ACME tests passed in 0.08
+seconds** (5.73-second build). Tests cover checkpoint failure and retry, exact
+expiry despite changed scheduling inputs, a lower-valued replacement fence,
+catalogue reconstruction without another CA request, and expired cleanup with
+both populated and empty catalogues. These handoff cases use recording authority
+and checkpoint encode/decode, not real consensus/process-crash proof.
+
+Both real-daemon HTTP-01/DNS-01 issuance, post-issuance restart and gateway-join
+tests also passed in **20.07 seconds**, after a 38.36-second build. They preserve
+the existing one-order/one-finalisation and successful-response polling checks.
+They do not yet interrupt the daemon during an unfinished authorisation.
+
+Affected all-target/all-feature Clippy passed in **17.00 seconds** after fixing
+collapsible conditionals, duplicate match arms and a runtime wildcard import;
+no suppression was added. Formatting passed. The current branch has not passed
+the full integration gate. Task 2 remains **4 points**, Stage 10 **143**, Stage 11
+**126**: legacy lifetime recovery, long-running publication/claim handling,
+manual-task ownership transfer, remaining provider process proofs and active
+gateway challenge distribution remain open. No release, tag, package/image
+publication or GitHub Actions were run.
+
 ### Integrated cleanup and manual-DNS polling candidate
 
 The complete local gate passed on signed commit

@@ -15,6 +15,36 @@ use crate::{
 };
 
 #[tokio::test]
+async fn expected_receipt_is_pure_and_remains_available_after_expiry()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut http = Http01Challenge::new();
+    let original = http_request(7, b"token.thumbprint")?;
+    let expected = http.expected_receipt(&original)?;
+    assert_eq!(http.response("token", UnixMicros::new(150))?, None);
+    assert_eq!(http.publish(&original).await?, expected);
+    let mut later = original.clone();
+    later.context.deadline = UnixMicros::new(300);
+    assert_eq!(http.expected_receipt(&later)?, expected);
+
+    let dns = Dns01Challenge::new(MemoryDns::default());
+    let original = request(
+        CertificateChallengeKind::Dns01,
+        "files.example.test",
+        Dns01Payload::new("_acme-challenge.files.example.test", b"txt-value")?.encode()?,
+        7,
+    )?;
+    let expected = dns.expected_receipt(&original)?;
+    let provider = dns.into_provider();
+    assert!(provider.records.is_empty());
+    let mut dns = Dns01Challenge::new(provider);
+    assert_eq!(dns.publish(&original).await?, expected);
+    let mut later = original;
+    later.context.deadline = UnixMicros::new(300);
+    assert_eq!(dns.expected_receipt(&later)?, expected);
+    Ok(())
+}
+
+#[tokio::test]
 async fn http_publication_is_shared_bounded_expiring_and_epoch_fenced()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut publisher = Http01Challenge::new();
