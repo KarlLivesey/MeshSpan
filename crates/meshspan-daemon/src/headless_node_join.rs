@@ -604,6 +604,7 @@ pub(crate) enum HeadlessNodeJoinError {
     Setup(#[from] meshspan_metadata::LocalSetupError),
     #[error("headless node protected receipt failed")]
     ProtectedReceipt(#[from] ProtectedFileError),
-    #[error("headless node HTTPS admission failed")]
+    // The nested enum contains only closed, payload-free failure categories.
+    #[error("headless node HTTPS admission failed: {0}")]
     Https(#[from] PinnedHttpsClientError),
 }

@@ -511,7 +511,10 @@ async fn initialise_daemon_node(
         } else {
             admit_headless_node(&mut local_state, config, &private_endpoint, started_at)
                 .await
-                .map_err(|_| DaemonProcessError::HeadlessNodeJoin)?
+                .map_err(|error| DaemonProcessError::HeadlessNodeJoin {
+                    phase: "admission",
+                    failure: error.to_string(),
+                })?
         };
         if let Some(admission) = admission {
             let joined = activate_and_install_node(
@@ -522,7 +525,10 @@ async fn initialise_daemon_node(
                 current_time()?,
             )
             .await
-            .map_err(|_| DaemonProcessError::HeadlessNodeJoin)?;
+            .map_err(|error| DaemonProcessError::HeadlessNodeJoin {
+                phase: "activation and catch-up",
+                failure: error.to_string(),
+            })?;
             private_network
                 .install(joined.network)
                 .map_err(|()| DaemonProcessError::PrivateNetworkState)?;
@@ -3776,8 +3782,13 @@ pub enum DaemonProcessError {
     #[error("daemon node-enrolment API failed")]
     NodeEnrolmentApi(#[from] NodeEnrolmentApiError),
     /// Headless admission into an existing mesh failed.
-    #[error("daemon headless node join failed")]
-    HeadlessNodeJoin,
+    #[error("daemon headless node join failed during {phase}: {failure}")]
+    HeadlessNodeJoin {
+        /// Local lifecycle phase, never supplied by the peer.
+        phase: &'static str,
+        /// Closed headless-join error display; excludes nested errors and peer payloads.
+        failure: String,
+    },
     /// Interactive admission or its protected restart hand-off failed closed.
     #[error("daemon interactive node join failed")]
     InteractiveNodeJoin,

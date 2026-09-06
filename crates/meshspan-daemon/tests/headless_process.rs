@@ -567,8 +567,15 @@ async fn three_headless_daemons_commit_after_original_node_loss() -> Result<(), 
         wait_for_file_surfaces(third.address, &third_client, api_key, &volume_id, content).await
     }
     .await;
+    let proof = proof.map_err(|error| -> Box<dyn Error> {
+        let observations = processes.iter_mut()
+            .map(|process| (process.id(), process.try_wait()))
+            .collect::<Vec<_>>();
+        format!("{error}; root/second/third HTTPS: {:?}; child exit states before cleanup: {observations:?}",
+            [root.address, second.address, third.address]).into()
+    });
     stop_processes(&mut processes);
-    proof
+    retain_failure_state(proof, [root.temporary, second.temporary, third.temporary])
 }
 
 async fn wait_for_survivor_vote_convergence(

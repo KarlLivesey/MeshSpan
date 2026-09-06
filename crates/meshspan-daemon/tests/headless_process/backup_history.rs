@@ -115,11 +115,29 @@ async fn encrypted_export(
         .await?;
     stream.write_all(format!("GET /api/latest/admin/backups/{backup_id}/export HTTP/1.1\r\nHost: {CERTIFICATE_NAME}\r\nAuthorization: {authorization}\r\nConnection: close\r\n\r\n").as_bytes()).await?;
     let mut received = Vec::new();
-    tokio::time::timeout(
+    let transfer = tokio::time::timeout(
         WAIT_LIMIT,
         stream.take(32 * 1024 * 1024).read_to_end(&mut received),
     )
-    .await??;
+    .await;
+    if !matches!(transfer, Ok(Ok(_))) {
+        // Report framing progress, never credentials, container bytes or arbitrary headers.
+        let framing = received
+            .windows(4)
+            .position(|bytes| bytes == b"\r\n\r\n")
+            .and_then(|offset| {
+                let headers = std::str::from_utf8(&received[..offset + 4]).ok()?;
+                let declared = super::response_header(headers, "content-length")
+                    .ok()?
+                    .parse::<u64>()
+                    .ok()?;
+                Some((declared, received.len() - offset - 4))
+            });
+        return Err(format!(
+            "encrypted backup export from {address} failed: {transfer:?}; received {} bytes; (declared body, received body): {framing:?}",
+            received.len()
+        ).into());
+    }
     let offset = received
         .windows(4)
         .position(|bytes| bytes == b"\r\n\r\n")

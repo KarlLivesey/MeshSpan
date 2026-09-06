@@ -56,8 +56,44 @@ fixtures are now race-free. The full focused headless suite then passed in
 **32.46 seconds** (eight passed, two container-dependent tests explicitly ignored),
 after a 2.81-second build. No timeout increase or serialisation was introduced.
 
-No production implementation, dependency, schema or protocol changed. Full local
-integration remains pending for the corrected slice; task 2 stays at **6 points** and Stage
+The corrected candidate `bf98d56`, tree
+`4d887e01333bbf64a39b1e1b82303a7ecdd5831c`, failed its full `pnpm check` in
+**440.23 seconds**. Static lanes and web tests (9.58 seconds) passed; Rust workspace
+tests failed after 404.24 seconds. Both certificate process workflows passed.
+The operator workflow received a TLS EOF with both children still alive, and
+the metrics workflow timed out waiting for a configured HTTPS listener. The
+operator fixture's retained operation history places its failure before file
+uploads; encrypted backup export is being investigated. The metrics failure did
+not retain enough context to distinguish root restart from peer join. Neither
+failure is explained or closed by the earlier passing focused runs. Request
+framing and metrics-phase/child-state diagnostics have been added without
+weakening assertions, increasing timeouts or serialising tests.
+
+The next diagnostic-focused parallel headless run passed those two workflows and
+both certificate lifecycles, but failed the three-node join proof (**38.05 seconds**,
+seven passed, one failed, two ignored). The child reported only `HeadlessNodeJoin`.
+The daemon now preserves the join phase and closed, redacted error category, and
+the three-node fixture retains failure state. This changes diagnostic detail only;
+it does not retry, accept an invalid response or alter join behaviour.
+
+Further diagnostic runs failed in **59.46**, **43.55** and **45.54 seconds**;
+the last two explicitly selected NVM Node 26.8.1. The failures now identify live
+peers missing HTTPS readiness after join. A retained peer's local setup record is
+already complete, so these observations are not evidence of failed admission.
+The single three-node workflow passed in **26.14 seconds**; that does not close
+the parallel failure. Native stack sampling during a further **44.02-second**
+failing parallel run places repeated repository opening, schema parsing and
+integrity checks inside service composition before public listeners are bound.
+Sampling adds overhead and is diagnostic evidence, not a performance result.
+Inspection also found unconditional schema-marker updates on current database
+reopens; a held-writer regression is being added before changing that boundary.
+
+An intermediate system-process listing was incorrectly attributed to a Node
+child of this suite. Inspection confirms its panel checks use Rust over HTTPS;
+no such Node child is launched. Node version is not an established failure cause.
+
+No dependency, schema or protocol changed. Full local
+integration remains incomplete for the corrected slice; task 2 stays at **6 points** and Stage
 10 at **145** until that gate passes. Cloudflare/webhook/manual lifecycle,
 interrupted and long-running orders, successful polling hints and active gateway
 challenge distribution remain open. No publication or Actions ran.
