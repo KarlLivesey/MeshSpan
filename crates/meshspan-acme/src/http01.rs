@@ -141,14 +141,19 @@ impl Http01Challenge {
         validate_request(request, CertificateChallengeKind::Http01)?;
         let payload =
             Http01Payload::decode(&request.challenge).map_err(|_| ContractError::InvalidInput)?;
+        if receipt != Self::receipt(request, &payload) {
+            return Err(ContractError::Stale);
+        }
         let mut records = self
             .records
             .write()
             .map_err(|_| ContractError::Unavailable)?;
-        let current = records
-            .get(payload.token())
-            .ok_or(ContractError::NotFound)?;
-        if current.receipt != receipt || current.receipt != Self::receipt(request, &payload) {
+        let Some(current) = records.get(payload.token()) else {
+            // Removal may have succeeded before its checkpoint, or restart may have
+            // discarded this process-local catalogue. Exact absence is successful cleanup.
+            return Ok(());
+        };
+        if current.receipt != receipt {
             return Err(ContractError::Stale);
         }
         records.remove(payload.token());

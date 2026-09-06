@@ -12,6 +12,32 @@ not close an unexplained failure.
 
 ## Task 2 — real DNS-01 issuance, restart and gateway delivery
 
+### Recovery follow-up — exact absent HTTP publications
+
+After the preceding candidate reached `main`, two new HTTP-01 cleanup regressions
+failed with `NotFound` in **0.00 seconds** (18.69-second build): replay after a
+successful removal, and receipt validation against an empty restarted catalogue.
+Cleanup now verifies the complete request-derived receipt before inventory lookup,
+then accepts exact absence. An existing replacement publication still returns
+`Stale` and its exact response bytes remain unchanged. This does not accept an
+unknown or mismatched receipt merely because its token is absent.
+
+All **47 ACME tests passed in 0.06 seconds** after the correction (3.56-second
+build); all-target/all-feature ACME Clippy passed in **18.35 seconds**. Formatting
+and diff checks passed. No dependency, schema or wire shape changed. This is a
+focused provider correction, not complete interrupted-order recovery or a fresh
+full integration gate. Task 2 remains **5 points**, Stage 10 **144**.
+
+The next recovery boundary must separate a live worker claim from the original
+publication identity, receipt and expiry retained for cleanup. A new claim must
+not reconstruct an old publication with new expiry/fence values, nor send a
+completed authorisation back through notification merely to obtain a new receipt.
+Coverage must include already-valid authorisation cleanup, same-worker restart,
+replacement-worker restart, stale cleanup against a replacement, and checkpoint
+round-trips. Persisted-state handling must be explicit before changing the
+checkpoint shape; this is not permission to discard a checkpoint or weaken its
+authority binding.
+
 The existing real-process lifecycle now also runs RFC 2136 DNS-01 through the
 public certificate-provisioning API. Two daemon processes use a local TLS CA and
 an independent signed-DNS transcript verifier. The verifier checks the exact
@@ -212,6 +238,12 @@ part of this proof: a read-only Docker inspection confirmed the named local
 `meshspan-smbclient-test:bookworm` image is absent. No live-CA, physical-hardware,
 soak or publication proof is claimed. No releases, tags, images or Actions were
 published or run.
+
+PR **#241** merged into `main` at `eae170a2774a028aee22cfc5da95c1946b01ad6f`;
+GitHub reports that merge signature verified. PR **#242** also reports merged
+through the contained signed merge `9942e63`. Both feature heads are ancestors
+of `main`. Their local and remote branches were removed, along with the clean
+temporary deadline worktree; committed source and evidence remain in `main`.
 
 ## Task 2 — real HTTP-01 issuance, restart and gateway delivery
 

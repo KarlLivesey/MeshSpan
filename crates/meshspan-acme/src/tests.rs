@@ -40,6 +40,49 @@ async fn http_publication_is_shared_bounded_expiring_and_epoch_fenced()
         publisher.cleanup(&request, receipt).await,
         Err(ContractError::Stale)
     );
+    assert_eq!(
+        reader.response("token", UnixMicros::new(199))?,
+        Some(b"replacement.thumbprint".to_vec())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_cleanup_replays_after_removal_and_empty_catalogue_restart()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut publisher = Http01Challenge::new();
+    let request = http_request(7, b"token.thumbprint")?;
+    let receipt = publisher.publish(&request).await?;
+
+    publisher.cleanup(&request, receipt).await?;
+    publisher.cleanup(&request, receipt).await?;
+    assert_eq!(publisher.response("token", UnixMicros::new(199))?, None);
+
+    // A new process has no HTTP publication inventory, but retains the exact
+    // request and receipt in its durable order checkpoint.
+    let mut restarted = Http01Challenge::new();
+    restarted.cleanup(&request, receipt).await?;
+    assert_eq!(restarted.response("token", UnixMicros::new(199))?, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_cleanup_requires_an_exact_receipt_even_when_already_absent()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut publisher = Http01Challenge::new();
+    let request = http_request(7, b"token.thumbprint")?;
+    let receipt = publisher.publish(&request).await?;
+    let mut restarted = Http01Challenge::new();
+    let mut mismatched = [receipt; 3];
+    mismatched[0].configuration_revision = Revision::new(4);
+    mismatched[1].order_epoch = 8;
+    mismatched[2].publication_digest[0] ^= 1;
+    for wrong_receipt in mismatched {
+        assert_eq!(
+            restarted.cleanup(&request, wrong_receipt).await,
+            Err(ContractError::Stale)
+        );
+    }
     Ok(())
 }
 
