@@ -42,10 +42,12 @@ async fn task_survives_restart_and_advances_through_exact_dns_observation()
     let mut recovered = challenge(tasks.clone(), records.clone());
     assert_eq!(recovered.publish(&request).await?, receipt);
     assert_phase(&tasks, ManualDnsTaskPhase::PublicationObserved)?;
-    recovered.cleanup(&request, receipt).await?;
+    let mut cleanup = request.clone();
+    cleanup.context.deadline = UnixMicros::new(300);
+    recovered.cleanup(&cleanup, receipt).await?;
     assert_phase(&tasks, ManualDnsTaskPhase::AwaitingRemoval)?;
     records.lock().map_err(|_| "record lock failed")?.clear();
-    recovered.cleanup(&request, receipt).await?;
+    recovered.cleanup(&cleanup, receipt).await?;
     assert_phase(&tasks, ManualDnsTaskPhase::Complete)?;
     Ok(())
 }

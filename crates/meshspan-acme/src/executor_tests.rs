@@ -102,6 +102,59 @@ async fn executor_publishes_the_exact_http_key_authorization()
 }
 
 #[tokio::test]
+async fn executor_cleans_a_retained_http_receipt_after_its_original_expiry()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut executor = AcmeStepExecutor::new(
+        RecordingTransport::new([]),
+        RecordingSigner::default(),
+        Http01Challenge::new(),
+    );
+    let published = executor
+        .execute(
+            &AcmeMachineAction::PublishChallenge {
+                dns_name: "files.example.test".to_owned(),
+                wildcard: false,
+                challenge: challenge("http-01", "token_http"),
+                order_epoch: 7,
+            },
+            execution()?,
+        )
+        .await?;
+    let AcmeStepOutcome::Advanced(AcmeMachineEvent::ChallengePublished { publication_digest }) =
+        published
+    else {
+        return Err("HTTP publication did not return its exact receipt".into());
+    };
+    let (transport, signer, old_publication) = executor.into_parts();
+    drop(old_publication);
+    let mut recovered = AcmeStepExecutor::new(transport, signer, Http01Challenge::new());
+    let mut cleanup = execution()?;
+    cleanup.context.deadline = UnixMicros::new(300);
+    assert_eq!(
+        recovered
+            .execute(
+                &AcmeMachineAction::CleanupChallenge {
+                    dns_name: "files.example.test".to_owned(),
+                    wildcard: false,
+                    challenge: challenge("http-01", "token_http"),
+                    publication_digest,
+                    order_epoch: 7,
+                },
+                cleanup,
+            )
+            .await?,
+        AcmeStepOutcome::Advanced(AcmeMachineEvent::ChallengeCleaned)
+    );
+    let (transport, _, publication) = recovered.into_parts();
+    assert!(transport.requests.is_empty());
+    assert_eq!(
+        publication.response("token_http", UnixMicros::new(300))?,
+        None
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn executor_retries_one_bad_nonce_with_the_server_nonce()
 -> Result<(), Box<dyn std::error::Error>> {
     let bad_nonce = response(

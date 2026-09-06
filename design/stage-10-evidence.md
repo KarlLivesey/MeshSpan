@@ -10,9 +10,7 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
-## Task 2 — real DNS-01 issuance, restart and gateway delivery
-
-### Recovery follow-up — exact absent HTTP publications
+## Task 2 — interrupted challenge recovery
 
 After the preceding candidate reached `main`, two new HTTP-01 cleanup regressions
 failed with `NotFound` in **0.00 seconds** (18.69-second build): replay after a
@@ -37,6 +35,29 @@ replacement-worker restart, stale cleanup against a replacement, and checkpoint
 round-trips. Persisted-state handling must be explicit before changing the
 checkpoint shape; this is not permission to discard a checkpoint or weaken its
 authority binding.
+
+Cleanup now has separate expiry validation from publication/visibility. Its
+current operation deadline may outlive the original publication expiry, while
+the original expiry remains part of the exact receipt identity. HTTP-01,
+automatic DNS-01 and manual DNS-01 share this rule; they continue rejecting
+invalid identity/configuration, non-positive time fields and mismatched receipts.
+Publication and visibility still require expiry beyond the request deadline.
+
+Four provider regressions failed with `InvalidInput` before that change
+(**0.07 seconds**, 2.37-second build), including real signed RFC 2136 removal
+after provider reconstruction at a later supplied clock time. An initial test
+compile failure shadowed the settings helper; the fixture binding was renamed
+before collecting those regression results. All 48 cases then passed in
+0.06 seconds. A separate executor regression reproduced its duplicate expiry
+guard (**0.00 seconds**, 2.38-second build). That guard now applies to publication,
+not cleanup; the executor test verifies retained-receipt cleanup without any CA
+request or republication. The final **49 ACME tests passed in 0.11 seconds**
+(4.48-second build), and affected Clippy passed in **3.22 seconds**. Formatting
+and diff checks passed. The checkpoint still needs to supply the original
+publication fields during worker replacement; this does not close that remaining
+integration requirement. No persisted shape or dependency changed.
+
+## Task 2 — real DNS-01 issuance, restart and gateway delivery
 
 The existing real-process lifecycle now also runs RFC 2136 DNS-01 through the
 public certificate-provisioning API. Two daemon processes use a local TLS CA and

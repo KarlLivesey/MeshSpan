@@ -138,7 +138,7 @@ impl Http01Challenge {
         request: &CertificateChallengeRequest,
         receipt: CertificateChallengeReceipt,
     ) -> Result<(), ContractError> {
-        validate_request(request, CertificateChallengeKind::Http01)?;
+        validate_cleanup_request(request, CertificateChallengeKind::Http01)?;
         let payload =
             Http01Payload::decode(&request.challenge).map_err(|_| ContractError::InvalidInput)?;
         if receipt != Self::receipt(request, &payload) {
@@ -227,6 +227,19 @@ pub(crate) fn validate_request(
     request: &CertificateChallengeRequest,
     expected_kind: CertificateChallengeKind,
 ) -> Result<(), ContractError> {
+    validate_cleanup_request(request, expected_kind)?;
+    if request.expires_at <= request.context.deadline {
+        return Err(ContractError::InvalidInput);
+    }
+    Ok(())
+}
+
+// Cleanup binds the original publication expiry, not a renewed lifetime. Its
+// separately authorised request can therefore finish after that publication expired.
+pub(crate) fn validate_cleanup_request(
+    request: &CertificateChallengeRequest,
+    expected_kind: CertificateChallengeKind,
+) -> Result<(), ContractError> {
     if request.context.contract_version != ContractVersion::V1_0 {
         return Err(ContractError::UnsupportedVersion);
     }
@@ -236,7 +249,8 @@ pub(crate) fn validate_request(
         || !request.identifier.as_slice().is_ascii()
         || !valid_identifier(request.identifier.as_slice(), expected_kind)
         || request.order_epoch == 0
-        || request.expires_at <= request.context.deadline
+        || request.expires_at.get() <= 0
+        || request.context.deadline.get() <= 0
         || request
             .context
             .expected_revision

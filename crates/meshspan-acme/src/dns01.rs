@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use crate::Dns01Payload;
 use crate::component::Lifecycle;
-use crate::http01::{descriptor, validate_request};
+use crate::http01::{descriptor, validate_cleanup_request, validate_request};
 
 /// Deterministic provider identity of one exact fenced TXT publication.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -167,7 +167,7 @@ impl<P: DnsTxtProvider + Send + Sync> CertificateChallenge for Dns01Challenge<P>
         request: &CertificateChallengeRequest,
         receipt: CertificateChallengeReceipt,
     ) -> Result<(), ContractError> {
-        validate_request(request, CertificateChallengeKind::Dns01)?;
+        validate_cleanup_request(request, CertificateChallengeKind::Dns01)?;
         let payload =
             Dns01Payload::decode(&request.challenge).map_err(|_| ContractError::InvalidInput)?;
         if receipt.order_epoch != request.order_epoch {

@@ -116,6 +116,9 @@ pub trait CertificateChallenge: ComponentLifecycle {
     ) -> impl Future<Output = Result<bool, ContractError>> + Send;
 
     /// Removes only the exact fenced publication represented by the receipt.
+    /// The request retains the original publication expiry even when it is in the past;
+    /// its current operation deadline is independent. Exact absence permits an idempotent
+    /// success, never deletion of a replacement publication.
     ///
     /// # Errors
     ///

@@ -87,6 +87,29 @@ async fn http_cleanup_requires_an_exact_receipt_even_when_already_absent()
 }
 
 #[tokio::test]
+async fn http_cleanup_keeps_original_expiry_under_a_later_request_deadline()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut publisher = Http01Challenge::new();
+    let request = http_request(7, b"token.thumbprint")?;
+    let receipt = publisher.publish(&request).await?;
+    let mut cleanup = request.clone();
+    cleanup.context.deadline = UnixMicros::new(300);
+
+    assert_eq!(
+        publisher.publish(&cleanup).await,
+        Err(ContractError::InvalidInput)
+    );
+    assert_eq!(
+        publisher.is_visible(&cleanup, receipt).await,
+        Err(ContractError::InvalidInput)
+    );
+    publisher.cleanup(&cleanup, receipt).await?;
+    assert_eq!(publisher.response("token", UnixMicros::new(199))?, None);
+    assert_eq!(cleanup.expires_at, UnixMicros::new(200));
+    Ok(())
+}
+
+#[tokio::test]
 async fn dns_publication_uses_exact_provider_receipt_for_probe_and_cleanup()
 -> Result<(), Box<dyn std::error::Error>> {
     let provider = MemoryDns::default();
@@ -108,7 +131,9 @@ async fn dns_publication_uses_exact_provider_receipt_for_probe_and_cleanup()
         challenge.cleanup(&request, stale).await,
         Err(ContractError::Stale)
     );
-    challenge.cleanup(&request, receipt).await?;
+    let mut cleanup = request.clone();
+    cleanup.context.deadline = UnixMicros::new(300);
+    challenge.cleanup(&cleanup, receipt).await?;
     assert!(!challenge.is_visible(&request, receipt).await?);
     Ok(())
 }
