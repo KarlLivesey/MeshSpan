@@ -41,6 +41,8 @@ type Failure = Box<dyn Error + Send + Sync>;
 
 #[path = "authority/interruption.rs"]
 mod interruption;
+#[path = "authority/rejection.rs"]
+mod rejection;
 pub(super) use interruption::AuthorizationInterruption;
 
 pub(super) struct TestAuthority {
@@ -67,6 +69,7 @@ struct AuthorityState {
     observations: Vec<String>,
     polls: PollSchedule,
     interruption: Option<Arc<interruption::AuthorizationInterruption>>,
+    rejection: Option<rejection::OrderRejection>,
 }
 
 impl TestAuthority {
@@ -98,6 +101,7 @@ impl TestAuthority {
             observations: Vec::new(),
             polls: PollSchedule::default(),
             interruption: None,
+            rejection: None,
         }));
         let router = Router::new()
             .fallback(handle)
@@ -126,12 +130,17 @@ impl TestAuthority {
 
     pub fn assert_issued_once(&self) -> Result<(), Box<dyn Error>> {
         let state = self.state.lock().map_err(|_| "CA mutex poisoned")?;
-        if state.orders != 1
+        let expected_orders = if state.rejection.is_some() { 2 } else { 1 };
+        if state.orders != expected_orders
             || state.finalisations != 1
             || !state.validated
             || state.chain.is_none()
             || state.polls.early_requests != 0
             || state.polls.fulfilled != BTreeSet::from(["/authorization", "/order"])
+            || state
+                .rejection
+                .as_ref()
+                .is_some_and(|proof| !proof.is_complete())
         {
             return Err(format!(
                 "expected one validated issuance and both polling deadlines, saw orders={}, finalisations={}, validated={}, early_polls={}, fulfilled={:?}",
@@ -156,7 +165,8 @@ impl TestAuthority {
             (
                 state.validation_target,
                 format!(
-                    "{TOKEN}.{}",
+                    "{}.{}",
+                    state.token(),
                     state.thumbprint.as_ref().ok_or("account missing")?
                 ),
             )
@@ -213,20 +223,22 @@ async fn respond(
     let (payload, probe) = {
         let mut state = state.lock().map_err(|_| "CA mutex poisoned")?;
         state.observations.push(format!("{method} {route}"));
-        state.polls.observe(route)?;
+        let resource = state.resource(route)?;
+        state.polls.observe(resource)?;
         let payload = if *method == Method::POST {
             verify_jws(&mut state, route, body)?
         } else {
             Value::Null
         };
-        let probe = if route == "/challenge" {
+        let probe = if resource == "/challenge" {
             if payload != json!({}) {
                 return Err("challenge notification must contain an empty object".into());
             }
             Some((
                 state.validation_target,
                 format!(
-                    "{TOKEN}.{}",
+                    "{}.{}",
+                    state.token(),
                     state.thumbprint.as_ref().ok_or("account missing")?
                 ),
             ))
@@ -239,8 +251,10 @@ async fn respond(
         target.validate(&expected).await?;
         state.lock().map_err(|_| "CA mutex poisoned")?.validated = true;
     }
+    rejection::before_new_order(state, method, route).await?;
     let mut state = state.lock().map_err(|_| "CA mutex poisoned")?;
-    let (status, location, content) = route_response(&mut state, method, route, &payload)?;
+    let resource = state.resource(route)?;
+    let (status, location, content) = route_response(&mut state, method, resource, &payload)?;
     state.nonce_index += 1;
     let nonce = format!("nonce_{}", state.nonce_index);
     state.nonces.insert(nonce.clone());
@@ -251,7 +265,7 @@ async fn respond(
     if let Some(location) = location {
         response.headers_mut().insert("location", location.parse()?);
     }
-    if matches!(route, "/challenge" | "/finalize") {
+    if matches!(resource, "/challenge" | "/finalize") {
         response.headers_mut().insert("retry-after", "2".parse()?);
     }
     Ok(response)
@@ -287,12 +301,15 @@ fn route_response(
                 return Err("unexpected order names".into());
             }
             state.orders += 1;
+            state.validated = false;
+            state.chain = None;
             status = StatusCode::CREATED;
-            location = Some(format!("{endpoint}/order"));
+            location = Some(state.resource_url("/order"));
             order(state).to_string()
         }
         (&Method::POST, "/authorization") => {
             require_empty_payload(payload)?;
+            state.record_rejection()?;
             authorization(state).to_string()
         }
         (&Method::POST, "/challenge") => {
@@ -304,7 +321,7 @@ fn route_response(
             order(state).to_string()
         }
         (&Method::POST, "/finalize") => {
-            if !state.validated {
+            if !state.validated || state.is_rejected() {
                 return Err("finalisation preceded successful challenge validation".into());
             }
             let csr = URL_SAFE_NO_PAD.decode(text(payload, "csr")?)?;
@@ -323,7 +340,9 @@ fn route_response(
 }
 
 fn order(state: &AuthorityState) -> Value {
-    let status = if state.polls.pending.contains_key("/order") {
+    let status = if state.is_rejected() {
+        "invalid"
+    } else if state.polls.pending.contains_key("/order") {
         "processing"
     } else if state.chain.is_some() {
         "valid"
@@ -335,11 +354,11 @@ fn order(state: &AuthorityState) -> Value {
     let mut value = json!({
         "status": status,
         "identifiers": [{"type": "dns", "value": CERTIFICATE_NAME}],
-        "authorizations": [format!("{}/authorization", state.endpoint)],
-        "finalize": format!("{}/finalize", state.endpoint)
+        "authorizations": [state.resource_url("/authorization")],
+        "finalize": state.resource_url("/finalize")
     });
     if status == "valid" {
-        value["certificate"] = json!(format!("{}/certificate", state.endpoint));
+        value["certificate"] = json!(state.resource_url("/certificate"));
     }
     value
 }
@@ -375,14 +394,20 @@ impl PollSchedule {
 }
 
 fn authorization(state: &AuthorityState) -> Value {
-    let status = if state.validated { "valid" } else { "pending" };
+    let status = if state.is_rejected() {
+        "invalid"
+    } else if state.validated {
+        "valid"
+    } else {
+        "pending"
+    };
     json!({
         "status": status,
         "identifier": {"type": "dns", "value": CERTIFICATE_NAME},
         "challenges": [{
             "type": state.validation_target.kind(),
-            "url": format!("{}/challenge", state.endpoint),
-            "token": TOKEN,
+            "url": state.resource_url("/challenge"),
+            "token": state.token(),
             "status": status
         }]
     })
@@ -408,6 +433,13 @@ fn verify_jws(state: &mut AuthorityState, route: &str, body: &[u8]) -> Result<Va
         sec1.extend(URL_SAFE_NO_PAD.decode(text(jwk, "x")?)?);
         sec1.extend(URL_SAFE_NO_PAD.decode(text(jwk, "y")?)?);
         let key = VerifyingKey::from_sec1_bytes(&sec1)?;
+        if state
+            .account
+            .as_ref()
+            .is_some_and(|existing| *existing != key)
+        {
+            return Err("replacement changed the configured account key".into());
+        }
         let canonical = format!(
             "{{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"{}\",\"y\":\"{}\"}}",
             text(jwk, "x")?,
