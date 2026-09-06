@@ -509,7 +509,7 @@ fn sign_csr(ca: &CertificateAuthority, der: &[u8]) -> Result<String, Failure> {
     ))
 }
 
-fn pem(der: &[u8]) -> String {
+pub(super) fn pem(der: &[u8]) -> String {
     let encoded = STANDARD.encode(der);
     let mut output = String::from("-----BEGIN CERTIFICATE-----\n");
     for line in encoded.as_bytes().chunks(64) {

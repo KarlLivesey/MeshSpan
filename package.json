@@ -14,6 +14,7 @@
     "check:dependency-update": "pnpm check:advisories && pnpm check",
     "check:licences": "cargo deny check licenses && node scripts/check-javascript-licences.mjs",
     "check:stage3-adversarial": "node scripts/check-stage3-adversarial.mjs",
+    "check:dns-providers": "node scripts/check-dns-providers.mjs",
     "check:generated": "node scripts/verify-generated.mjs",
     "generate:api": "node scripts/generate-api.mjs",
     "web:format": "pnpm --filter @meshspan/web format",

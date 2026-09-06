@@ -153,6 +153,12 @@ the stage; publication-dependent acceptance remains held separately and visible.
    **337.90 seconds**. These results verify the owning-boundary corrections;
    they do not establish the cause of the older independent cluster-startup timeout.
    DNS-provider process lifecycles remain open; the estimate is unchanged.
+   The [isolated provider lifecycle candidate](stage-10-evidence.md#task-2--isolated-dns-provider-process-lifecycles)
+   now passes real-daemon Cloudflare, webhook and manual-DNS cases in separate
+   offline Linux networks (**18.46**, **18.48** and **13.35 seconds** respectively).
+   Final-source integration is pending. Advance renewal notification delivery
+   remains an explicit dependency on task 21; it is not waived or replaced by
+   simply listing tasks in the panel.
 
 3. **Encrypted certificate delivery and rotation — Partial.** **5 points remaining.**
    PKI-001/002/005/007/010; accepted decisions §7.

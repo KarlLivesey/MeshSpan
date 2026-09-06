@@ -6,6 +6,8 @@
 mod authority;
 #[path = "acme_lifecycle/challenge.rs"]
 mod challenge;
+#[path = "acme_lifecycle/dns_providers.rs"]
+mod dns_providers;
 #[path = "acme_lifecycle/gateways.rs"]
 mod gateways;
 #[path = "acme_lifecycle/rejection.rs"]
@@ -38,6 +40,7 @@ async fn http01_issuance_survives_restart_and_gateway_join_without_another_order
         target,
         json!({"kind": "http01"}),
         RecoveryScenario::Normal,
+        None,
     )
     .await
 }
@@ -53,6 +56,7 @@ async fn http01_authorization_recovers_after_process_loss_and_real_lease_expiry(
         target,
         json!({"kind": "http01"}),
         RecoveryScenario::ProcessLoss,
+        None,
     )
     .await
 }
@@ -68,6 +72,7 @@ async fn rejected_http01_order_is_cleaned_and_reissued_after_queued_daemon_resta
         target,
         json!({"kind": "http01"}),
         RecoveryScenario::RejectedOrder,
+        None,
     )
     .await
 }
@@ -92,6 +97,7 @@ async fn dns01_issuance_survives_restart_and_gateway_join_without_another_order(
         target,
         settings,
         RecoveryScenario::Normal,
+        None,
     )
     .await;
     let dns_result = dns.finish().await.map_err(|error| error.to_string());
@@ -105,8 +111,15 @@ async fn prove_lifecycle(
     target: challenge::ValidationTarget,
     settings: serde_json::Value,
     scenario: RecoveryScenario,
+    additional_trust: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
     let mut peer = ProcessFixture::new()?;
+    if additional_trust.is_some() {
+        // Provider cases run only in isolated containers. Preserve private evidence even on a
+        // panic; the runner removes successful containers and retains failed ones for diagnosis.
+        root.temporary.disable_cleanup(true);
+        peer.temporary.disable_cleanup(true);
+    }
     // This proof never connects to SMB. Bind it atomically to an OS-selected port instead of
     // leaving an unnecessary probe-to-child-start gap for an unused fixed listener address.
     root.smb_address.set_port(0);
@@ -119,7 +132,10 @@ async fn prove_lifecycle(
         ca.reject_first_authorization()?;
     }
     let trust_file = root.temporary.path().join("test-ca.pem");
-    fs::write(&trust_file, &ca.anchor_pem)?;
+    fs::write(
+        &trust_file,
+        format!("{}{}", ca.anchor_pem, additional_trust.unwrap_or_default()),
+    )?;
     let mut processes = vec![root.command().env("SSL_CERT_FILE", &trust_file).spawn()?];
     let proof: Result<(), Box<dyn Error>> = async {
         let claim = wait_for_claim(&root.claim_path).await?;

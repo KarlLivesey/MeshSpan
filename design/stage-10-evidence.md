@@ -10,6 +10,48 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 2 — isolated DNS-provider process lifecycles
+
+The candidate adds real-daemon Cloudflare, authenticated webhook and manual-DNS
+lifecycle tests. Production transports are unchanged: Cloudflare still uses its
+fixed HTTPS origin; authoritative probes still use the system resolver and direct
+DNS sockets. Each case runs in its own offline Linux container with loopback-only
+DNS and provider origins, test-owned TLS trust, no host port publication and no
+external CA/provider traffic. The CA independently derives the expected TXT from
+the authenticated signing account. The fixtures enforce exact record ownership
+and keep unrelated TXT data present through publication and cleanup.
+
+Cloudflare and webhook cases verify issuance, exact cleanup, daemon restart and
+new-gateway installation without a second order. The manual case follows the
+manager-only HTTPS task inventory, denies anonymous access, verifies that no CA
+challenge is notified before publication, checks the exact matching removal task
+and proves completed tasks stay absent after restart. These are local protocol
+and daemon integration proofs, **not live Cloudflare or public-CA evidence**.
+
+Run through NVM with `pnpm check:dns-providers`. The runner requires a locally
+available Rust image matching `rust-toolchain.toml`; `MESHSPAN_DNS_PROOF_IMAGE`
+can select an exact local image ID. It never pulls or publishes an image. Cargo
+builds offline with the existing registry cache and a dedicated Linux target
+volume; cases run in parallel without sharing their DNS/HTTPS listeners. Failed
+containers retain private fixture state for diagnosis, while successful containers
+are removed. Do not upload retained databases or credentials as public artefacts.
+
+The initial three-case run passed after a **77.58-second Linux build**. On the
+final harness (including failure-state retention), its incremental build passed
+in **9.43 seconds**, with manual DNS **13.35 seconds**, Cloudflare **18.46 seconds**
+and webhook **18.48 seconds**, all running concurrently. The image was
+`sha256:e70e2eec3d495fd5c8e0be74adda86507dfac7f51a724fbf9813ff59b2b247c7`
+(Linux ARM64, Rust **1.98.0**), under NVM Node **26.8.1**, pnpm **11.19.0** and
+four workers. Affected all-target/all-feature Clippy passed in **2.23 seconds**;
+the new runner's ESLint and formatting checks passed. Existing normal HTTP-01,
+RFC 2136 and two-gateway ACME tests passed in **21.22 seconds** after a
+**5.91-second build**, before the container-only retention adjustment.
+
+Full final-source integration is pending. No production behaviour, dependency,
+schema or protocol was changed. Task 2 remains partial: advance renewal delivery
+depends explicitly on the existing **task 21 durable-notification implementation**,
+not a second notification system. Live CA verification remains task 5.
+
 ## Task 2 — shared HTTP-01 gateway challenges
 
 ### Final recovery integration
