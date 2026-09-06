@@ -26,6 +26,7 @@ use crate::{
 const IDLE_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const ACTIVE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CLAIM_LEASE_MICROS: u64 = 5 * 60 * 1_000_000;
+const CHALLENGE_LIFETIME_MICROS: u64 = 24 * 60 * 60 * 1_000_000;
 const RENEWAL_LEAD_MICROS: u64 = 30 * 24 * 60 * 60 * 1_000_000;
 const ADMISSION_PAGE_ITEMS: usize = 32;
 const DRIVE_REQUEST_TIMEOUT_MICROS: u64 = 2 * 60 * 1_000_000;
@@ -110,6 +111,7 @@ impl CertificateRuntime {
         )?;
         let drive = CertificateOrderDrivePolicy::new(
             DurationMicros::new(DRIVE_REQUEST_TIMEOUT_MICROS),
+            DurationMicros::new(CHALLENGE_LIFETIME_MICROS),
             DRIVE_MAXIMUM_STEPS,
         )?;
         let policy = CertificateAutomationPolicy::new(

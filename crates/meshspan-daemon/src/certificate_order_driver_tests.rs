@@ -32,6 +32,27 @@ use crate::{
 mod deadlines;
 mod tls_retry;
 
+#[test]
+fn publication_policy_is_bounded_independently_of_request_timeouts() {
+    let request_timeout = DurationMicros::new(1_000_000);
+    for lifetime in [0, 1_000_000, 7 * 24 * 60 * 60 * 1_000_000 + 1] {
+        assert!(
+            CertificateOrderDrivePolicy::new(request_timeout, DurationMicros::new(lifetime), 1)
+                .is_err()
+        );
+    }
+    for lifetime in [
+        1_000_001,
+        24 * 60 * 60 * 1_000_000,
+        7 * 24 * 60 * 60 * 1_000_000,
+    ] {
+        assert!(
+            CertificateOrderDrivePolicy::new(request_timeout, DurationMicros::new(lifetime), 1)
+                .is_ok()
+        );
+    }
+}
+
 #[tokio::test]
 async fn drive_yields_only_after_authoritative_checkpoint() -> Result<(), Box<dyn std::error::Error>>
 {
@@ -92,7 +113,11 @@ fn driver<C: Clock>(
     driver_with_policy(
         authority,
         clock,
-        CertificateOrderDrivePolicy::new(DurationMicros::new(1_000_000), maximum_steps)?,
+        CertificateOrderDrivePolicy::new(
+            DurationMicros::new(1_000_000),
+            DurationMicros::new(24 * 60 * 60 * 1_000_000),
+            maximum_steps,
+        )?,
     )
 }
 

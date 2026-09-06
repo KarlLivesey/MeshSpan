@@ -22,7 +22,16 @@ async fn http01_issuance_survives_restart_and_gateway_join_without_another_order
 -> Result<(), Box<dyn Error>> {
     let root = ProcessFixture::new()?;
     let target = challenge::ValidationTarget::Http01(root.http01_address);
-    prove_lifecycle(root, target, json!({"kind": "http01"})).await
+    prove_lifecycle(root, target, json!({"kind": "http01"}), false).await
+}
+
+#[tokio::test]
+#[ignore = "waits for the real five-minute worker lease; run separately from the fast suite"]
+async fn http01_authorization_recovers_after_process_loss_and_real_lease_expiry()
+-> Result<(), Box<dyn Error>> {
+    let root = ProcessFixture::new()?;
+    let target = challenge::ValidationTarget::Http01(root.http01_address);
+    prove_lifecycle(root, target, json!({"kind": "http01"}), true).await
 }
 
 #[tokio::test]
@@ -40,7 +49,7 @@ async fn dns01_issuance_survives_restart_and_gateway_join_without_another_order(
         "algorithm": "hmac_sha256",
         "secret": "0123456789abcdef0123456789abcdef"
     });
-    let proof = prove_lifecycle(ProcessFixture::new()?, target, settings).await;
+    let proof = prove_lifecycle(ProcessFixture::new()?, target, settings, false).await;
     let dns_result = dns.finish().await.map_err(|error| error.to_string());
     proof.map_err(|error| format!("{error}; DNS transcript result: {dns_result:?}"))?;
     dns_result?;
@@ -51,6 +60,7 @@ async fn prove_lifecycle(
     mut root: ProcessFixture,
     target: challenge::ValidationTarget,
     settings: serde_json::Value,
+    interrupt_authorization: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut peer = ProcessFixture::new()?;
     // This proof never connects to SMB. Bind it atomically to an OS-selected port instead of
@@ -58,6 +68,9 @@ async fn prove_lifecycle(
     root.smb_address.set_port(0);
     peer.smb_address.set_port(0);
     let ca = authority::TestAuthority::start(target).await?;
+    let interruption = interrupt_authorization
+        .then(|| ca.interrupt_authorization())
+        .transpose()?;
     let trust_file = root.temporary.path().join("test-ca.pem");
     fs::write(&trust_file, &ca.anchor_pem)?;
     let mut processes = vec![root.command().env("SSL_CERT_FILE", &trust_file).spawn()?];
@@ -85,10 +98,8 @@ async fn prove_lifecycle(
         )
         .await?;
         require_status(&response, "201 Created", "queue ACME certificate")?;
-        let issued = client_config(&ca.anchor_der)?;
-        wait_for_active(root.address, &issued, key, 1).await?;
-        ca.assert_issued_once()?;
-        ca.assert_challenge_removed().await?;
+        let issued =
+            await_issuance(&root, &ca, key, &mut processes[0], interruption.as_deref()).await?;
 
         processes[0].kill()?;
         processes[0].wait()?;
@@ -126,13 +137,63 @@ async fn prove_lifecycle(
     proof
 }
 
+async fn await_issuance(
+    root: &ProcessFixture,
+    ca: &authority::TestAuthority,
+    key: &str,
+    process: &mut Child,
+    interruption: Option<&authority::AuthorizationInterruption>,
+) -> Result<ClientConfig, Box<dyn Error>> {
+    let issued = client_config(&ca.anchor_der)?;
+    if let Some(interruption) = interruption {
+        interruption.wait_until_intercepted().await?;
+        process.kill()?;
+        process.wait()?;
+        interruption.release_unprocessed_request();
+        *process = root
+            .command()
+            .env("SSL_CERT_FILE", root.temporary.path().join("test-ca.pem"))
+            .spawn()?;
+        wait_for_active_until(
+            root.address,
+            &issued,
+            key,
+            1,
+            Instant::now() + Duration::from_mins(6),
+        )
+        .await?;
+        interruption.assert_restored()?;
+        assert_eq!(
+            ca.observations()
+                .iter()
+                .filter(|event| event.as_str() == "POST /challenge")
+                .count(),
+            1
+        );
+    } else {
+        wait_for_active(root.address, &issued, key, 1).await?;
+    }
+    ca.assert_issued_once()?;
+    ca.assert_challenge_removed().await?;
+    Ok(issued)
+}
+
 async fn wait_for_active(
     address: SocketAddr,
     client: &ClientConfig,
     key: &str,
     gateways: u64,
 ) -> Result<(), Box<dyn Error>> {
-    let deadline = Instant::now() + WAIT_LIMIT;
+    wait_for_active_until(address, client, key, gateways, Instant::now() + WAIT_LIMIT).await
+}
+
+async fn wait_for_active_until(
+    address: SocketAddr,
+    client: &ClientConfig,
+    key: &str,
+    gateways: u64,
+    deadline: Instant,
+) -> Result<(), Box<dyn Error>> {
     let authorization = format!("Bearer {key}");
     loop {
         let response = tokio::time::timeout_at(
@@ -168,6 +229,6 @@ async fn wait_for_active(
         if Instant::now() >= deadline {
             return Err(format!("ACME installation at {address}: {observation}").into());
         }
-        sleep(RETRY_INTERVAL).await;
+        sleep(Duration::from_millis(250)).await;
     }
 }

@@ -18,26 +18,34 @@ use crate::{
 
 const MAXIMUM_STEPS_PER_DRIVE: usize = 64;
 const MAXIMUM_REQUEST_TIMEOUT_MICROS: u64 = 5 * 60 * 1_000_000;
+const MAXIMUM_CHALLENGE_LIFETIME_MICROS: u64 = 7 * 24 * 60 * 60 * 1_000_000;
 
 /// Resource policy for one bounded pass over a prepared ACME order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CertificateOrderDrivePolicy {
     request_timeout: DurationMicros,
+    challenge_lifetime: DurationMicros,
     maximum_steps: usize,
 }
 
 impl CertificateOrderDrivePolicy {
     /// Creates a finite worker policy.
     ///
+    /// The publication lifetime is independent of worker ownership and is fixed when material
+    /// is first checkpointed. It is a local publication budget, not proof of CA validity.
+    ///
     /// # Errors
     ///
-    /// Rejects zero or excessive request timeouts and step budgets.
+    /// Rejects excessive bounds or a publication lifetime which cannot outlive a request.
     pub fn new(
         request_timeout: DurationMicros,
+        challenge_lifetime: DurationMicros,
         maximum_steps: usize,
     ) -> Result<Self, CertificateOrderDriverError> {
         if request_timeout.get() == 0
             || request_timeout.get() > MAXIMUM_REQUEST_TIMEOUT_MICROS
+            || challenge_lifetime.get() <= request_timeout.get()
+            || challenge_lifetime.get() > MAXIMUM_CHALLENGE_LIFETIME_MICROS
             || maximum_steps == 0
             || maximum_steps > MAXIMUM_STEPS_PER_DRIVE
         {
@@ -45,6 +53,7 @@ impl CertificateOrderDrivePolicy {
         }
         Ok(Self {
             request_timeout,
+            challenge_lifetime,
             maximum_steps,
         })
     }
@@ -150,12 +159,9 @@ where
                 // there is no valid interval; the next pass releases the expired claim.
                 return Ok(CertificateOrderDriveOutcome::Pending);
             };
-            let challenge_expires_at = execution
-                .assignment()
-                .order
-                .claim
-                .ok_or(CertificateOrderDriverError::InvalidInput)?
-                .lease_expires_at;
+            let challenge_expires_at = now
+                .checked_add(self.policy.challenge_lifetime)
+                .ok_or(CertificateOrderDriverError::InvalidInput)?;
             let step = execution
                 .execute_step(
                     &self.checkpoint,
@@ -195,11 +201,16 @@ where
             .order
             .claim
             .ok_or(CertificateOrderDriverError::InvalidInput)?;
-        let latest_deadline = claim
+        let mut latest_deadline = claim
             .lease_expires_at
             .get()
             .checked_sub(1)
             .ok_or(CertificateOrderDriverError::InvalidInput)?;
+        if let Some(publication) = execution.machine().publication()
+            && publication.expires_at() > now
+        {
+            latest_deadline = latest_deadline.min(publication.expires_at().get() - 1);
+        }
         let requested_deadline = now
             .checked_add(self.policy.request_timeout)
             .ok_or(CertificateOrderDriverError::InvalidInput)?

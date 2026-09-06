@@ -12,6 +12,54 @@ not close an unexplained failure.
 
 ## Task 2 — interrupted challenge recovery
 
+### Independent publication lifetime and real expired-lease takeover
+
+The `codex/stage10-task2-challenge-lifetime` candidate separates a publication's
+retained lifetime from the current worker lease. The runtime proposes **24 hours**
+for new challenge material. The internal drive policy accepts an explicit bounded
+lifetime, longer than its request timeout and no longer than **seven days**. This
+is a local publication budget, not a statement that the CA considers an order or
+authorisation valid for that duration. The first authoritative checkpoint fixes
+the exact expiry; later worker scheduling or replacement cannot extend it.
+
+Requests remain bounded by the current claim. While a retained publication is
+still live, the driver also caps the request deadline before that publication's
+expiry. Claim expiration still discards the old execution and uses ordinary
+fenced admission; no lease duration was increased and no automatic deadline
+extension was substituted for takeover. The policy constructor gains a lifetime
+argument; no SQL, HTTP or private wire format, dependency or persisted checkpoint
+shape changes in this increment.
+
+The new regression failed with `InvalidInput` in **0.02 seconds** after a
+30.12-second build because publication could not outlive a claim. With the fix,
+the final **39 certificate-order tests passed in 0.27 seconds** (10.41-second
+build). The replacement restores the same original receipt, opaque epoch, exact
+HTTP body and expiry after the old claim has expired. **Four metadata handoff
+tests passed in 3.02 seconds** (16.04-second build), including an on-disk close /
+reopen followed by natural lease expiry, one unchanged manual-DNS task, exact
+TXT material/creation time/expiry, no-op replay and rejection of expired workers.
+Affected all-target/all-feature Clippy passed in **2.02 seconds** after replacing
+a seconds multiplication with `Duration::from_mins`; no suppression was added.
+
+A new opt-in real-process test pauses the local TLS CA before processing an
+authorisation poll or consuming its nonce, kills the daemon, restarts it, and
+waits for the **actual five-minute lease** to expire. The CA independently probes
+the restarted HTTP listener before accepting its next poll. It requires the exact
+account-derived proof, one challenge notification, one order, one finalisation,
+cleanup, another post-issuance restart and a second gateway receiving the same
+certificate. The first execution passed in **322.28 seconds**, after a 17.23-second
+build. Issuance orchestration was then separated from gateway-join orchestration
+in the fixture; the final fixture replay and complete integration gate are still
+pending. This test is deliberately outside the fast default suite and must be
+invoked explicitly with `--ignored`; its ignored status is not itself evidence.
+
+Remaining: publication-deadline exhaustion and invalid/expired CA order recovery,
+manual-DNS and other provider full-process lifecycles, active HTTP challenge
+distribution to other gateways and the separately tracked live-CA proof. No task
+is closed by this candidate yet: task 2 remains **4 points**, Stage 10 **143** and
+Stage 11 **126**. No release, tag, package/image publication or GitHub Actions were
+run.
+
 ### Integrated publication recovery candidate
 
 The complete local integration gate passed on signed, pushed and GitHub-verified

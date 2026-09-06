@@ -117,7 +117,6 @@ where
         if now.get() < 0
             || context.deadline > claim.lease_expires_at
             || context.expected_revision != Some(self.assignment.configuration.revision)
-            || challenge_expires_at > claim.lease_expires_at
         {
             return Err(CertificateOrderExecutionError::InvalidInput);
         }
