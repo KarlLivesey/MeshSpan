@@ -112,6 +112,27 @@ path found that provider snapshots use `try_lock` on the entire storage runtime,
 so ordinary maintenance contention can become an export/restore failure. That
 boundary is the next focused investigation, not an accepted 503 workaround.
 
+The real-runtime lock regression reproduced `Unavailable` in **0.56 seconds**
+(31.39-second build) while holding only the maintenance mutex. Backup provider
+inventory now has its own shared catalogue, used by export, restore, background
+backup and the data router. Its guards cover handle lookup and replacement, not
+provider open/close/transfer IO or the surrounding maintenance cycle. No duplicate
+provider cache or second source of authority was introduced. Existing destination,
+generation, current permission, receipt and ciphertext checks are unchanged.
+The focused backup suite passed **49 tests in 5.45 seconds**, after a 22.36-second
+build. A final guard-scope review also moves retired provider destruction outside
+the catalogue mutex. The next parallel process run still failed joined-node
+readiness (including the three-node, operator and DNS workflows); its final
+summary was not retained, so no aggregate count or duration is claimed. These
+failures do not close the startup investigation. The final focused backup run
+passed **49 tests in 8.82 seconds** after an 11.66-second build. Clippy then found
+an unnecessary owned route-composition argument; after using references instead,
+all-target/all-feature daemon Clippy passed in **20.05 seconds**, with formatting
+and diff checks also passing.
+The real CLI/public-HTTPS operator workflow then passed in **13.75 seconds**
+(16.80-second build), including encrypted export and isolated restore checking.
+This verifies the backup integration in that workflow, not parallel startup.
+
 No dependency, schema or protocol changed. Full local
 integration remains incomplete for the corrected slice; task 2 stays at **6 points** and Stage
 10 at **145** until that gate passes. Cloudflare/webhook/manual lifecycle,

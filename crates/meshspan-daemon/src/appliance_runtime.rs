@@ -2,6 +2,10 @@
 
 //! Headless process composition for the real HTTPS appliance runtime.
 
+#[cfg(test)]
+#[path = "appliance_runtime_tests.rs"]
+mod tests;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::future::Future;
@@ -176,6 +180,9 @@ struct ActiveBackupDestination {
     provider: meshspan_backup::SharedBackupProvider<meshspan_backup::DirectoryBackupProvider>,
     service: ProductionRemoteBackupService,
 }
+
+type BackupDestinationCatalogue =
+    Arc<Mutex<BTreeMap<(BackupDestinationId, u64), ActiveBackupDestination>>>;
 
 struct StorageRuntimeComposition {
     readiness: Arc<RuntimeReadiness>,
@@ -683,7 +690,7 @@ fn compose_appliance_services(
             started_at,
             config.https_listen(),
             &node.private_network,
-            Arc::clone(&storage_targets),
+            &storage_targets,
         )?)
         .merge(native_file_routes(
             &node.local_state,
@@ -1073,7 +1080,7 @@ fn authentication_session_routes(
     now: UnixMicros,
     https_listen: SocketAddr,
     private_network: &Arc<PrivateConsensusRuntime>,
-    storage_targets: Arc<Mutex<StorageTargetRuntime>>,
+    storage_targets: &Arc<Mutex<StorageTargetRuntime>>,
 ) -> Result<Router, DaemonProcessError> {
     let passkey_origin = passkey_origin(https_listen);
     Ok(Router::new()
@@ -1345,7 +1352,7 @@ fn authenticated_administration_routes(
     gateway: GatewaySessionIdentity,
     now: UnixMicros,
     private_network: &Arc<PrivateConsensusRuntime>,
-    storage_targets: Arc<Mutex<StorageTargetRuntime>>,
+    storage_targets: &Arc<Mutex<StorageTargetRuntime>>,
 ) -> Result<Router, DaemonProcessError> {
     let security =
         security_administration_routes(local_state, authority, gateway, now, private_network)?;
@@ -1355,7 +1362,7 @@ fn authenticated_administration_routes(
         gateway,
         now,
         private_network,
-        Arc::clone(&storage_targets),
+        Arc::clone(storage_targets),
     )?;
     let backup = crate::backup_schedule_api_router(crate::BackupScheduleService::new(
         open_authentication_authority(local_state, authority, Arc::clone(private_network), now)?,
@@ -1412,7 +1419,10 @@ fn authenticated_administration_routes(
     let export_service = Arc::new(crate::backup_export_service::BackupExportService::new(
         open_authentication_authority(local_state, authority, Arc::clone(private_network), now)?,
         gateway,
-        Arc::new(BackupExportTargetSnapshot(storage_targets)),
+        Arc::new(
+            BackupExportTargetSnapshot::from_runtime(storage_targets)
+                .map_err(|_| DaemonProcessError::StorageTargetTaskStopped)?,
+        ),
         Arc::clone(private_network),
     ));
     let readiness = crate::backup_readiness_api::router(
@@ -1441,18 +1451,28 @@ fn authenticated_administration_routes(
         .merge(readiness))
 }
 
-// Clone only shared provider handles while holding the runtime lock. All export IO runs
-// after this snapshot is released, independently of registration and maintenance work.
-struct BackupExportTargetSnapshot(Arc<Mutex<StorageTargetRuntime>>);
+// Share the provider catalogue, not the maintenance runtime's lock. Catalogue guards cover
+// only handle lookup/replacement; provider IO and reconciliation run after they are released.
+struct BackupExportTargetSnapshot(BackupDestinationCatalogue);
+
+impl BackupExportTargetSnapshot {
+    fn from_runtime(
+        runtime: &Arc<Mutex<StorageTargetRuntime>>,
+    ) -> Result<Self, crate::BackupExportError> {
+        let runtime = runtime
+            .lock()
+            .map_err(|_| crate::BackupExportError::Unavailable)?;
+        Ok(Self(Arc::clone(&runtime.backup_services)))
+    }
+}
 
 impl crate::backup_export_service::BackupExportProviders for BackupExportTargetSnapshot {
     fn snapshot(&self) -> Result<Vec<crate::RegisteredBackupTarget>, crate::BackupExportError> {
-        let runtime = self
+        let catalogue = self
             .0
-            .try_lock()
+            .lock()
             .map_err(|_| crate::BackupExportError::Unavailable)?;
-        Ok(runtime
-            .backup_services
+        Ok(catalogue
             .iter()
             .map(
                 |((destination_id, generation), active)| crate::RegisteredBackupTarget {
@@ -2412,7 +2432,7 @@ struct StorageTargetRuntime {
     backup_worker: crate::MetadataBackupWorker,
     backup_retention: crate::metadata_backup_retention::MetadataBackupRetentionWorker,
     backup_authority: crate::remote_backup_authority::ConsensusRemoteBackupAuthority,
-    backup_services: BTreeMap<(BackupDestinationId, u64), ActiveBackupDestination>,
+    backup_services: BackupDestinationCatalogue,
     private_network: Arc<PrivateConsensusRuntime>,
     runtime: tokio::runtime::Handle,
     state_directory: PathBuf,
@@ -2472,7 +2492,7 @@ impl StorageTargetRuntime {
             backup_retention:
                 crate::metadata_backup_retention::MetadataBackupRetentionWorker::default(),
             backup_authority: services.backup_authority,
-            backup_services: BTreeMap::new(),
+            backup_services: Arc::new(Mutex::new(BTreeMap::new())),
             private_network: services.private_network,
             runtime: services.runtime,
             state_directory: services.state_directory,
@@ -2497,15 +2517,14 @@ impl StorageTargetRuntime {
     fn data_router(&mut self, now: UnixMicros) -> Result<ProductionDataRouter, ()> {
         self.refresh_backup_services(now)?;
         let shards = self.shard_router()?;
-        let backups = if self.backup_services.is_empty() {
+        let catalogue = self.backup_services.lock().map_err(|_| ())?;
+        let backups = if catalogue.is_empty() {
             None
         } else {
             Some(
                 RemoteBackupRouter::new(
-                    self.backup_services
-                        .values()
-                        .map(|entry| entry.service.clone()),
-                    self.backup_services.len(),
+                    catalogue.values().map(|entry| entry.service.clone()),
+                    catalogue.len(),
                 )
                 .map_err(|_| ())?,
             )
@@ -2575,14 +2594,17 @@ impl StorageTargetRuntime {
                 {
                     return Err(());
                 }
-                if self.backup_services.get(&route).is_some_and(|entry| {
+                let mut catalogue = self.backup_services.lock().map_err(|_| ())?;
+                if catalogue.get(&route).is_some_and(|entry| {
                     entry.target_id == target_id
                         && entry.storage_path == *storage_path
                         && entry.target.shares_owner_with(&target.provider())
                 }) {
                     continue;
                 }
-                self.backup_services.remove(&route);
+                let replaced = catalogue.remove(&route);
+                drop(catalogue);
+                drop(replaced);
                 let Ok(provider) = meshspan_backup::DirectoryBackupProvider::open(
                     storage_path,
                     destination.destination_id,
@@ -2605,7 +2627,7 @@ impl StorageTargetRuntime {
                     target_generation,
                 )
                 .map_err(|_| ())?;
-                self.backup_services.insert(
+                self.backup_services.lock().map_err(|_| ())?.insert(
                     route,
                     ActiveBackupDestination {
                         target_id,
@@ -2621,8 +2643,15 @@ impl StorageTargetRuntime {
             };
             after = Some(next);
         }
-        self.backup_services
-            .retain(|route, _| active_routes.contains(route));
+        let retired = {
+            let mut catalogue = self.backup_services.lock().map_err(|_| ())?;
+            catalogue
+                .extract_if(.., |route, _| !active_routes.contains(route))
+                .collect::<Vec<_>>()
+        };
+        // Closing the last provider owner may checkpoint its database; do that outside
+        // the inventory guard just as we do opening and transfer IO.
+        drop(retired);
         Ok(())
     }
 
@@ -2665,17 +2694,10 @@ impl StorageTargetRuntime {
         )? {
             self.refresh_backup_services(now)?;
         }
-        let local_targets =
-            self.backup_services
-                .iter()
-                .map(|((destination_id, target_generation), entry)| {
-                    crate::RegisteredBackupTarget {
-                        destination_id: *destination_id,
-                        target_id: entry.target_id,
-                        target_generation: *target_generation,
-                        provider: entry.provider.clone(),
-                    }
-                });
+        let local_targets = crate::backup_export_service::BackupExportProviders::snapshot(
+            &BackupExportTargetSnapshot(Arc::clone(&self.backup_services)),
+        )
+        .map_err(|_| ())?;
         let local =
             crate::RegisteredTargetBackupProviderResolver::new(local_targets).map_err(|_| ())?;
         let mut resolver = crate::cluster_backup_provider::ClusterBackupProviderResolver::new(
