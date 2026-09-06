@@ -62,6 +62,38 @@ fn bootstrap_appliance_round_trips_canonically() -> Result<(), Box<dyn std::erro
 }
 
 #[test]
+fn founding_endpoint_extension_preserves_legacy_bootstrap_bytes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, mut command) = fixture()?;
+    let legacy = encode_authoritative_command(context, &command)?;
+    let legacy_digest = command.request_digest(context);
+    let AuthoritativeCommand::BootstrapAppliance(bootstrap) = &mut command else {
+        return Err("wrong fixture command".into());
+    };
+    bootstrap.private_endpoint = Some("files.example.test:9412".to_owned());
+    let current = encode_authoritative_command(context, &command)?;
+    assert_eq!(current.get(..legacy.len()), Some(legacy.as_slice()));
+    assert_ne!(command.request_digest(context), legacy_digest);
+    assert_eq!(decode_authoritative_command(&current)?.command, command);
+    let decoded_legacy = decode_authoritative_command(&legacy)?;
+    assert_eq!(
+        decoded_legacy.command.request_digest(context),
+        legacy_digest
+    );
+    assert_eq!(
+        encode_authoritative_command(context, &decoded_legacy.command)?,
+        legacy
+    );
+    for length in legacy.len() + 1..current.len() {
+        assert!(decode_authoritative_command(&current[..length]).is_err());
+    }
+    let mut trailing = current;
+    trailing.push(0);
+    assert!(decode_authoritative_command(&trailing).is_err());
+    Ok(())
+}
+
+#[test]
 fn decoder_rejects_truncation_trailing_bytes_and_noncanonical_flags()
 -> Result<(), Box<dyn std::error::Error>> {
     let (context, command) = fixture()?;

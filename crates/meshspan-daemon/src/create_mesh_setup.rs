@@ -74,6 +74,7 @@ pub enum BootstrapAuthorityError {
 
 /// Owns the two-database first-mesh transition and protected claim-file cleanup.
 pub struct CreateMeshSetupService<A, R> {
+    private_endpoint: String,
     local_database: LocalDatabase,
     authority: A,
     claim_output_path: PathBuf,
@@ -86,6 +87,7 @@ pub struct CreateMeshSetupService<A, R> {
 
 /// Immutable local paths and node identity required by first-mesh creation.
 pub struct CreateMeshSetupConfiguration {
+    private_endpoint: String,
     claim_output_path: PathBuf,
     recovery_bundle_path: PathBuf,
     wrapping_public_key: WrappingPublicKey,
@@ -100,8 +102,10 @@ impl CreateMeshSetupConfiguration {
         recovery_bundle_path: PathBuf,
         wrapping_public_key: WrappingPublicKey,
         node_identity_public_key: Vec<u8>,
+        private_endpoint: String,
     ) -> Self {
         Self {
+            private_endpoint,
             claim_output_path,
             recovery_bundle_path,
             wrapping_public_key,
@@ -126,6 +130,7 @@ where
     ) -> Self {
         Self {
             local_database,
+            private_endpoint: configuration.private_endpoint,
             authority,
             claim_output_path: configuration.claim_output_path,
             recovery_bundle_path: configuration.recovery_bundle_path,
@@ -199,6 +204,7 @@ where
                     occurred_at: setup.created_at,
                     wrapping_public_key: self.wrapping_public_key,
                     node_identity_public_key: &self.node_identity_public_key,
+                    private_endpoint: &self.private_endpoint,
                     online_authority: &online_authority,
                 },
             )?;
@@ -249,6 +255,7 @@ struct ValidatedSetupInput {
 }
 
 struct BootstrapCommandInputs<'a> {
+    private_endpoint: &'a str,
     recovery: &'a OfflineRecoveryIdentity,
     save_challenge_commitment: [u8; 32],
     occurred_at: UnixMicros,
@@ -305,6 +312,7 @@ impl ValidatedSetupInput {
         let smb_verifier_ciphertext = initial_smb_verifier_ciphertext(material)?;
         Ok(AuthoritativeCommand::BootstrapAppliance(Box::new(
             BootstrapAppliance {
+                private_endpoint: Some(inputs.private_endpoint.to_owned()),
                 mesh: BootstrapMesh {
                     mesh_id: material.mesh_id,
                     mesh_name: self.mesh_name.clone(),

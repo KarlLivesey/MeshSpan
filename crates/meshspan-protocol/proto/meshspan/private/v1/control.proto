@@ -441,6 +441,17 @@ message RevokeCertificateEnvelope {
   bytes recipient_node_id = 3;
 }
 
+// Public proof only. Never contains account, provider, certificate or private-key state.
+message FetchHttp01Challenge {
+  string token = 1;
+}
+
+message Http01ChallengeResult {
+  string token = 1;
+  optional bytes key_authorization = 2;
+  optional sint64 expires_at_unix_micros = 3;
+}
+
 message ControlEnvelope {
   RequestHeader header = 1;
   oneof message {
@@ -511,6 +522,8 @@ message ControlEnvelope {
     FetchCertificateEnvelope fetch_certificate_envelope = 101;
     AcknowledgeCertificateInstall acknowledge_certificate_install = 102;
     RevokeCertificateEnvelope revoke_certificate_envelope = 103;
+    FetchHttp01Challenge fetch_http01_challenge = 104;
+    Http01ChallengeResult http01_challenge_result = 105;
     PublishNamespaceHead publish_namespace_head = 110;
     NamespaceHeadAccepted namespace_head_accepted = 111;
     FetchNamespaceHistoryPage fetch_namespace_history_page = 112;

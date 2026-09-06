@@ -138,6 +138,21 @@ the stage; publication-dependent acceptance remains held separately and visible.
    **337.22 seconds**. This closes the identified response-guidance/trust gaps,
    not the remaining provider lifecycles or active-gateway challenge distribution.
    Task 2 remains **2 points** pending that integrated acceptance.
+   The [shared HTTP-01 gateway candidate](stage-10-evidence.md#task-2--shared-http-01-gateway-challenges)
+   now passes a real CA probe of both active gateways, exact cleanup and gateway
+   restart with one issuance. It also fixes the missing founding-node endpoint
+   which prevented a joined gateway restoring its private route after restart.
+   The first full integration run **failed in 353.00 seconds**. The
+   [recovery corrections](stage-10-evidence.md#recovery-corrections-awaiting-final-integration)
+   address cross-process port collisions, cancelled control-connection reuse,
+   election-timer suppression and a backup-provider refresh race. The strengthened
+   headless suite passed **10 enabled tests in 36.64 seconds** before the final
+   wrong-plan timer regression. [Final recovery integration](stage-10-evidence.md#final-recovery-integration)
+   on signed source `115a6c5` passed in **780.44 seconds** (Rust **732.27**, web
+   **5.58**), and both opt-in real-time recovery cases passed together in
+   **337.90 seconds**. These results verify the owning-boundary corrections;
+   they do not establish the cause of the older independent cluster-startup timeout.
+   DNS-provider process lifecycles remain open; the estimate is unchanged.
 
 3. **Encrypted certificate delivery and rotation — Partial.** **5 points remaining.**
    PKI-001/002/005/007/010; accepted decisions §7.

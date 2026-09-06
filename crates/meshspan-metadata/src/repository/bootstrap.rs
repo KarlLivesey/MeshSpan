@@ -57,6 +57,10 @@ pub(super) fn bootstrap_appliance(
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
     if command.authentication.principal_id != command.mesh.administrator_id
+        || command
+            .private_endpoint
+            .as_ref()
+            .is_some_and(|endpoint| !valid_bootstrap_endpoint(endpoint))
         || command.node_wrapping_key.node_id != command.mesh.node_id
         || command.node_certificate.certificate_der.is_empty()
         || command.node_certificate.certificate_fingerprint
@@ -70,6 +74,13 @@ pub(super) fn bootstrap_appliance(
     let recovery_recipient = WrappingPublicKey::from_bytes(command.recovery.public_wrapping_key)
         .map_err(|_| RepositoryError::InvalidCommand)?;
     let mesh = bootstrap(transaction, partition_id, context, &command.mesh, revision)?;
+    transaction.execute(
+        "UPDATE nodes SET bootstrap_private_endpoint = ?1 WHERE node_id = ?2",
+        params![
+            command.private_endpoint,
+            command.mesh.node_id.as_bytes().as_slice()
+        ],
+    )?;
     persist_initial_node_certificate(transaction, context, command, revision)?;
     super::authentication_method_creation::create(
         transaction,
@@ -113,6 +124,37 @@ pub(super) fn bootstrap_appliance(
         revision,
     )?;
     Ok(mesh)
+}
+
+fn valid_bootstrap_endpoint(endpoint: &str) -> bool {
+    if endpoint.len() > 512
+        || !endpoint.is_ascii()
+        || endpoint
+            .bytes()
+            .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+    {
+        return false;
+    }
+    if let Ok(address) = endpoint.parse::<std::net::SocketAddr>() {
+        return address.port() != 0
+            && !address.ip().is_unspecified()
+            && !address.ip().is_multicast();
+    }
+    let Some((host, port)) = endpoint.rsplit_once(':') else {
+        return false;
+    };
+    !host.is_empty()
+        && host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+        && port.parse::<u16>().is_ok_and(|port| port != 0)
 }
 
 fn persist_initial_node_certificate(

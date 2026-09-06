@@ -2,6 +2,7 @@
 
 //! Immutable ACME configuration and single-worker fenced certificate orders.
 
+mod http01;
 mod order_checkpoint;
 mod query;
 

@@ -16,6 +16,8 @@ use crate::{
     NewAuthenticationCredential, PartitionDatabase, RecordName, STORAGE_PERMIT_KEY_SECRET_KIND,
 };
 
+mod endpoint;
+
 #[test]
 fn first_mesh_and_login_method_commit_and_replay_as_one_operation()
 -> Result<(), Box<dyn std::error::Error>> {

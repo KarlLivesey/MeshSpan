@@ -10,6 +10,167 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 2 — shared HTTP-01 gateway challenges
+
+### Final recovery integration
+
+Signed, pushed and GitHub-verified source
+`115a6c5f3332729f37c196d5c3ab489af78f74aa`
+(tree `73b8f3ed1b5dbf9e9b3fa718c3940ffd88660971`) passed the full local
+integration gate in **780.44 seconds**: Rust workspace tests **732.27 seconds**,
+web tests **5.58 seconds**, and every generated, formatting, lint, licence,
+TypeScript and tooling lane passed. The command used the NVM-selected Node
+**26.8.1**, pnpm **11.19.0**, Rust **1.98.0**, `CARGO_BUILD_JOBS=4` and
+`MESHSPAN_CHECK_WORKERS=4` with `pnpm check`.
+
+Both opt-in real-time ACME recovery cases then passed together in **337.90
+seconds**, using the final gate's rebuilt all-feature binary
+`headless_process-955f61bbc0f09fcd acme_lifecycle:: --ignored --test-threads=4`.
+They cover process loss with the unchanged five-minute claim lease and rejected
+order cleanup/restart with the unchanged retry backoff. This is final-source
+evidence, unlike the earlier diagnostic run below.
+
+The reproduced port, cancelled-connection, election-deadline and backup-provider
+findings below now have owning-boundary corrections and passing integration.
+The additional wrong-plan timer regressions passed in **0.79 seconds**, and
+affected all-target/all-feature Clippy passed in **21.94 seconds** before the
+full gate. The independent, older cluster-startup timeout is **not** claimed
+fixed by these results. DNS-provider process lifecycles remain outstanding;
+task 2 stays **2 points**, Stage 10 **141**, Stage 11 **126**. No release, tag,
+package/image publication or GitHub Actions run occurred.
+
+### Integration findings — not closed
+
+The full local gate on signed source `3f920adf87b69e0d337a57c4de77b8457a594583`
+(tree `f1530c9c10c2bed14ee69b3cdc58af5cc4af130a`) **failed in 353.00 seconds**.
+Rust tests failed in **285.89 seconds** at the two-gateway restart proof;
+web tests passed in **5.57 seconds**, and all static/generated/licence lanes
+passed. PR #251 remains unmerged. The affected Clippy preceding this gate passed
+in **21.81 seconds**; that does not supersede the process failure.
+
+The concurrent opt-in recovery run completed in **337.42 seconds** with rejected
+order recovery passing but lease-loss recovery failing at a child's HTTPS bind:
+`Address already in use`. The harness allocated from the same counter in each
+test process and released its probe socket before child startup. A new actual
+child-process regression reproduced reuse of port 16384. OS file-lock reservations
+now retain each allocated TCP/UDP address through daemon restarts until the owning
+test process exits. Locks cover individual ports, not the suite. The regression
+and range parser passed in **0.01 seconds**, after a **3.24-second build**.
+Both opt-in recovery cases subsequently passed together in **337.14 seconds**
+with reservations and temporary gateway diagnostics. Production lease/backoff
+durations were not shortened. Final-source integration is still required.
+
+Port isolation did **not** fix the gateway restart defect. A diagnostic parallel
+headless run failed in **42.38 seconds**, and a later run failed in **38.64
+seconds**. The peer's requests reach the surviving node, but reverse-direction
+requests do not reach the restarted peer's HTTP-proof handler. Both nodes can
+remain without a known leader. Waiting for both gateways within the unchanged
+deadline exposed persistent unavailability, rather than merely a readiness race;
+the three-case focused run failed in **40.48 seconds**. Investigation continues
+at the private connection boundary; isolated passing retries do not close it.
+
+The 42.38-second run also exposed an independent automatic-backup failure. Its
+retained authoritative state has a recorded run requiring two verified copies,
+two active destinations, but only one verified copy. Evidence is retained in
+the private temporary directories `.tmp3IEjub` and `.tmp6zqGWd`. A later passing
+operator flow does not establish the cause or close this finding. Neither this
+failure nor the earlier independent cluster timeout is waived for integration.
+
+### Recovery corrections awaiting final integration
+
+The port fix is signed, pushed and GitHub-verified as
+`09119037c1a589664c5d7e3b96f6827dcc83fc3b`. Further diagnosis identified three
+separate ownership defects; none is addressed by extending test deadlines:
+
+- An outer request deadline cancelled `request_control` before its ordinary error
+  path could evict the cached connection. Repeated lookups reused that uncertain
+  connection. A real-QUIC regression failed in **0.12 seconds**. Cancellation now
+  evicts only the exact connection used by that request, without closing other
+  streams, automatically retrying a mutation or implying remote rollback. A
+  second regression protects a newer replacement from an older cancelled call.
+  All five focused network tests passed in **0.23 seconds**.
+- A higher-term but log-stale candidate reset the receiver's election deadline
+  even when refused a vote. With fixed election slots, the quicker outdated node
+  could repeatedly postpone a viable candidate. The direct reactor regression
+  failed in **0.30 seconds**. Higher terms remain durably persisted, but timer
+  resets require a granted vote or validated current-leader contact. The latter
+  binds both membership epoch and plan digest: a previously recognised leader
+  sending the wrong plan must not reset the timer either. That additional
+  regression failed in **0.28 seconds** before its binding correction.
+- The retained backup claim belonged to the peer while only the root destination
+  had a verified copy. A worker refreshed its local backup providers only when
+  it personally committed the defaults transition. A peer claiming work after
+  another node's transition could therefore lack its own destination indefinitely.
+  Provider refresh now follows the replicated projection on every backup pass,
+  regardless of which node committed the defaults.
+
+The gateway proof now waits for two stable voters before killing the peer, checks
+bounded recovery of both public challenge listeners, and requires a new committed
+administration write afterwards. The exact operation ID/body are retained while
+retrying temporary `503` responses; any other failure still fails immediately.
+This distinguishes public-proof availability from restored consensus. The
+parallel headless run passed **10 enabled tests in 36.64 seconds**, after an
+**18.06-second build**, including two-copy backup completion. Four opt-in tests
+were not run by that command. This preceded the final wrong-plan timer check;
+final-source integration and opt-in recovery must still pass before PR #251 merges.
+The earlier unrelated cluster-start timeout is not claimed fixed.
+
+### Candidate behaviour and focused evidence
+
+The current candidate makes public HTTP-01 material available independently of
+which gateway claimed the order. The local publisher remains the challenge
+component; other gateways read an indexed, revalidated projection of the
+replicated checkpoint. A miss can query an authenticated voter without issuing
+an ACME request or appending consensus work. The response contains only the
+exact token's public key authorisation and original expiry. Preparation,
+cleanup and retirement are not projected as serving states. Reads use one
+database snapshot; negative lookups use the token index instead of scanning
+order history. Remote reads reuse a dedicated reader and bypass the mutation
+queue. Anonymous lookup admission and total duration are bounded.
+
+The new two-daemon CA proof initially failed in **22.38 seconds**: one gateway
+returned `404` during actual CA validation. After delivery was implemented, the
+proof exposed a separate persistent restart defect. A joined node retained the
+founding node's certificate but **no private endpoint**, so its route registry
+could never recover that peer. Diagnostics confirmed the missing endpoint in
+the persisted topology; waiting for readiness did not fix it. New appliance
+bootstrap now commits its advertised private endpoint atomically. The topology
+reader exposes it without inventing an enrolment activation for the founding
+node. Endpoint validation and cross-table duplicate protection apply.
+
+Migration **86** adds the derived challenge-token index and backfills existing
+checkpoints transactionally, preserving their bytes/digests. Corrupt migration
+evidence rolls back both the index and migration history. Migration **87** adds
+the optional founding endpoint. Existing bootstrap records retain their exact
+wire bytes and request digests; new records use a bounded tagged endpoint
+extension. Missing legacy addresses remain missing rather than being invented.
+There is no dependency or public HTTPS schema change.
+
+The final focused parallel process run passed **all three normal ACME cases in
+23.30 seconds**, after a **17.02-second build**: ordinary HTTP-01, RFC 2136
+DNS-01, and two active HTTP gateways followed by gateway restart. The CA checks
+both actual HTTP listeners against its independently derived account proof,
+requires exact removal and observes exactly one order/issuance. Startup may
+temporarily return `503` while restoring peer routes, but the removed token may
+never reappear and lookup readiness has a bounded deadline. An earlier parallel
+run exposed the fixture's two-second client deadline matching the server's new
+two-second work deadline; the client now leaves one second for the response,
+without increasing the server budget or serialising tests.
+
+Focused metadata coverage passed **5 tests in 3.12 seconds**; founding-endpoint
+and legacy-codec coverage passed **3 tests in 2.93 seconds**. Both new private
+wire tests passed, including malformed tokens, substituted bodies, missing or
+invalid expiry and round trips of found/absent responses. The broader ACME
+repository run passed **32 tests in 24.12 seconds**. Affected Clippy passed
+before the final allocation-free token-validation cleanup; final integration
+and the two opt-in real-time recovery cases remain pending for this candidate.
+
+This closes neither the remaining DNS-provider process lifecycles nor Stage 10.
+Task 2 remains **2 points**, Stage 10 **141**, and Stage 11 **126** pending their
+recorded acceptance. Releases, tags, package/image publication and GitHub
+Actions remain prohibited. The previously recorded independent cluster timeout
+is not claimed fixed by these passing ACME tests.
+
 ## Task 2 — interrupted challenge recovery
 
 ### Retry guidance survives parsing and terminal certificate refusal

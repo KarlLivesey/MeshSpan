@@ -307,7 +307,7 @@ pub(super) fn nodes(
     let mut statement = database.connection().prepare(
         "SELECT n.node_id, n.host_id, n.display_name, n.canonical_name, n.state,
                 n.current_incarnation, COALESCE(SUM(1 << (nr.role_code - 1)), 0),
-                na.private_endpoint, n.revision
+                COALESCE(na.private_endpoint, n.bootstrap_private_endpoint), n.revision
          FROM nodes n
          LEFT JOIN node_roles nr ON nr.node_id = n.node_id
          LEFT JOIN node_activations na ON na.node_id = n.node_id

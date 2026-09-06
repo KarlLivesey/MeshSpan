@@ -19,6 +19,10 @@ impl<'a> Decoder<'a> {
         }
     }
 
+    pub(super) const fn is_finished(&self) -> bool {
+        self.remaining.is_empty()
+    }
+
     pub(super) fn fixed<const N: usize>(&mut self) -> Result<[u8; N], MetadataCommandCodecError> {
         let bytes = self.take(N)?;
         bytes

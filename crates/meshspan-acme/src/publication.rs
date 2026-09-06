@@ -107,6 +107,23 @@ impl AcmeChallengePublication {
         UnixMicros::new(self.0.expires_at)
     }
 
+    /// Returns only the bounded public HTTP proof, never DNS settings or private keys.
+    ///
+    /// # Errors
+    /// Rejects malformed retained payloads. DNS publications return `None`.
+    pub fn http01_payload(&self) -> Result<Option<Http01Payload>, ContractError> {
+        if self.0.kind != AcmeChallengePreference::Http01 {
+            return Ok(None);
+        }
+        Http01Payload::decode(&VersionedPayload {
+            format_version: self.0.payload_version,
+            bytes: BoundedBytes::copy_from(&self.0.payload, 1_024)
+                .map_err(|_| ContractError::InvalidInput)?,
+        })
+        .map(Some)
+        .map_err(|_| ContractError::InvalidInput)
+    }
+
     pub(crate) fn matches_challenge(
         &self,
         dns_name: &str,

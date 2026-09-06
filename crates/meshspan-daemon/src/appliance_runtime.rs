@@ -348,6 +348,7 @@ impl PrivateNetworkStarter {
         let runtime = self.runtime.clone();
         let permits = Arc::new(tokio::sync::Semaphore::new(PRIVATE_CONTROL_CONCURRENCY));
         let mutations = Arc::new(tokio::sync::Semaphore::new(1));
+        let http01 = crate::http01_gateway::Http01PeerReader::new(&state_directory);
         self.runtime.spawn(async move {
             while let Some(request) = requests.recv().await {
                 let Ok(permit) = Arc::clone(&permits).acquire_owned().await else {
@@ -357,6 +358,7 @@ impl PrivateNetworkStarter {
                 let authority = authority.clone();
                 let state_directory = state_directory.clone();
                 let runtime = runtime.clone();
+                let http01 = http01.clone();
                 let mutation_permit = (!private_control_is_fetch(&request))
                     .then(|| Arc::clone(&mutations).acquire_owned())
                     .map(|permit| async move { permit.await.ok() });
@@ -369,14 +371,24 @@ impl PrivateNetworkStarter {
                         },
                         None => None,
                     };
-                    let response = handle_private_control(
-                        &network,
-                        &authority,
-                        &state_directory,
-                        &runtime,
-                        &request,
-                    )
-                    .await;
+                    let response = if matches!(
+                        request.envelope.as_inner().message,
+                        Some(Message::FetchHttp01Challenge(_))
+                    ) {
+                        http01
+                            .handle(&network, &request)
+                            .await
+                            .map_err(|()| DaemonProcessError::PrivateNetworkState)
+                    } else {
+                        handle_private_control(
+                            &network,
+                            &authority,
+                            &state_directory,
+                            &runtime,
+                            &request,
+                        )
+                        .await
+                    };
                     if let Ok(response) = response {
                         let _closed = request.respond.send(response);
                     }
@@ -393,6 +405,7 @@ fn private_control_is_fetch(request: &PeerControlRequest) -> bool {
             Message::FetchNamespaceHistoryPage(_)
                 | Message::FetchNamespaceHistoryObject(_)
                 | Message::FetchNativeContentLayout(_)
+                | Message::FetchHttp01Challenge(_)
         )
     )
 }
@@ -732,6 +745,7 @@ fn compose_certificate_runtime(
             installation_selection: open_authority()?,
             installation_generation: open_authority()?,
             installation_acknowledgement: open_authority()?,
+            http01_reader: open_authority()?,
         },
         local_state.open_wrapping_key()?,
         local_state.open_wrapping_key()?,
@@ -764,6 +778,7 @@ fn setup_and_enrolment_routes(
                     node.local_state.pending_recovery_bundle_path(),
                     node.local_state.wrapping_public_key(),
                     node.local_state.node_identity_public_key().to_vec(),
+                    node.private_endpoint.clone(),
                 ),
                 OperatingSystemRandom,
             ),
@@ -857,7 +872,8 @@ async fn serve_public_services<F>(
 where
     F: Future<Output = ()> + Send,
 {
-    let http01 = Http01Server::bind(config.http01_listen(), services.certificates.http01()).await?;
+    let http01 =
+        Http01Server::bind_shared(config.http01_listen(), services.certificates.http01()).await?;
     let https = HttpsServer::bind(
         config.https_listen(),
         services.https_identity.server_config(),
@@ -2686,14 +2702,15 @@ impl StorageTargetRuntime {
             return Ok(());
         };
         let mut random = OperatingSystemRandom;
-        if crate::metadata_backup_defaults::reconcile(
+        crate::metadata_backup_defaults::reconcile(
             &self.maintenance_authority,
             &mut random,
             actor_principal_id,
             now,
-        )? {
-            self.refresh_backup_services(now)?;
-        }
+        )?;
+        // Another voter may have committed the destination defaults. Refresh this worker's
+        // providers from the resulting projection even when it made no defaults transition.
+        self.refresh_backup_services(now)?;
         let local_targets = crate::backup_export_service::BackupExportProviders::snapshot(
             &BackupExportTargetSnapshot(Arc::clone(&self.backup_services)),
         )

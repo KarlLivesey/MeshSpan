@@ -18,6 +18,18 @@ pub struct Http01Payload {
 }
 
 impl Http01Payload {
+    /// Validates an HTTP-01 path token without allocating or constructing a response body.
+    ///
+    /// # Errors
+    /// Rejects empty, oversized or non-base64url tokens.
+    pub fn validate_token(token: &str) -> Result<(), PayloadError> {
+        if valid_token(token) {
+            Ok(())
+        } else {
+            Err(PayloadError::Invalid)
+        }
+    }
+
     /// Validates one base64url token and bounded ASCII key authorization.
     ///
     /// # Errors

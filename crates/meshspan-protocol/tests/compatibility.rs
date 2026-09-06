@@ -18,6 +18,9 @@ use serde::Deserialize;
 
 const FIXTURE: &str = include_str!("../../../contracts/protobuf/v1/node-hello.json");
 
+#[path = "compatibility/http01.rs"]
+mod http01;
+
 #[derive(Debug, Deserialize)]
 struct HelloFixture {
     name: String,

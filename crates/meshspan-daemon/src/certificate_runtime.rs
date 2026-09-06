@@ -72,13 +72,14 @@ pub(crate) struct CertificateAuthoritySet {
     pub installation_selection: ConsensusAuthenticationAuthority,
     pub installation_generation: ConsensusAuthenticationAuthority,
     pub installation_acknowledgement: ConsensusAuthenticationAuthority,
+    pub http01_reader: ConsensusAuthenticationAuthority,
 }
 
 /// One restart-scoped certificate worker and its shared HTTP-01 challenge catalogue.
 pub(crate) struct CertificateRuntime {
     service: CertificateService,
     installation: CertificateInstallation,
-    http01: Http01Challenge,
+    http01: crate::http01_gateway::Http01Gateway,
 }
 
 impl CertificateRuntime {
@@ -163,13 +164,13 @@ impl CertificateRuntime {
         Ok(Self {
             service,
             installation,
-            http01,
+            http01: authorities.http01_reader.into_http01_gateway(http01),
         })
     }
 
     /// Returns the catalogue served by the isolated plain-HTTP listener.
     #[must_use]
-    pub fn http01(&self) -> Http01Challenge {
+    pub fn http01(&self) -> crate::http01_gateway::Http01Gateway {
         self.http01.clone()
     }
 

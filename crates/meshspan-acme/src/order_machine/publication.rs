@@ -63,6 +63,23 @@ impl AcmeOrderMachine {
         }
     }
 
+    /// Projects material safe for another gateway to serve after authoritative checkpointing.
+    ///
+    /// Preparation is not publication. Cleanup and retirement immediately withdraw the proof;
+    /// retained cleanup inputs must never accidentally republish a completed challenge.
+    #[must_use]
+    pub fn serving_publication(&self) -> Option<&AcmeChallengePublication> {
+        if matches!(
+            self.phase,
+            Phase::NotifyChallenge | Phase::PollAuthorization
+        ) && self.publication_digest.is_some()
+        {
+            self.publication()
+        } else {
+            None
+        }
+    }
+
     /// Returns the original publication epoch, including for a legacy checkpoint without expiry.
     #[must_use]
     pub fn publication_epoch(&self) -> Option<u64> {

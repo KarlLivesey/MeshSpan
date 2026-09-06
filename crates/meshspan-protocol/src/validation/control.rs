@@ -2,6 +2,7 @@
 
 //! Metadata, routing, presence, branch, work and certificate message validation.
 
+mod http01;
 mod routing;
 
 use crate::framing::{WireContractError, WireLimits};
@@ -28,6 +29,8 @@ use super::{
 
 pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireContractError> {
     match value {
+        Message::FetchHttp01Challenge(value) => http01::token(&value.token),
+        Message::Http01ChallengeResult(value) => http01::result(value),
         Message::MetadataCommand(_)
         | Message::NodeActivationRequest(_)
         | Message::NodeActivationResult(_)

@@ -7,19 +7,19 @@ use meshspan_metadata::{AuthoritativeCommand, CommandContext, EntityKind};
 
 use crate::ConsensusAuthenticationAuthority;
 
-/// Returns whether a defaults transition committed; ordinary file IO does not trigger one.
+/// Ensures current defaults; local provider refresh must also observe other voters' commits.
 pub(crate) fn reconcile(
     authority: &ConsensusAuthenticationAuthority,
     random: &mut impl RandomSource,
     actor: PrincipalId,
     now: UnixMicros,
-) -> Result<bool, ()> {
+) -> Result<(), ()> {
     let Some(candidate) = authority
         .reader()
         .metadata_backup_defaults_candidate()
         .map_err(|_| ())?
     else {
-        return Ok(false);
+        return Ok(());
     };
     let mut operation = [0; 16];
     let mut audit = [0; 16];
@@ -48,5 +48,5 @@ pub(crate) fn reconcile(
     {
         return Err(());
     }
-    Ok(true)
+    Ok(())
 }

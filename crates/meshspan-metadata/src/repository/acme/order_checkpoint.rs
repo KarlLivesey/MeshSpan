@@ -100,6 +100,7 @@ pub(crate) fn checkpoint(
         ],
     )?;
     exactly_one(changed)?;
+    super::http01::index_checkpoint(transaction, value.order_id, &value.checkpoint)?;
     update_order_revision(transaction, value.order_id, revision)?;
     Ok(order_entity(value.order_id))
 }
