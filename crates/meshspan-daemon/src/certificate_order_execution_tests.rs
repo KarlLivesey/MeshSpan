@@ -24,6 +24,8 @@ use crate::{
     CertificateOrderExecution, CertificateOrderStepResult, PreparedCertificateOrder,
 };
 
+mod polling;
+
 #[tokio::test]
 async fn downloaded_chain_goes_to_terminal_validation_not_an_incomplete_checkpoint()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -78,7 +80,7 @@ async fn downloaded_chain_goes_to_terminal_validation_not_an_incomplete_checkpoi
             certificate_chain: expected
         }
     );
-    assert_eq!(authority.commit_count(), 0);
+    assert_eq!(authority.commit_count()?, 0);
     Ok(())
 }
 
@@ -112,7 +114,7 @@ async fn validated_remote_step_advances_then_commits_before_next_action()
         execution.machine().action()?,
         meshspan_acme::AcmeMachineAction::AcquireNonce { .. }
     ));
-    assert_eq!(authority.commit_count(), 1);
+    assert_eq!(authority.commit_count()?, 1);
     Ok(())
 }
 
@@ -212,24 +214,30 @@ impl AcmeTransport for OneResponseTransport {
 
 #[derive(Default)]
 struct RecordingCheckpointAuthority {
-    state: Mutex<Option<CommandReceipt>>,
+    state: Mutex<Vec<(CommandReceipt, Vec<u8>)>>,
 }
 
 impl RecordingCheckpointAuthority {
-    fn commit_count(&self) -> usize {
-        usize::from(self.state.lock().is_ok_and(|state| state.is_some()))
+    fn commit_count(&self) -> Result<usize, CertificateOrderCheckpointAuthorityError> {
+        self.state
+            .lock()
+            .map(|state| state.len())
+            .map_err(|_| CertificateOrderCheckpointAuthorityError::Failed)
     }
 }
 
 impl CertificateOrderCheckpointAuthority for &RecordingCheckpointAuthority {
     fn resolve_certificate_order_checkpoint(
         &self,
-        _operation_id: OperationId,
+        operation_id: OperationId,
     ) -> Result<Option<CommandReceipt>, CertificateOrderCheckpointAuthorityError> {
-        Ok(*self
+        Ok(self
             .state
             .lock()
-            .map_err(|_| CertificateOrderCheckpointAuthorityError::Failed)?)
+            .map_err(|_| CertificateOrderCheckpointAuthorityError::Failed)?
+            .iter()
+            .find(|(receipt, _)| receipt.operation_id == operation_id)
+            .map(|(receipt, _)| *receipt))
     }
 
     fn checkpoint_certificate_order(
@@ -237,8 +245,10 @@ impl CertificateOrderCheckpointAuthority for &RecordingCheckpointAuthority {
         context: CommandContext,
         command: &AuthoritativeCommand,
     ) -> Result<CommandReceipt, CertificateOrderCheckpointAuthorityError> {
-        let order_id = match command {
-            AuthoritativeCommand::CheckpointCertificateOrder(value) => value.order_id,
+        let (order_id, checkpoint) = match command {
+            AuthoritativeCommand::CheckpointCertificateOrder(value) => {
+                (value.order_id, value.checkpoint.clone())
+            }
             _ => return Err(CertificateOrderCheckpointAuthorityError::Failed),
         };
         let receipt = CommandReceipt {
@@ -254,10 +264,10 @@ impl CertificateOrderCheckpointAuthority for &RecordingCheckpointAuthority {
                 id: order_id.as_bytes(),
             },
         };
-        *self
-            .state
+        self.state
             .lock()
-            .map_err(|_| CertificateOrderCheckpointAuthorityError::Failed)? = Some(receipt);
+            .map_err(|_| CertificateOrderCheckpointAuthorityError::Failed)?
+            .push((receipt, checkpoint));
         Ok(receipt)
     }
 }

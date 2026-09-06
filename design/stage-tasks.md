@@ -17,7 +17,7 @@ Update the relevant task when work changes its status. Report the current task,
 what behaviour changed, what remains and what was tested. Do not replace this
 with “nearly done”, a count of commits or an unweighted completion percentage.
 
-Remaining-effort estimate, 2026-09-06: **Stage 10: 144 points; Stage 11: 126
+Remaining-effort estimate, 2026-09-06: **Stage 10: 143 points; Stage 11: 126
 points; Stage 12: 55 points.** These are preliminary engineering judgements from
 the task scope and recorded gaps, not measured hours or completion guarantees.
 Uncertainty is high until the open integration/proof work is exercised.
@@ -71,7 +71,7 @@ the stage; publication-dependent acceptance remains held separately and visible.
    and task acceptance; it does not establish invitation continuity across later
    leaf changes. The estimate fell 5 → 3 → 1 → 0 as this scope was verified.
 
-2. **Automatic ACME and DNS challenge handling — Partial; current task.** **5 points remaining.**
+2. **Automatic ACME and DNS challenge handling — Partial; current task.** **4 points remaining.**
    PKI-003/004/006/010; accepted decisions §7.
    [ACME components](../crates/meshspan-acme/src/lib.rs) and
    [renewal scheduling](../crates/meshspan-daemon/src/certificate_renewal_scheduler.rs)
@@ -99,6 +99,13 @@ the stage; publication-dependent acceptance remains held separately and visible.
    manual lifecycle, interrupted and long-running orders, successful polling hints
    and active-gateway challenge distribution remain. Higher-concurrency startup
    costs, absent SMB test-image prerequisites and external proofs remain explicit.
+   [Successful-response polling guidance](stage-10-evidence.md#successful-response-polling-guidance)
+   now retains receipt-time deadlines across checkpoints and replacement fences,
+   with no early CA requests. Real HTTP-01/DNS-01 lifecycles enforce notification
+   and finalisation delays. The full gate on `c48a078` passed in **751.75 seconds**
+   (Rust **688.03**, web **5.69**), closing this scope **5 → 4 points**.
+   Original publication identity/lifetime, long-running manual orders, remaining
+   DNS provider process proof and active-gateway challenge distribution remain.
 
 3. **Encrypted certificate delivery and rotation — Partial.** **5 points remaining.**
    PKI-001/002/005/007/010; accepted decisions §7.

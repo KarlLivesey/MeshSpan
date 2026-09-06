@@ -8,6 +8,8 @@ use crate::{
     AcmeMachineEvent, AcmeOrder, AcmeOrderMachine, AcmeOrderRequest, AcmeResourceStatus,
 };
 
+mod polling;
+
 #[test]
 fn every_order_phase_round_trips_as_the_same_next_action() -> Result<(), Box<dyn std::error::Error>>
 {
@@ -77,7 +79,7 @@ fn hostile_checkpoint_version_shape_and_size_fail_closed() -> Result<(), Box<dyn
     let machine = machine()?;
     let encoded = machine.encode_checkpoint()?;
     let mut value: Value = serde_json::from_slice(&encoded)?;
-    value["version"] = Value::from(2);
+    value["version"] = Value::from(3);
     assert!(AcmeOrderMachine::decode_checkpoint(&serde_json::to_vec(&value)?).is_err());
 
     let mut value: Value = serde_json::from_slice(&encoded)?;
@@ -133,6 +135,17 @@ fn assert_round_trip(machine: &AcmeOrderMachine) -> Result<(), Box<dyn std::erro
     let decoded = AcmeOrderMachine::decode_checkpoint(&machine.encode_checkpoint()?)?;
     assert_eq!(decoded, *machine);
     assert_eq!(decoded.action()?, machine.action()?);
+    // Every original phase remains readable when its v1 fixture has no scheduling field.
+    let mut legacy: Value = serde_json::from_slice(&machine.encode_checkpoint()?)?;
+    legacy["version"] = Value::from(1);
+    legacy["machine"]
+        .as_object_mut()
+        .ok_or("expected machine object")?
+        .remove("poll_not_before");
+    assert_eq!(
+        AcmeOrderMachine::decode_checkpoint(&serde_json::to_vec(&legacy)?)?,
+        *machine
+    );
     Ok(())
 }
 

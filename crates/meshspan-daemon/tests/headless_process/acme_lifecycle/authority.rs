@@ -2,8 +2,9 @@
 
 //! Minimal validating ACME peer for the real-process certificate lifecycle proof.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::{
     Router,
@@ -60,6 +61,7 @@ struct AuthorityState {
     orders: usize,
     finalisations: usize,
     observations: Vec<String>,
+    polls: PollSchedule,
 }
 
 impl TestAuthority {
@@ -89,6 +91,7 @@ impl TestAuthority {
             orders: 0,
             finalisations: 0,
             observations: Vec::new(),
+            polls: PollSchedule::default(),
         }));
         let router = Router::new()
             .fallback(handle)
@@ -121,10 +124,13 @@ impl TestAuthority {
             || state.finalisations != 1
             || !state.validated
             || state.chain.is_none()
+            || state.polls.early_requests != 0
+            || state.polls.fulfilled != BTreeSet::from(["/authorization", "/order"])
         {
             return Err(format!(
-                "expected one validated issuance, saw orders={}, finalisations={}, validated={}",
-                state.orders, state.finalisations, state.validated
+                "expected one validated issuance and both polling deadlines, saw orders={}, finalisations={}, validated={}, early_polls={}, fulfilled={:?}",
+                state.orders, state.finalisations, state.validated,
+                state.polls.early_requests, state.polls.fulfilled
             )
             .into());
         }
@@ -190,6 +196,7 @@ async fn respond(
     let (payload, probe) = {
         let mut state = state.lock().map_err(|_| "CA mutex poisoned")?;
         state.observations.push(format!("{method} {route}"));
+        state.polls.observe(route)?;
         let payload = if *method == Method::POST {
             verify_jws(&mut state, route, body)?
         } else {
@@ -226,6 +233,9 @@ async fn respond(
         .insert("replay-nonce", nonce.parse()?);
     if let Some(location) = location {
         response.headers_mut().insert("location", location.parse()?);
+    }
+    if matches!(route, "/challenge" | "/finalize") {
+        response.headers_mut().insert("retry-after", "2".parse()?);
     }
     Ok(response)
 }
@@ -268,7 +278,10 @@ fn route_response(
             require_empty_payload(payload)?;
             authorization(state).to_string()
         }
-        (&Method::POST, "/challenge") => json!({"status": "valid"}).to_string(),
+        (&Method::POST, "/challenge") => {
+            state.polls.defer("/authorization");
+            json!({"status": "valid"}).to_string()
+        }
         (&Method::POST, "/order") => {
             require_empty_payload(payload)?;
             order(state).to_string()
@@ -280,6 +293,7 @@ fn route_response(
             let csr = URL_SAFE_NO_PAD.decode(text(payload, "csr")?)?;
             state.chain = Some(sign_csr(&state.ca, &csr)?);
             state.finalisations += 1;
+            state.polls.defer("/order");
             order(state).to_string()
         }
         (&Method::POST, "/certificate") => {
@@ -292,7 +306,9 @@ fn route_response(
 }
 
 fn order(state: &AuthorityState) -> Value {
-    let status = if state.chain.is_some() {
+    let status = if state.polls.pending.contains_key("/order") {
+        "processing"
+    } else if state.chain.is_some() {
         "valid"
     } else if state.validated {
         "ready"
@@ -305,10 +321,40 @@ fn order(state: &AuthorityState) -> Value {
         "authorizations": [format!("{}/authorization", state.endpoint)],
         "finalize": format!("{}/finalize", state.endpoint)
     });
-    if state.chain.is_some() {
+    if status == "valid" {
         value["certificate"] = json!(format!("{}/certificate", state.endpoint));
     }
     value
+}
+
+#[derive(Default)]
+struct PollSchedule {
+    pending: BTreeMap<&'static str, Instant>,
+    fulfilled: BTreeSet<&'static str>,
+    early_requests: usize,
+}
+
+impl PollSchedule {
+    fn defer(&mut self, resource: &'static str) {
+        self.pending
+            .insert(resource, Instant::now() + Duration::from_secs(2));
+    }
+
+    fn observe(&mut self, resource: &str) -> Result<(), Failure> {
+        let Some(deadline) = self.pending.get(resource) else {
+            return Ok(());
+        };
+        if Instant::now() < *deadline {
+            self.early_requests += 1;
+            return Err("request preceded CA Retry-After deadline".into());
+        }
+        let (resource, _) = self
+            .pending
+            .remove_entry(resource)
+            .ok_or("missing poll schedule")?;
+        self.fulfilled.insert(resource);
+        Ok(())
+    }
 }
 
 fn authorization(state: &AuthorityState) -> Value {
