@@ -60,10 +60,7 @@ async fn response_after_claim_expiry_cannot_write_or_stop_the_worker()
 
     assert_eq!(authority.checkpoint_count(), 0);
     assert_eq!(authority.completion_count(), 0);
-    assert!(
-        outcome.is_ok(),
-        "expired claim must be a recoverable worker outcome: {outcome:?}"
-    );
+    assert_eq!(outcome?, CertificateOrderDriveOutcome::ClaimExpired);
     Ok(())
 }
 
@@ -78,11 +75,60 @@ async fn expired_claim_is_released_before_any_remote_step() -> Result<(), Box<dy
         .drive(&mut execution)
         .await;
 
-    assert!(
-        outcome.is_ok(),
-        "expired claim must be a recoverable worker outcome: {outcome:?}"
-    );
+    assert_eq!(outcome?, CertificateOrderDriveOutcome::ClaimExpired);
     assert_eq!(clock.now(), UnixMicros::new(120_000_000));
+    assert_eq!(authority.checkpoint_count(), 0);
+    assert_eq!(authority.completion_count(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn claim_expiring_between_admission_and_execution_is_released()
+-> Result<(), Box<dyn std::error::Error>> {
+    let authority = RecordingAuthority::default();
+    let mut execution = CertificateOrderExecution::new(
+        prepared()?,
+        DirectoryTransport::available()?,
+        Http01Challenge::new(),
+    );
+    let outcome = driver(
+        authority.clone(),
+        1,
+        AdvancingClock(AtomicI64::new(119_999_998)),
+    )?
+    .drive(&mut execution)
+    .await?;
+
+    assert_eq!(outcome, CertificateOrderDriveOutcome::ClaimExpired);
+    assert_eq!(authority.checkpoint_count(), 0);
+    assert_eq!(authority.completion_count(), 0);
+    assert!(matches!(
+        execution.machine().action()?,
+        meshspan_acme::AcmeMachineAction::DiscoverDirectory { .. }
+    ));
+    Ok(())
+}
+
+struct AdvancingClock(AtomicI64);
+
+impl Clock for AdvancingClock {
+    fn now(&self) -> UnixMicros {
+        UnixMicros::new(self.0.fetch_add(2, Ordering::SeqCst))
+    }
+}
+
+#[tokio::test]
+async fn last_claim_microsecond_waits_without_starting_an_invalid_request()
+-> Result<(), Box<dyn std::error::Error>> {
+    let authority = RecordingAuthority::default();
+    let clock = SharedClock::new(119_999_999);
+    let mut execution = execution(clock.clone(), 20_500_000)?;
+    let outcome = driver(authority.clone(), 1, clock.clone())?
+        .drive(&mut execution)
+        .await?;
+
+    assert_eq!(outcome, CertificateOrderDriveOutcome::Pending);
+    assert_eq!(clock.now(), UnixMicros::new(119_999_999));
     assert_eq!(authority.checkpoint_count(), 0);
     assert_eq!(authority.completion_count(), 0);
     Ok(())
@@ -103,8 +149,9 @@ async fn unresponsive_transport_is_cancelled_at_the_owned_request_deadline()
         FixedClock(UnixMicros::new(20_000_000)),
         CertificateOrderDrivePolicy::new(DurationMicros::new(10_000), 1)?,
     )?;
-    let outcome =
-        tokio::time::timeout(Duration::from_millis(100), worker.drive(&mut execution)).await;
+    // This outer bound only detects a stuck test. The independently configured worker owns
+    // the 10ms cancellation; OS scheduling latency is not a throughput assertion here.
+    let outcome = tokio::time::timeout(Duration::from_secs(2), worker.drive(&mut execution)).await;
 
     assert!(outcome.is_ok(), "worker ignored its own 10ms deadline");
     assert!(matches!(

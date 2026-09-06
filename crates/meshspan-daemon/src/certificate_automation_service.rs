@@ -244,6 +244,7 @@ where
             drive,
             CertificateOrderDriveOutcome::Completed(_)
                 | CertificateOrderDriveOutcome::Retried { .. }
+                | CertificateOrderDriveOutcome::ClaimExpired
         ) {
             self.active = None;
         }
