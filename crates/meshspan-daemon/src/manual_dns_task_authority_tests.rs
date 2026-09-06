@@ -18,6 +18,41 @@ use meshspan_metadata::{
 use crate::{ConsensusManualDnsTaskAuthority, ManualDnsTaskCommitAuthority};
 
 #[tokio::test]
+async fn retained_publication_uses_current_claim_authority_and_distinct_operation_identity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut replacement = active_claim()?;
+    replacement.generation += 1;
+    replacement.fence = 7;
+    let mut operation_ids = std::collections::BTreeSet::new();
+    for claim in [active_claim()?, replacement] {
+        let authority = RecordingAuthority {
+            publication_epoch: Some(5),
+            ..RecordingAuthority::default()
+        };
+        let adapter = ConsensusManualDnsTaskAuthority::new(
+            &authority,
+            FixedClock,
+            CertificateOrderId::from_bytes([1; 16])?,
+            claim,
+            PrincipalId::from_bytes([6; 16])?,
+        );
+        adapter.advance(&manual_task()).await?;
+        let state = authority.stored.lock().map_err(|_| "authority lock")?;
+        let (receipt, command) = state.as_ref().ok_or("missing committed task")?;
+        assert!(operation_ids.insert(receipt.operation_id));
+        let AuthoritativeCommand::AdvanceManualDnsTask(command) = command else {
+            return Err("wrong task command".into());
+        };
+        assert_eq!(command.fence, claim.fence);
+        assert_eq!(command.claim_generation, claim.generation);
+        assert_eq!(command.task_digest, [7; 32]);
+        assert_eq!(command.record_value, b"txt-value");
+    }
+    assert_eq!(operation_ids.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
 async fn exact_transition_commits_once_across_clock_progress_and_adapter_restart()
 -> Result<(), Box<dyn std::error::Error>> {
     let order_id = CertificateOrderId::from_bytes([1; 16])?;
@@ -175,6 +210,7 @@ struct RecordingAuthority {
     commits: Mutex<usize>,
     observation_error: Option<ContractError>,
     lose_reply: AtomicBool,
+    publication_epoch: Option<u64>,
 }
 
 impl RecordingAuthority {
@@ -198,7 +234,11 @@ impl ManualDnsTaskCommitAuthority for &RecordingAuthority {
         &self,
         _now: UnixMicros,
         transition: &AdvanceManualDnsTask,
+        publication_epoch: u64,
     ) -> Result<bool, ContractError> {
+        if publication_epoch != self.publication_epoch.unwrap_or(transition.fence) {
+            return Err(ContractError::Stale);
+        }
         if let Some(error) = self.observation_error {
             return Err(error);
         }

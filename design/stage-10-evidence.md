@@ -12,6 +12,58 @@ not close an unexplained failure.
 
 ## Task 2 — interrupted challenge recovery
 
+### Manual-DNS task continuation across worker claims
+
+The next increment on `codex/stage10-task2-publication-handoff` separates current
+worker authority from the task's original creator. Both the observation/no-op
+path and mutation path validate the live claim and exact checkpointed publication
+inside their SQLite transaction. The original task must also match a retained
+creator claim. A replacement worker can advance that same task without changing
+its digest, creator fence, original creation time or expiry. The stale worker
+remains rejected, and a satisfied phase still creates no revision or operation.
+
+The metadata reader now receives the original publication epoch separately from
+the current claim fence. It verifies that epoch against retained publication
+material, including the actual immutable configuration revision and canonical
+DNS owner name. The epoch is checked dynamically for each task: an order can
+finish a handed-off challenge and subsequently publish another authorisation
+under its current worker. No adapter-wide original-epoch cache is introduced.
+Missing or substituted evidence cannot authorise cross-claim task continuation.
+Legacy same-claim transitions remain supported; complete legacy lifetime
+recovery and long-running publication handling are still unfinished.
+
+Operation and audit identity domain **2** includes the order and complete current
+claim identity as well as the task, phase and occurrence time. Two workers at the
+same clock instant must not share an operation identity merely because they now
+share the original publication. Previously committed phases are still resolved
+by the authoritative no-op observation. Task digests, authoritative command
+encoding and SQL tables are unchanged; no migration or dependency was added.
+
+The handoff regression failed at the exact replacement-task observation in
+**0.24 seconds**, after a 12.11-second build; a diagnostic-only rerun confirmed
+that the fixture itself had succeeded. After the fix, all **21 ACME metadata
+tests passed in 13.10 seconds** (3.41-second build). The handoff case was then
+extended to close and reopen an on-disk SQLite database; both handoff acceptance
+cases passed in **0.95 seconds** (3.47-second build). They assert one unchanged
+task identity, original creator/expiry, exact phase/revision, no-op replay, stale
+worker rejection, wrong publication-epoch rejection, and refusal of missing or
+substituted checkpoints. A rejection fixture initially skipped a log index and
+therefore returned `InvalidLogPosition`; its input sequence was corrected before
+asserting the intended `InvalidCommand`, without changing production behaviour.
+
+The daemon's **9 manual-DNS cases passed in 0.09 seconds** after a 35.52-second
+build. All **58 ACME cases passed in 0.07 seconds** after a 7.55-second build.
+Affected all-target/all-feature Clippy passed in **30.22 seconds**; formatting and
+diff checks passed. The exact revised task query was extracted from source and
+explained against the current migrations in in-memory system SQLite: it uses
+the task-digest primary-key index and the historical claim's order/fence index,
+without scanning task history. This is query-shape evidence, not a throughput
+benchmark or a real multi-daemon manual-DNS interruption proof.
+
+This remains an in-progress branch without a final full integration gate. Task 2
+stays **4 points**, Stage 10 **143**, Stage 11 **126**. No release, tag, package,
+image publication or GitHub Actions were run.
+
 ### Publication identity handoff — in-progress branch
 
 The current `codex/stage10-task2-publication-handoff` candidate checkpoints exact

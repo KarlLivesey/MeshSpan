@@ -111,24 +111,29 @@ impl AuthoritativeRepository {
         &self,
         order_id: CertificateOrderId,
     ) -> Result<Option<CertificateOrderCheckpointRecord>, RepositoryError> {
-        let record = self
-            .database
-            .connection()
-            .query_row(
-                "SELECT order_id, claim_generation, worker_node_id, worker_incarnation, fence,
+        load_checkpoint(self.database.connection(), order_id)
+    }
+}
+
+pub(in crate::repository) fn load_checkpoint(
+    connection: &rusqlite::Connection,
+    order_id: CertificateOrderId,
+) -> Result<Option<CertificateOrderCheckpointRecord>, RepositoryError> {
+    let record = connection
+        .query_row(
+            "SELECT order_id, claim_generation, worker_node_id, worker_incarnation, fence,
                         certificate_key_secret_kind, certificate_key_secret_id,
                         certificate_key_secret_generation, checkpoint, checkpoint_digest, revision
                  FROM certificate_order_checkpoints WHERE order_id = ?1",
-                [order_id.as_bytes().as_slice()],
-                decode_checkpoint,
-            )
-            .optional()
-            .map_err(RepositoryError::from)?;
-        if let Some(value) = &record {
-            validate_checkpoint_record_binding(self.database.connection(), value)?;
-        }
-        Ok(record)
+            [order_id.as_bytes().as_slice()],
+            decode_checkpoint,
+        )
+        .optional()
+        .map_err(RepositoryError::from)?;
+    if let Some(value) = &record {
+        validate_checkpoint_record_binding(connection, value)?;
     }
+    Ok(record)
 }
 
 fn validate_checkpoint_binding(

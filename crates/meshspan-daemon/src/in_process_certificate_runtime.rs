@@ -711,6 +711,7 @@ mod tests {
             &self,
             _now: UnixMicros,
             _transition: &meshspan_metadata::AdvanceManualDnsTask,
+            _publication_epoch: u64,
         ) -> Result<bool, ContractError> {
             Err(ContractError::Unavailable)
         }
