@@ -12,6 +12,33 @@ not close an unexplained failure.
 
 ## Task 2 — shared HTTP-01 gateway challenges
 
+### Final recovery integration
+
+Signed, pushed and GitHub-verified source
+`115a6c5f3332729f37c196d5c3ab489af78f74aa`
+(tree `73b8f3ed1b5dbf9e9b3fa718c3940ffd88660971`) passed the full local
+integration gate in **780.44 seconds**: Rust workspace tests **732.27 seconds**,
+web tests **5.58 seconds**, and every generated, formatting, lint, licence,
+TypeScript and tooling lane passed. The command used the NVM-selected Node
+**26.8.1**, pnpm **11.19.0**, Rust **1.98.0**, `CARGO_BUILD_JOBS=4` and
+`MESHSPAN_CHECK_WORKERS=4` with `pnpm check`.
+
+Both opt-in real-time ACME recovery cases then passed together in **337.90
+seconds**, using the final gate's rebuilt all-feature binary
+`headless_process-955f61bbc0f09fcd acme_lifecycle:: --ignored --test-threads=4`.
+They cover process loss with the unchanged five-minute claim lease and rejected
+order cleanup/restart with the unchanged retry backoff. This is final-source
+evidence, unlike the earlier diagnostic run below.
+
+The reproduced port, cancelled-connection, election-deadline and backup-provider
+findings below now have owning-boundary corrections and passing integration.
+The additional wrong-plan timer regressions passed in **0.79 seconds**, and
+affected all-target/all-feature Clippy passed in **21.94 seconds** before the
+full gate. The independent, older cluster-startup timeout is **not** claimed
+fixed by these results. DNS-provider process lifecycles remain outstanding;
+task 2 stays **2 points**, Stage 10 **141**, Stage 11 **126**. No release, tag,
+package/image publication or GitHub Actions run occurred.
+
 ### Integration findings — not closed
 
 The full local gate on signed source `3f920adf87b69e0d337a57c4de77b8457a594583`

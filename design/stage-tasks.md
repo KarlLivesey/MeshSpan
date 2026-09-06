@@ -147,8 +147,11 @@ the stage; publication-dependent acceptance remains held separately and visible.
    address cross-process port collisions, cancelled control-connection reuse,
    election-timer suppression and a backup-provider refresh race. The strengthened
    headless suite passed **10 enabled tests in 36.64 seconds** before the final
-   wrong-plan timer regression. Final-source integration remains pending;
-   PR #251 is not merged and these findings are not waived.
+   wrong-plan timer regression. [Final recovery integration](stage-10-evidence.md#final-recovery-integration)
+   on signed source `115a6c5` passed in **780.44 seconds** (Rust **732.27**, web
+   **5.58**), and both opt-in real-time recovery cases passed together in
+   **337.90 seconds**. These results verify the owning-boundary corrections;
+   they do not establish the cause of the older independent cluster-startup timeout.
    DNS-provider process lifecycles remain open; the estimate is unchanged.
 
 3. **Encrypted certificate delivery and rotation — Partial.** **5 points remaining.**
