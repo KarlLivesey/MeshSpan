@@ -61,14 +61,19 @@ process proof rerun passed in **17.52 seconds** after an 11.42-second build.
 Affected all-target/all-feature Clippy passed with warnings denied in **7.71
 seconds**, following corrections to fixture field ordering and an unnecessary
 owned argument. `cargo deny check licenses` and `git diff --check` passed.
-The full dependency-update integration gate remains.
+The final `pnpm check:dependency-update` passed on signed commit `7fb130c`, tree
+`d1a83a0088db57d25b3883dacb104a0c68cf301f`. Its integration gate took **909.68
+seconds** with four workers; Rust workspace tests took **776.10 seconds** and web
+tests **10.38 seconds**. All static/generated, advisory and licence lanes passed.
+This includes the new default process proof, not ignored or external-service tests.
 
 Only development dependency edges to already-resolved `base64` and `x509-parser`
 were added; their MIT options remain subject to the existing allow-only gate.
 No persistence or public API schema changed. The public-identity signing method
 is an additive Rust library interface with a concrete test-CA consumer.
 
-Task 2 stays **7 points**, Stage 10 **146 points**, pending integration. This
+Integration closes the basic HTTP-01 lifecycle slice: task 2 falls **7 → 6 points**,
+and Stage 10 **146 → 145 points**. This
 proof does not yet cover worker interruption during issuance, long-lived/manual
 challenges, successful-response polling hints or publishing an active challenge
 on every gateway. DNS lifecycle and live-CA acceptance remain open. No releases,
