@@ -156,7 +156,10 @@ the stage; publication-dependent acceptance remains held separately and visible.
    The [isolated provider lifecycle candidate](stage-10-evidence.md#task-2--isolated-dns-provider-process-lifecycles)
    now passes real-daemon Cloudflare, webhook and manual-DNS cases in separate
    offline Linux networks (**18.46**, **18.48** and **13.35 seconds** respectively).
-   Final-source integration is pending. Advance renewal notification delivery
+   The first integration gate failed at an existing nested-runtime backup export;
+   its [focused correction](stage-10-evidence.md#provider-integration-finding--remote-backup-export)
+   now passes the operator proof through both gateways in **16.88 seconds**.
+   Final corrected-source integration is pending. Advance renewal notification delivery
    remains an explicit dependency on task 21; it is not waived or replaced by
    simply listing tasks in the panel.
 

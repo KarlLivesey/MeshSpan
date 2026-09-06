@@ -644,7 +644,18 @@ async fn clean_machine_operator_flow_uses_only_cli_and_public_https() -> Result<
         web_panel::verify(peer.address, &peer_client).await?;
         wait_for_storage_folder_visibility(&root, &root_client, api_key).await?;
         wait_for_storage_folder_visibility(&peer, &peer_client, api_key).await?;
-        stage10::backup_destination_controls(root.address, &root_client, api_key).await?;
+        let root_backup =
+            stage10::backup_destination_controls(root.address, &root_client, api_key).await?;
+        let peer_backup = backup_history::automatic_backup_history(
+            peer.address,
+            &peer_client,
+            &format!("Bearer {api_key}"),
+        )
+        .await?;
+        assert_eq!(
+            peer_backup, root_backup,
+            "both gateways must export and verify the same backup"
+        );
         register_storage_folder(
             root.address,
             &root_client,

@@ -47,10 +47,39 @@ the new runner's ESLint and formatting checks passed. Existing normal HTTP-01,
 RFC 2136 and two-gateway ACME tests passed in **21.22 seconds** after a
 **5.91-second build**, before the container-only retention adjustment.
 
-Full final-source integration is pending. No production behaviour, dependency,
-schema or protocol was changed. Task 2 remains partial: advance renewal delivery
+The initial provider candidate changed no production behaviour, dependency,
+schema or protocol. Task 2 remains partial: advance renewal delivery
 depends explicitly on the existing **task 21 durable-notification implementation**,
 not a second notification system. Live CA verification remains task 5.
+
+### Provider integration finding — remote backup export
+
+Signed and GitHub-verified provider source
+`2ceb677b64c0dfff9d0d3fc191049d512e992a88`
+(tree `3653cfa448d910491f00182ae1c850bfe4275b92`) failed the full gate in
+**279.78 seconds**: Rust **215.62 seconds**, web passed in **6.26 seconds**, and
+all static/generated/licence/tooling lanes passed. The clean-machine operator
+flow exposed an existing remote-backup export panic: the HTTP body writer called
+`Handle::block_on` while a remote provider was already inside its async QUIC
+fetch. The resulting response declared **2,626,456 bytes** but sent **zero body
+bytes**. Private state remains in `.tmpjhYkr0` and `.tmpCgsLDc` under the local
+test temporary directory; it is not a public artefact.
+
+A direct regression reproduced the exact nested-runtime panic in **0.01 seconds**,
+using more bytes than the two-frame channel can buffer. The writer now polls only
+the existing channel-send future with a thread-unparking waker on the owned
+blocking-provider thread. It retains the same bounded channel, 64-KiB frames,
+drop cancellation and absolute monotonic deadline without starting another
+executor or adding a dependency. Four focused body tests passed in **0.03 seconds**
+after a **15.59-second build**, including stalled-reader timeout and cancellation.
+
+The operator proof now exports and verifies the **same backup through both
+gateways**, rather than exercising whichever local/remote source the root happened
+to choose. It passed in **16.88 seconds** after a **21.67-second build**; affected
+all-target/all-feature Clippy passed in **7.01 seconds**. The provider-source
+opt-in ACME recovery pair separately passed in **339.64 seconds**; that binary
+preceded this backup correction. Final corrected-source integration is pending,
+and PR #252 remains unmerged.
 
 ## Task 2 — shared HTTP-01 gateway challenges
 

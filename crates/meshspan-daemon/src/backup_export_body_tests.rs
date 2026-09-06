@@ -5,6 +5,32 @@ use axum::body::to_bytes;
 use std::{io, time::Duration};
 
 #[tokio::test]
+async fn backup_export_remote_provider_can_write_inside_its_async_fetch()
+-> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Handle::current();
+    // Larger than both channel slots: the remote fetch must make progress with backpressure,
+    // not merely avoid a nested-runtime panic for one immediately accepted frame.
+    let content = (0_u8..251)
+        .cycle()
+        .take(3 * 64 * 1024 + 17)
+        .collect::<Vec<_>>();
+    let expected = content.clone();
+    let download = body(
+        move |sink| {
+            runtime.block_on(async {
+                tokio::task::yield_now().await;
+                sink.write_all(&content)
+            })
+        },
+        Duration::from_secs(2),
+    );
+    let received =
+        tokio::time::timeout(Duration::from_secs(3), to_bytes(download, expected.len())).await??;
+    assert_eq!(received.as_ref(), expected);
+    Ok(())
+}
+
+#[tokio::test]
 async fn backup_export_drop_closes_a_backpressured_writer() -> Result<(), Box<dyn std::error::Error>>
 {
     let (completed, outcome) = tokio::sync::oneshot::channel();

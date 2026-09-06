@@ -15,10 +15,10 @@ pub(super) async fn backup_destination_controls(
     address: SocketAddr,
     client: &ClientConfig,
     api_key: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<String, Box<dyn Error>> {
     let authorization = format!("Bearer {api_key}");
     automatic_backup_configuration(address, client, &authorization).await?;
-    automatic_backup_history(address, client, &authorization).await?;
+    let backup_id = automatic_backup_history(address, client, &authorization).await?;
     let response = request_with_headers(
         address,
         client,
@@ -71,7 +71,7 @@ pub(super) async fn backup_destination_controls(
     assert_eq!(destination["revision"], paused["committed_revision"]);
     assert_eq!(destination["failure_relationship"], "overlapping");
     assert!(page["next_page_url"].is_null());
-    Ok(())
+    Ok(backup_id)
 }
 
 async fn automatic_backup_configuration(

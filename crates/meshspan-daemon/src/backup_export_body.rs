@@ -7,11 +7,13 @@ use hyper::body::{Frame, SizeHint};
 use std::{
     future::Future,
     io::{self, Write},
-    pin::Pin,
-    task::{Context, Poll},
-    time::Duration,
+    pin::{Pin, pin},
+    sync::Arc,
+    task::{Context, Poll, Wake, Waker},
+    thread,
+    time::{Duration, Instant},
 };
-use tokio::{runtime::Handle, sync::mpsc, task::JoinHandle, time::Instant};
+use tokio::{sync::mpsc, task::JoinHandle};
 
 const CHANNEL_FRAMES: usize = 2;
 const FRAME_BYTES: usize = 64 * 1024;
@@ -22,18 +24,13 @@ pub(crate) fn body(
     timeout: Duration,
 ) -> Body {
     let (sender, receiver) = mpsc::channel(CHANNEL_FRAMES);
-    let runtime = Handle::current();
     // The router validates configured limits. Fail immediately if an extreme direct
     // caller still exceeds the platform clock range; never panic in body construction.
     let deadline = Instant::now()
         .checked_add(timeout)
         .unwrap_or_else(Instant::now);
     let worker = tokio::task::spawn_blocking(move || {
-        let mut sink = ChannelWriter {
-            sender,
-            runtime,
-            deadline,
-        };
+        let mut sink = ChannelWriter { sender, deadline };
         job(&mut sink)
     });
     Body::new(ExportBody {
@@ -45,8 +42,50 @@ pub(crate) fn body(
 
 struct ChannelWriter {
     sender: mpsc::Sender<Bytes>,
-    runtime: Handle,
     deadline: Instant,
+}
+
+impl ChannelWriter {
+    fn send_frame(&self, frame: Bytes) -> io::Result<()> {
+        // The provider owns this blocking thread, but a remote provider may already be inside
+        // Handle::block_on while fetching bytes. Poll only the channel future here: its receiver
+        // wakes this thread when capacity opens or the body is dropped. No nested executor,
+        // reactor or timer is needed; a parked writer still has an absolute monotonic deadline.
+        let waker = Waker::from(Arc::new(WriterWake(thread::current())));
+        let mut context = Context::from_waker(&waker);
+        let mut send = pin!(self.sender.send(frame));
+        loop {
+            let remaining = self.deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "backup export deadline elapsed",
+                ));
+            }
+            match send.as_mut().poll(&mut context) {
+                Poll::Ready(result) => {
+                    return result.map_err(|_| {
+                        io::Error::new(io::ErrorKind::BrokenPipe, "backup export receiver closed")
+                    });
+                }
+                // An unpark racing with this call retains its token. Spurious wakes simply
+                // re-poll the channel and recompute the unchanged remaining deadline.
+                Poll::Pending => thread::park_timeout(remaining),
+            }
+        }
+    }
+}
+
+struct WriterWake(thread::Thread);
+
+impl Wake for WriterWake {
+    fn wake(self: Arc<Self>) {
+        self.0.unpark();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.unpark();
+    }
 }
 
 impl Write for ChannelWriter {
@@ -62,16 +101,7 @@ impl Write for ChannelWriter {
         }
         let count = bytes.len().min(FRAME_BYTES);
         let frame = Bytes::copy_from_slice(bytes.get(..count).ok_or_else(failed)?);
-        self.runtime.block_on(async {
-            tokio::time::timeout_at(self.deadline, self.sender.send(frame))
-                .await
-                .map_err(|_| {
-                    io::Error::new(io::ErrorKind::TimedOut, "backup export deadline elapsed")
-                })?
-                .map_err(|_| {
-                    io::Error::new(io::ErrorKind::BrokenPipe, "backup export receiver closed")
-                })
-        })?;
+        self.send_frame(frame)?;
         Ok(count)
     }
     fn flush(&mut self) -> io::Result<()> {
