@@ -138,6 +138,13 @@ the stage; publication-dependent acceptance remains held separately and visible.
    **337.22 seconds**. This closes the identified response-guidance/trust gaps,
    not the remaining provider lifecycles or active-gateway challenge distribution.
    Task 2 remains **2 points** pending that integrated acceptance.
+   The [shared HTTP-01 gateway candidate](stage-10-evidence.md#task-2--shared-http-01-gateway-challenges)
+   now passes a real CA probe of both active gateways, exact cleanup and gateway
+   restart with one issuance. It also fixes the missing founding-node endpoint
+   which prevented a joined gateway restoring its private route after restart.
+   All three normal ACME process scenarios passed together in **23.30 seconds**;
+   full integration and opt-in recovery verification are pending on this source.
+   DNS-provider process lifecycles remain open; the estimate is unchanged.
 
 3. **Encrypted certificate delivery and rotation — Partial.** **5 points remaining.**
    PKI-001/002/005/007/010; accepted decisions §7.

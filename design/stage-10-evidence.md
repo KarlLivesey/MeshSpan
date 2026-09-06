@@ -10,6 +10,62 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 2 — shared HTTP-01 gateway challenges
+
+The current candidate makes public HTTP-01 material available independently of
+which gateway claimed the order. The local publisher remains the challenge
+component; other gateways read an indexed, revalidated projection of the
+replicated checkpoint. A miss can query an authenticated voter without issuing
+an ACME request or appending consensus work. The response contains only the
+exact token's public key authorisation and original expiry. Preparation,
+cleanup and retirement are not projected as serving states. Reads use one
+database snapshot; negative lookups use the token index instead of scanning
+order history. Remote reads reuse a dedicated reader and bypass the mutation
+queue. Anonymous lookup admission and total duration are bounded.
+
+The new two-daemon CA proof initially failed in **22.38 seconds**: one gateway
+returned `404` during actual CA validation. After delivery was implemented, the
+proof exposed a separate persistent restart defect. A joined node retained the
+founding node's certificate but **no private endpoint**, so its route registry
+could never recover that peer. Diagnostics confirmed the missing endpoint in
+the persisted topology; waiting for readiness did not fix it. New appliance
+bootstrap now commits its advertised private endpoint atomically. The topology
+reader exposes it without inventing an enrolment activation for the founding
+node. Endpoint validation and cross-table duplicate protection apply.
+
+Migration **86** adds the derived challenge-token index and backfills existing
+checkpoints transactionally, preserving their bytes/digests. Corrupt migration
+evidence rolls back both the index and migration history. Migration **87** adds
+the optional founding endpoint. Existing bootstrap records retain their exact
+wire bytes and request digests; new records use a bounded tagged endpoint
+extension. Missing legacy addresses remain missing rather than being invented.
+There is no dependency or public HTTPS schema change.
+
+The final focused parallel process run passed **all three normal ACME cases in
+23.30 seconds**, after a **17.02-second build**: ordinary HTTP-01, RFC 2136
+DNS-01, and two active HTTP gateways followed by gateway restart. The CA checks
+both actual HTTP listeners against its independently derived account proof,
+requires exact removal and observes exactly one order/issuance. Startup may
+temporarily return `503` while restoring peer routes, but the removed token may
+never reappear and lookup readiness has a bounded deadline. An earlier parallel
+run exposed the fixture's two-second client deadline matching the server's new
+two-second work deadline; the client now leaves one second for the response,
+without increasing the server budget or serialising tests.
+
+Focused metadata coverage passed **5 tests in 3.12 seconds**; founding-endpoint
+and legacy-codec coverage passed **3 tests in 2.93 seconds**. Both new private
+wire tests passed, including malformed tokens, substituted bodies, missing or
+invalid expiry and round trips of found/absent responses. The broader ACME
+repository run passed **32 tests in 24.12 seconds**. Affected Clippy passed
+before the final allocation-free token-validation cleanup; final integration
+and the two opt-in real-time recovery cases remain pending for this candidate.
+
+This closes neither the remaining DNS-provider process lifecycles nor Stage 10.
+Task 2 remains **2 points**, Stage 10 **141**, and Stage 11 **126** pending their
+recorded acceptance. Releases, tags, package/image publication and GitHub
+Actions remain prohibited. The previously recorded independent cluster timeout
+is not claimed fixed by these passing ACME tests.
+
 ## Task 2 — interrupted challenge recovery
 
 ### Retry guidance survives parsing and terminal certificate refusal

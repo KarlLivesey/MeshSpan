@@ -27,7 +27,12 @@ pub(super) fn encode(
     encode_node_certificate(encoder, &value.node_certificate)?;
     secret_generation::encode_payload(encoder, &value.storage_permit_key_generation)?;
     secret_generation::encode_payload(encoder, &value.authentication_root_key_generation)?;
-    secret_generation::encode_payload(encoder, &value.online_authority_key_generation)
+    secret_generation::encode_payload(encoder, &value.online_authority_key_generation)?;
+    if let Some(endpoint) = &value.private_endpoint {
+        encoder.u8(1)?;
+        encoder.text(endpoint, 512)?;
+    }
+    Ok(())
 }
 
 pub(super) fn decode(
@@ -42,7 +47,18 @@ pub(super) fn decode(
         storage_permit_key_generation: Box::new(secret_generation::decode_payload(decoder)?),
         authentication_root_key_generation: Box::new(secret_generation::decode_payload(decoder)?),
         online_authority_key_generation: Box::new(secret_generation::decode_payload(decoder)?),
+        private_endpoint: decode_endpoint(decoder)?,
     })
+}
+
+fn decode_endpoint(decoder: &mut Decoder<'_>) -> Result<Option<String>, MetadataCommandCodecError> {
+    if decoder.is_finished() {
+        return Ok(None);
+    }
+    if decoder.u8()? != 1 {
+        return Err(MetadataCommandCodecError::Invalid);
+    }
+    Ok(Some(decoder.text(512)?))
 }
 
 fn encode_node_certificate(

@@ -32,6 +32,7 @@ use crate::{
     SecretGenerationReference,
 };
 
+mod http01;
 mod manual_dns_handoff;
 mod manual_dns_transition;
 

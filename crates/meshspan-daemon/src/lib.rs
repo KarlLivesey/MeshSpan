@@ -166,6 +166,7 @@ mod headless_config;
 #[cfg(test)]
 mod headless_config_tests;
 mod headless_node_join;
+mod http01_gateway;
 mod http01_server;
 #[cfg(test)]
 mod http01_server_tests;

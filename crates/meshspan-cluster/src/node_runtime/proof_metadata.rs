@@ -169,6 +169,7 @@ fn bootstrap() -> Result<AuthoritativeCommand, NodeRuntimeError> {
     .map_err(|_| NodeRuntimeError::InvalidConfiguration)?;
     Ok(AuthoritativeCommand::BootstrapAppliance(Box::new(
         BootstrapAppliance {
+            private_endpoint: None,
             mesh,
             authentication: CreateAuthenticationMethod {
                 method_id: AuthenticationMethodId::from_bytes([13; 16])?,

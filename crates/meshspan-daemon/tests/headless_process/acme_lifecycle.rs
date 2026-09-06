@@ -6,6 +6,8 @@
 mod authority;
 #[path = "acme_lifecycle/challenge.rs"]
 mod challenge;
+#[path = "acme_lifecycle/gateways.rs"]
+mod gateways;
 #[path = "acme_lifecycle/rejection.rs"]
 mod rejection;
 // Reuse the independent signed-DNS transcript verifier, without a production fixture export.

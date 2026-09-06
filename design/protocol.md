@@ -464,6 +464,26 @@ authorised node identity. Messages are:
 - `AcknowledgeCertificateInstall` with the installed public fingerprint; and
 - `RevokeCertificateEnvelope` / rotation state changes.
 
+HTTP-01 gateways also use `FetchHttp01Challenge` and `Http01ChallengeResult` on
+the authenticated same-swarm control stream. A request contains one base64url
+token (1–128 bytes). A result echoes that token and contains either no proof, or
+its bounded ASCII key authorisation (at most 512 bytes) plus original exclusive
+expiry. Body and expiry must be present together. Replies bind the request's
+operation ID and exact token; transport binds node, incarnation and swarm.
+These messages expose no account key, provider settings or full order checkpoint.
+
+Gateways serve the local publisher's catalogue or an indexed projection of an
+already replicated publication checkpoint. Only published/notifying/polling
+material is projected: preparation, cleanup and retirement are not permission
+to republish. A local miss may query the known leader; during leader discovery,
+the bounded durable voter set is queried, not every storage node. Responders
+only read their own checkpoint and never forward, preventing relay loops.
+There are no CA requests or Raft mutations on this path. Anonymous lookup work
+has bounded admission and a two-second total deadline. Unavailable routing
+returns `503`, not fabricated absence. Startup certificate installation status
+does not by itself establish private-route readiness. This public proof lookup
+is not a linearizable metadata read or a grant to perform certificate work.
+
 The private key is never broadcast in plaintext or made readable through a
 metadata query. Public challenge settings and non-secret status may be
 replicated normally.

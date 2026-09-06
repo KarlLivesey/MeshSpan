@@ -19,28 +19,27 @@ pub(super) const REPLACEMENT_TOKEN: &str = "meshspan_replacement_challenge_token
 #[derive(Clone, Copy)]
 pub(super) enum ValidationTarget {
     Http01(SocketAddr),
+    Http01Gateways([SocketAddr; 2]),
     Dns01(SocketAddr),
 }
 
 impl ValidationTarget {
     pub const fn kind(self) -> &'static str {
         match self {
-            Self::Http01(_) => "http-01",
+            Self::Http01(_) | Self::Http01Gateways(_) => "http-01",
             Self::Dns01(_) => "dns-01",
         }
     }
 
     pub async fn validate(self, key_authorisation: &str) -> Result<(), Failure> {
         match self {
-            Self::Http01(address) => {
-                let response = read_challenge(address, token(key_authorisation)?).await?;
-                super::require_status(&response, "200 OK", "CA HTTP-01 probe")
-                    .map_err(|error| error.to_string())?;
-                if super::response_body(&response).map_err(|error| error.to_string())?
-                    != key_authorisation
-                {
-                    return Err("HTTP-01 key authorisation differs from the signing account".into());
+            Self::Http01Gateways(addresses) => {
+                for address in addresses {
+                    validate_http(address, key_authorisation).await?;
                 }
+            }
+            Self::Http01(address) => {
+                validate_http(address, key_authorisation).await?;
             }
             Self::Dns01(address) => {
                 if !contains_dns_proof(address, key_authorisation).await? {
@@ -53,10 +52,13 @@ impl ValidationTarget {
 
     pub async fn assert_removed(self, key_authorisation: &str) -> Result<(), Failure> {
         match self {
+            Self::Http01Gateways(addresses) => {
+                for address in addresses {
+                    assert_http_removed(address, key_authorisation).await?;
+                }
+            }
             Self::Http01(address) => {
-                let response = read_challenge(address, token(key_authorisation)?).await?;
-                super::require_status(&response, "404 Not Found", "completed challenge cleanup")
-                    .map_err(|error| error.to_string())?;
+                assert_http_removed(address, key_authorisation).await?;
             }
             Self::Dns01(address) => {
                 if contains_dns_proof(address, key_authorisation).await? {
@@ -65,6 +67,45 @@ impl ValidationTarget {
             }
         }
         Ok(())
+    }
+}
+
+async fn validate_http(address: SocketAddr, key_authorisation: &str) -> Result<(), Failure> {
+    let response = read_challenge(address, token(key_authorisation)?).await?;
+    super::require_status(&response, "200 OK", "CA HTTP-01 probe")
+        .map_err(|error| error.to_string())?;
+    if super::response_body(&response).map_err(|error| error.to_string())? != key_authorisation {
+        return Err("HTTP-01 key authorisation differs from the signing account".into());
+    }
+    Ok(())
+}
+
+async fn assert_http_removed(address: SocketAddr, key_authorisation: &str) -> Result<(), Failure> {
+    let response = read_challenge(address, token(key_authorisation)?).await?;
+    super::require_status(&response, "404 Not Found", "completed challenge cleanup")
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// An installed certificate is durable local state, not proof that restarted peer routing is
+/// ready. Permit only temporary unavailability: serving the deleted token is always a failure.
+pub(super) async fn wait_for_removed_after_restart(address: SocketAddr) -> Result<(), Failure> {
+    let deadline = super::Instant::now() + super::WAIT_LIMIT;
+    loop {
+        let response = read_challenge(address, TOKEN).await?;
+        if response.starts_with("HTTP/1.1 404 Not Found\r\n") {
+            return Ok(());
+        }
+        super::require_status(
+            &response,
+            "503 Service Unavailable",
+            "restarted challenge readiness",
+        )
+        .map_err(|error| error.to_string())?;
+        if super::Instant::now() >= deadline {
+            return Err("restarted HTTP-01 gateway did not regain private lookup readiness".into());
+        }
+        super::sleep(super::RETRY_INTERVAL).await;
     }
 }
 
@@ -88,7 +129,9 @@ fn token(key_authorisation: &str) -> Result<&str, Failure> {
 }
 
 async fn read_challenge(address: SocketAddr, token: &str) -> Result<String, Failure> {
-    tokio::time::timeout(Duration::from_secs(2), async {
+    // The server's bounded distributed lookup can legitimately consume two seconds before
+    // returning 503. The client must leave time for that response instead of racing its timer.
+    tokio::time::timeout(Duration::from_secs(3), async {
         let mut stream = TcpStream::connect(address).await?;
         stream.write_all(format!("GET /.well-known/acme-challenge/{token} HTTP/1.1\r\nHost: {CERTIFICATE_NAME}\r\nConnection: close\r\n\r\n").as_bytes()).await?;
         let mut bytes = Vec::new();

@@ -157,6 +157,7 @@ fn fixture(lose_first_response: bool) -> Result<Fixture, Box<dyn std::error::Err
             recovery_path,
             WrappingPrivateKey::from_bytes([61; 32])?.public_key(),
             node_identity.public_key_sec1().to_vec(),
+            "127.0.0.1:9412".to_owned(),
         ),
         SequentialRandom(101),
     );

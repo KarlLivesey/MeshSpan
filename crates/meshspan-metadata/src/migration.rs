@@ -8,12 +8,14 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+mod http01;
+
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 85;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 87;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 13;
 
-const PARTITION_MIGRATIONS: [Migration; 85] = [
+const PARTITION_MIGRATIONS: [Migration; 87] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -351,8 +353,16 @@ const PARTITION_MIGRATIONS: [Migration; 85] = [
         sql: include_str!("../schema/partition/084_backup_reclamation.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 85,
         sql: include_str!("../schema/partition/085_backup_defaults.sql"),
+    },
+    Migration {
+        version: 86,
+        sql: include_str!("../schema/partition/086_http01_checkpoint_index.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/087_bootstrap_private_endpoint.sql"),
     },
 ];
 
@@ -450,14 +460,19 @@ pub(crate) fn migrate_partition(
     connection: &mut Connection,
     applied_at: i64,
 ) -> Result<(), MetadataStoreError> {
-    apply_migrations(connection, &PARTITION_MIGRATIONS, applied_at)
+    apply_migrations(
+        connection,
+        &PARTITION_MIGRATIONS,
+        applied_at,
+        partition_data_migration,
+    )
 }
 
 pub(crate) fn migrate_local(
     connection: &mut Connection,
     applied_at: i64,
 ) -> Result<(), MetadataStoreError> {
-    apply_migrations(connection, &LOCAL_MIGRATIONS, applied_at)
+    apply_migrations(connection, &LOCAL_MIGRATIONS, applied_at, |_, _| Ok(()))
 }
 
 #[cfg(test)]
@@ -469,7 +484,7 @@ pub(crate) fn migrate_partition_through(
     let migrations = PARTITION_MIGRATIONS
         .get(..version)
         .ok_or(MetadataStoreError::InvalidMigrationHistory)?;
-    apply_migrations(connection, migrations, applied_at)
+    apply_migrations(connection, migrations, applied_at, partition_data_migration)
 }
 
 #[cfg(test)]
@@ -481,13 +496,14 @@ pub(crate) fn migrate_local_through(
     let migrations = LOCAL_MIGRATIONS
         .get(..version)
         .ok_or(MetadataStoreError::InvalidMigrationHistory)?;
-    apply_migrations(connection, migrations, applied_at)
+    apply_migrations(connection, migrations, applied_at, |_, _| Ok(()))
 }
 
 fn apply_migrations(
     connection: &mut Connection,
     migrations: &[Migration],
     applied_at: i64,
+    transform: fn(&rusqlite::Transaction<'_>, u32) -> Result<(), MetadataStoreError>,
 ) -> Result<(), MetadataStoreError> {
     validate_migration_catalogue(migrations)?;
     let applied = read_applied_migrations(connection)?;
@@ -502,7 +518,7 @@ fn apply_migrations(
             }
             continue;
         }
-        apply_one(connection, *migration, applied_at)?;
+        apply_one(connection, *migration, applied_at, transform)?;
     }
     Ok(())
 }
@@ -511,9 +527,11 @@ fn apply_one(
     connection: &mut Connection,
     migration: Migration,
     applied_at: i64,
+    transform: fn(&rusqlite::Transaction<'_>, u32) -> Result<(), MetadataStoreError>,
 ) -> Result<(), MetadataStoreError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute_batch(migration.sql)?;
+    transform(&transaction, migration.version)?;
     transaction.execute(
         "INSERT INTO schema_migrations(version, migration_digest, applied_at) VALUES (?1, ?2, ?3)",
         params![
@@ -524,6 +542,16 @@ fn apply_one(
     )?;
     transaction.pragma_update(None, "user_version", migration.version)?;
     transaction.commit()?;
+    Ok(())
+}
+
+fn partition_data_migration(
+    transaction: &rusqlite::Transaction<'_>,
+    version: u32,
+) -> Result<(), MetadataStoreError> {
+    if version == 86 {
+        http01::backfill(transaction)?;
+    }
     Ok(())
 }
 

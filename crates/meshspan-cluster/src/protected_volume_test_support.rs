@@ -53,6 +53,7 @@ pub(crate) fn protected_bootstrap(
     let node_id = mesh.node_id;
     Ok(AuthoritativeCommand::BootstrapAppliance(Box::new(
         BootstrapAppliance {
+            private_endpoint: None,
             authentication: CreateAuthenticationMethod {
                 method_id: AuthenticationMethodId::from_bytes([205; 16])?,
                 principal_id: administrator_id,

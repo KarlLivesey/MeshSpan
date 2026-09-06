@@ -206,7 +206,7 @@ hosts(
 nodes(
   node_id PK, host_id -> hosts, display_name, canonical_name UNIQUE,
   state, current_incarnation, admitted_at, activated_at NULL,
-  last_retired_at NULL, revision
+  last_retired_at NULL, bootstrap_private_endpoint NULL, revision
 )
 
 node_public_keys(
@@ -240,6 +240,14 @@ join_grants(
 
 `node_id` is a daemon identity. `host_id` is the physical machine identity.
 Multiple nodes on one host do not count as independent machine failures.
+
+The implementation commits the founding node's `bootstrap_private_endpoint`
+with appliance creation (migration 87), without inventing an enrolment activation
+for that already-active node. Topology projects activated endpoints or this
+bootstrap endpoint. Legacy records remain nullable: an upgrade cannot invent an
+address that was never stored. New bootstrap commands retain the legacy encoding
+when no endpoint exists and use a bounded, explicitly tagged endpoint extension
+otherwise; the endpoint participates in the request digest.
 
 ## 5. Metadata partitions and routing
 
@@ -1296,7 +1304,7 @@ certificate_order_checkpoints(
   order_id PK -> certificate_orders,
   claim_generation, worker_node_id, worker_incarnation, fence,
   certificate_key_secret_id, certificate_key_secret_generation,
-  checkpoint, checkpoint_digest, revision
+  checkpoint, checkpoint_digest, http01_token NULL, revision
 )
 
 manual_dns_tasks(

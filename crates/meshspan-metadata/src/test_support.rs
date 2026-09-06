@@ -46,6 +46,7 @@ pub(crate) fn bootstrap_appliance(
         &mut SequentialRandom(31),
     )?;
     Ok(BootstrapAppliance {
+        private_endpoint: None,
         node_wrapping_key: RegisterNodeWrappingKey {
             node_id: mesh.node_id,
             generation: 1,

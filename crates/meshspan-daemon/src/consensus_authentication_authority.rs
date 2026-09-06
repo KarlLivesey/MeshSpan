@@ -73,6 +73,13 @@ impl ConsensusAuthenticationAuthority {
         &self.reader
     }
 
+    pub(crate) fn into_http01_gateway(
+        self,
+        local: meshspan_acme::Http01Challenge,
+    ) -> crate::http01_gateway::Http01Gateway {
+        crate::http01_gateway::Http01Gateway::new(local, self.reader, self.authority, self.network)
+    }
+
     pub(crate) fn commit_authoritative(
         &self,
         context: CommandContext,

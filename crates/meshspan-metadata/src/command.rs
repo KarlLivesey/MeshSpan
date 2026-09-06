@@ -564,6 +564,8 @@ pub struct BootstrapMesh {
 /// Atomic first-appliance bootstrap with no default or temporarily missing credential.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BootstrapAppliance {
+    /// Founding node's advertised private endpoint. `None` preserves legacy bootstrap records.
+    pub private_endpoint: Option<String>,
     /// First mesh, administrator and one-node authority records.
     pub mesh: BootstrapMesh,
     /// Initial login-capable passkey or API key owned by the first administrator.
@@ -2692,6 +2694,10 @@ digest_simple_record!(
             .authentication_root_key_generation
             .update_digest(digest);
         value.online_authority_key_generation.update_digest(digest);
+        if let Some(endpoint) = &value.private_endpoint {
+            digest.bytes(b"bootstrap-private-endpoint-v1");
+            digest.bytes(endpoint.as_bytes());
+        }
     }
 );
 digest_simple_record!(

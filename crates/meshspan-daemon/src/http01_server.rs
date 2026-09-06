@@ -28,6 +28,12 @@ pub struct Http01Server {
     router: Router,
 }
 
+#[derive(Clone)]
+enum ChallengeSource {
+    Local(Http01Challenge),
+    Shared(crate::http01_gateway::Http01Gateway),
+}
+
 impl Http01Server {
     /// Binds the dedicated challenge listener without starting its accept loop.
     ///
@@ -39,6 +45,20 @@ impl Http01Server {
     pub async fn bind(
         address: SocketAddr,
         challenges: Http01Challenge,
+    ) -> Result<Self, Http01ServerError> {
+        Self::bind_source(address, ChallengeSource::Local(challenges)).await
+    }
+
+    pub(crate) async fn bind_shared(
+        address: SocketAddr,
+        challenges: crate::http01_gateway::Http01Gateway,
+    ) -> Result<Self, Http01ServerError> {
+        Self::bind_source(address, ChallengeSource::Shared(challenges)).await
+    }
+
+    async fn bind_source(
+        address: SocketAddr,
+        challenges: ChallengeSource,
     ) -> Result<Self, Http01ServerError> {
         let listener = TcpListener::bind(address)
             .await
@@ -90,12 +110,16 @@ impl Http01Server {
 
 async fn challenge(
     Path(token): Path<String>,
-    State(challenges): State<Http01Challenge>,
+    State(challenges): State<ChallengeSource>,
 ) -> Response<Body> {
     let Some(now) = current_time() else {
         return empty_response(StatusCode::SERVICE_UNAVAILABLE);
     };
-    match challenges.response(&token, now) {
+    let proof = match challenges {
+        ChallengeSource::Local(local) => local.response(&token, now).map_err(|_| ()),
+        ChallengeSource::Shared(shared) => shared.response(&token, now).await,
+    };
+    match proof {
         Ok(Some(body)) => {
             let mut response = Response::new(Body::from(body));
             *response.status_mut() = StatusCode::OK;
@@ -109,7 +133,7 @@ async fn challenge(
             response
         }
         Ok(None) => empty_response(StatusCode::NOT_FOUND),
-        Err(_) => empty_response(StatusCode::SERVICE_UNAVAILABLE),
+        Err(()) => empty_response(StatusCode::SERVICE_UNAVAILABLE),
     }
 }
 
