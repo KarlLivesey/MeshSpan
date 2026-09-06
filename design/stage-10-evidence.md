@@ -12,6 +12,45 @@ not close an unexplained failure.
 
 ## Task 2 — shared HTTP-01 gateway challenges
 
+### Integration findings — not closed
+
+The full local gate on signed source `3f920adf87b69e0d337a57c4de77b8457a594583`
+(tree `f1530c9c10c2bed14ee69b3cdc58af5cc4af130a`) **failed in 353.00 seconds**.
+Rust tests failed in **285.89 seconds** at the two-gateway restart proof;
+web tests passed in **5.57 seconds**, and all static/generated/licence lanes
+passed. PR #251 remains unmerged. The affected Clippy preceding this gate passed
+in **21.81 seconds**; that does not supersede the process failure.
+
+The concurrent opt-in recovery run completed in **337.42 seconds** with rejected
+order recovery passing but lease-loss recovery failing at a child's HTTPS bind:
+`Address already in use`. The harness allocated from the same counter in each
+test process and released its probe socket before child startup. A new actual
+child-process regression reproduced reuse of port 16384. OS file-lock reservations
+now retain each allocated TCP/UDP address through daemon restarts until the owning
+test process exits. Locks cover individual ports, not the suite. The regression
+and range parser passed in **0.01 seconds**, after a **3.24-second build**.
+Both opt-in recovery cases subsequently passed together in **337.14 seconds**
+with reservations and temporary gateway diagnostics. Production lease/backoff
+durations were not shortened. Final-source integration is still required.
+
+Port isolation did **not** fix the gateway restart defect. A diagnostic parallel
+headless run failed in **42.38 seconds**, and a later run failed in **38.64
+seconds**. The peer's requests reach the surviving node, but reverse-direction
+requests do not reach the restarted peer's HTTP-proof handler. Both nodes can
+remain without a known leader. Waiting for both gateways within the unchanged
+deadline exposed persistent unavailability, rather than merely a readiness race;
+the three-case focused run failed in **40.48 seconds**. Investigation continues
+at the private connection boundary; isolated passing retries do not close it.
+
+The 42.38-second run also exposed an independent automatic-backup failure. Its
+retained authoritative state has a recorded run requiring two verified copies,
+two active destinations, but only one verified copy. Evidence is retained in
+the private temporary directories `.tmp3IEjub` and `.tmp6zqGWd`. A later passing
+operator flow does not establish the cause or close this finding. Neither this
+failure nor the earlier independent cluster timeout is waived for integration.
+
+### Candidate behaviour and focused evidence
+
 The current candidate makes public HTTP-01 material available independently of
 which gateway claimed the order. The local publisher remains the challenge
 component; other gateways read an indexed, revalidated projection of the
