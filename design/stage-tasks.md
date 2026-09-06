@@ -17,7 +17,7 @@ Update the relevant task when work changes its status. Report the current task,
 what behaviour changed, what remains and what was tested. Do not replace this
 with “nearly done”, a count of commits or an unweighted completion percentage.
 
-Remaining-effort estimate, 2026-09-06: **Stage 10: 143 points; Stage 11: 126
+Remaining-effort estimate, 2026-09-06: **Stage 10: 142 points; Stage 11: 126
 points; Stage 12: 55 points.** These are preliminary engineering judgements from
 the task scope and recorded gaps, not measured hours or completion guarantees.
 Uncertainty is high until the open integration/proof work is exercised.
@@ -71,7 +71,7 @@ the stage; publication-dependent acceptance remains held separately and visible.
    and task acceptance; it does not establish invitation continuity across later
    leaf changes. The estimate fell 5 → 3 → 1 → 0 as this scope was verified.
 
-2. **Automatic ACME and DNS challenge handling — Partial; current task.** **4 points remaining.**
+2. **Automatic ACME and DNS challenge handling — Partial; current task.** **3 points remaining.**
    PKI-003/004/006/010; accepted decisions §7.
    [ACME components](../crates/meshspan-acme/src/lib.rs) and
    [renewal scheduling](../crates/meshspan-daemon/src/certificate_renewal_scheduler.rs)
@@ -108,9 +108,13 @@ the stage; publication-dependent acceptance remains held separately and visible.
    retains original material/receipt/lifetime, continues the same manual task under
    replacement claims and verifies ordinary legacy lifetime candidates. The full
    gate on `aa4f5e8` passed in **748.09 seconds** (Rust **687.72**, web **5.46**).
-   This does not close interrupted real-process issuance, long-running or expired
-   pending challenges, remaining DNS-provider process proof or active-gateway
-   challenge distribution; these remain within the current **4 points**.
+   The [independent-lifetime and takeover proof](stage-10-evidence.md#integrated-independent-lifetime-and-takeover-proof)
+   now passes actual process loss, the unmodified five-minute lease expiry, exact
+   HTTP challenge restoration and completion of the same CA order. Its final
+   opt-in run passed in **325.02 seconds**, and the full gate on `86be66f` passed
+   in **792.30 seconds** (Rust **717.65**, web **9.94**), closing **4 → 3 points**.
+   Expired publication/terminal CA order recovery, remaining DNS-provider process
+   lifecycles and active-gateway challenge distribution remain outstanding.
 
 3. **Encrypted certificate delivery and rotation — Partial.** **5 points remaining.**
    PKI-001/002/005/007/010; accepted decisions §7.
