@@ -17,7 +17,7 @@ Update the relevant task when work changes its status. Report the current task,
 what behaviour changed, what remains and what was tested. Do not replace this
 with “nearly done”, a count of commits or an unweighted completion percentage.
 
-Remaining-effort estimate, 2026-09-06: **Stage 10: 142 points; Stage 11: 126
+Remaining-effort estimate, 2026-09-06: **Stage 10: 141 points; Stage 11: 126
 points; Stage 12: 55 points.** These are preliminary engineering judgements from
 the task scope and recorded gaps, not measured hours or completion guarantees.
 Uncertainty is high until the open integration/proof work is exercised.
@@ -71,7 +71,7 @@ the stage; publication-dependent acceptance remains held separately and visible.
    and task acceptance; it does not establish invitation continuity across later
    leaf changes. The estimate fell 5 → 3 → 1 → 0 as this scope was verified.
 
-2. **Automatic ACME and DNS challenge handling — Partial; current task.** **3 points remaining.**
+2. **Automatic ACME and DNS challenge handling — Partial; current task.** **2 points remaining.**
    PKI-003/004/006/010; accepted decisions §7.
    [ACME components](../crates/meshspan-acme/src/lib.rs) and
    [renewal scheduling](../crates/meshspan-daemon/src/certificate_renewal_scheduler.rs)
@@ -117,10 +117,15 @@ the stage; publication-dependent acceptance remains held separately and visible.
    now handles exhausted publication budgets and terminal CA resource rejection,
    keeping exact cleanup and CA deadlines through restart. Its full local gate on
    `6dc6dbe` passed in **590.19 seconds** (Rust **536.36**, web **6.19**), including
-   the focused transaction-fault/reopen and daemon recovery checks. Whole-process
-   rejected-order/reissuance acceptance, remaining CA error-response handling,
-   DNS-provider process lifecycles and active-gateway challenge distribution remain
-   outstanding; task 2 stays **3 points** until those acceptance gaps close.
+   the focused transaction-fault/reopen and daemon recovery checks.
+   [Rejected-order process recovery](stage-10-evidence.md#rejected-order-process-restart-and-replacement-issuance)
+   now proves exact cleanup, queued-daemon restart, retained deadline/key and a
+   distinct replacement issuance in **336.68 seconds**. The existing lease-loss
+   process regression also passed in **319.68 seconds** on this candidate. The
+   full gate on `789ce79` passed in **494.96 seconds** (Rust **453.22**, web
+   **5.09**), closing this slice **3 → 2 points**. Remaining CA error-response
+   handling, DNS-provider process lifecycles and active-gateway challenge
+   distribution are still outstanding.
 
 3. **Encrypted certificate delivery and rotation — Partial.** **5 points remaining.**
    PKI-001/002/005/007/010; accepted decisions §7.

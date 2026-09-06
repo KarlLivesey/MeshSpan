@@ -12,6 +12,60 @@ not close an unexplained failure.
 
 ## Task 2 — interrupted challenge recovery
 
+### Rejected-order process restart and replacement issuance
+
+Signed, pushed, GitHub-verified commit
+`789ce79ced06b665429442eeaef12678c4b32027`, tree
+`0d967701fbfe2413e0c5e16c51556a84c03bfd1f`, adds the real-process retirement
+acceptance test. [PR #248](https://github.com/KarlLivesey/MeshSpan/pull/248)
+contains this test-only candidate. The full NVM-default local gate passed on
+that source in **494.96 seconds**, with Rust workspace tests in **453.22 seconds**
+and web tests in **5.09 seconds**. The command was
+`CARGO_BUILD_JOBS=4 MESHSPAN_CHECK_WORKERS=4 rustup run 1.98.0 pnpm check` after
+initialising NVM. Rust lint (**18.11 seconds**), web lint (**18.53 seconds**),
+generated drift, embedded bundle, formatting, both licence checks, TypeScript
+and tooling tests passed. No implementation edits followed the gate.
+
+The existing opt-in
+`acme_lifecycle::http01_authorization_recovers_after_process_loss_and_real_lease_expiry`
+regression also passed on this candidate in **319.68 seconds**, using the same
+rebuilt executable, exact filter and four-worker harness. Both affected slow
+process cases therefore ran explicitly; neither is inferred from the default
+suite's ignored entries. Together with the full gate, this closes the
+rejected-order/reissuance acceptance slice: task 2 **3 → 2 points**, Stage 10
+**142 → 141**, Stage 11 unchanged at **126**. The closing changes are evidence
+only; the tested implementation tree is unchanged.
+
+The opt-in
+`acme_lifecycle::rejected_http01_order_is_cleaned_and_reissued_after_queued_daemon_restart`
+test passed in **336.68 seconds**. A local TLS CA independently reads the actual
+HTTP challenge, then rejects the first authorisation. The test requires the
+exact old token to return 404 and the authoritative order to be queued without
+its retired checkpoint or live claim. It kills the daemon, restarts from the
+same SQLite state, and checks the entire queued record—including its original
+retry instant—and encrypted leaf-key digest are unchanged. The CA refuses a
+replacement before five real monotonic minutes and assigns distinct order,
+authorisation, challenge, finalisation and certificate URLs plus a new token.
+Exactly two CA orders produce one validated certificate; another daemon restart
+and gateway join install that certificate without another order. The configured
+account key and protected leaf key remain unchanged.
+
+Normal HTTP-01 and RFC 2136 DNS-01 process lifecycles passed together in **20.15
+seconds**; affected Clippy passed. The long rejection test uses the rebuilt
+Rust 1.98.0 executable with `--exact --ignored --test-threads=4`, independently
+of the full NVM-default gate. It remains opt-in so the real five-to-six-minute
+production backoff does not slow every-edit checks. No production clock, lease,
+backoff, runtime code, dependency, schema or protocol was changed. An initial
+test compile failure used an unavailable direct SQLite-driver import; the test
+now inspects state through the existing typed metadata repository, without a
+new dependency.
+
+Remaining acceptance includes other CA error responses, Cloudflare/webhook/manual
+DNS process lifecycles, active-gateway challenge delivery and the separate live-CA
+gate. This result does not close the previously recorded unexplained cluster
+timeout. Publication remains prohibited; no releases, tags, packages/images or
+GitHub Actions were published or run.
+
 ### Exact retirement and atomic fresh-order retry
 
 The final full NVM-default local gate passed on signed, pushed, GitHub-verified
