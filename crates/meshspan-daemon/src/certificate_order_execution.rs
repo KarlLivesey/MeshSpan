@@ -16,6 +16,7 @@ use crate::{
 };
 
 mod publication;
+mod response;
 
 /// Durable result of executing exactly one current machine action.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -180,8 +181,7 @@ where
             event,
             meshspan_acme::AcmeMachineEvent::ChallengePublished { .. }
         );
-        let mut candidate = self.machine.clone();
-        candidate.advance_with_retry(event, received_at, retry_after)?;
+        let candidate = response::advance(&self.machine, event, received_at, retry_after)?;
         if let meshspan_acme::AcmeMachineAction::Complete { certificate } = candidate.action()? {
             return Ok(CertificateOrderStepResult::ReadyForCompletion {
                 certificate_chain: certificate,
@@ -272,6 +272,15 @@ pub enum CertificateOrderExecutionError {
     /// The pure state machine rejected its current action or returned event.
     #[error("certificate order execution state is invalid")]
     Machine(#[from] meshspan_acme::AcmeMachineError),
+    /// A structurally valid CA response contradicts this order; retain the accepted checkpoint.
+    #[error("certificate authority response contradicts the accepted order")]
+    RejectedResponse {
+        /// Redacted semantic refusal, without the response's identifiers or body.
+        #[source]
+        reason: meshspan_acme::AcmeMachineError,
+        /// CA guidance resolved at response receipt time, not a later scheduling instant.
+        retry_not_before: Option<UnixMicros>,
+    },
     /// The bounded in-process ACME executor failed.
     #[error("certificate order execution step failed")]
     Worker(#[from] AcmeWorkerError),

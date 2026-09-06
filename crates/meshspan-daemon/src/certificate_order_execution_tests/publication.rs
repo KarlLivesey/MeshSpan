@@ -8,6 +8,7 @@ use meshspan_acme::{
 use super::*;
 
 mod legacy;
+mod response;
 mod retirement;
 
 #[tokio::test]
