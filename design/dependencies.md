@@ -258,6 +258,13 @@ the first implementation.
 allow-only local licence gate; certificate signature paths and authority trust remain verified by
 Rustls rather than by enabling a second cryptographic provider in the parser.
 
+The real-daemon ACME fixture directly uses the already-resolved `base64` 0.22.1
+and `x509-parser` 0.18.1 as daemon development dependencies, both under their MIT
+options. It independently decodes/verifies JWS and CSR inputs instead of reading
+the daemon's private key or invoking an external issuer executable. No package
+version or parser crypto feature was added. Both upstream repositories were
+non-archived and had August 2026 activity when checked on 2026-09-06.
+
 The independently extractable `GPL-2.0-only` `meshspan-passkey` crate owns the
 bounded WebAuthn relying-party parser and validation state machine. It initially
 uses current `p256` under its MIT option for the mandatory ES256 path and

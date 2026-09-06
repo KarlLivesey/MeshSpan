@@ -78,24 +78,41 @@ impl ConsensusAuthenticationAuthority {
         context: CommandContext,
         command: &AuthoritativeCommand,
     ) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
+        // Certificate automation polls asynchronous transports on its owned blocking worker.
+        // Its synchronous authority calls must leave that entered async context before waiting
+        // for consensus. Outside an async context this remains an ordinary blocking-pool call.
+        tokio::task::block_in_place(|| {
+            self.runtime
+                .block_on(self.commit_with_forwarding(context, command))
+        })
+    }
+
+    async fn commit_with_forwarding(
+        &self,
+        context: CommandContext,
+        command: &AuthoritativeCommand,
+    ) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
         match self
-            .runtime
-            .block_on(self.authority.commit_or_resolve(context, command.clone()))
+            .authority
+            .commit_or_resolve(context, command.clone())
+            .await
         {
             Err(MetadataAuthorityRequestError::NotLeader { leader_id }) => {
                 match self.network.as_ref() {
-                    Some(network) => match self.runtime.block_on(
-                        crate::metadata_forwarding::forward_to_authority(
-                            network,
-                            &self.reader,
-                            leader_id,
-                            context,
-                            command,
-                        ),
-                    ) {
-                        Err(MetadataAuthorityRequestError::Unavailable) => self
-                            .runtime
-                            .block_on(self.authority.commit_or_resolve(context, command.clone())),
+                    Some(network) => match crate::metadata_forwarding::forward_to_authority(
+                        network,
+                        &self.reader,
+                        leader_id,
+                        context,
+                        command,
+                    )
+                    .await
+                    {
+                        Err(MetadataAuthorityRequestError::Unavailable) => {
+                            self.authority
+                                .commit_or_resolve(context, command.clone())
+                                .await
+                        }
                         outcome => outcome,
                     },
                     None => Err(MetadataAuthorityRequestError::NotLeader { leader_id }),

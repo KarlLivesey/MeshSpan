@@ -172,7 +172,7 @@ fn authorization(status: AcmeResourceStatus) -> AcmeAuthorization {
             kind: "http-01".to_owned(),
             url: "https://ca.example.test/challenge/1".to_owned(),
             token: "token-1".to_owned(),
-            status: AcmeResourceStatus::Pending,
+            status,
         }],
     }
 }

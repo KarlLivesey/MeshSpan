@@ -325,6 +325,53 @@ impl CertificateAuthority {
         let parameters = node_parameters(identity, dns_name)?;
         Ok(parameters.signed_by(identity, &self.issuer)?.der().to_vec())
     }
+
+    /// Signs a verified endpoint public identity for exact names and a bounded validity interval.
+    ///
+    /// The caller must first verify possession of the private key and authority for the names.
+    /// Unlike node certificates, this leaf is server-only and never uses an implicit lifetime.
+    /// The local ACME test authority uses this after verifying the public CSR.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid names, non-positive or unrepresentable Unix timestamps, empty intervals,
+    /// lifetimes exceeding 398 days, and X.509 construction failures. No private key is accepted.
+    pub fn sign_public_endpoint_identity(
+        &self,
+        identity: &NodePublicIdentity,
+        dns_names: &[String],
+        not_before_unix_seconds: u64,
+        not_after_unix_seconds: u64,
+    ) -> Result<Vec<u8>, CertificateError> {
+        external_request::validate_dns_names(dns_names)?;
+        let lifetime = not_after_unix_seconds
+            .checked_sub(not_before_unix_seconds)
+            .ok_or(CertificateError::CertificateRequest)?;
+        if not_before_unix_seconds == 0 || lifetime == 0 || lifetime > 398 * 24 * 60 * 60 {
+            return Err(CertificateError::CertificateRequest);
+        }
+        let mut parameters = CertificateParams::new(dns_names.to_vec())?;
+        parameters.distinguished_name = DistinguishedName::new();
+        parameters
+            .key_usages
+            .push(KeyUsagePurpose::DigitalSignature);
+        parameters
+            .extended_key_usages
+            .push(ExtendedKeyUsagePurpose::ServerAuth);
+        parameters.serial_number = Some(serial_number(identity));
+        parameters.key_identifier_method = identifier(identity);
+        parameters.not_before = time::OffsetDateTime::from_unix_timestamp(
+            i64::try_from(not_before_unix_seconds)
+                .map_err(|_| CertificateError::CertificateRequest)?,
+        )
+        .map_err(|_| CertificateError::CertificateRequest)?;
+        parameters.not_after = time::OffsetDateTime::from_unix_timestamp(
+            i64::try_from(not_after_unix_seconds)
+                .map_err(|_| CertificateError::CertificateRequest)?,
+        )
+        .map_err(|_| CertificateError::CertificateRequest)?;
+        Ok(parameters.signed_by(identity, &self.issuer)?.der().to_vec())
+    }
 }
 
 impl OnlineCertificateAuthority {
@@ -630,6 +677,57 @@ mod tests {
     use super::{
         CertificateAuthority, NodeIdentityKey, NodePublicIdentity, OnlineCertificateAuthority,
     };
+
+    #[test]
+    fn public_identity_issuance_has_exact_names_key_lifetime_and_server_only_usage()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use x509_parser::prelude::{FromDer as _, GeneralName, X509Certificate};
+
+        let authority = CertificateAuthority::new()?;
+        let identity = NodeIdentityKey::generate()?;
+        let public = NodePublicIdentity::from_sec1(identity.public_key_sec1())?;
+        let names = vec!["files.example.test".to_owned()];
+        let start = 1_800_000_000;
+        let end = start + 90 * 24 * 60 * 60;
+        let der = authority.sign_public_endpoint_identity(&public, &names, start, end)?;
+        let (remaining, leaf) = X509Certificate::from_der(&der)?;
+        assert!(remaining.is_empty());
+        assert_eq!(leaf.validity().not_before.timestamp(), 1_800_000_000);
+        assert_eq!(leaf.validity().not_after.timestamp(), 1_807_776_000);
+        assert_eq!(
+            leaf.public_key().subject_public_key.data.as_ref(),
+            identity.public_key_sec1()
+        );
+        let usage = leaf.extended_key_usage()?.ok_or("missing EKU")?.value;
+        assert!(usage.server_auth);
+        assert!(!usage.client_auth);
+        assert_eq!(
+            leaf.subject_alternative_name()?
+                .ok_or("missing SAN")?
+                .value
+                .general_names,
+            vec![GeneralName::DNSName("files.example.test")]
+        );
+        for (start, end) in [
+            (0, 100),
+            (100, 100),
+            (101, 100),
+            (1, 398 * 86400 + 2),
+            (u64::MAX - 1, u64::MAX),
+        ] {
+            assert!(
+                authority
+                    .sign_public_endpoint_identity(&public, &names, start, end)
+                    .is_err()
+            );
+        }
+        assert!(
+            authority
+                .sign_public_endpoint_identity(&public, &[], start, end)
+                .is_err()
+        );
+        Ok(())
+    }
 
     #[test]
     fn independently_issued_nodes_have_distinct_keys_and_certificates()

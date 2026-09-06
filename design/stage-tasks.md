@@ -84,6 +84,10 @@ the stage; publication-dependent acceptance remains held separately and visible.
    `d83002b` passed, including the local integration gate in 1,059.56 seconds.
    This closes error-response retry guidance (8 → 7 points), not the remaining
    complete challenge lifecycle, worker replacement or gateway-sharing proof.
+   The [real HTTP-01 lifecycle proof](stage-10-evidence.md#task-2--real-http-01-issuance-restart-and-gateway-delivery)
+   now passes issuance, cleanup, restart and second-gateway installation with
+   exactly one CA order. Its final integration gate is pending; task points
+   remain unchanged until that evidence is complete.
 
 3. **Encrypted certificate delivery and rotation — Partial.** **5 points remaining.**
    PKI-001/002/005/007/010; accepted decisions §7.

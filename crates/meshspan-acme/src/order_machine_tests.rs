@@ -7,6 +7,37 @@ use crate::{
 };
 
 #[test]
+fn polled_challenge_identity_cannot_replace_the_published_token_or_url()
+-> Result<(), Box<dyn std::error::Error>> {
+    for change_token in [true, false] {
+        let mut machine = machine(AcmeChallengePreference::Http01)?;
+        drive_to_challenge(&mut machine)?;
+        machine.advance(AcmeMachineEvent::ChallengePublished {
+            publication_digest: [9; 32],
+        })?;
+        machine.advance(AcmeMachineEvent::ChallengeNotified {
+            replay_nonce: "nonce_5".to_owned(),
+        })?;
+        let mut changed = authorization(AcmeResourceStatus::Valid, false);
+        let challenge = changed.challenges.first_mut().ok_or("missing challenge")?;
+        challenge.status = AcmeResourceStatus::Valid;
+        if change_token {
+            challenge.token = "substituted_token".to_owned();
+        } else {
+            challenge.url = "https://ca.example.test/substituted".to_owned();
+        }
+        assert_eq!(
+            machine.advance(AcmeMachineEvent::AuthorizationPolled {
+                authorization: changed,
+                replay_nonce: "nonce_6".to_owned(),
+            }),
+            Err(AcmeMachineError::InvalidRemoteState)
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn order_machine_runs_one_exact_resumable_http01_cycle() -> Result<(), Box<dyn std::error::Error>> {
     let mut machine = machine(AcmeChallengePreference::Http01)?;
     drive_to_challenge(&mut machine)?;

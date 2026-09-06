@@ -10,6 +10,70 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 2 — real HTTP-01 issuance, restart and gateway delivery
+
+The new `headless_process::acme_lifecycle` proof runs real child daemons and a
+local TLS test CA. The CA checks ES256 signatures, account binding, single-use
+nonces, exact order names, the actual HTTP-01 response and the public CSR's
+signature/name/key binding. It never reads the daemon's private key. The workflow
+checks certificate-backed TLS, challenge cleanup, restart, a second gateway's
+installation and **exactly one CA order/finalisation** throughout.
+
+The first successful process run passed in **16.82 seconds**, following a
+23.77-second incremental build. Earlier failures identified and reproduced:
+
+- Nested runtime entry: the certificate worker's asynchronous pass called the
+  synchronous consensus adapter's `block_on` while already inside `block_on`.
+  The daemon panicked before contacting the CA (19.60-second red process run).
+  The synchronous adapter now explicitly enters a blocking section before its
+  async commit/forwarding path. It retains the existing owned blocking worker.
+- Unpersistable claim fences: deterministic entropy seed 128 generated
+  `11574711341044573863`, outside SQLite's signed integer range. The regression
+  failed before correction; fences now use 63 unpredictable bits and retain the
+  non-zero check. Four dispatcher regressions pass.
+- Successful challenge status: an authorisation poll changed its challenge from
+  `pending` to `valid`, but the selected challenge retained the old status and
+  failed checkpoint validation. Existing fixtures incorrectly left it pending.
+  Correcting the fixture reproduced `CorruptState`; the machine now tracks status
+  changes while rejecting token/URL substitution. All 45 ACME tests passed in
+  **0.08 seconds**. The process then reached certificate download.
+- Terminal hand-off: downloaded chains were sent to the incomplete-checkpoint
+  service, which explicitly rejects terminal state. The focused regression
+  failed with `Checkpoint(InvalidInput)` in **0.03 seconds**. Chains now pass to
+  the existing trust validation and atomic completion transaction. Until that
+  commits, recovery retains the prior download checkpoint, not an unvalidated
+  terminal certificate. Both execution tests pass in **0.03 seconds**.
+
+The other red process runs took 19.91, 19.83 and 20.23 seconds as those distinct
+boundaries were reached; no timeout was increased. A later 9.76-second failure
+was a fixture error: the generic node-certificate constructor expires in year
+4096, outside the public API's safe timestamp range. The certificate library now
+offers explicit, bounded, server-only public-identity signing, used by the test
+CA for a 90-day leaf. Exact names/key/validity/usage and invalid bounds are tested.
+The API timestamp limits were not relaxed.
+
+The certificate library's 16 tests passed in **0.14 seconds**, and the 20
+certificate-order tests passed in **0.17 seconds**. The dedicated real-consensus
+worker-context regression initially compared `Applied` and `Replayed` dispositions
+as equal; that fixture assertion is corrected while checking every receipt field.
+All ten real-consensus boundary tests then passed in **7.44 seconds**. The final
+process proof rerun passed in **17.52 seconds** after an 11.42-second build.
+Affected all-target/all-feature Clippy passed with warnings denied in **7.71
+seconds**, following corrections to fixture field ordering and an unnecessary
+owned argument. `cargo deny check licenses` and `git diff --check` passed.
+The full dependency-update integration gate remains.
+
+Only development dependency edges to already-resolved `base64` and `x509-parser`
+were added; their MIT options remain subject to the existing allow-only gate.
+No persistence or public API schema changed. The public-identity signing method
+is an additive Rust library interface with a concrete test-CA consumer.
+
+Task 2 stays **7 points**, Stage 10 **146 points**, pending integration. This
+proof does not yet cover worker interruption during issuance, long-lived/manual
+challenges, successful-response polling hints or publishing an active challenge
+on every gateway. DNS lifecycle and live-CA acceptance remain open. No releases,
+tags, publication or Actions ran.
+
 ## Task 2 — CA-directed error retry deadlines
 
 The ACME executor previously collapsed error responses into a generic protocol

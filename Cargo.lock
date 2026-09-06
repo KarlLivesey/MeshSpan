@@ -1291,6 +1291,7 @@ name = "meshspan-daemon"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
  "blake3",
  "chacha20poly1305",
  "form_urlencoded",
@@ -1334,6 +1335,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower",
+ "x509-parser",
  "zeroize",
 ]
 

@@ -2,6 +2,8 @@
 
 //! Real-process proof for headless startup, HTTPS setup and durable restart.
 
+#[path = "headless_process/acme_lifecycle.rs"]
+mod acme_lifecycle;
 #[path = "headless_process/backup_history.rs"]
 mod backup_history;
 #[path = "headless_process/diagnostics.rs"]

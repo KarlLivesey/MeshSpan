@@ -502,6 +502,22 @@ impl AcmeOrderMachine {
     ) -> Result<(), AcmeMachineError> {
         validate_nonce(&replay_nonce)?;
         self.validate_current_authorization(&authorization)?;
+        if was_poll {
+            let updated = select_challenge(&authorization, self.preference)?;
+            let published = self
+                .challenge
+                .as_ref()
+                .ok_or(AcmeMachineError::CorruptState)?;
+            if updated.kind != published.kind
+                || updated.url != published.url
+                || updated.token != published.token
+            {
+                return Err(AcmeMachineError::InvalidRemoteState);
+            }
+            // The CA advances challenge status independently of our publication receipt.
+            // Retain the exact published identity while checkpointing its current status.
+            self.challenge = Some(updated);
+        }
         self.nonce = Some(replay_nonce);
         match authorization.status {
             AcmeResourceStatus::Valid if self.publication_digest.is_some() => {

@@ -84,7 +84,11 @@ where
     T: AcmeTransport,
     C: CertificateChallenge,
 {
-    /// Executes one current action and durably checkpoints every successful state transition.
+    /// Executes one action and checkpoints incomplete progress before further side effects.
+    ///
+    /// Downloaded chains instead pass to terminal validation and its atomic completion command.
+    /// Until that commits, recovery retains the prior download checkpoint, never an unvalidated
+    /// terminal certificate. Re-downloading after interruption does not create another CA order.
     ///
     /// # Errors
     ///
@@ -130,6 +134,13 @@ where
             }
             AcmeStepOutcome::Advanced(event) => {
                 self.machine.advance(event)?;
+                if let meshspan_acme::AcmeMachineAction::Complete { certificate } =
+                    self.machine.action()?
+                {
+                    return Ok(CertificateOrderStepResult::ReadyForCompletion {
+                        certificate_chain: certificate,
+                    });
+                }
                 let checkpoint = checkpoint_service.checkpoint(
                     actor_principal_id,
                     now,
