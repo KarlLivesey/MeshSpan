@@ -12,7 +12,44 @@ pub const METRIC_LATENCY_BOUNDARIES_MICROS: [u64; 8] = [
 ];
 
 /// Maximum distinct families in a version-one runtime snapshot.
-pub const MAX_RUNTIME_METRIC_FAMILIES: usize = 15;
+pub const MAX_RUNTIME_METRIC_FAMILIES: usize = 23;
+
+/// Closed access-protocol identity; request paths and client identities are never labels.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GatewayProtocol {
+    /// Native HTTPS request dispatch, excluding TLS admission and response-body streaming.
+    Https,
+    /// One complete SMB Direct TCP payload dispatch, not each command in a compound packet.
+    Smb,
+}
+
+/// Handler outcome, not proof of file publication or delivery to a client.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GatewayDispatchOutcome {
+    /// HTTPS returned a non-5xx response, or SMB dispatch returned normally.
+    Returned,
+    /// HTTPS returned a 5xx response, or the SMB handler returned an error.
+    Failed,
+    /// Dispatch was dropped before returning, including task cancellation or unwinding.
+    Cancelled,
+}
+
+/// One finite handler-lifecycle observation with no request-derived strings or bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GatewayDispatchObservation {
+    /// Access adapter which dispatched the request.
+    pub protocol: GatewayProtocol,
+    /// Outcome observed when dispatch ended.
+    pub outcome: GatewayDispatchOutcome,
+    /// Monotonic time inside dispatch; excludes subsequent response delivery.
+    pub duration: Duration,
+}
+
+/// Replaceable best-effort observation sink, independent of access authority.
+pub trait GatewayDispatchObserver: Send + Sync {
+    /// Records or counts a dropped observation without IO, waiting, or affecting the request.
+    fn observe_dispatch(&self, observation: GatewayDispatchObservation);
+}
 
 /// A coherent lifetime latency distribution with a fixed cardinality.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -103,6 +140,22 @@ pub enum RuntimeMetric {
     PendingReturnScans(u64),
     /// Failed steps in the last completed reconciliation cycle.
     LastReconciliationFailedSteps(u64),
+    /// HTTPS dispatches which ended, including failures and cancellations.
+    HttpsDispatches(u64),
+    /// HTTP responses with a 5xx status, not all authentication or domain rejections.
+    HttpsServerErrors(u64),
+    /// HTTPS dispatch futures dropped before producing a response.
+    HttpsCancelledDispatches(u64),
+    /// HTTPS dispatch lifetime, excluding subsequent response-body streaming.
+    HttpsDispatchDuration(LatencyHistogram),
+    /// Complete SMB payload dispatches which ended, including failures and cancellations.
+    SmbDispatches(u64),
+    /// SMB handler errors; an ordinary SMB error-status response is not a handler error.
+    SmbDispatchErrors(u64),
+    /// SMB dispatch futures dropped before returning.
+    SmbCancelledDispatches(u64),
+    /// SMB payload dispatch lifetime, excluding response socket writes.
+    SmbDispatchDuration(LatencyHistogram),
 }
 
 /// A bounded snapshot; absence means unavailable/unmeasured, never implicitly zero.
@@ -144,7 +197,9 @@ impl RuntimeMetricSnapshot {
                 return Err(ContractError::InvalidInput);
             }
             if let RuntimeMetric::ReconciliationDuration(histogram)
-            | RuntimeMetric::TargetProbeDuration(histogram) = sample
+            | RuntimeMetric::TargetProbeDuration(histogram)
+            | RuntimeMetric::HttpsDispatchDuration(histogram)
+            | RuntimeMetric::SmbDispatchDuration(histogram) = sample
             {
                 histogram.validate()?;
             }

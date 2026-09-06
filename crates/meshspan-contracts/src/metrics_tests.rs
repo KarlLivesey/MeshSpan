@@ -81,3 +81,20 @@ fn snapshots_reject_duplicates_and_do_not_fill_absent_measurements() -> Result<(
     assert!(RuntimeMetricSnapshot::new(vec![])?.samples().is_empty());
     Ok(())
 }
+
+#[test]
+fn gateway_histograms_are_revalidated_at_the_snapshot_boundary() {
+    let invalid = LatencyHistogram {
+        buckets: [1; 8],
+        ..LatencyHistogram::default()
+    };
+    for metric in [
+        RuntimeMetric::HttpsDispatchDuration(invalid.clone()),
+        RuntimeMetric::SmbDispatchDuration(invalid),
+    ] {
+        assert_eq!(
+            RuntimeMetricSnapshot::new(vec![metric]),
+            Err(ContractError::InvalidInput)
+        );
+    }
+}

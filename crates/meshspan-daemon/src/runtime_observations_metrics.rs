@@ -28,6 +28,14 @@ impl RuntimeSnapshot {
             RuntimeMetric::TargetProbeFailures(state.failed_probes),
             RuntimeMetric::ReconciliationDuration(state.cycle_duration.clone()),
             RuntimeMetric::TargetProbeDuration(state.probe_duration.clone()),
+            RuntimeMetric::HttpsDispatches(state.https.duration.count),
+            RuntimeMetric::HttpsServerErrors(state.https.failures),
+            RuntimeMetric::HttpsCancelledDispatches(state.https.cancelled),
+            RuntimeMetric::HttpsDispatchDuration(state.https.duration.clone()),
+            RuntimeMetric::SmbDispatches(state.smb.duration.count),
+            RuntimeMetric::SmbDispatchErrors(state.smb.failures),
+            RuntimeMetric::SmbCancelledDispatches(state.smb.cancelled),
+            RuntimeMetric::SmbDispatchDuration(state.smb.duration.clone()),
         ];
         if let Some(cycle) = &state.cycle {
             let count = |value| u64::try_from(value).map_err(|_| ContractError::InternalContract);

@@ -31,6 +31,7 @@ async fn exporter_policy_survives_restart_and_reaches_another_gateway() -> Resul
         super::save_and_verify_recovery_bundle(&root, &client, api_key, &created).await?;
         super::wait_for_storage_folder_visibility(&root, &client, api_key).await?;
         configure_and_verify(root.address, &client, api_key, &administrator).await?;
+        verify_gateway_dispatches(&root, &client, api_key).await?;
         processes[0].kill()?;
         processes[0].wait()?;
         processes[0] = root.start()?;
@@ -42,6 +43,7 @@ async fn exporter_policy_survives_restart_and_reaches_another_gateway() -> Resul
         super::wait_for_status(peer.address, &peer_client, "configured").await?;
         super::wait_for_storage_folder_visibility(&peer, &peer_client, api_key).await?;
         verify(peer.address, &peer_client, api_key).await?;
+        verify_gateway_dispatches(&peer, &peer_client, api_key).await?;
         processes[0].kill()?;
         processes[0].wait()?;
         verify(peer.address, &peer_client, api_key).await
@@ -221,4 +223,56 @@ async fn configure(
         request["operation_id"].as_str().ok_or("operation absent")?
     );
     Ok(receipt)
+}
+
+async fn verify_gateway_dispatches(
+    fixture: &super::ProcessFixture,
+    client: &ClientConfig,
+    api_key: &str,
+) -> Result<(), Box<dyn Error>> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let deadline = tokio::time::Instant::now() + super::WAIT_LIMIT;
+    loop {
+        // A valid Direct TCP frame with invalid SMB content reaches dispatch and must close.
+        // This proves the real listener's error observation, not SMB client interoperability.
+        let mut socket = tokio::net::TcpStream::connect(fixture.smb_address).await?;
+        socket.write_all(&[0, 0, 0, 64]).await?;
+        socket.write_all(&[0; 64]).await?;
+        let mut response = [0; 1];
+        let read = tokio::time::timeout_at(deadline, socket.read(&mut response)).await??;
+        assert_eq!(
+            read, 0,
+            "invalid SMB content must not receive a success response"
+        );
+        let authorization = format!("Bearer {api_key}");
+        let response = request_with_headers(
+            fixture.address,
+            client,
+            "GET",
+            SCRAPE,
+            None,
+            &[("Authorization", &authorization)],
+        )
+        .await?;
+        require_status(&response, "200 OK", "scrape real gateway dispatches")?;
+        let body = response_body(&response)?;
+        let count = |name: &str| -> Result<u64, Box<dyn Error>> {
+            body.lines()
+                .find_map(|line| line.strip_prefix(name))
+                .ok_or_else(|| format!("missing gateway counter {name}"))?
+                .parse()
+                .map_err(Into::into)
+        };
+        if count("meshspan_v1_smb_dispatches_total ")? > 0
+            && count("meshspan_v1_smb_dispatch_errors_total ")? > 0
+        {
+            assert!(count("meshspan_v1_https_dispatches_total ")? > 0);
+            return Ok(());
+        }
+        // Observations are explicitly best-effort; retry only this test probe within its budget.
+        if tokio::time::Instant::now() >= deadline {
+            return Err("SMB dispatch observation remained unavailable".into());
+        }
+        tokio::time::sleep(super::RETRY_INTERVAL).await;
+    }
 }
