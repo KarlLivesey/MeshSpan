@@ -25,21 +25,18 @@ use rustls::{
 };
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
-use tokio::{
-    io::{AsyncReadExt as _, AsyncWriteExt as _},
-    net::TcpStream,
-    sync::oneshot,
-    task::JoinHandle,
-};
+use tokio::{sync::oneshot, task::JoinHandle};
 use x509_parser::{
     certification_request::X509CertificationRequest,
     prelude::{FromDer as _, GeneralName, ParsedExtension},
 };
 
-use super::{CERTIFICATE_NAME, Duration, Error, SocketAddr};
+use super::{
+    CERTIFICATE_NAME, Error,
+    challenge::{TOKEN, ValidationTarget},
+};
 
 type Failure = Box<dyn Error + Send + Sync>;
-const TOKEN: &str = "meshspan_lifecycle_challenge_token";
 
 pub(super) struct TestAuthority {
     pub endpoint: String,
@@ -53,7 +50,7 @@ pub(super) struct TestAuthority {
 struct AuthorityState {
     ca: CertificateAuthority,
     endpoint: String,
-    challenge_address: SocketAddr,
+    validation_target: ValidationTarget,
     nonce_index: usize,
     nonces: BTreeSet<String>,
     account: Option<VerifyingKey>,
@@ -66,7 +63,7 @@ struct AuthorityState {
 }
 
 impl TestAuthority {
-    pub async fn start(challenge_address: SocketAddr) -> Result<Self, Box<dyn Error>> {
+    pub async fn start(validation_target: ValidationTarget) -> Result<Self, Box<dyn Error>> {
         let ca = CertificateAuthority::new()?;
         let anchor_der = ca.certificate_der().to_vec();
         let anchor_pem = pem(&anchor_der);
@@ -82,7 +79,7 @@ impl TestAuthority {
         let state = Arc::new(Mutex::new(AuthorityState {
             ca,
             endpoint: String::new(),
-            challenge_address,
+            validation_target,
             nonce_index: 0,
             nonces: BTreeSet::new(),
             account: None,
@@ -141,6 +138,23 @@ impl TestAuthority {
         )
     }
 
+    pub async fn assert_challenge_removed(&self) -> Result<(), Box<dyn Error>> {
+        let (target, authorisation) = {
+            let state = self.state.lock().map_err(|_| "CA mutex poisoned")?;
+            (
+                state.validation_target,
+                format!(
+                    "{TOKEN}.{}",
+                    state.thumbprint.as_ref().ok_or("account missing")?
+                ),
+            )
+        };
+        target
+            .assert_removed(&authorisation)
+            .await
+            .map_err(|error| error.to_string().into())
+    }
+
     pub async fn stop(self) -> Result<(), Box<dyn Error>> {
         self.shutdown
             .send(())
@@ -186,7 +200,7 @@ async fn respond(
                 return Err("challenge notification must contain an empty object".into());
             }
             Some((
-                state.challenge_address,
+                state.validation_target,
                 format!(
                     "{TOKEN}.{}",
                     state.thumbprint.as_ref().ok_or("account missing")?
@@ -197,13 +211,8 @@ async fn respond(
         };
         (payload, probe)
     };
-    if let Some((address, expected)) = probe {
-        let response = read_challenge(address).await?;
-        super::require_status(&response, "200 OK", "CA HTTP-01 probe")
-            .map_err(|error| error.to_string())?;
-        if super::response_body(&response).map_err(|error| error.to_string())? != expected {
-            return Err("HTTP-01 key authorisation differs from the signing account".into());
-        }
+    if let Some((target, expected)) = probe {
+        target.validate(&expected).await?;
         state.lock().map_err(|_| "CA mutex poisoned")?.validated = true;
     }
     let mut state = state.lock().map_err(|_| "CA mutex poisoned")?;
@@ -266,7 +275,7 @@ fn route_response(
         }
         (&Method::POST, "/finalize") => {
             if !state.validated {
-                return Err("finalisation preceded successful HTTP-01 validation".into());
+                return Err("finalisation preceded successful challenge validation".into());
             }
             let csr = URL_SAFE_NO_PAD.decode(text(payload, "csr")?)?;
             state.chain = Some(sign_csr(&state.ca, &csr)?);
@@ -308,7 +317,7 @@ fn authorization(state: &AuthorityState) -> Value {
         "status": status,
         "identifier": {"type": "dns", "value": CERTIFICATE_NAME},
         "challenges": [{
-            "type": "http-01",
+            "type": state.validation_target.kind(),
             "url": format!("{}/challenge", state.endpoint),
             "token": TOKEN,
             "status": status
@@ -431,14 +440,4 @@ fn require_empty_payload(payload: &Value) -> Result<(), Failure> {
     } else {
         Err("POST-as-GET payload is not empty".into())
     }
-}
-
-pub(super) async fn read_challenge(address: SocketAddr) -> Result<String, Failure> {
-    tokio::time::timeout(Duration::from_secs(2), async {
-        let mut stream = TcpStream::connect(address).await?;
-        stream.write_all(format!("GET /.well-known/acme-challenge/{TOKEN} HTTP/1.1\r\nHost: {CERTIFICATE_NAME}\r\nConnection: close\r\n\r\n").as_bytes()).await?;
-        let mut bytes = Vec::new();
-        stream.take(8192).read_to_end(&mut bytes).await?;
-        Ok(String::from_utf8(bytes)?)
-    }).await?
 }

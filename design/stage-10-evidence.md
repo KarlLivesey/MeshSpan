@@ -10,6 +10,41 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 2 — real DNS-01 issuance, restart and gateway delivery
+
+The existing real-process lifecycle now also runs RFC 2136 DNS-01 through the
+public certificate-provisioning API. Two daemon processes use a local TLS CA and
+an independent signed-DNS transcript verifier. The verifier checks the exact
+zone, TXT operation, TTL, TSIG identity/signature and exact-value deletion. Two
+separate authoritative queries prove daemon propagation and CA validation; the
+CA derives the expected TXT value from its independently authenticated JWK.
+An additional query proves the completed record is absent.
+
+The shared lifecycle checks certificate-backed HTTPS, restart, second-gateway
+installation and exactly one CA order/finalisation. It does not export the
+daemon's private key, change OS DNS/trust, use the browser or contact a public CA.
+The existing RFC 2136 fixture is reused directly by the integration test, not
+exported from a production library. The fixture's fixed-clock unit mode remains;
+real processes use current-time TSIG responses. Its completion is bounded and a
+dropped fixture cancels its owned task.
+
+Focused verification:
+
+- `cargo test -p meshspan-acme rfc2136_provider_tests -- --nocapture`: all three
+  passed in **0.00 seconds**, after a 10.11-second build.
+- `cargo test -p meshspan-daemon --test headless_process acme_lifecycle -- --nocapture`:
+  HTTP-01 and DNS-01 passed together in **16.17 seconds**, after a 4.38-second build.
+  An initial compile error used the wrong test query constructor; it was corrected
+  to the existing fallible `DnsQuery::txt`. No process test failed.
+- Affected all-target/all-feature Clippy with warnings denied passed in
+  **21.28 seconds**. Rust formatting and `git diff --check` passed.
+
+No production implementation, dependency, schema or protocol changed. Full local
+integration remains pending for this slice; task 2 stays at **6 points** and Stage
+10 at **145** until that gate passes. Cloudflare/webhook/manual lifecycle,
+interrupted and long-running orders, successful polling hints and active gateway
+challenge distribution remain open. No publication or Actions ran.
+
 ## Task 2 — real HTTP-01 issuance, restart and gateway delivery
 
 The new `headless_process::acme_lifecycle` proof runs real child daemons and a
