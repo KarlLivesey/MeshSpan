@@ -10,6 +10,209 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 2 — real DNS-01 issuance, restart and gateway delivery
+
+The existing real-process lifecycle now also runs RFC 2136 DNS-01 through the
+public certificate-provisioning API. Two daemon processes use a local TLS CA and
+an independent signed-DNS transcript verifier. The verifier checks the exact
+zone, TXT operation, TTL, TSIG identity/signature and exact-value deletion. Two
+separate authoritative queries prove daemon propagation and CA validation; the
+CA derives the expected TXT value from its independently authenticated JWK.
+An additional query proves the completed record is absent.
+
+The shared lifecycle checks certificate-backed HTTPS, restart, second-gateway
+installation and exactly one CA order/finalisation. It does not export the
+daemon's private key, change OS DNS/trust, use the browser or contact a public CA.
+The existing RFC 2136 fixture is reused directly by the integration test, not
+exported from a production library. The fixture's fixed-clock unit mode remains;
+real processes use current-time TSIG responses. Its completion is bounded and a
+dropped fixture cancels its owned task.
+
+Focused verification:
+
+- `cargo test -p meshspan-acme rfc2136_provider_tests -- --nocapture`: all three
+  passed in **0.00 seconds**, after a 10.11-second build.
+- `cargo test -p meshspan-daemon --test headless_process acme_lifecycle -- --nocapture`:
+  HTTP-01 and DNS-01 passed together in **16.17 seconds**, after a 4.38-second build.
+  An initial compile error used the wrong test query constructor; it was corrected
+  to the existing fallible `DnsQuery::txt`. No process test failed.
+- Affected all-target/all-feature Clippy with warnings denied passed in
+  **21.28 seconds**. Rust formatting and `git diff --check` passed.
+
+The first full `pnpm check` on `ded7810`, tree
+`60118e27812acf25a8923aee89e57726b40eca2c`, failed in **270.51 seconds**. Static
+lanes and web tests passed; the Rust lane failed in the DNS process proof because
+the daemon's SMB bind returned `AddrInUse`, before any CA request. The competing
+owner was not captured. Diagnostic-only parallel reruns passed in **41.26** and
+**28.02 seconds**; these did not establish a cause or close the failure.
+
+Certificate lifecycle tests never connect to SMB, so they now request an
+OS-selected SMB port (`:0`), atomically allocated by the real daemon's bind. The
+service still starts normally, but this test no longer has an unnecessary
+probe-to-child-start race for an unused fixed SMB address. The error path also
+records every allocated root/peer listener address. This removes that collision
+opportunity for these two proofs; it does not claim all fixed-address process
+fixtures are now race-free. The full focused headless suite then passed in
+**32.46 seconds** (eight passed, two container-dependent tests explicitly ignored),
+after a 2.81-second build. No timeout increase or serialisation was introduced.
+
+The corrected candidate `bf98d56`, tree
+`4d887e01333bbf64a39b1e1b82303a7ecdd5831c`, failed its full `pnpm check` in
+**440.23 seconds**. Static lanes and web tests (9.58 seconds) passed; Rust workspace
+tests failed after 404.24 seconds. Both certificate process workflows passed.
+The operator workflow received a TLS EOF with both children still alive, and
+the metrics workflow timed out waiting for a configured HTTPS listener. The
+operator fixture's retained operation history places its failure before file
+uploads; encrypted backup export is being investigated. The metrics failure did
+not retain enough context to distinguish root restart from peer join. Neither
+failure is explained or closed by the earlier passing focused runs. Request
+framing and metrics-phase/child-state diagnostics have been added without
+weakening assertions, increasing timeouts or serialising tests.
+
+The next diagnostic-focused parallel headless run passed those two workflows and
+both certificate lifecycles, but failed the three-node join proof (**38.05 seconds**,
+seven passed, one failed, two ignored). The child reported only `HeadlessNodeJoin`.
+The daemon now preserves the join phase and closed, redacted error category, and
+the three-node fixture retains failure state. This changes diagnostic detail only;
+it does not retry, accept an invalid response or alter join behaviour.
+
+Further diagnostic runs failed in **59.46**, **43.55** and **45.54 seconds**;
+the last two explicitly selected NVM Node 26.8.1. The failures now identify live
+peers missing HTTPS readiness after join. A retained peer's local setup record is
+already complete, so these observations are not evidence of failed admission.
+The single three-node workflow passed in **26.14 seconds**; that does not close
+the parallel failure. Native stack sampling during a further **44.02-second**
+failing parallel run places repeated repository opening, schema parsing and
+integrity checks inside service composition before public listeners are bound.
+Sampling adds overhead and is diagnostic evidence, not a performance result.
+Inspection also found unconditional schema-marker updates on current database
+reopens; a held-writer regression is being added before changing that boundary.
+
+An intermediate system-process listing was incorrectly attributed to a Node
+child of this suite. Inspection confirms its panel checks use Rust over HTTPS;
+no such Node child is launched. Node version is not an established failure cause.
+
+The focused database regressions both reproduced `DatabaseBusy` on a current
+database reopen while another connection held a writer transaction (**5.49 seconds**,
+43.67-second build). Binding now reads the existing identity/schema first and
+does not rewrite an already-current marker. Creation, migration, mismatched
+identity rejection and full existing integrity checks remain intact. All **49
+database tests passed in 13.28 seconds** after correction (5.75-second build).
+The parallel process effect and full integration still require verification;
+this evidence does not yet close the startup or backup-transfer failures.
+
+The first unprofiled parallel run after that correction passed all startup,
+join and certificate workflows in **31.57 seconds**; seven cases passed, while
+the operator workflow now failed at restore-readiness with HTTP 503 after its
+encrypted export passed. Both child processes remained alive. Affected metadata
+and daemon all-target/all-feature Clippy passed with warnings denied in **33.58
+seconds**. The no-op writer-lock defect is reproduced and corrected, but this
+single run is not a claim of exhaustive startup proof. Inspection of the backup
+path found that provider snapshots use `try_lock` on the entire storage runtime,
+so ordinary maintenance contention can become an export/restore failure. That
+boundary is the next focused investigation, not an accepted 503 workaround.
+
+The real-runtime lock regression reproduced `Unavailable` in **0.56 seconds**
+(31.39-second build) while holding only the maintenance mutex. Backup provider
+inventory now has its own shared catalogue, used by export, restore, background
+backup and the data router. Its guards cover handle lookup and replacement, not
+provider open/close/transfer IO or the surrounding maintenance cycle. No duplicate
+provider cache or second source of authority was introduced. Existing destination,
+generation, current permission, receipt and ciphertext checks are unchanged.
+The focused backup suite passed **49 tests in 5.45 seconds**, after a 22.36-second
+build. A final guard-scope review also moves retired provider destruction outside
+the catalogue mutex. The next parallel process run still failed joined-node
+readiness (including the three-node, operator and DNS workflows); its final
+summary was not retained, so no aggregate count or duration is claimed. These
+failures do not close the startup investigation. The final focused backup run
+passed **49 tests in 8.82 seconds** after an 11.66-second build. Clippy then found
+an unnecessary owned route-composition argument; after using references instead,
+all-target/all-feature daemon Clippy passed in **20.05 seconds**, with formatting
+and diff checks also passing.
+The real CLI/public-HTTPS operator workflow then passed in **13.75 seconds**
+(16.80-second build), including encrypted export and isolated restore checking.
+This verifies the backup integration in that workflow, not parallel startup.
+
+No dependency, schema or protocol changed. Full local
+integration remains incomplete for the corrected slice; task 2 stays at **6 points** and Stage
+10 at **145** until that gate passes. Cloudflare/webhook/manual lifecycle,
+interrupted and long-running orders, successful polling hints and active gateway
+challenge distribution remain open. No publication or Actions ran.
+
+## Task 2 — response-time deadlines and normal claim expiry
+
+The certificate driver now owns cancellation of each external action rather than
+relying on a replaceable transport to honour its deadline. It rereads the supplied
+clock after IO, rejects late responses before advancing the machine and timestamps
+successful checkpoints at receipt time. Expired claims yield a normal outcome
+that clears the active execution for fenced admission on the next worker pass;
+they do not submit checkpoint, completion or retry commands under expired authority.
+Corrupt state and ambiguous authoritative commits still fail closed.
+
+Five original regressions all failed before implementation in **0.13 seconds**
+(88-second build): stale checkpoint time, accepted late response, mutation after
+claim expiry, fatal pre-expired claim and an unbounded transport future. The
+corrected certificate-order suite first passed 25 tests in **0.20 seconds**.
+Two additional exact-boundary regressions then reproduced fatal `InvalidInput`
+when the lease elapsed between admission and execution (**0.04 seconds**) and
+when only its last microsecond remained (**0.08 seconds**, six other cases passed).
+Expired execution deadlines are now distinct from invalid structure; the last
+microsecond waits without starting an impossible challenge-request interval.
+
+`cargo test -p meshspan-daemon --lib certificate_order_ -- --nocapture` passed
+all **27 tests in 0.39 seconds**, after a 37.94-second build. Tests use per-test
+clocks, exact mutation counts and observed future cancellation, not global time
+changes or provider sleeps. The stalled transport's worker deadline remains
+10 milliseconds; its separate two-second deadlock watchdog is not a performance
+claim. Affected all-target/all-feature Clippy with warnings denied passed in
+**134 seconds**. Rust formatting and `git diff --check` passed. No dependency,
+schema or wire format changed. Full local integration remains required before
+merge. Lease renewal, interrupted challenge
+recovery and successful CA polling hints remain separate open task-2 scope.
+
+### Combined candidate and bounded Rust test scheduling
+
+Signed merge `9942e63` combines DNS lifecycle and certificate deadlines on the
+candidate branch, not on `main`. The combined tree passed all **27 certificate-order
+tests in 0.40 seconds** after a 19.24-second build. Both source histories remain
+intact; neither PR is claimed merged into `main` yet.
+
+Inspection found that `MESHSPAN_CHECK_WORKERS` bounded outer lanes but was not
+passed to Cargo's Rust test harness. In this suite, each harness case additionally
+launches multiple real daemon processes. An unchanged combined-candidate run with
+four concurrent test cases passed **all eight active process tests in 34.62 seconds**
+(13.69-second build); the two existing container-image-dependent cases remained
+explicitly ignored. No readiness deadline, assertion or case topology changed.
+
+The canonical runner now passes its existing selected worker count to the Rust
+harness, retaining workspace/all-target/all-feature coverage. Five scheduler
+tests passed in **0.05 seconds**, including exact command arguments and rejected
+invalid budgets. The new test first failed because this scheduling boundary did
+not exist. Targeted ESLint, formatting and diff checks passed. This is bounded
+test scheduling, not a daemon startup optimisation: the earlier higher-concurrency
+timeouts remain observed evidence for startup-cost and scale measurements. It
+does not establish a maximum supported mesh size. The combined candidate still
+needs the complete local integration gate before `main` integration.
+
+The complete local `MESHSPAN_CHECK_WORKERS=4 pnpm check` then passed on signed
+commit `510748ff7ece1404ec7fee47b402f34cea7b8476`, tree
+`1dc4a5c18fdebe9e9c51a164eb8b7be1d165258c`, in **892.62 seconds** under NVM
+Node 26.8.1 and pnpm 11.19.0. Rust workspace/all-target/all-feature tests passed
+in **803.13 seconds**; web tests passed in **6.69 seconds**. Generated drift,
+embedded bundle, Rust/web formatting, Clippy, ESLint, TypeScript, both licence
+checks and tooling tests passed. The tested source remained unchanged throughout,
+and no competing Cargo build ran. This is successful bounded integration, not a
+claimed test-speed improvement or closure of higher-concurrency startup costs.
+
+This closes the basic DNS-01 issuance/restart/gateway-delivery slice alongside
+the tested response-deadline and backup/database corrections. Task 2 decreases
+**6 → 5 points** and Stage 10 **145 → 144**; the remaining certificate lifecycle
+and delivery tasks remain open. The two container-dependent SMB cases were not
+part of this proof: a read-only Docker inspection confirmed the named local
+`meshspan-smbclient-test:bookworm` image is absent. No live-CA, physical-hardware,
+soak or publication proof is claimed. No releases, tags, images or Actions were
+published or run.
+
 ## Task 2 — real HTTP-01 issuance, restart and gateway delivery
 
 The new `headless_process::acme_lifecycle` proof runs real child daemons and a

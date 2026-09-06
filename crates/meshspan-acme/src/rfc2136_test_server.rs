@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-use std::{error::Error, net::SocketAddr};
+use std::{
+    error::Error,
+    net::SocketAddr,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
@@ -14,7 +18,6 @@ type TestError = Box<dyn Error + Send + Sync>;
 
 const KEY_NAME: &str = "meshspan-key.example.test";
 const SECRET: &[u8] = b"0123456789abcdef0123456789abcdef";
-const SIGNED_AT: u64 = 1_700_000_000;
 
 pub(crate) struct Rfc2136TestServer {
     address: SocketAddr,
@@ -22,11 +25,16 @@ pub(crate) struct Rfc2136TestServer {
 }
 
 impl Rfc2136TestServer {
-    pub(crate) async fn start() -> Result<Self, TestError> {
+    pub(crate) async fn start(
+        zone: &'static str,
+        ttl: u32,
+        present_queries: usize,
+        signed_at: Option<u64>,
+    ) -> Result<Self, TestError> {
         let tcp = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
         let address = tcp.local_addr()?;
         let udp = UdpSocket::bind(address).await?;
-        let task = tokio::spawn(serve(tcp, udp));
+        let task = tokio::spawn(serve(tcp, udp, zone, ttl, present_queries, signed_at));
         Ok(Self { address, task })
     }
 
@@ -34,19 +42,35 @@ impl Rfc2136TestServer {
         self.address
     }
 
-    pub(crate) async fn finish(self) -> Result<(), TestError> {
-        self.task.await??;
+    pub(crate) async fn finish(mut self) -> Result<(), TestError> {
+        tokio::time::timeout(Duration::from_secs(5), &mut self.task).await???;
         Ok(())
     }
 }
 
-async fn serve(tcp: TcpListener, udp: UdpSocket) -> Result<(), TestError> {
-    let published = receive_update(&tcp).await?;
+impl Drop for Rfc2136TestServer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn serve(
+    tcp: TcpListener,
+    udp: UdpSocket,
+    zone: &str,
+    ttl: u32,
+    present_queries: usize,
+    signed_at: Option<u64>,
+) -> Result<(), TestError> {
+    let published = receive_update(&tcp, zone, ttl, signed_at).await?;
     if published.class != 1 {
         return Err("first DNS update was not a publish".into());
     }
-    answer_query(&udp, &published, true).await?;
-    let removed = receive_update(&tcp).await?;
+    // Provider propagation and CA validation are distinct observable DNS requests.
+    for _ in 0..present_queries {
+        answer_query(&udp, &published, true).await?;
+    }
+    let removed = receive_update(&tcp, zone, ttl, signed_at).await?;
     if removed.class != 254 || removed.name != published.name || removed.value != published.value {
         return Err("cleanup was not an exact-value DNS removal".into());
     }
@@ -60,13 +84,22 @@ struct Update {
     class: u16,
 }
 
-async fn receive_update(listener: &TcpListener) -> Result<Update, TestError> {
+async fn receive_update(
+    listener: &TcpListener,
+    zone: &str,
+    ttl: u32,
+    signed_at: Option<u64>,
+) -> Result<Update, TestError> {
     let (mut stream, _) = listener.accept().await?;
     let length = usize::from(stream.read_u16().await?);
     let mut request = vec![0_u8; length];
     stream.read_exact(&mut request).await?;
-    let (update, request_mac, request_id) = parse_and_verify_update(&request)?;
-    let response = signed_response(request_id, &request_mac)?;
+    let (update, request_mac, request_id) = parse_and_verify_update(&request, zone, ttl)?;
+    let signed_at = match signed_at {
+        Some(value) => value,
+        None => SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+    };
+    let response = signed_response(request_id, &request_mac, signed_at)?;
     stream
         .write_all(&u16::try_from(response.len())?.to_be_bytes())
         .await?;
@@ -74,14 +107,18 @@ async fn receive_update(listener: &TcpListener) -> Result<Update, TestError> {
     Ok(update)
 }
 
-fn parse_and_verify_update(request: &[u8]) -> Result<(Update, Vec<u8>, u16), TestError> {
+fn parse_and_verify_update(
+    request: &[u8],
+    expected_zone: &str,
+    expected_ttl: u32,
+) -> Result<(Update, Vec<u8>, u16), TestError> {
     if request.len() < 12 || request[2..12] != [0x28, 0, 0, 1, 0, 0, 0, 1, 0, 1] {
         return Err("unexpected RFC 2136 header".into());
     }
     let request_id = u16::from_be_bytes(request[..2].try_into()?);
     let mut cursor = 12;
     let zone = read_name(request, &mut cursor)?;
-    if zone != "example.test" || read_u16(request, &mut cursor)? != 6 {
+    if zone != expected_zone || read_u16(request, &mut cursor)? != 6 {
         return Err("unexpected RFC 2136 zone".into());
     }
     if read_u16(request, &mut cursor)? != 1 {
@@ -93,7 +130,7 @@ fn parse_and_verify_update(request: &[u8]) -> Result<(Update, Vec<u8>, u16), Tes
     }
     let class = read_u16(request, &mut cursor)?;
     let ttl = read_u32(request, &mut cursor)?;
-    if (class == 1 && ttl != 30) || (class == 254 && ttl != 0) {
+    if (class == 1 && ttl != expected_ttl) || (class == 254 && ttl != 0) {
         return Err("RFC 2136 update TTL did not match its operation".into());
     }
     let rdata_length = usize::from(read_u16(request, &mut cursor)?);
@@ -156,11 +193,15 @@ fn read_request_tsig(
     Ok((mac, variables))
 }
 
-fn signed_response(request_id: u16, request_mac: &[u8]) -> Result<Vec<u8>, TestError> {
+fn signed_response(
+    request_id: u16,
+    request_mac: &[u8],
+    signed_at: u64,
+) -> Result<Vec<u8>, TestError> {
     let mut unsigned = Vec::from(request_id.to_be_bytes());
     unsigned.extend_from_slice(&0xa800_u16.to_be_bytes());
     unsigned.extend_from_slice(&[0_u8; 8]);
-    let variables = response_variables()?;
+    let variables = response_variables(signed_at)?;
     let mut authenticated = Vec::new();
     authenticated.extend_from_slice(&u16::try_from(request_mac.len())?.to_be_bytes());
     authenticated.extend_from_slice(request_mac);
@@ -170,17 +211,17 @@ fn signed_response(request_id: u16, request_mac: &[u8]) -> Result<Vec<u8>, TestE
     signer.update(&authenticated);
     let mac = signer.finalize().into_bytes();
     unsigned[10..12].copy_from_slice(&1_u16.to_be_bytes());
-    append_response_tsig(&mut unsigned, request_id, &mac)?;
+    append_response_tsig(&mut unsigned, request_id, &mac, signed_at)?;
     Ok(unsigned)
 }
 
-fn response_variables() -> Result<Vec<u8>, TestError> {
+fn response_variables(signed_at: u64) -> Result<Vec<u8>, TestError> {
     let mut variables = Vec::new();
     encode_name(&mut variables, KEY_NAME)?;
     variables.extend_from_slice(&255_u16.to_be_bytes());
     variables.extend_from_slice(&0_u32.to_be_bytes());
     encode_name(&mut variables, "hmac-sha256")?;
-    variables.extend_from_slice(&SIGNED_AT.to_be_bytes()[2..]);
+    variables.extend_from_slice(&signed_at.to_be_bytes()[2..]);
     variables.extend_from_slice(&300_u16.to_be_bytes());
     variables.extend_from_slice(&[0_u8; 4]);
     Ok(variables)
@@ -190,6 +231,7 @@ fn append_response_tsig(
     response: &mut Vec<u8>,
     request_id: u16,
     mac: &[u8],
+    signed_at: u64,
 ) -> Result<(), TestError> {
     encode_name(response, KEY_NAME)?;
     response.extend_from_slice(&250_u16.to_be_bytes());
@@ -197,7 +239,7 @@ fn append_response_tsig(
     response.extend_from_slice(&0_u32.to_be_bytes());
     let mut rdata = Vec::new();
     encode_name(&mut rdata, "hmac-sha256")?;
-    rdata.extend_from_slice(&SIGNED_AT.to_be_bytes()[2..]);
+    rdata.extend_from_slice(&signed_at.to_be_bytes()[2..]);
     rdata.extend_from_slice(&300_u16.to_be_bytes());
     rdata.extend_from_slice(&u16::try_from(mac.len())?.to_be_bytes());
     rdata.extend_from_slice(mac);

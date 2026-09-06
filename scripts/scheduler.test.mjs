@@ -3,7 +3,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { readWorkerCount, runWithLimit } from "./scheduler.mjs";
+import {
+  readWorkerCount,
+  runWithLimit,
+  rustTestArguments,
+} from "./scheduler.mjs";
+
+test("Rust harness receives the same budget without dropping any test target", () => {
+  for (const workers of [1, 4, 12, 32]) {
+    assert.deepEqual(rustTestArguments(workers), [
+      "test",
+      "--workspace",
+      "--all-targets",
+      "--all-features",
+      "--quiet",
+      "--",
+      "--test-threads",
+      String(workers),
+    ]);
+  }
+});
+
+test("Rust harness budget rejects invalid limits instead of falling back", () => {
+  for (const invalid of [0, -1, 1.5, 33, NaN, Infinity]) {
+    assert.throws(() => rustTestArguments(invalid), /integer from 1 to 32/);
+  }
+});
 
 test("worker override accepts only the documented bounded integer", () => {
   assert.equal(readWorkerCount("1"), 1);

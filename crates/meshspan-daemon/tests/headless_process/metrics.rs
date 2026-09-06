@@ -19,6 +19,7 @@ async fn exporter_policy_survives_restart_and_reaches_another_gateway() -> Resul
     let root = super::ProcessFixture::new()?;
     let peer = super::ProcessFixture::new()?;
     let mut processes = vec![root.start()?];
+    let mut phase = "initial root startup and exporter configuration";
     let proof = async {
         let claim = super::wait_for_claim(&root.claim_path).await?;
         let client = super::wait_for_client(&root.identity_path).await?;
@@ -34,24 +35,35 @@ async fn exporter_policy_survives_restart_and_reaches_another_gateway() -> Resul
         verify_gateway_dispatches(&root, &client, api_key).await?;
         processes[0].kill()?;
         processes[0].wait()?;
+        phase = "root restart";
         processes[0] = root.start()?;
         super::wait_for_status(root.address, &client, "configured").await?;
         verify(root.address, &client, api_key).await?;
         verify_storage_measurements(root.address, &client, api_key).await?;
         let join_code = super::issue_join_code(&root, &client, api_key).await?;
+        phase = "peer join";
         processes.push(peer.start_join(&join_code)?);
         let peer_client = super::wait_for_client(&peer.identity_path).await?;
         super::wait_for_status(peer.address, &peer_client, "configured").await?;
         super::wait_for_storage_folder_visibility(&peer, &peer_client, api_key).await?;
         verify(peer.address, &peer_client, api_key).await?;
         verify_gateway_dispatches(&peer, &peer_client, api_key).await?;
+        phase = "peer service after root loss";
         processes[0].kill()?;
         processes[0].wait()?;
         verify(peer.address, &peer_client, api_key).await
     }
     .await;
+    let proof = proof.map_err(|error| -> Box<dyn Error> {
+        let observations = processes.iter_mut()
+            .map(|process| (process.id(), process.try_wait()))
+            .collect::<Vec<_>>();
+        format!("metrics phase {phase}: {error}; root HTTPS/SMB/private: {:?}; peer HTTPS/SMB/private: {:?}; child exit states before cleanup: {observations:?}",
+            (root.address, root.smb_address, root.private_address),
+            (peer.address, peer.smb_address, peer.private_address)).into()
+    });
     super::stop_processes(&mut processes);
-    proof
+    super::retain_failure_state(proof, [root.temporary, peer.temporary])
 }
 
 async fn configure_and_verify(

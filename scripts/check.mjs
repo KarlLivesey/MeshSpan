@@ -3,7 +3,11 @@
 import { fileURLToPath } from "node:url";
 
 import { runProcess } from "./process.mjs";
-import { readWorkerCount, runWithLimit } from "./scheduler.mjs";
+import {
+  readWorkerCount,
+  runWithLimit,
+  rustTestArguments,
+} from "./scheduler.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const workerCount = readWorkerCount(process.env.MESHSPAN_CHECK_WORKERS);
@@ -121,12 +125,7 @@ if (!generation.passed) {
   const testLanes = [
     {
       name: "Rust workspace tests",
-      steps: [
-        [
-          "cargo",
-          ["test", "--workspace", "--all-targets", "--all-features", "--quiet"],
-        ],
-      ],
+      steps: [["cargo", rustTestArguments(workerCount)]],
     },
     {
       name: "web tests",

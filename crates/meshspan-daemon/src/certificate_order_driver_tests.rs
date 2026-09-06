@@ -29,6 +29,7 @@ use crate::{
     CertificateOrderFailureClass, CertificateOrderResultService, PreparedCertificateOrder,
 };
 
+mod deadlines;
 mod tls_retry;
 
 #[tokio::test]
@@ -88,6 +89,19 @@ fn driver<C: Clock>(
     clock: C,
 ) -> Result<CertificateOrderDriver<RecordingAuthority, SharedRandom, C>, Box<dyn std::error::Error>>
 {
+    driver_with_policy(
+        authority,
+        clock,
+        CertificateOrderDrivePolicy::new(DurationMicros::new(1_000_000), maximum_steps)?,
+    )
+}
+
+fn driver_with_policy<C: Clock>(
+    authority: RecordingAuthority,
+    clock: C,
+    policy: CertificateOrderDrivePolicy,
+) -> Result<CertificateOrderDriver<RecordingAuthority, SharedRandom, C>, Box<dyn std::error::Error>>
+{
     let certificate_authority = CertificateAuthority::new()?;
     let mut roots = RootCertStore::empty();
     roots.add(CertificateDer::from(
@@ -99,7 +113,7 @@ fn driver<C: Clock>(
         authority,
         SharedRandom::default(),
         clock,
-        CertificateOrderDrivePolicy::new(DurationMicros::new(1_000_000), maximum_steps)?,
+        policy,
         CertificateOrderResultService::new(roots)?,
     ))
 }
@@ -257,6 +271,7 @@ struct RecordingAuthority(Arc<Mutex<AuthorityState>>);
 #[derive(Default)]
 struct AuthorityState {
     checkpoints: usize,
+    checkpoint_at: Option<UnixMicros>,
     completions: usize,
     completion: Option<AuthoritativeCommand>,
 }
@@ -264,6 +279,10 @@ struct AuthorityState {
 impl RecordingAuthority {
     fn checkpoint_count(&self) -> usize {
         self.0.lock().map_or(0, |state| state.checkpoints)
+    }
+
+    fn checkpoint_at(&self) -> Option<UnixMicros> {
+        self.0.lock().ok()?.checkpoint_at
     }
 
     fn completion_count(&self) -> usize {
@@ -297,10 +316,12 @@ impl CertificateOrderCheckpointAuthority for RecordingAuthority {
         context: CommandContext,
         command: &AuthoritativeCommand,
     ) -> Result<CommandReceipt, CertificateOrderCheckpointAuthorityError> {
-        self.0
+        let mut state = self
+            .0
             .lock()
-            .map_err(|_| CertificateOrderCheckpointAuthorityError::Failed)?
-            .checkpoints += 1;
+            .map_err(|_| CertificateOrderCheckpointAuthorityError::Failed)?;
+        state.checkpoints += 1;
+        state.checkpoint_at = Some(context.occurred_at);
         receipt(context, command, Revision::new(10))
     }
 }

@@ -4,6 +4,11 @@
 
 #[path = "acme_lifecycle/authority.rs"]
 mod authority;
+#[path = "acme_lifecycle/challenge.rs"]
+mod challenge;
+// Reuse the independent signed-DNS transcript verifier, without a production fixture export.
+#[path = "../../../meshspan-acme/src/rfc2136_test_server.rs"]
+mod rfc2136_test_server;
 
 use meshspan_api_contract::{
     CertificateOperationalState, CertificateStatusResponse, CertificateStatusSource,
@@ -16,8 +21,43 @@ use super::*;
 async fn http01_issuance_survives_restart_and_gateway_join_without_another_order()
 -> Result<(), Box<dyn Error>> {
     let root = ProcessFixture::new()?;
-    let peer = ProcessFixture::new()?;
-    let ca = authority::TestAuthority::start(root.http01_address).await?;
+    let target = challenge::ValidationTarget::Http01(root.http01_address);
+    prove_lifecycle(root, target, json!({"kind": "http01"})).await
+}
+
+#[tokio::test]
+async fn dns01_issuance_survives_restart_and_gateway_join_without_another_order()
+-> Result<(), Box<dyn Error>> {
+    let dns = rfc2136_test_server::Rfc2136TestServer::start(CERTIFICATE_NAME, 60, 2, None)
+        .await
+        .map_err(|error| error.to_string())?;
+    let target = challenge::ValidationTarget::Dns01(dns.address());
+    let settings = json!({
+        "kind": "dns01_rfc2136",
+        "server": dns.address().to_string(),
+        "zone": CERTIFICATE_NAME,
+        "key_name": "meshspan-key.example.test",
+        "algorithm": "hmac_sha256",
+        "secret": "0123456789abcdef0123456789abcdef"
+    });
+    let proof = prove_lifecycle(ProcessFixture::new()?, target, settings).await;
+    let dns_result = dns.finish().await.map_err(|error| error.to_string());
+    proof.map_err(|error| format!("{error}; DNS transcript result: {dns_result:?}"))?;
+    dns_result?;
+    Ok(())
+}
+
+async fn prove_lifecycle(
+    mut root: ProcessFixture,
+    target: challenge::ValidationTarget,
+    settings: serde_json::Value,
+) -> Result<(), Box<dyn Error>> {
+    let mut peer = ProcessFixture::new()?;
+    // This proof never connects to SMB. Bind it atomically to an OS-selected port instead of
+    // leaving an unnecessary probe-to-child-start gap for an unused fixed listener address.
+    root.smb_address.set_port(0);
+    peer.smb_address.set_port(0);
+    let ca = authority::TestAuthority::start(target).await?;
     let trust_file = root.temporary.path().join("test-ca.pem");
     fs::write(&trust_file, &ca.anchor_pem)?;
     let mut processes = vec![root.command().env("SSL_CERT_FILE", &trust_file).spawn()?];
@@ -32,7 +72,7 @@ async fn http01_issuance_survives_restart_and_gateway_join_without_another_order
             "operation_id": "00000000-0000-4000-8000-000000000201",
             "directory_url": format!("{}/directory", ca.endpoint),
             "certificate_names": [CERTIFICATE_NAME],
-            "challenge": {"kind": "http01"}
+            "challenge": settings
         }))?;
         let authorization = format!("Bearer {key}");
         let response = request_with_headers(
@@ -48,7 +88,7 @@ async fn http01_issuance_survives_restart_and_gateway_join_without_another_order
         let issued = client_config(&ca.anchor_der)?;
         wait_for_active(root.address, &issued, key, 1).await?;
         ca.assert_issued_once()?;
-        assert_challenge_removed(root.http01_address).await?;
+        ca.assert_challenge_removed().await?;
 
         processes[0].kill()?;
         processes[0].wait()?;
@@ -74,7 +114,9 @@ async fn http01_issuance_survives_restart_and_gateway_join_without_another_order
             .map(|child| format!("{:?}", child.try_wait()))
             .collect::<Vec<_>>();
         format!(
-            "{error}; child exits {exits:?}; CA observations {:?}",
+            "{error}; root listeners HTTPS={} HTTP01={} SMB={} QUIC={}; peer listeners HTTPS={} HTTP01={} SMB={} QUIC={}; child exits {exits:?}; CA observations {:?}",
+            root.address, root.http01_address, root.smb_address, root.private_address,
+            peer.address, peer.http01_address, peer.smb_address, peer.private_address,
             ca.observations()
         )
         .into()
@@ -128,11 +170,4 @@ async fn wait_for_active(
         }
         sleep(RETRY_INTERVAL).await;
     }
-}
-
-async fn assert_challenge_removed(address: SocketAddr) -> Result<(), Box<dyn Error>> {
-    let response = authority::read_challenge(address)
-        .await
-        .map_err(|error| error.to_string())?;
-    require_status(&response, "404 Not Found", "completed challenge cleanup")
 }

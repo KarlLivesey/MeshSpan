@@ -45,7 +45,7 @@ async fn invalid_authoritative_time_fails_before_network_io() -> Result<(), Test
 
 #[tokio::test]
 async fn publishes_probes_and_removes_through_real_dns_sockets() -> Result<(), TestError> {
-    let server = Rfc2136TestServer::start().await?;
+    let server = Rfc2136TestServer::start("example.test", 30, 1, Some(1_700_000_000)).await?;
     let settings = settings(server.address())?;
     let provider = Rfc2136DnsProvider::new(
         settings,

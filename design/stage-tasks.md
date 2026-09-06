@@ -17,7 +17,7 @@ Update the relevant task when work changes its status. Report the current task,
 what behaviour changed, what remains and what was tested. Do not replace this
 with “nearly done”, a count of commits or an unweighted completion percentage.
 
-Remaining-effort estimate, 2026-09-06: **Stage 10: 145 points; Stage 11: 126
+Remaining-effort estimate, 2026-09-06: **Stage 10: 144 points; Stage 11: 126
 points; Stage 12: 55 points.** These are preliminary engineering judgements from
 the task scope and recorded gaps, not measured hours or completion guarantees.
 Uncertainty is high until the open integration/proof work is exercised.
@@ -71,7 +71,7 @@ the stage; publication-dependent acceptance remains held separately and visible.
    and task acceptance; it does not establish invitation continuity across later
    leaf changes. The estimate fell 5 → 3 → 1 → 0 as this scope was verified.
 
-2. **Automatic ACME and DNS challenge handling — Partial; current task.** **6 points remaining.**
+2. **Automatic ACME and DNS challenge handling — Partial; current task.** **5 points remaining.**
    PKI-003/004/006/010; accepted decisions §7.
    [ACME components](../crates/meshspan-acme/src/lib.rs) and
    [renewal scheduling](../crates/meshspan-daemon/src/certificate_renewal_scheduler.rs)
@@ -90,6 +90,15 @@ the stage; publication-dependent acceptance remains held separately and visible.
    including the integration gate in 909.68 seconds. This closes the basic HTTP-01
    issuance/restart/delivery acceptance slice (7 → 6 points); DNS and interrupted
    or long-running orders, polling guidance and active challenge distribution remain.
+   The [combined DNS/deadline candidate](stage-10-evidence.md#combined-candidate-and-bounded-rust-test-scheduling)
+   passed the complete local gate on `510748f` in 892.62 seconds: Rust tests in
+   803.13 seconds and web tests in 6.69 seconds. The Rust harness now receives the
+   existing selected worker budget; this is not a claimed startup-speed improvement.
+   Basic DNS-01 issuance/restart/delivery is now verified (6 → 5 points), as are
+   owned response deadlines and normal expired-claim handling. Cloudflare/webhook/
+   manual lifecycle, interrupted and long-running orders, successful polling hints
+   and active-gateway challenge distribution remain. Higher-concurrency startup
+   costs, absent SMB test-image prerequisites and external proofs remain explicit.
 
 3. **Encrypted certificate delivery and rotation — Partial.** **5 points remaining.**
    PKI-001/002/005/007/010; accepted decisions §7.

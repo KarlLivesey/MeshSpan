@@ -241,6 +241,23 @@ fn bind_partition_identity(
     partition_id: PartitionId,
 ) -> Result<(), MetadataStoreError> {
     let partition_bytes = partition_id.as_bytes();
+    let existing: Option<(Vec<u8>, u32)> = connection
+        .query_row(
+            "SELECT partition_id, schema_version FROM applied_state WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    if let Some((stored, schema_version)) = existing {
+        if stored.as_slice() != partition_bytes {
+            return Err(MetadataStoreError::IdentityMismatch);
+        }
+        if schema_version == PARTITION_SCHEMA_VERSION {
+            // Reopening current state is a read. Do not contend with the authoritative
+            // writer or emit an identical WAL update for every service connection.
+            return Ok(());
+        }
+    }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute(
         "INSERT OR IGNORE INTO applied_state(
@@ -269,6 +286,22 @@ fn bind_local_identity(
     node_id: NodeId,
 ) -> Result<(), MetadataStoreError> {
     let node_bytes = node_id.as_bytes();
+    let existing: Option<(Vec<u8>, u32)> = connection
+        .query_row(
+            "SELECT node_id, schema_version FROM local_identity WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    if let Some((stored, schema_version)) = existing {
+        if stored.as_slice() != node_bytes {
+            return Err(MetadataStoreError::IdentityMismatch);
+        }
+        if schema_version == LOCAL_SCHEMA_VERSION {
+            // Creation and migration still use the transactional binding below.
+            return Ok(());
+        }
+    }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute(
         "INSERT OR IGNORE INTO local_identity(singleton, node_id, schema_version)
@@ -681,6 +714,44 @@ mod tests {
                 params![grant_id.as_slice(), hop_index, mesh_id.as_slice(), revision],
             )?;
         }
+        Ok(())
+    }
+
+    #[test]
+    fn current_partition_reopen_does_not_contend_with_an_active_writer()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let file_path = directory.path().join("partition.sqlite3");
+        let partition = PartitionId::from_bytes([3; 16])?;
+        let mut writer = PartitionDatabase::open(&file_path, partition, UnixMicros::new(10))?;
+        let transaction = writer
+            .connection_mut()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let inferred = PartitionDatabase::open_existing(&file_path, UnixMicros::new(11))?;
+        let explicit = PartitionDatabase::open(&file_path, partition, UnixMicros::new(11))?;
+        assert_eq!(inferred.partition_id(), partition);
+        assert_eq!(explicit.partition_id(), partition);
+        assert!(inferred.check_integrity()?.sqlite_ok);
+        transaction.rollback()?;
+        Ok(())
+    }
+
+    #[test]
+    fn current_local_reopen_does_not_contend_with_an_active_writer()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let file_path = directory.path().join("local.sqlite3");
+        let node = NodeId::from_bytes([3; 16])?;
+        let mut writer = LocalDatabase::open(&file_path, node, UnixMicros::new(10))?;
+        let transaction = writer
+            .connection_mut()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let inferred = LocalDatabase::open_existing(&file_path, UnixMicros::new(11))?;
+        let explicit = LocalDatabase::open(&file_path, node, UnixMicros::new(11))?;
+        assert_eq!(inferred.node_id(), node);
+        assert_eq!(explicit.node_id(), node);
+        assert!(inferred.check_integrity()?.sqlite_ok);
+        transaction.rollback()?;
         Ok(())
     }
 
