@@ -72,6 +72,45 @@ Task 1 remains open for integration verification and resolution of the startup
 timeout. Its estimate fell from 5 to 3 points; Stage 10 from 152 to 150. Nothing
 has been released, tagged or published.
 
+### Parallel startup investigation and correction
+
+The first full local gate on `653b463` failed in **423.08 seconds**: all static,
+licence, generation and web-test lanes passed, but all five active headless tests
+timed out before initial HTTPS readiness. Observed children were alive. The 311
+daemon unit tests had passed in 59.39 seconds. This result supersedes any claim
+that the earlier isolated lifecycle pass alone closed startup reliability.
+
+A focused parallel rerun passed three workflows but timed out two joined-node
+workflows in **53.55 seconds**. Automatic native sampling then captured initial
+startup. In the third sampling window, 85 main-thread samples were in appliance
+composition and 79 in authentication-route composition; individual routes were
+repeatedly constructing/serialising the complete Rust-authored OpenAPI document.
+The retained first-failure database had all 85 migrations applied. Database-open
+work was visible too, but no database or durability policy was changed based on
+that suspicion.
+
+`generate_openapi` now shares an immutable `Arc<Value>` after successful initial
+generation. The document and header digest remain deterministic; external
+request/response validation is unchanged. A regression checks shared schema
+identity, identical digest and byte-for-byte output. The 45 API-contract tests
+passed in **0.22 seconds**. The `OpenApiDocument::value` accessor is no longer a
+const function; ordinary call signatures and wire output are unchanged.
+
+With this correction, all five active headless workflows passed together in
+**31.26 seconds**. A profiling run had separately exposed `AddrInUse` for HTTPS
+and SMB: the old bind-to-zero probe released listener ports back into the OS
+outbound pool before child binding. The harness now reads the OS ephemeral range,
+excludes it, checks candidate availability and assigns distinct candidates within
+the test process. It does not claim to reserve ports against unrelated processes.
+Linux/macOS range parsing fails closed; there is no guessed fallback range.
+
+All five workflows plus the range-parser test passed in **26.68 seconds**, with
+the two existing container-dependent tests still explicitly ignored. Affected
+API-contract/daemon Clippy across all targets/features passed in **20.70 seconds**.
+No deadlines were raised and no test was serialised. These focused results
+address the profiled startup defect; the full candidate must still pass the
+integration gate. Task 1 now has 1 point remaining; Stage 10 has 148.
+
 ## Target accounting and selected maintenance measurements
 
 The [metrics catalogue](metrics.md) now includes seven target-accounting gauges

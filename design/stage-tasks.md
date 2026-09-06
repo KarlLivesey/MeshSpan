@@ -17,7 +17,7 @@ Update the relevant task when work changes its status. Report the current task,
 what behaviour changed, what remains and what was tested. Do not replace this
 with “nearly done”, a count of commits or an unweighted completion percentage.
 
-Remaining-effort estimate, 2026-09-06: **Stage 10: 150 points; Stage 11: 126
+Remaining-effort estimate, 2026-09-06: **Stage 10: 148 points; Stage 11: 126
 points; Stage 12: 55 points.** These are preliminary engineering judgements from
 the task scope and recorded gaps, not measured hours or completion guarantees.
 Uncertainty is high until the open integration/proof work is exercised.
@@ -52,7 +52,7 @@ unavailable until actually obtained, not replaced with simulated evidence.
 Status: **in progress**. Finish and verify the open scope below before closing
 the stage; publication-dependent acceptance remains held separately and visible.
 
-1. **Mesh-local CA and domain-free HTTPS — Partial; current task.** **3 points remaining.**
+1. **Mesh-local CA and domain-free HTTPS — Partial; current task.** **1 point remaining.**
    PKI-001/002/008. [CA implementation](../crates/meshspan-certificates/src/mesh_local_ca.rs)
    exists. Close with recorded create/join/restart and trust-bundle download
    acceptance, automatic gateway issuance and clear domain guidance, without
@@ -61,9 +61,13 @@ the stage; publication-dependent acceptance remains held separately and visible.
    trust, join, rotation and restart test passed in 52.89 seconds after correcting
    original receipt timestamps, stale join-code TLS pins and same-certificate
    recipient rewrapping. Eight focused certificate tests passed in 0.25 seconds.
-   Panel trust-download verification and the integration gate remain. A separate
-   initial-startup timeout is retained as unresolved, not erased by the passing run.
-   The estimate fell from 5 to 3 points with the lifecycle proof; it is not closed.
+   Panel trust-download verification passed. The integration run exposed parallel
+   startup timeouts; profiling identified repeated full OpenAPI generation per
+   route, now replaced with shared immutable schema data. All five headless
+   workflows then passed in parallel. OS-aware listener-port allocation also
+   removes the observed collision with the outbound ephemeral pool; six tests
+   (including its range parser) pass in 26.68 seconds. The final integration gate
+   remains. The estimate fell 5 → 3 → 1 points as this scope was verified.
 
 2. **Automatic ACME and DNS challenge handling — Partial.** **8 points remaining.**
    PKI-003/004/006/010; accepted decisions §7.

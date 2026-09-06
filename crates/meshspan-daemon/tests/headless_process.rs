@@ -22,7 +22,7 @@ mod web_panel;
 use std::error::Error;
 use std::fs;
 use std::fs::OpenOptions;
-use std::net::{SocketAddr, TcpListener as StandardTcpListener, UdpSocket as StandardUdpSocket};
+use std::net::SocketAddr;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -47,6 +47,8 @@ use tokio::time::sleep;
 use tokio_rustls::TlsConnector;
 
 const CERTIFICATE_NAME: &str = "meshspan.local";
+#[path = "headless_process/ports.rs"]
+mod ports;
 const WAIT_LIMIT: Duration = Duration::from_secs(15);
 const RETRY_INTERVAL: Duration = Duration::from_millis(50);
 const SMB_CLIENT_IMAGE: &str = "meshspan-smbclient-test:bookworm";
@@ -2767,9 +2769,9 @@ async fn request_with_content_type(
 }
 
 fn unused_address() -> Result<SocketAddr, std::io::Error> {
-    StandardTcpListener::bind("127.0.0.1:0")?.local_addr()
+    ports::tcp()
 }
 
 fn unused_udp_address() -> Result<SocketAddr, std::io::Error> {
-    StandardUdpSocket::bind("127.0.0.1:0")?.local_addr()
+    ports::udp()
 }
