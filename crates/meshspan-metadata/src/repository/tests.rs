@@ -1211,7 +1211,7 @@ fn backup_repository(
     Ok((repository, bootstrap_context))
 }
 
-fn bootstrap_snapshot_repository(
+pub(super) fn bootstrap_snapshot_repository(
     repository: &mut AuthoritativeRepository,
     administrator: PrincipalId,
     voter: NodeId,

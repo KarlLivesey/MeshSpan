@@ -40,6 +40,18 @@ mod identity_administration_validation;
 mod manual_dns_task;
 mod manual_dns_task_validation;
 mod metadata_diagnostics;
+mod metrics_exporter;
+#[cfg(test)]
+mod metrics_exporter_tests;
+mod metrics_exporter_validation;
+pub use metrics_exporter::{
+    ConfigureMetricsExporterRequest, ConfigureMetricsExporterResponse, MAX_METRICS_EXPORT_BYTES,
+    MetricsExporterPolicy, MetricsExporterResponse, MetricsExporterStatus,
+};
+pub use metrics_exporter_validation::{
+    MAX_CONFIGURE_METRICS_EXPORTER_BYTES, decode_configure_metrics_exporter_request,
+    encode_configure_metrics_exporter_response, encode_metrics_exporter_response,
+};
 mod runtime_diagnostics;
 #[cfg(test)]
 mod runtime_diagnostics_tests;

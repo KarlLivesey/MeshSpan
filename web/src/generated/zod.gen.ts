@@ -978,6 +978,56 @@ export const zConfigureBackupScheduleResponse = z
   .strict();
 
 /**
+ * ConfigureMetricsExporterRequest
+ *
+ * Exact-retry replacement of one mesh-wide exporter configuration.
+ */
+export const zConfigureMetricsExporterRequest = z
+  .strictObject({
+    expected_sequence: z.int().gte(0).lte(9007199254740990),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    policy: z
+      .strictObject({
+        allowed_principals: z
+          .array(
+            z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+          )
+          .max(64),
+        enabled: z.boolean(),
+      })
+      .strict(),
+  })
+  .strict();
+
+/**
+ * ConfigureMetricsExporterResponse
+ *
+ * Original durable mutation receipt, even after a later policy supersedes it.
+ */
+export const zConfigureMetricsExporterResponse = z
+  .strictObject({
+    committed_revision: z.int().gte(1).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    sequence: z.int().gte(1).lte(9007199254740991),
+  })
+  .strict();
+
+/**
  * ConfirmRecoveryBundleRequest
  *
  * One authenticated idempotent save-verification request.
@@ -5024,6 +5074,38 @@ export const zMetadataDiagnosticsResponse = z
   .strict();
 
 /**
+ * MetricsExporterResponse
+ *
+ * Current mesh policy; null explicitly means never configured and disabled.
+ */
+export const zMetricsExporterResponse = z
+  .strictObject({
+    configuration: z
+      .strictObject({
+        committed_revision: z.int().gte(1).lte(9007199254740991),
+        policy: z
+          .strictObject({
+            allowed_principals: z
+              .array(
+                z
+                  .string()
+                  .length(36)
+                  .regex(
+                    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+                  ),
+              )
+              .max(64),
+            enabled: z.boolean(),
+          })
+          .strict(),
+        sequence: z.int().gte(1).lte(9007199254740991),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+
+/**
  * OperationStatusResponse
  *
  * Current durable state of one exact operation visible to the caller.
@@ -6973,6 +7055,31 @@ export const zCreateLocalityPolicyHeaders = z
 export const zCreateLocalityPolicyResponse2 = zCreateLocalityPolicyResponse;
 
 /**
+ * Current policy, or null when disabled and never configured
+ */
+export const zGetMetricsExporterResponse = zMetricsExporterResponse;
+
+/**
+ * Complete policy, observed sequence and exact-retry identity
+ */
+export const zConfigureMetricsExporterBody = zConfigureMetricsExporterRequest;
+
+export const zConfigureMetricsExporterHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Original committed policy receipt
+ */
+export const zConfigureMetricsExporterResponse2 =
+  zConfigureMetricsExporterResponse;
+
+/**
  * Join invitation policy
  */
 export const zCreateNodeJoinGrantBody = zCreateNodeJoinGrantRequest;
@@ -7692,6 +7799,11 @@ export const zPublishSmbExportResponse2 = zPublishSmbExportResponse;
  * Process readiness
  */
 export const zGetHealthResponse = zHealthResponse;
+
+/**
+ * Bounded OpenMetrics 1.0 text with explicit EOF
+ */
+export const zScrapeMetricsResponse = z.string().max(65536);
 
 /**
  * This exact OpenAPI 3.1 document

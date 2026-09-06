@@ -42,11 +42,14 @@ mod local_target;
 #[cfg(test)]
 mod local_target_tests;
 mod mesh_local_certificate_command;
+mod metrics_exporter_command;
 mod migration;
 mod name;
 mod repository;
 #[cfg(test)]
 mod test_support;
+
+pub use repository::{MetricsExporterConfiguration, metrics_exporter_instance_id};
 
 pub use acme_command::{
     AcknowledgePublicCertificateInstallation, AcmeChallengeKind, AdvanceManualDnsTask,
@@ -195,6 +198,9 @@ pub use mesh_local_certificate_command::{
     AcknowledgeMeshLocalCertificateInstallation, CreateMeshLocalCertificateAuthority,
     IssueMeshLocalCertificate, MAXIMUM_MESH_LOCAL_CA_CERTIFICATE_BYTES,
     MAXIMUM_MESH_LOCAL_CERTIFICATE_NAMES,
+};
+pub use metrics_exporter_command::{
+    ConfigureMetricsExporter, MAX_METRICS_EXPORTER_CONSUMERS, MetricsExporterPolicy,
 };
 pub use migration::MetadataStoreError;
 pub use name::{RecordName, RecordNameError};

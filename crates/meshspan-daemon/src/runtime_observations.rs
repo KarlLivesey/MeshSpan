@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use meshspan_contracts::LatencyHistogram;
 use meshspan_domain::{TargetId, UnixMicros};
 
 const WINDOW_ITEMS: usize = 100;
@@ -34,6 +35,8 @@ struct ObservationState {
     failed_cycles: u64,
     passed_probes: u64,
     failed_probes: u64,
+    cycle_duration: LatencyHistogram,
+    probe_duration: LatencyHistogram,
     cycle: Option<StorageCycleObservation>,
     targets: BTreeMap<(TargetId, u64), TargetCheckObservation>,
     events: VecDeque<RuntimeEvent>,
@@ -115,6 +118,7 @@ impl RuntimeObservations {
             return;
         }
         self.update(completed_at, |state, observation| {
+            state.probe_duration.observe(duration).map_err(|_| ())?;
             let previous = state.targets.get(&target).map(|check| check.passed);
             if previous != Some(passed) && (!passed || previous == Some(false)) {
                 state.event(RuntimeEvent {
@@ -154,6 +158,7 @@ impl RuntimeObservations {
                 &mut state.failed_probes
             };
             *count = count.saturating_add(1);
+            Ok(())
         });
     }
 
@@ -164,6 +169,7 @@ impl RuntimeObservations {
         completed_at: Option<UnixMicros>,
     ) {
         self.update(completed_at, |state, observation| {
+            state.cycle_duration.observe(duration).map_err(|_| ())?;
             let failed = summary.failed_steps > 0;
             let previous = state
                 .cycle
@@ -189,13 +195,14 @@ impl RuntimeObservations {
                 duration,
                 summary,
             });
+            Ok(())
         });
     }
 
     fn update(
         &self,
         at: Option<UnixMicros>,
-        apply: impl FnOnce(&mut ObservationState, ObservationTime),
+        apply: impl FnOnce(&mut ObservationState, ObservationTime) -> Result<(), ()>,
     ) {
         let Some(wall) = at.filter(|at| (0..=9_007_199_254_740_991).contains(&at.get())) else {
             self.drop_update();
@@ -209,15 +216,20 @@ impl RuntimeObservations {
             self.drop_update();
             return;
         };
-        state.sequence = sequence;
-        apply(
+        if apply(
             &mut state,
             ObservationTime {
                 sequence,
                 wall,
                 monotonic: Instant::now(),
             },
-        );
+        )
+        .is_err()
+        {
+            self.drop_update();
+            return;
+        }
+        state.sequence = sequence;
     }
 
     fn drop_update(&self) {
@@ -255,6 +267,9 @@ impl ObservationState {
 
 #[path = "runtime_observations_projection.rs"]
 mod projection;
+
+#[path = "runtime_observations_metrics.rs"]
+mod metrics;
 
 #[cfg(test)]
 #[path = "runtime_observations_tests.rs"]

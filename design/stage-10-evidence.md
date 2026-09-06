@@ -3,6 +3,143 @@
 Status: **in progress**. Stage 11 has not started. Publication remains on hold
 pending the owner's dependency review.
 
+## Metrics collection and encoding — in progress
+
+The [metrics contract and catalogue](metrics.md) now have a typed replaceable
+source, bounded aggregate runtime measurements and an OpenMetrics text encoder.
+The storage runtime records process-lifetime probe/cycle latency histograms;
+diagnostic-window eviction does not reset them. Output contains no dynamic
+identity/path labels. Unavailable sources and unobserved gauges remain distinct
+from zero-valued measurements.
+
+Three contract tests, four observation/source tests and two encoder tests all
+passed, each focused harness completing in under **0.01 seconds**. They check
+exact inclusive buckets and nanosecond sums, no partial overflow update,
+duplicate-family rejection, bounded churn, lock contention, missing gauges,
+deterministic family order and exact OpenMetrics bytes including counters above
+JavaScript's safe-integer range. Affected all-target/all-feature Clippy passed
+in **8.38 seconds** after correcting documentation, borrowing and test-import
+lint findings. No rule was suppressed or loosened.
+
+That initial commit covered collection/encoding only. The following integration
+adds configuration and routing; the wider metric catalogue remains outstanding.
+No release or publication ran.
+
+### Replicated opt-in and authenticated exporter integration
+
+The native configuration API and scrape route are now composed into the daemon.
+The [metrics contract](metrics.md) records access, cancellation, exact-retry,
+configuration bytes and private command impacts. Default-off, consumer grants,
+current authentication and the response bound are enforced independently of any
+web client. No dependency or SQL migration was added.
+
+Focused local Rust verification:
+
+- Four metadata tests passed in **5.38 seconds**: exact receipts and CAS,
+  immutable history, all four apply-fault rollback points, reopen persistence,
+  canonical wire rejection, unknown consumers and corrupt stored evidence.
+- Two Rust API boundary tests passed in **0.09 seconds**.
+- Four daemon HTTP tests passed in **0.43 seconds**: early rejection, no implicit
+  manager scrape grant, revocation before response, invalid outgoing policy,
+  malformed/oversized mutations and owned work after client cancellation.
+- Affected all-target/all-feature Clippy passed in **34.17 seconds**.
+- The independent real-process HTTPS test
+  `metrics::exporter_policy_survives_restart_and_reaches_another_gateway`
+  passed in **16.92 seconds**. It asserts default-off, enable/disable, exact
+  original receipt replay without re-enabling, mixed-cookie rejection, actual
+  runtime counters, restart persistence, policy catch-up by another gateway and
+  scraping after the original process stops. It does not prove non-admin
+  credential enrolment, a real Prometheus ingestor, hardware failure or soak.
+
+The broad operator flow also ran and failed in **27.50 seconds** at the existing
+automatic-backup restore-readiness request with HTTP 503, before reaching metrics.
+Its root cause is not established. The metrics process case is independent so it
+can run in parallel; the original operator assertions remain intact. This failure
+is not waived or described as fixed by a later passing run.
+
+The Operations panel now exposes the exporter policy through the generated
+client. Eleven focused client/panel tests passed in **4.48 seconds**, including
+default-off, on-demand bounded user pages, selections across pages, enable and
+disable, CSRF transport, Rust-derived Zod rejection, exact retry after connection
+loss, mismatched receipts, stale-policy conflict recovery, refreshed form values
+and late response suppression after unmount. TypeScript and focused ESLint
+passed with no relaxed rules. The frontend-design skill guided the existing
+restrained layout, labelled controls, optional detail and honest pending states;
+these are headless DOM checks, not browser visual or device evidence.
+
+The complete NVM-default `pnpm check` subsequently passed in **1,149.60 seconds**
+with four workers. Rust workspace/all-target/all-feature tests took **1,026.21
+seconds**; web tests took **25.75 seconds**. Generated-contract drift, embedded
+web build, Rust format, workspace Clippy, Rust and JavaScript licence checks,
+workspace format, full ESLint, TypeScript and tooling tests all passed. The
+operator flow's earlier HTTP 503 did not recur in this gate. This is full local
+integration evidence, not a root-cause resolution of that intermittent result.
+
+A fresh final debug-bundle build succeeded, but its subsequent parallel
+`headless_process` run failed in **44.83 seconds**: two cases timed out waiting
+for joining daemons' HTTPS listeners (`Connection refused`), while the metrics
+case and standalone restart case passed. Two external SMB-container cases were
+explicitly ignored. The branch remains unmerged pending diagnosis; the earlier
+full passing gate does not override these later failures.
+
+### Snapshot capture race isolated
+
+Inspection of a retained failed join found committed node activation on the
+existing node but no installed authority database on its peer. Snapshot creation
+sampled the live consensus position before making an online database copy, then
+compared that old position against the newer copy. A concurrent commit could
+therefore reject a valid copy with `SnapshotMismatch`.
+
+A deterministic regression places a separate-connection commit exactly between
+those operations. It failed with `SnapshotMismatch` before the correction and
+passed in **0.38 seconds** afterwards. Capture now holds one SQLite read view
+across consensus inspection and copying; the test proves that the other connection
+still commits and that the captured older position restores correctly. The existing
+receiver-vote preservation case passed in **0.36 seconds**. Affected all-target,
+all-feature Clippy passed in **14.03 seconds**. No timeout was increased, no tests
+were serialised, and no schema or protocol was changed.
+
+After rebuilding the daemon, parallel process verification completed in **28.90
+seconds**: standalone restart, metrics gateway catch-up and three-node original-node
+loss passed. The operator case joined successfully but reproduced the separate
+backup failure: its run remained `Recorded` with only one verified destination.
+Both children were still running before cleanup. The fixture now retains private
+test state on failure and reports child exit observations; successful fixtures are
+still removed. Inspection found the local encrypted copy but no remote provider
+object. That remaining failure is not explained or waived by the snapshot fix.
+
+### Bootstrap-node remote backup identity
+
+The retained backup run was claimed by the original bootstrap node. Its local
+copy was verified, while the second node's provider remained empty. Remote backup
+authorisation incorrectly required a `node_activations` join receipt, which the
+original node never has: bootstrap commits it directly as an active node.
+
+The identity check now reads the current incarnation together with the active
+certificate and active-node predicate in one indexed query. Bootstrap and joined
+nodes therefore use the same current identity boundary; neither gets an exemption
+from certificate, incarnation, expiry, destination or backup-claim checks.
+
+A regression using the real bootstrap metadata/consensus fixture failed with
+`Unauthorized` before the correction and passed in **0.31 seconds** afterwards.
+It rejects a changed incarnation, fingerprint, unknown node and expired
+certificate. A separate persistence test passed in **0.27 seconds**, checking
+inactive node states, current-incarnation changes and certificate revocation.
+Affected all-target/all-feature Clippy passed in **5.87 seconds**. This adds one
+field to the internal Rust certificate projection, not a SQL migration, public
+API or wire change. After rebuilding, all **four** ordinary process tests passed
+in parallel in **22.63 seconds**, including automatic multi-node backup placement,
+encrypted download and restore-readiness, node joining, restart and original-node
+loss. The two opt-in SMB-container cases were ignored, not executed.
+
+The final complete NVM-default `MESHSPAN_CHECK_WORKERS=4 pnpm check` passed on
+`65ea7ef` in **553.90 seconds**. Rust workspace/all-target/all-feature tests took
+**515.59 seconds** and web tests took **4.63 seconds**. Generated-contract drift,
+embedded web build, Rust format, workspace Clippy, both dependency licence gates,
+workspace format, full web lint, TypeScript and tooling tests all passed. This is
+local integration evidence, not hardware, soak or ignored SMB-container evidence.
+No release, tag, image or publication workflow was run.
+
 ## Runtime diagnostic bundle and download control
 
 `GET /api/latest/admin/diagnostics/bundle` combines the existing metadata

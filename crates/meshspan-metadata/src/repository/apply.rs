@@ -16,10 +16,10 @@ use super::{
     cleanup_reclamation, cluster, component, external_certificate, federation_actor_attestation,
     federation_assignment, federation_grant, federation_mutation_admission, federation_quarantine,
     federation_relationship, federation_storage_allocation, federation_succession, identity,
-    locality_policy, maintenance_work, manual_dns_task, mesh_local_certificate, namespace,
-    node_wrapping_key, protection_policy, recovery_authority, retention, root_delegation, routing,
-    secret_generation, session, smb_export_configuration, snapshot_schedule, storage_target, tags,
-    topology, user_snapshot, version_cleanup, volume_head,
+    locality_policy, maintenance_work, manual_dns_task, mesh_local_certificate, metrics_exporter,
+    namespace, node_wrapping_key, protection_policy, recovery_authority, retention,
+    root_delegation, routing, secret_generation, session, smb_export_configuration,
+    snapshot_schedule, storage_target, tags, topology, user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -623,6 +623,7 @@ fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
         || matches!(
             command,
             AuthoritativeCommand::CreateComponent(_)
+                | AuthoritativeCommand::ConfigureMetricsExporter(_)
                 | AuthoritativeCommand::ConfigureComponent(_)
                 | AuthoritativeCommand::AssignComponent(_)
                 | AuthoritativeCommand::RegisterStorageTarget(_)
@@ -702,6 +703,9 @@ fn execute_infrastructure_command(
     match command {
         AuthoritativeCommand::CreateComponent(value) => {
             component::create(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::ConfigureMetricsExporter(value) => {
+            metrics_exporter::configure(transaction, context, value, revision)
         }
         AuthoritativeCommand::ConfigureComponent(value) => {
             component::configure(transaction, context, value, revision)
@@ -1434,6 +1438,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::RetireMetadataBackup(_) => 137,
         AuthoritativeCommand::RecordBackupReclamation(_) => 138,
         AuthoritativeCommand::ReconcileMetadataBackupDefaults(_) => 139,
+        AuthoritativeCommand::ConfigureMetricsExporter(_) => 140,
     }
 }
 

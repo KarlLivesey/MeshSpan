@@ -94,6 +94,8 @@ pub struct NodeActivationRecord {
 pub struct ActiveNodeCertificate {
     /// Permanent active node identity.
     pub node_id: meshspan_domain::NodeId,
+    /// Current active node incarnation, read atomically with its certificate.
+    pub incarnation: u64,
     /// Mesh-signed leaf certificate DER.
     pub certificate_der: Vec<u8>,
     /// Exact leaf fingerprint.
@@ -303,7 +305,7 @@ pub(super) fn active_node_certificate(
         .connection()
         .query_row(
             "SELECT certificate.certificate_der, certificate.certificate_fingerprint,
-                    certificate.valid_until, certificate.revision
+                    certificate.valid_until, certificate.revision, node.current_incarnation
              FROM node_certificates AS certificate
              JOIN nodes AS node ON node.node_id = certificate.node_id
              WHERE certificate.node_id = ?1 AND certificate.state = 1 AND node.state = 2
@@ -315,11 +317,14 @@ pub(super) fn active_node_certificate(
                     row.get::<_, Vec<u8>>(1)?,
                     row.get::<_, i64>(2)?,
                     row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
                 ))
             },
         )
         .optional()?;
-    let Some((certificate_der, certificate_fingerprint, valid_until, revision)) = stored else {
+    let Some((certificate_der, certificate_fingerprint, valid_until, revision, incarnation)) =
+        stored
+    else {
         return Ok(None);
     };
     let certificate_fingerprint: [u8; 32] = certificate_fingerprint
@@ -327,6 +332,7 @@ pub(super) fn active_node_certificate(
         .map_err(|_| RepositoryError::CorruptState)?;
     let record = ActiveNodeCertificate {
         node_id,
+        incarnation: u64::try_from(incarnation).map_err(|_| RepositoryError::CorruptState)?,
         certificate_fingerprint,
         valid_until: UnixMicros::new(valid_until),
         certificate_der,
@@ -334,7 +340,8 @@ pub(super) fn active_node_certificate(
             u64::try_from(revision).map_err(|_| RepositoryError::CorruptState)?,
         ),
     };
-    if record.certificate_der.is_empty()
+    if record.incarnation == 0
+        || record.certificate_der.is_empty()
         || record.certificate_fingerprint
             != <[u8; 32]>::from(Sha256::digest(&record.certificate_der))
         || record.revision == Revision::ZERO

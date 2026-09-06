@@ -1009,6 +1009,56 @@ export type ConfigureBackupScheduleResponse = {
 };
 
 /**
+ * ConfigureMetricsExporterRequest
+ *
+ * Exact-retry replacement of one mesh-wide exporter configuration.
+ */
+export type ConfigureMetricsExporterRequest = {
+  /**
+   * Zero for initial configuration; otherwise the current immutable policy sequence.
+   */
+  expected_sequence: number;
+  /**
+   * Retained logical mutation identity.
+   */
+  operation_id: string;
+  /**
+   * Complete replacement, not a patch.
+   */
+  policy: {
+    /**
+     * Existing users permitted to scrape with current HTTPS-capable API keys.
+     * Order has no meaning; the server canonicalises it and rejects duplicate identities.
+     */
+    allowed_principals: Array<string>;
+    /**
+     * Disabled by default, including before the first configuration exists.
+     */
+    enabled: boolean;
+  };
+};
+
+/**
+ * ConfigureMetricsExporterResponse
+ *
+ * Original durable mutation receipt, even after a later policy supersedes it.
+ */
+export type ConfigureMetricsExporterResponse = {
+  /**
+   * Metadata revision of the original operation.
+   */
+  committed_revision: number;
+  /**
+   * Original operation identity.
+   */
+  operation_id: string;
+  /**
+   * Policy sequence created by the original operation.
+   */
+  sequence: number;
+};
+
+/**
  * ConfirmRecoveryBundleRequest
  *
  * One authenticated idempotent save-verification request.
@@ -4616,6 +4666,41 @@ export type MetadataDiagnosticsResponse = {
 };
 
 /**
+ * MetricsExporterResponse
+ *
+ * Current mesh policy; null explicitly means never configured and disabled.
+ */
+export type MetricsExporterResponse = {
+  /**
+   * Current configuration if explicitly committed.
+   */
+  configuration: {
+    /**
+     * Metadata revision which committed this configuration.
+     */
+    committed_revision: number;
+    /**
+     * Complete non-secret policy.
+     */
+    policy: {
+      /**
+       * Existing users permitted to scrape with current HTTPS-capable API keys.
+       * Order has no meaning; the server canonicalises it and rejects duplicate identities.
+       */
+      allowed_principals: Array<string>;
+      /**
+       * Disabled by default, including before the first configuration exists.
+       */
+      enabled: boolean;
+    };
+    /**
+     * Exact active policy sequence.
+     */
+    sequence: number;
+  } | null;
+};
+
+/**
  * OperationStatusResponse
  *
  * Current durable state of one exact operation visible to the caller.
@@ -7313,6 +7398,113 @@ export type CreateLocalityPolicyResponses = {
 export type CreateLocalityPolicyResponse2 =
   CreateLocalityPolicyResponses[keyof CreateLocalityPolicyResponses];
 
+export type GetMetricsExporterData = {
+  body?: never;
+  path?: never;
+  query?: never;
+  url: "/admin/metrics/exporter";
+};
+
+export type GetMetricsExporterErrors = {
+  /**
+   * Query or body not supported
+   */
+  400: ApiError;
+  /**
+   * Authentication required
+   */
+  401: ApiError;
+  /**
+   * Manager authority required
+   */
+  403: ApiError;
+  /**
+   * Invalid stored or outgoing evidence
+   */
+  500: ApiError;
+  /**
+   * Current authority unavailable
+   */
+  503: ApiError;
+};
+
+export type GetMetricsExporterError =
+  GetMetricsExporterErrors[keyof GetMetricsExporterErrors];
+
+export type GetMetricsExporterResponses = {
+  /**
+   * Current policy, or null when disabled and never configured
+   */
+  200: MetricsExporterResponse;
+};
+
+export type GetMetricsExporterResponse =
+  GetMetricsExporterResponses[keyof GetMetricsExporterResponses];
+
+export type ConfigureMetricsExporterData = {
+  /**
+   * Complete policy, observed sequence and exact-retry identity
+   */
+  body: ConfigureMetricsExporterRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/admin/metrics/exporter";
+};
+
+export type ConfigureMetricsExporterErrors = {
+  /**
+   * Invalid policy, query or consumer
+   */
+  400: ApiError;
+  /**
+   * Authentication required
+   */
+  401: ApiError;
+  /**
+   * Manager authority required
+   */
+  403: ApiError;
+  /**
+   * Stale sequence or changed retry
+   */
+  409: ApiError;
+  /**
+   * Body exceeds its bound
+   */
+  413: ApiError;
+  /**
+   * JSON content type required
+   */
+  415: ApiError;
+  /**
+   * Invalid stored or outgoing evidence
+   */
+  500: ApiError;
+  /**
+   * Current authority unavailable
+   */
+  503: ApiError;
+};
+
+export type ConfigureMetricsExporterError =
+  ConfigureMetricsExporterErrors[keyof ConfigureMetricsExporterErrors];
+
+export type ConfigureMetricsExporterResponses = {
+  /**
+   * Original committed policy receipt
+   */
+  200: ConfigureMetricsExporterResponse;
+};
+
+export type ConfigureMetricsExporterResponse2 =
+  ConfigureMetricsExporterResponses[keyof ConfigureMetricsExporterResponses];
+
 export type CreateNodeJoinGrantData = {
   /**
    * Join invitation policy
@@ -9119,6 +9311,48 @@ export type GetHealthResponses = {
 };
 
 export type GetHealthResponse = GetHealthResponses[keyof GetHealthResponses];
+
+export type ScrapeMetricsData = {
+  body?: never;
+  path?: never;
+  query?: never;
+  url: "/metrics";
+};
+
+export type ScrapeMetricsErrors = {
+  /**
+   * Query or body not supported
+   */
+  400: ApiError;
+  /**
+   * API-key authentication required
+   */
+  401: ApiError;
+  /**
+   * Disabled exporter or consumer not allowed
+   */
+  403: ApiError;
+  /**
+   * Invalid source evidence
+   */
+  500: ApiError;
+  /**
+   * Current authority or measurements unavailable
+   */
+  503: ApiError;
+};
+
+export type ScrapeMetricsError = ScrapeMetricsErrors[keyof ScrapeMetricsErrors];
+
+export type ScrapeMetricsResponses = {
+  /**
+   * Bounded OpenMetrics 1.0 text with explicit EOF
+   */
+  200: string;
+};
+
+export type ScrapeMetricsResponse =
+  ScrapeMetricsResponses[keyof ScrapeMetricsResponses];
 
 export type GetOpenApiData = {
   body?: never;

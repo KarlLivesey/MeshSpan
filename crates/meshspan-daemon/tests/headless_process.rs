@@ -6,6 +6,8 @@
 mod backup_history;
 #[path = "headless_process/diagnostics.rs"]
 mod diagnostics;
+#[path = "headless_process/metrics.rs"]
+mod metrics;
 #[path = "support/passkey.rs"]
 mod passkey_support;
 #[path = "headless_process/stage10.rs"]
@@ -657,8 +659,27 @@ async fn clean_machine_operator_flow_uses_only_cli_and_public_https() -> Result<
         diagnostics::verify(peer.address, &peer_client, api_key).await
     }
     .await;
+    let proof = proof.map_err(|error| -> Box<dyn Error> {
+        let observations = processes
+            .iter_mut()
+            .map(|process| (process.id(), process.try_wait()))
+            .collect::<Vec<_>>();
+        format!("{error}; child exit states before cleanup: {observations:?}").into()
+    });
     stop_processes(&mut processes);
-    proof
+    retain_failure_state(proof, [root.temporary, peer.temporary])
+}
+
+// Private test-only state is retained on failure for diagnosis, never copied into the repository
+// or release artefacts. Successful cases still remove every owned temporary directory.
+fn retain_failure_state<const N: usize>(
+    result: Result<(), Box<dyn Error>>,
+    directories: [TempDir; N],
+) -> Result<(), Box<dyn Error>> {
+    result.map_err(|error| {
+        let retained = directories.map(TempDir::keep);
+        format!("{error}; private test fixture state retained at {retained:?}").into()
+    })
 }
 
 async fn create_process_mesh(
@@ -2568,7 +2589,9 @@ impl ProcessFixture {
             .arg(self.private_address.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            // The executable reports its terminal error on stderr. Keep it visible so a
+            // refused connection is not mistaken for a slow startup. Claim output stays hidden.
+            .stderr(Stdio::inherit());
         command
     }
 }

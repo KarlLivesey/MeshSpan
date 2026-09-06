@@ -3,6 +3,8 @@
 //! Deterministic `OpenAPI` 3.1 document generation.
 
 use serde_json::{Map, Value, json};
+#[path = "openapi_metrics.rs"]
+mod metrics;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -122,6 +124,13 @@ fn components() -> Value {
                 "ConfigureBackupScheduleResponse",
             ),
             schema_response::<crate::BackupScheduleResponse>("BackupScheduleResponse"),
+            schema_request::<crate::ConfigureMetricsExporterRequest>(
+                "ConfigureMetricsExporterRequest",
+            ),
+            schema_response::<crate::ConfigureMetricsExporterResponse>(
+                "ConfigureMetricsExporterResponse",
+            ),
+            schema_response::<crate::MetricsExporterResponse>("MetricsExporterResponse"),
             schema_request::<crate::ConfigureBackupDestinationRequest>(
                 "ConfigureBackupDestinationRequest",
             ),
@@ -536,6 +545,11 @@ fn administration_paths() -> Vec<(String, Value)> {
             ),
             ("/admin/storage-drains".to_owned(), storage_drains_path()),
             ("/admin/backups/schedule".to_owned(), backup_schedule_path()),
+            (
+                "/admin/metrics/exporter".to_owned(),
+                metrics::configuration_path(),
+            ),
+            ("/metrics".to_owned(), metrics::scrape_path()),
             ("/admin/backups/runs".to_owned(), backup_runs_path()),
             (
                 "/admin/diagnostics/metadata".to_owned(),

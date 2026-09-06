@@ -43,6 +43,8 @@ mod backup_destination_service_tests;
 mod backup_history;
 #[path = "backup_schedule_service_tests.rs"]
 mod backup_schedule;
+#[path = "remote_backup_identity_tests.rs"]
+mod remote_backup_identity;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn authentication_reads_and_session_mutation_share_committed_consensus_state()

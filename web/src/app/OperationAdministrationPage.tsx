@@ -36,7 +36,10 @@ export function OperationAdministrationPage(): JSX.Element {
         </section>
       </Match>
       <Match when={current()?.administration_available === true}>
-        <OperationAdministrationPanel client={session.client} />
+        <OperationAdministrationPanel
+          client={session.client}
+          csrfToken={session.csrfToken() ?? ""}
+        />
       </Match>
       <Match when={true}>
         <section class="route-status">
