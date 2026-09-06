@@ -10,6 +10,108 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 2 — isolated DNS-provider process lifecycles
+
+The candidate adds real-daemon Cloudflare, authenticated webhook and manual-DNS
+lifecycle tests. Production transports are unchanged: Cloudflare still uses its
+fixed HTTPS origin; authoritative probes still use the system resolver and direct
+DNS sockets. Each case runs in its own offline Linux container with loopback-only
+DNS and provider origins, test-owned TLS trust, no host port publication and no
+external CA/provider traffic. The CA independently derives the expected TXT from
+the authenticated signing account. The fixtures enforce exact record ownership
+and keep unrelated TXT data present through publication and cleanup.
+
+Cloudflare and webhook cases verify issuance, exact cleanup, daemon restart and
+new-gateway installation without a second order. The manual case follows the
+manager-only HTTPS task inventory, denies anonymous access, verifies that no CA
+challenge is notified before publication, checks the exact matching removal task
+and proves completed tasks stay absent after restart. These are local protocol
+and daemon integration proofs, **not live Cloudflare or public-CA evidence**.
+
+Run through NVM with `pnpm check:dns-providers`. The runner requires a locally
+available Rust image matching `rust-toolchain.toml`; `MESHSPAN_DNS_PROOF_IMAGE`
+can select an exact local image ID. It never pulls or publishes an image. Cargo
+builds offline with the existing registry cache and a dedicated Linux target
+volume; cases run in parallel without sharing their DNS/HTTPS listeners. Failed
+containers retain private fixture state for diagnosis, while successful containers
+are removed. Do not upload retained databases or credentials as public artefacts.
+
+The initial three-case run passed after a **77.58-second Linux build**. On the
+final harness (including failure-state retention), its incremental build passed
+in **9.43 seconds**, with manual DNS **13.35 seconds**, Cloudflare **18.46 seconds**
+and webhook **18.48 seconds**, all running concurrently. The image was
+`sha256:e70e2eec3d495fd5c8e0be74adda86507dfac7f51a724fbf9813ff59b2b247c7`
+(Linux ARM64, Rust **1.98.0**), under NVM Node **26.8.1**, pnpm **11.19.0** and
+four workers. Affected all-target/all-feature Clippy passed in **2.23 seconds**;
+the new runner's ESLint and formatting checks passed. Existing normal HTTP-01,
+RFC 2136 and two-gateway ACME tests passed in **21.22 seconds** after a
+**5.91-second build**, before the container-only retention adjustment.
+
+The initial provider candidate changed no production behaviour, dependency,
+schema or protocol. Task 2 remains partial: advance renewal delivery
+depends explicitly on the existing **task 21 durable-notification implementation**,
+not a second notification system. Live CA verification remains task 5.
+
+### Provider integration finding — remote backup export
+
+Signed and GitHub-verified provider source
+`2ceb677b64c0dfff9d0d3fc191049d512e992a88`
+(tree `3653cfa448d910491f00182ae1c850bfe4275b92`) failed the full gate in
+**279.78 seconds**: Rust **215.62 seconds**, web passed in **6.26 seconds**, and
+all static/generated/licence/tooling lanes passed. The clean-machine operator
+flow exposed an existing remote-backup export panic: the HTTP body writer called
+`Handle::block_on` while a remote provider was already inside its async QUIC
+fetch. The resulting response declared **2,626,456 bytes** but sent **zero body
+bytes**. Private state remains in `.tmpjhYkr0` and `.tmpCgsLDc` under the local
+test temporary directory; it is not a public artefact.
+
+A direct regression reproduced the exact nested-runtime panic in **0.01 seconds**,
+using more bytes than the two-frame channel can buffer. The writer now polls only
+the existing channel-send future with a thread-unparking waker on the owned
+blocking-provider thread. It retains the same bounded channel, 64-KiB frames,
+drop cancellation and absolute monotonic deadline without starting another
+executor or adding a dependency. Four focused body tests passed in **0.03 seconds**
+after a **15.59-second build**, including stalled-reader timeout and cancellation.
+
+The operator proof now exports and verifies the **same backup through both
+gateways**, rather than exercising whichever local/remote source the root happened
+to choose. It passed in **16.88 seconds** after a **21.67-second build**; affected
+all-target/all-feature Clippy passed in **7.01 seconds**. The provider-source
+opt-in ACME recovery pair separately passed in **339.64 seconds**; that binary
+preceded this backup correction. Final corrected-source integration is pending,
+and PR #252 remains unmerged.
+
+### Final provider integration
+
+Signed, pushed and GitHub-verified source
+`4449f5dc4c7e1e49f643935dbfce25e151a915d2`
+(tree `c29984249e51df053b0ece4ac8776ca5d5105b87`) passed the full local gate in
+**601.03 seconds**: Rust workspace tests **564.43 seconds**, web tests **4.82
+seconds**, and every generated, formatting, lint, licence, TypeScript and tooling
+lane passed. This used NVM Node **26.8.1**, pnpm **11.19.0**, Rust **1.98.0**,
+`CARGO_BUILD_JOBS=4` and `MESHSPAN_CHECK_WORKERS=4` with `pnpm check`.
+
+On that corrected source, `pnpm check:dns-providers` passed after a **27.71-second
+Linux build**: manual DNS **13.30 seconds**, Cloudflare **18.16 seconds** and
+webhook **18.27 seconds**, running concurrently in the isolated networks described
+above. Both opt-in real-time ACME cases passed together in **340.25 seconds** on
+the final rebuilt all-feature headless binary, selecting the exact lease-loss and
+rejected-order recovery tests with `--ignored --test-threads=4`. The newer Linux-only
+provider cases were not selected by this macOS command.
+
+The remote-backup defect now has a failing-before/passing-after regression and
+passing full integration; the clean-machine workflow verifies the same exported
+backup through both gateways. The older independent cluster-startup timeout is
+not claimed resolved. Task 2 drops **2 → 1 points**, Stage 10 **141 → 140**;
+advance renewal notification delivery remains required through task 21. Stage 11
+remains **126 points**. No publication or GitHub Actions occurred.
+
+A separate diagnostic ran all **406 metadata library tests** successfully in the
+same offline Linux image in **150.38 seconds**, after a **22.88-second build**, with
+four test workers. It ran alongside the macOS gate using a separate Cargo target.
+This is an additional platform result, not a controlled speed comparison or a
+replacement for the macOS gate.
+
 ## Task 2 — shared HTTP-01 gateway challenges
 
 ### Final recovery integration

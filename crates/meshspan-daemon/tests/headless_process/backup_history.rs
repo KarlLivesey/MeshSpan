@@ -9,7 +9,7 @@ pub(super) async fn automatic_backup_history(
     address: SocketAddr,
     client: &ClientConfig,
     authorization: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<String, Box<dyn Error>> {
     let rejected = request_with_headers(
         address,
         client,
@@ -45,7 +45,8 @@ pub(super) async fn automatic_backup_history(
             assert!(run.minimum_verified_copies > 0);
             if run.state == meshspan_api_contract::BackupRunStatus::Protected {
                 encrypted_export(address, client, authorization, &run.backup_id).await?;
-                return restore_check(address, client, authorization, &run.backup_id).await;
+                restore_check(address, client, authorization, &run.backup_id).await?;
+                return Ok(run.backup_id.clone());
             }
         }
         if Instant::now() >= deadline {
