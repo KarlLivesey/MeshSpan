@@ -4,38 +4,92 @@ MeshSpan is a self-healing distributed filesystem appliance written primarily
 in Rust. It combines folder-backed storage across one or more nodes and exposes
 one authoritative namespace through built-in HTTPS and SMB services.
 
-## Start here
+## Working mandate
 
-Before changing behaviour, read:
+- Follow the current request. A review or question does not authorise edits;
+  an implementation request authorises its necessary, scoped implementation.
+- Simplicity, reliability, speed, extensibility and security must reinforce one
+  another. Do not simplify by removing required capability or claiming weaker
+  durability. Routine operation must not require an administrator to repair
+  internal histories, shards or consensus state.
+- Work headlessly. Do not operate the user's browser or depend on external
+  services for built-in filesystem, authentication or access functionality.
+- Local tests only: do not add, trigger or rely on GitHub Actions.
+- **Publication is prohibited until the user explicitly lifts the hold.** Do not
+  create releases or tags, publish packages/images, or run publication workflows.
+  Preparing scripts and local artefacts is allowed within the requested stage.
+  An older goal mentioning publication does not override this restriction.
+- Preserve user changes. Do not bundle unrelated staged work into a commit,
+  discard it, or rewrite history without authorisation.
 
-1. [`README.md`](README.md)
-2. [`design/README.md`](design/README.md)
-3. the design documents relevant to the change
-4. [`design/decisions.md`](design/decisions.md)
+## Orient, plan, finish
 
-Public HTTPS or web-client work must also read
-[`design/public-api.md`](design/public-api.md).
+1. Inspect the branch and working tree. Read [README.md](README.md), the
+   [design index](design/README.md), [roadmap](design/roadmap.md), current stage
+   evidence and the contracts relevant to the change. Read applicable nested
+   instructions before editing their files; avoid rereading unrelated documents.
+2. Distinguish accepted decisions from proposals using
+   [decisions.md](design/decisions.md) and its linked stage decisions. A draft
+   heading does not make accepted decisions optional. Surface genuine conflicts.
+3. Find the existing owner, implementation and tests before adding anything.
+   For HTTPS/web work, also read [public-api.md](design/public-api.md).
+4. Before coding, state the intended observable behaviour, affected boundaries,
+   acceptance tests and exclusions. Use a short plan proportional to the task;
+   do not turn a small fix into another architecture project.
+5. Complete a coherent end-to-end feature with focused tests. Then review the
+   integrated stage for missing behaviour, adversarial cases and useful refactors.
+   Fix known correctness/security defects immediately; do not repeatedly delay
+   the remaining features for speculative hardening of unfinished interfaces.
+6. Close each stage against its existing acceptance checklist, with evidence and
+   explicit gaps. Continue through the authorised stages without asking again
+   unless blocked or redirected. Never silently defer a required item to claim
+   completion. Documents, scaffolding and passing unit tests alone are not a
+   working product.
 
-The design pack is currently draft. Do not present a proposed decision as
-accepted. Once locked, code and tests must preserve its invariants or update the
-decision explicitly.
+While working, give concise progress updates at least every minute. Report
+**stage; behaviour completed; current work; remaining acceptance items; blocker**
+as relevant. A branch name or test count alone is not progress. Record durable
+milestones in the existing stage evidence file, not a new parallel status system.
+After a restart, resume from that evidence and the actual working tree; do not
+repeat completed work or infer success from an old narrative.
 
-## Non-negotiable principles
+## Toolchain and commands
 
-1. **Keep it simple.** Prefer one clear state machine and one source of truth.
-2. **Protect correctness.** Refuse unsafe work; never invent durability,
-   authority, identity or success.
-3. **Prove changes locally.** Local verification is the sole early-development
-   gate. Do not add or depend on GitHub Actions until an explicit later decision.
-4. **Test behaviour.** Every meaningful change needs a test that fails for the
-   missing or incorrect behaviour and passes after the change.
-5. **Assert invariants.** Reject contradictions at the boundary instead of
-   papering over them with fallback state.
-6. **Validate hypotheses.** Reproduce and isolate failures before changing code.
-7. **Keep paths extensible.** Protocol, storage and access adapters depend on
-   narrow domain interfaces, not on one another's implementation details.
-8. **Preserve the appliance.** Internal roles, branches, shards and consensus
-   must not become routine setup or recovery work for users.
+Use NVM for **every** Node/npm/pnpm invocation, including subprocess launchers.
+Initialise it in each fresh shell; never fall back to an ambient Node executable.
+The repository's `.nvmrc` selects the user's NVM default:
+
+```bash
+# In a Bash shell, from the repository root:
+source "${NVM_DIR:-$HOME/.nvm}/nvm.sh"
+nvm use
+node --version
+pnpm --version
+```
+
+Check selected tools against repository engine requirements; report mismatches
+instead of silently switching runtimes. Read exact versions from manifests,
+lockfiles and `rust-toolchain.toml`, not this document. Keep TypeScript 6 until
+the selected generator and typed ESLint stack support the planned 7 upgrade.
+
+| Purpose                        | Command from repository root                                          |
+| ------------------------------ | --------------------------------------------------------------------- |
+| Focused Rust regression        | `cargo test -p <crate> <test-filter>`                                 |
+| Affected Rust lint             | `cargo clippy -p <crate> --all-targets --all-features -- -D warnings` |
+| Rust formatting                | `cargo fmt --all -- --check`                                          |
+| Focused web tests              | `pnpm --filter @meshspan/web test <test-file>`                        |
+| Web static checks              | `pnpm web:lint` and `pnpm web:typecheck`                              |
+| Generated contract drift       | `pnpm check:generated`                                                |
+| Regenerate API artefacts       | `pnpm generate:api`                                                   |
+| Dependency licence checks      | `pnpm check:licences`                                                 |
+| Full local integration gate    | `pnpm check`                                                          |
+| Dependency/toolchain candidate | `pnpm check:dependency-update`                                        |
+
+Use existing scripts and installed project tools; do not add global tools or
+download a new runner to perform a routine check. Prefer incremental debug builds
+for development; optimised builds belong to a specific benchmark or packaging
+proof. Avoid concurrent Cargo commands that merely contend for the same build
+lock; use the existing bounded check scheduler for independent lanes.
 
 ## Safety invariants
 
@@ -93,43 +147,19 @@ decision explicitly.
   release and SBOM metadata use exactly `GPL-2.0-only`; no later-version grant
   is permitted.
 
-## Repository shape
+## Architecture and ownership
 
-The implementation layout will be introduced by the accepted roadmap. Preserve
-these boundaries when it is scaffolded:
+Use [interfaces.md](design/interfaces.md) for permitted dependencies and the
+root `Cargo.toml` for the actual crate inventory. HTTPS, SMB and future adapters
+use protocol-neutral filesystem/domain operations; the daemon composes them
+with persistence, consensus, storage and transport. The web panel is an API
+client, not a privileged alternative path.
 
-```text
-crates/
-  domain/       pure identifiers, commands, state machines and invariants
-  metadata/     SQLite-compatible persistence behind domain repositories
-  consensus/    replicated command log and voter membership
-  protocol/     versioned Protobuf messages and Quinn transport
-  storage/      folder provider, shard IO and storage capability interface
-  filesystem/   protocol-neutral namespace and handle semantics
-  api-contract/ public Rust boundary types, validation and OpenAPI generation
-  gateway-http/ HTTPS adapter
-  gateway-smb/  embedded SMB adapter
-  daemon/       composition, configuration and process lifecycle
-web/            user and administrator interface
-tests/          cross-crate, protocol, simulation and end-to-end suites
-```
-
-Do not create a crate merely to shorten a file. A boundary must own a coherent
-responsibility, stable inputs and outputs, and a reason to change independently.
-
-## Dependency direction
-
-```text
-HTTPS / SMB / future adapters
-            |
-       filesystem service
-            |
-      domain operations
-       /      |      \
-metadata  consensus  storage capability
-                 \   /
-              private protocol
-```
+Keep work in the component that owns its state. A new crate, public export or
+trait is an interface decision: identify its consumer and responsibility first.
+Prefer private or `pub(crate)` items unless external use is required. Do not
+create parallel helpers, adapters or miniature files when an existing owner
+fits; do not force unrelated responsibilities together to avoid a new module.
 
 The domain layer has no network, SQL, web or SMB dependency. Database rows and
 wire messages convert at explicit boundaries. Do not expose raw SQL, generic KV
@@ -156,8 +186,6 @@ abstractions solely to make the crate independently publishable.
   so the main flow reads from top to bottom.
 - Keep pure decisions separate from IO and make side effects explicit.
 - Prefer concrete types for IDs, revisions, epochs, byte counts and timestamps.
-- Use TypeScript 6.0.3 until the selected generator and typed ESLint stack
-  officially support TypeScript 7; keep 7 as the next toolchain upgrade target.
 - Use `Temporal` in web code for date/time domain values; do not add new
   arithmetic based on JavaScript `Date`.
 - Bound untrusted allocations, collections, streams and recursion.
@@ -166,6 +194,12 @@ abstractions solely to make the crate independently publishable.
   the reason is evident.
 - Errors must identify the failed operation and stable error kind without
   leaking secrets.
+- Do not silently discard fallible results, including with `let _ =`. Propagate,
+  handle or deliberately record the failure with appropriate redaction and
+  bounded reporting. Best-effort telemetry must not make a data operation fail.
+- Match closed state-machine enums exhaustively; avoid catch-all arms that hide
+  newly added states. Represent invalid combinations out of the type where
+  practical rather than coordinating unrelated booleans or sentinel strings.
 - Comments explain invariants, ordering and non-obvious trade-offs; they do not
   narrate syntax.
 - No new dependency without a concrete need, maintenance/legal review and a
@@ -181,62 +215,48 @@ abstractions solely to make the crate independently publishable.
 - Dependency/toolchain candidates must run `pnpm check:dependency-update` under
   the active NVM toolchain. It requires Rust and JavaScript advisory scans plus
   the entire canonical local gate; an unavailable scan is not a passing result.
+- Keep dependency updates targeted; inspect transitive features and lockfile
+  changes. Do not refresh unrelated dependencies as a side effect of a fix.
 
 ## TypeScript and ESLint contract
 
-Use ESLint flat configuration with type information. Start from
-`@eslint/js` recommended plus `typescript-eslint` `strictTypeChecked` and
-`stylisticTypeChecked`, then apply Solid, JSX accessibility, regular-expression,
-import, test and ESLint-directive rules. Do not enable an `all` preset blindly;
-every additional rule must have a known purpose and no conflict with the typed
-configuration. Prettier owns formatting; deprecated ESLint formatting rules do
-not.
+Preserve [the typed flat ESLint configuration](tooling/eslint/eslint.config.mjs):
+JS recommended, TypeScript strict/stylistic type-checked, Solid, accessibility,
+regexp, imports, tests and directive checks. Do not blindly enable `all` presets;
+Prettier owns formatting. Warnings and unused disable directives fail validation.
 
-All warnings fail the local gate. Unused disable directives fail it too.
-Handwritten source and tests follow these rules. Generated API code is exempt
-only from human responsibility/size ceilings: it still compiles strictly,
-contains no `any` and passes generated-schema behaviour tests. Vendored files are
-excluded at their directory boundary rather than weakened with inline comments.
+- No explicit or inferred `any`, unsafe assignments/calls/returns/assertions or
+  member access. Accept untrusted values as `unknown` and validate them.
+- No `@ts-ignore` or `@ts-nocheck`. Described, narrowly scoped `@ts-expect-error`
+  belongs only in a fixture proving the specific type error.
+- Enforce safe promises/async callbacks, valid awaits and thrown Error values.
+  Closed unions require exhaustive handling; reject unnecessary conditions,
+  assertions, non-null assertions, conversions and type arguments.
+- Require explicit public return types, consistent type-only imports/exports,
+  declared dependencies and acyclic imports without duplicates or self-imports.
+- Keep strict equality and checks for fallthrough, unreachable loops,
+  constructor returns and prototype-built-in misuse. Forbid dynamic evaluation
+  and production `console`, `debugger` or `alert` calls.
+- Preserve Solid reactivity, strict JSX accessibility, regexp safety, restricted
+  layer imports and the restriction on domain arithmetic with JavaScript `Date`.
 
-Type safety is non-negotiable:
+Handwritten tests follow these rules. Generated code is exempt only from human
+size/responsibility ceilings: strict compilation, no `any` and schema behaviour
+tests still apply. Exclude vendored code at its boundary, not with inline bypasses.
 
-- `any` is forbidden, including explicit `any` and inferred `any` flowing
-  through assignment, arguments, calls, member access, returns, assertions or
-  operations. Untrusted data enters as `unknown` and is narrowed or validated.
-- `@ts-ignore` and `@ts-nocheck` are forbidden. A narrowly scoped
-  `@ts-expect-error` is allowed only in a type-test fixture with a description of
-  the exact error being proved.
-- Floating, misused and unhandled promises, awaiting non-promises, throwing
-  non-errors and unsafe async callbacks are errors.
-- Switches over closed unions are exhaustive. Unnecessary assertions,
-  conditions, type arguments, conversions and non-null assertions are errors.
-- Public module boundaries have explicit return types. Type-only imports and
-  exports are consistent; import cycles, self-imports, duplicate imports and
-  undeclared dependencies are errors.
-- Equality is strict; fallthrough, unreachable loops, accidental constructor
-  returns, prototype-built-in calls, dynamic evaluation and production
-  `console`, `debugger` or `alert` calls are errors.
-- Solid reactivity rules and strict JSX accessibility rules apply to every
-  component. Security-sensitive regular expressions use the recommended regexp
-  rules.
-- Domain date/time arithmetic uses `Temporal`; direct use of JavaScript `Date`
-  for domain logic is a restricted global.
-- Layer boundaries use restricted imports. A gateway, view or persistence
-  module may not bypass its declared domain interface.
+Maintainability ceilings (not targets to code up to):
 
-Initial maintainability ceilings are:
-
-| Measure | Maximum |
-| --- | ---: |
-| Cyclomatic complexity | 12 |
-| Cognitive complexity | 15 |
-| Nested blocks | 4 |
-| Nested callbacks | 3 |
-| Parameters | 5 |
-| Statements per function | 40 |
-| Non-blank, non-comment lines per function | 80 |
-| Non-blank, non-comment lines per source module | 500 |
-| Classes per module | 1 |
+| Measure                                        | Maximum |
+| ---------------------------------------------- | ------: |
+| Cyclomatic complexity                          |      12 |
+| Cognitive complexity                           |      15 |
+| Nested blocks                                  |       4 |
+| Nested callbacks                               |       3 |
+| Parameters                                     |       5 |
+| Statements per function                        |      40 |
+| Non-blank, non-comment lines per function      |      80 |
+| Non-blank, non-comment lines per source module |     500 |
+| Classes per module                             |       1 |
 
 Test vectors and generated fixtures may use a separately justified module-size
 ceiling, but their functions keep the same control-flow limits. A rule exception
@@ -294,6 +314,8 @@ TypeScript compiler projects enable `strict`, `noUncheckedIndexedAccess`,
 - A lint exception is scoped to the smallest item and states the invariant or
   platform constraint that requires it. Crate-wide blanket allowances are not
   acceptable.
+- Prefer `#[expect(lint, reason = "...")]` where supported so an obsolete
+  exception is detected. Do not weaken warning levels to make a check pass.
 
 ## Database and transaction rules
 
@@ -316,6 +338,8 @@ TypeScript compiler projects enable `strict`, `noUncheckedIndexedAccess`,
 - Never block an async executor thread with filesystem, database or CPU-heavy
   coding work; use the designated bounded worker mechanism.
 - Every spawned task has an owner, cancellation path and observed result.
+- At cancellable IO boundaries, distinguish dropping a future from undoing its
+  effects. Test interruption and retry without duplicate acknowledgement.
 - Every remote operation has a deadline. Retries require idempotency and bounded
   backoff.
 - Consensus/control work is isolated from bulk data work.
@@ -326,114 +350,81 @@ TypeScript compiler projects enable `strict`, `noUncheckedIndexedAccess`,
 
 ## Testing strategy
 
-Use the smallest test that can prove the behaviour, then the narrowest necessary
-integration layer.
+- Check existing coverage first. Extend the nearest suitable harness and fixture
+  conventions; do not duplicate scenarios or invent another test framework.
+- Every meaningful behaviour change needs a regression or acceptance test.
+  Prove a defect's test fails before the fix and passes after it. Assert expected
+  outputs independently of the implementation, not through its own calculation.
+- Choose the layer that proves the claim: domain transition tables; persistence
+  contracts across supported engines; canonical/malformed protocol fixtures;
+  Rust/OpenAPI/Zod/Fetch agreement; seeded fault simulation; real Quinn/folder IO;
+  shared HTTPS/SMB conformance vectors; real multi-daemon client workflows.
+- Assert exact outcomes, revisions, visible bytes, authorised shard sets and
+  recovery state where relevant. A process staying alive or returning any error
+  is insufficient. Include denied and interrupted operations, not only success.
+- Exercise public behaviour through real interfaces. Inject faults at the owned
+  boundary; mocks cannot prove wire interoperability or durable recovery. Use
+  real files and restarts for persistence claims, not only in-memory databases.
+- Review generated fixtures and snapshot diffs against the intended contract.
+  Never accept changed expected output solely because it matches today's code.
+- Keep tests parallel and isolated: unique folders, databases, identities, ports,
+  clocks and seeds. No in-process changes to global environment or working
+  directory. Use configured child processes when testing those behaviours.
+- Use bounded worker pools and Rust's parallel harness; no routine serial-test
+  workaround. Serialise only a named exclusive physical resource, not its whole
+  suite. Resolve races instead of hiding them with serial execution.
+- Prefer controlled clocks and explicit readiness/completion signals over fixed
+  sleeps. Real-process waits need a bounded deadline and useful failure state.
+  Preserve failing seeds; a passing retry does not erase a flaky failure.
+- Name slow suites and their purpose/runtime. Hardware, power-loss, soak and
+  performance proofs remain explicit stage gates, not every-edit checks. Never
+  describe synthetic faults, ignored tests or cross-compilation as those proofs.
 
-1. Domain transition tables: deterministic inputs, outputs and rejected states.
-2. Persistence contract tests: run the same repository suite against supported
-   SQLite-compatible engines.
-3. Protocol fixtures: canonical encoding, limits, malformed input and version
-   compatibility.
-4. Public API fixtures: Rust validation, OpenAPI, generated Zod and Fetch types
-   agree for valid and invalid requests and responses.
-5. Deterministic simulation: loss, duplication, reordering, partitions, crashes
-   and stale workers under a seeded scheduler and clock.
-6. Process integration: real Quinn peers and real folder IO.
-7. Adapter conformance: the same filesystem vectors through HTTPS and SMB.
-8. End to end: multiple real daemon processes and real protocol clients.
-9. Hardware, power-loss, soak and performance gates for release milestones.
+## Validation cadence and debugging
 
-Tests must assert exact committed revisions, operation outcomes, visible bytes,
-authoritative shard sets and durable recovery state where relevant. Avoid tests
-that only assert that an error occurred or a process remained alive.
+1. **During a change:** run the focused regression and affected crate/web tests,
+   formatting and lint. Broaden to consumers when a shared contract changes.
+2. **Before integration:** run `pnpm check` on the completed candidate. It checks
+   generated drift, builds the embedded web bundle and runs Rust/web static,
+   licence and test lanes. Run additional affected acceptance suites explicitly;
+   the default gate is not proof of ignored or environment-dependent tests.
+3. **After further edits:** rerun checks whose evidence was invalidated. Changes
+   to implementation after the integration gate require a new final gate;
+   prose-only edits need document/link/diff checks, not another workspace build.
+4. **Dependencies/toolchains:** always use the full dependency-update gate.
 
-Keep fast suites independently runnable and parallel. A new slow test belongs in
-an explicitly named suite with its expected duration and reason. Do not make all
-pull requests wait for hardware or soak tests.
+Keep the existing scheduler's bounded parallelism; `MESHSPAN_CHECK_WORKERS`
+accepts 1–32. Record commands, duration, tested revision/tree, failures and skipped
+checks. Do not claim success for an unrun, timed-out or still-running command.
 
-Tests run concurrently by default at both lane and case level. Rust tests use the
-normal parallel harness or `cargo-nextest`; do not add a global serial-test
-mechanism or routine `--test-threads=1`. Vitest, Playwright and deterministic
-simulation use bounded worker pools. Each case owns unique temporary folders,
-database files, mesh identities, clocks, random seeds and dynamic loopback ports.
-Do not mutate process-wide working directory or environment from an in-process
-test; use an explicitly configured child process when that behaviour must be
-tested. Serial execution is allowed only around a named, genuinely exclusive
-physical resource and must not block unrelated lanes. If concurrency exposes a
-race, fix the shared state instead of serialising the suite.
+For failures: minimise the reproducer, state expected versus actual, gather
+evidence for one hypothesis, fix its owning boundary, rerun the focused test,
+then broaden. After two failed fix attempts without new evidence, stop patching
+and reassess the model; do not try a third speculative variant. Report a blocker
+if progress needs new authority, context or an unavailable environment.
 
-## Local validation
-
-Run `npm run check` from the repository root as the canonical fast local gate.
-It verifies generated API drift first, then schedules independent lanes with a
-bounded worker pool. Set `MESHSPAN_CHECK_WORKERS` from 1 to 32 only when the
-machine needs a different limit. The gate includes:
-
-- format check;
-- Rust workspace build and unit tests;
-- Rust lint with warnings denied across all targets and features;
-- web format, type-check, lint and unit tests;
-- schema and protocol compatibility tests;
-- affected integration tests.
-
-Record exactly what was run, its duration and anything that could not run.
-
-For a defect:
-
-1. reproduce it locally with the smallest failing test;
-2. record the expected and actual state;
-3. validate the suspected cause;
-4. fix the responsible boundary;
-5. run the focused test, then the affected fast suites;
-6. inspect the diff for unrelated churn.
-
-Do not bounce speculative fixes through GitHub Actions.
-
-Do not create `.github/workflows` during early implementation. Release
-automation remains a documented future stage, not a current development gate.
-
-If a test first fails after the current change, investigate it as a regression
-from that change. Do not repeatedly stash, revert or push variants merely to ask
-whether `main` also fails. Compare with `main` only after local evidence leaves a
-real baseline question.
+Treat failures after a change as potential regressions. Do not repeatedly stash,
+revert, increase timeouts or push variants to seek a green result. A baseline
+comparison is justified when local evidence leaves a genuine baseline question.
 
 ## Git and review workflow
 
-- Start from current `main` with a clean understanding of existing user changes.
-- Use one short-lived branch for one reviewable vertical change.
-- Commit coherent progress frequently, but do not create placeholder commits.
-- Sign every commit and tag.
-- Push after local validation so progress is visible.
-- Open one pull request, address it, merge it promptly, then delete the branch.
-- Do not stack ordinary work on unmerged branches or leave completed branches
-  floating.
-- Never rewrite or discard user changes without explicit approval.
-
-Commit subjects use a short lowercase imperative summary, optionally prefixed by
-a component:
-
-```text
-protocol: reject stale removal permits
-
-Explain why the change is needed and which invariant it protects.
-
-Tests: cargo test -p meshspan-protocol removal_permit
-```
-
-The body explains intent and non-obvious trade-offs, not a line-by-line diff.
-
-## Pull request evidence
-
-Every pull request states:
-
-- the behaviour added or changed;
-- the invariant or requirement IDs involved;
-- exact local validation performed and its duration;
-- known gaps or deferred release gates; and
-- migration, protocol or persisted-state impact.
-
-Documentation-only planning must not be reported as implemented product
-behaviour.
+- When Git work is authorised, start new work from current `main` on one
+  short-lived `codex/` branch per reviewable feature. Understand an existing dirty
+  branch before switching; do not stack routine work on unfinished branches.
+- Check signing configuration and authentication availability early. Sign every
+  commit; never bypass signing or repeatedly retry a failing authentication
+  prompt. Preserve work and report the blocker. Verify signatures, not just the
+  signing configuration; if claiming GitHub verification, check GitHub's result.
+- Commit coherent progress and push after relevant local checks; a progress push
+  need not repeat the full gate. Before merge, satisfy the integration gate above.
+- Wait for successful commit and push before opening/updating a PR. Use properly
+  formatted Markdown with actual newlines. Verify the remote branch/PR state.
+- Merge completed PRs into `main` promptly, confirm inclusion, then remove merged
+  branches. Do not leave completed work floating or report a merge before it exists.
+- Use a lowercase imperative subject, optionally component-prefixed. Describe
+  intent, protected requirements/invariants, exact tests/durations, remaining gaps
+  and schema/wire/persistence impact in the commit/PR evidence, not a diff narration.
 
 ## Performance work
 
@@ -456,3 +447,23 @@ Stop and make the uncertainty visible when:
 - required validation cannot be run or its result cannot be trusted.
 
 Do not silently choose a weaker contract.
+
+## Maintaining these instructions
+
+Keep reusable instructions here; live progress belongs in stage evidence and
+architecture detail in design documents. Do not copy volatile crate inventories
+or tool versions into this file. Add rules for demonstrated recurring mistakes,
+with a concrete action; do not accumulate one-off fixes or edit instructions to
+excuse the current implementation. Propose changes during feature work; edit
+this file when that change is requested or explicitly authorised.
+
+Research informing this revision (ideas adapted, not imported project policies):
+
+- [Turso](https://github.com/tursodatabase/turso/blob/main/AGENTS.md): harness
+  selection, concise commands and evidence-led regression investigation.
+- [uv](https://github.com/astral-sh/uv/blob/main/AGENTS.md): focused tests,
+  exhaustive enum handling, expiring lint exceptions and targeted updates.
+- [rust-analyser](https://github.com/rust-lang/rust-analyzer/blob/master/CLAUDE.md):
+  existing ownership, deliberate public interfaces and generated-diff review.
+- [Zed](https://github.com/zed-industries/zed/blob/main/.rules): explicit error
+  handling and a high bar for adding permanent agent instructions.
