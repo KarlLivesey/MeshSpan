@@ -180,6 +180,7 @@ lockfile.
 | `hyper`           | In-process HTTP/1.1 server and ACME client protocol engine                       |
 | `hyper-util`      | Tokio IO adaptation for Hyper connections                                        |
 | `http-body-util`  | Bounded request bodies and streamed response-frame access                        |
+| `httpdate`        | HTTP-date parsing for ACME retry deadlines; reuses the already locked transitive package under its MIT option, with no additional runtime dependencies |
 
 There is no OpenRaft or `raft-rs` runtime dependency. Their behaviour remains a
 reference and differential-test oracle for the standard-majority subset of the

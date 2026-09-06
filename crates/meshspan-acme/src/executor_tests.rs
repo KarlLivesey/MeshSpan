@@ -11,8 +11,9 @@ use sha2::{Digest as _, Sha256};
 use crate::{
     AcmeChallengeExecution, AcmeChallengeRecord, AcmeHttpMethod, AcmeHttpResponse, AcmeJwsSigner,
     AcmeMachineAction, AcmeMachineEvent, AcmeProtocolError, AcmePublicJwk, AcmeResponseHeaders,
-    AcmeStepExecutor, AcmeStepOutcome, AcmeTransport, AcmeTransportError, AcmeTransportRequest,
-    Dns01Challenge, DnsTxtProvider, DnsTxtReceipt, Http01Challenge,
+    AcmeRetryAfter, AcmeStepExecutor, AcmeStepOutcome, AcmeTransport, AcmeTransportError,
+    AcmeTransportRequest, AcmeWorkerError, Dns01Challenge, DnsTxtProvider, DnsTxtReceipt,
+    Http01Challenge,
 };
 
 #[tokio::test]
@@ -214,6 +215,91 @@ fn response(
         )?,
         body,
     )
+}
+
+#[tokio::test]
+async fn retry_guidance_survives_get_head_and_signed_post_errors()
+-> Result<(), Box<dyn std::error::Error>> {
+    let url = "https://ca.example.test/resource".to_owned();
+    let actions = [
+        AcmeMachineAction::DiscoverDirectory { url: url.clone() },
+        AcmeMachineAction::AcquireNonce { url: url.clone() },
+        AcmeMachineAction::CreateAccount {
+            url,
+            nonce: "nonce_1".to_owned(),
+        },
+    ];
+    for action in actions {
+        let transport =
+            RecordingTransport::new([response(429, vec![("retry-after", "3600")], Vec::new())?]);
+        let mut executor = AcmeStepExecutor::new(
+            transport,
+            RecordingSigner::default(),
+            Http01Challenge::new(),
+        );
+        assert_eq!(
+            executor.execute(&action, execution()?).await,
+            Err(AcmeWorkerError::RemoteRetry {
+                retry_after: Some(AcmeRetryAfter::DelayMicros(3_600_000_000))
+            })
+        );
+        assert_eq!(executor.into_parts().0.requests.len(), 1);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn rate_limit_after_bad_nonce_is_not_retried_again() -> Result<(), Box<dyn std::error::Error>>
+{
+    let transport = RecordingTransport::new([
+        response(
+            400,
+            vec![("replay-nonce", "nonce_fresh")],
+            br#"{"type":"urn:ietf:params:acme:error:badNonce"}"#.to_vec(),
+        )?,
+        response(429, vec![("retry-after", "1200")], Vec::new())?,
+    ]);
+    let mut executor = AcmeStepExecutor::new(
+        transport,
+        RecordingSigner::default(),
+        Http01Challenge::new(),
+    );
+    let action = AcmeMachineAction::CreateAccount {
+        url: "https://ca.example.test/account".to_owned(),
+        nonce: "nonce_stale".to_owned(),
+    };
+    assert_eq!(
+        executor.execute(&action, execution()?).await,
+        Err(AcmeWorkerError::RemoteRetry {
+            retry_after: Some(AcmeRetryAfter::DelayMicros(1_200_000_000))
+        })
+    );
+    assert_eq!(executor.into_parts().0.requests.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_retry_guidance_does_not_trigger_an_inline_retry()
+-> Result<(), Box<dyn std::error::Error>> {
+    for headers in [
+        vec![("retry-after", "+120")],
+        vec![("retry-after", "120"), ("retry-after", "240")],
+    ] {
+        let mut executor = AcmeStepExecutor::new(
+            RecordingTransport::new([response(429, headers, Vec::new())?]),
+            RecordingSigner::default(),
+            Http01Challenge::new(),
+        );
+        let action = AcmeMachineAction::DiscoverDirectory {
+            url: "https://ca.example.test/directory".to_owned(),
+        };
+        assert_eq!(
+            executor.execute(&action, execution()?).await,
+            Err(AcmeWorkerError::Protocol)
+        );
+        assert_eq!(executor.into_parts().0.requests.len(), 1);
+    }
+    Ok(())
 }
 
 struct RecordingTransport {

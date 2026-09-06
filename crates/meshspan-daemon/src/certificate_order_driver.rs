@@ -169,7 +169,7 @@ where
                 Ok(CertificateOrderStepResult::ReadyForCompletion { certificate_chain }) => {
                     return self.complete_or_retry(execution, now, &certificate_chain);
                 }
-                Err(error) => return self.execution_failure(execution, now, error),
+                Err(error) => return self.execution_failure(execution, self.clock.now(), error),
             }
         }
         Err(CertificateOrderDriverError::InvalidInput)
@@ -214,19 +214,25 @@ where
         now: UnixMicros,
         error: CertificateOrderExecutionError,
     ) -> Result<CertificateOrderDriveOutcome, CertificateOrderDriverError> {
-        let failure_class = match error {
+        let (failure_class, retry_after) = match error {
             CertificateOrderExecutionError::Worker(AcmeWorkerError::Transport) => {
-                CertificateOrderFailureClass::Transport
+                (CertificateOrderFailureClass::Transport, None)
             }
             CertificateOrderExecutionError::Worker(AcmeWorkerError::Protocol) => {
-                CertificateOrderFailureClass::Protocol
+                (CertificateOrderFailureClass::Protocol, None)
             }
+            CertificateOrderExecutionError::Worker(AcmeWorkerError::RemoteRetry {
+                retry_after,
+            }) => (
+                CertificateOrderFailureClass::Protocol,
+                retry_after.and_then(|value| value.not_before(now)),
+            ),
             CertificateOrderExecutionError::Worker(AcmeWorkerError::Challenge) => {
-                CertificateOrderFailureClass::Challenge
+                (CertificateOrderFailureClass::Challenge, None)
             }
             other => return Err(other.into()),
         };
-        self.retry(execution, now, failure_class)
+        self.retry(execution, now, failure_class, retry_after)
     }
 
     fn complete_or_retry<T, Challenge>(
@@ -246,7 +252,12 @@ where
             Err(
                 CertificateOrderResultError::InvalidCertificate
                 | CertificateOrderResultError::Validation(_),
-            ) => self.retry(execution, now, CertificateOrderFailureClass::Certificate),
+            ) => self.retry(
+                execution,
+                now,
+                CertificateOrderFailureClass::Certificate,
+                None,
+            ),
             Err(error) => Err(error.into()),
         }
     }
@@ -256,13 +267,14 @@ where
         execution: &CertificateOrderExecution<T, Challenge>,
         now: UnixMicros,
         failure_class: CertificateOrderFailureClass,
+        retry_after: Option<UnixMicros>,
     ) -> Result<CertificateOrderDriveOutcome, CertificateOrderDriverError> {
         let commit = self.retry.retry(
             execution.assignment().configuration.configured_by,
             now,
             execution.assignment(),
             failure_class,
-            None,
+            retry_after,
         )?;
         Ok(CertificateOrderDriveOutcome::Retried {
             failure_class,

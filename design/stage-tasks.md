@@ -17,7 +17,7 @@ Update the relevant task when work changes its status. Report the current task,
 what behaviour changed, what remains and what was tested. Do not replace this
 with “nearly done”, a count of commits or an unweighted completion percentage.
 
-Remaining-effort estimate, 2026-09-06: **Stage 10: 147 points; Stage 11: 126
+Remaining-effort estimate, 2026-09-06: **Stage 10: 146 points; Stage 11: 126
 points; Stage 12: 55 points.** These are preliminary engineering judgements from
 the task scope and recorded gaps, not measured hours or completion guarantees.
 Uncertainty is high until the open integration/proof work is exercised.
@@ -71,7 +71,7 @@ the stage; publication-dependent acceptance remains held separately and visible.
    and task acceptance; it does not establish invitation continuity across later
    leaf changes. The estimate fell 5 → 3 → 1 → 0 as this scope was verified.
 
-2. **Automatic ACME and DNS challenge handling — Partial; current task.** **8 points remaining.**
+2. **Automatic ACME and DNS challenge handling — Partial; current task.** **7 points remaining.**
    PKI-003/004/006/010; accepted decisions §7.
    [ACME components](../crates/meshspan-acme/src/lib.rs) and
    [renewal scheduling](../crates/meshspan-daemon/src/certificate_renewal_scheduler.rs)
@@ -79,6 +79,11 @@ the stage; publication-dependent acceptance remains held separately and visible.
    plus durable manual-DNS tasks, authoritative probes and advance renewal notices.
    Record fencing, interrupted-order recovery, retry/rate-limit behaviour and
    no new order merely because gateways join. Live CA proof is task 5.
+   [CA-directed error retry correction](stage-10-evidence.md#task-2--ca-directed-error-retry-deadlines)
+   has focused and real TLS-to-command proof. The full dependency-update gate on
+   `d83002b` passed, including the local integration gate in 1,059.56 seconds.
+   This closes error-response retry guidance (8 → 7 points), not the remaining
+   complete challenge lifecycle, worker replacement or gateway-sharing proof.
 
 3. **Encrypted certificate delivery and rotation — Partial.** **5 points remaining.**
    PKI-001/002/005/007/010; accepted decisions §7.

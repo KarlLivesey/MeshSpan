@@ -125,6 +125,24 @@ fn assignment(
     })
 }
 
+#[test]
+fn valid_ca_deadline_is_not_shortened_to_the_local_backoff_ceiling()
+-> Result<(), Box<dyn std::error::Error>> {
+    let assignment = assignment(UnixMicros::new(1_000 * SECOND))?;
+    let authority = RecordingAuthority::default();
+    let retry_after = UnixMicros::new((100 + 8 * 24 * 60 * 60) * SECOND);
+    let committed = CertificateOrderRetryService::new(&authority).retry(
+        PrincipalId::from_bytes([7; 16])?,
+        UnixMicros::new(100 * SECOND),
+        &assignment,
+        CertificateOrderFailureClass::Protocol,
+        Some(retry_after),
+    )?;
+    assert_eq!(committed.retry_at, retry_after);
+    assert_eq!(authority.commit_count(), 1);
+    Ok(())
+}
+
 #[derive(Default)]
 struct RecordingAuthority {
     state: Mutex<AuthorityState>,
