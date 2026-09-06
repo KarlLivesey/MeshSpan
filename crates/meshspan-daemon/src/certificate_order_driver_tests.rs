@@ -29,6 +29,8 @@ use crate::{
     CertificateOrderFailureClass, CertificateOrderResultService, PreparedCertificateOrder,
 };
 
+mod tls_retry;
+
 #[tokio::test]
 async fn drive_yields_only_after_authoritative_checkpoint() -> Result<(), Box<dyn std::error::Error>>
 {
@@ -38,7 +40,11 @@ async fn drive_yields_only_after_authoritative_checkpoint() -> Result<(), Box<dy
         DirectoryTransport::available()?,
         Http01Challenge::new(),
     );
-    let mut driver = driver(authority.clone(), 1)?;
+    let mut driver = driver(
+        authority.clone(),
+        1,
+        FixedClock(UnixMicros::new(20_000_000)),
+    )?;
 
     let outcome = driver.drive(&mut execution).await?;
 
@@ -56,7 +62,11 @@ async fn transport_failure_is_durably_requeued() -> Result<(), Box<dyn std::erro
         DirectoryTransport::unavailable(),
         Http01Challenge::new(),
     );
-    let mut driver = driver(authority.clone(), 8)?;
+    let mut driver = driver(
+        authority.clone(),
+        8,
+        FixedClock(UnixMicros::new(20_000_000)),
+    )?;
 
     let outcome = driver.drive(&mut execution).await?;
 
@@ -72,13 +82,12 @@ async fn transport_failure_is_durably_requeued() -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
-fn driver(
+fn driver<C: Clock>(
     authority: RecordingAuthority,
     maximum_steps: usize,
-) -> Result<
-    CertificateOrderDriver<RecordingAuthority, SharedRandom, FixedClock>,
-    Box<dyn std::error::Error>,
-> {
+    clock: C,
+) -> Result<CertificateOrderDriver<RecordingAuthority, SharedRandom, C>, Box<dyn std::error::Error>>
+{
     let certificate_authority = CertificateAuthority::new()?;
     let mut roots = RootCertStore::empty();
     roots.add(CertificateDer::from(
@@ -89,10 +98,40 @@ fn driver(
         authority.clone(),
         authority,
         SharedRandom::default(),
-        FixedClock(UnixMicros::new(20_000_000)),
+        clock,
         CertificateOrderDrivePolicy::new(DurationMicros::new(1_000_000), maximum_steps)?,
         CertificateOrderResultService::new(roots)?,
     ))
+}
+
+#[tokio::test]
+async fn ca_retry_after_reaches_the_authoritative_retry_deadline()
+-> Result<(), Box<dyn std::error::Error>> {
+    let authority = RecordingAuthority::default();
+    let response = AcmeHttpResponse::new(
+        429,
+        AcmeResponseHeaders::new(vec![("retry-after".to_owned(), "3600".to_owned())])?,
+        br#"{"type":"urn:ietf:params:acme:error:rateLimited"}"#.to_vec(),
+    )?;
+    let mut execution = CertificateOrderExecution::new(
+        prepared()?,
+        DirectoryTransport(Some(Ok(response))),
+        Http01Challenge::new(),
+    );
+    let outcome = driver(
+        authority.clone(),
+        8,
+        FixedClock(UnixMicros::new(20_000_000)),
+    )?
+    .drive(&mut execution)
+    .await?;
+    let CertificateOrderDriveOutcome::Retried { commit, .. } = outcome else {
+        return Err("CA rate limit must be durably requeued".into());
+    };
+    assert_eq!(commit.retry_at, UnixMicros::new(3_620_000_000));
+    assert_eq!(authority.checkpoint_count(), 0);
+    assert_eq!(authority.completion_count(), 1);
+    Ok(())
 }
 
 fn prepared() -> Result<PreparedCertificateOrder, Box<dyn std::error::Error>> {
@@ -219,6 +258,7 @@ struct RecordingAuthority(Arc<Mutex<AuthorityState>>);
 struct AuthorityState {
     checkpoints: usize,
     completions: usize,
+    completion: Option<AuthoritativeCommand>,
 }
 
 impl RecordingAuthority {
@@ -228,6 +268,19 @@ impl RecordingAuthority {
 
     fn completion_count(&self) -> usize {
         self.0.lock().map_or(0, |state| state.completions)
+    }
+
+    fn retry_deadline(&self) -> Option<UnixMicros> {
+        let state = self.0.lock().ok()?;
+        match state.completion.as_ref()? {
+            AuthoritativeCommand::CompleteCertificateOrder(command) => match command.outcome {
+                meshspan_metadata::CertificateOrderCompletion::Retry { retry_at, .. } => {
+                    Some(retry_at)
+                }
+                meshspan_metadata::CertificateOrderCompletion::Issued { .. } => None,
+            },
+            _ => None,
+        }
     }
 }
 
@@ -271,10 +324,12 @@ impl CertificateOrderCompletionAuthority for RecordingAuthority {
         context: CommandContext,
         command: &AuthoritativeCommand,
     ) -> Result<CommandReceipt, CertificateOrderCompletionAuthorityError> {
-        self.0
+        let mut state = self
+            .0
             .lock()
-            .map_err(|_| CertificateOrderCompletionAuthorityError::Failed)?
-            .completions += 1;
+            .map_err(|_| CertificateOrderCompletionAuthorityError::Failed)?;
+        state.completions += 1;
+        state.completion = Some(command.clone());
         receipt(context, command, Revision::new(11))
             .map_err(|_| CertificateOrderCompletionAuthorityError::Failed)
     }

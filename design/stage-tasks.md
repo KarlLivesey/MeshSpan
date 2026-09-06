@@ -79,6 +79,8 @@ the stage; publication-dependent acceptance remains held separately and visible.
    plus durable manual-DNS tasks, authoritative probes and advance renewal notices.
    Record fencing, interrupted-order recovery, retry/rate-limit behaviour and
    no new order merely because gateways join. Live CA proof is task 5.
+   [CA-directed error retry correction](stage-10-evidence.md#task-2--ca-directed-error-retry-deadlines)
+   now has focused and real TLS-to-command proof; full integration remains.
 
 3. **Encrypted certificate delivery and rotation — Partial.** **5 points remaining.**
    PKI-001/002/005/007/010; accepted decisions §7.

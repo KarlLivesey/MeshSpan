@@ -23,6 +23,7 @@ mod manual_dns01;
 #[cfg(test)]
 mod manual_dns01_tests;
 mod order_machine;
+mod retry_after;
 mod rfc2136_provider;
 #[cfg(test)]
 mod rfc2136_provider_tests;
@@ -68,6 +69,7 @@ pub use order_machine::{
     AcmeChallengePreference, AcmeMachineAction, AcmeMachineError, AcmeMachineEvent,
     AcmeOrderMachine,
 };
+pub use retry_after::AcmeRetryAfter;
 pub use rfc2136_provider::{Rfc2136DnsProvider, Rfc2136ProviderPolicy};
 pub use transport::RustlsAcmeTransport;
 pub use webhook_provider::{WebhookDnsAction, WebhookDnsApi, WebhookDnsProvider, WebhookDnsRecord};

@@ -28,6 +28,17 @@ const MAXIMUM_PROBLEM_DETAIL_BYTES: usize = 4_096;
 pub struct AcmeResponseHeaders(Vec<(String, String)>);
 
 impl AcmeResponseHeaders {
+    /// Parses one unambiguous retry hint without consulting the host clock.
+    ///
+    /// # Errors
+    ///
+    /// Rejects duplicate fields, malformed dates, signs, fractions and overflow.
+    pub fn retry_after(&self) -> Result<Option<crate::AcmeRetryAfter>, AcmeProtocolError> {
+        self.optional("retry-after")?
+            .map(crate::AcmeRetryAfter::parse)
+            .transpose()
+    }
+
     /// Validates lower-case HTTP field names and bounded ASCII values.
     ///
     /// # Errors

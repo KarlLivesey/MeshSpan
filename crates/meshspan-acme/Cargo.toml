@@ -14,6 +14,7 @@ version.workspace = true
 bytes.workspace = true
 form_urlencoded.workspace = true
 http-body-util.workspace = true
+httpdate.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 meshspan-contracts = { path = "../meshspan-contracts" }

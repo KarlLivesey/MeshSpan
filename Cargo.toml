@@ -58,6 +58,7 @@ getrandom = { version = "0.4.3", features = ["sys_rng"] }
 form_urlencoded = "1.2.2"
 hmac = "0.13.0"
 http-body-util = "0.1.5"
+httpdate = "1.0.3"
 hkdf = "0.13.0"
 md-5 = "0.11.0"
 md4 = "0.11.0"

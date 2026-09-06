@@ -10,6 +10,53 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 2 — CA-directed error retry deadlines
+
+The ACME executor previously collapsed error responses into a generic protocol
+failure and the daemon driver always supplied `None` to the retry scheduler.
+The new regression observed **361,896,937 µs** instead of the CA-directed
+**3,620,000,000 µs** deadline and failed in **0.04 seconds** before correction.
+A second regression proved that the existing seven-day cap shortened an eight-day
+CA deadline; it failed in under **0.01 seconds**.
+
+Typed retry guidance now crosses unsigned GET/HEAD and signed POST execution,
+including an error after the sole bad-nonce retry. Seconds and all three HTTP-date
+formats are parsed without consulting host time. Duplicate, malformed, signed,
+fractional and overflowing fields fail protocol validation; they never trigger
+an inline retry. Relative delays use authority-aligned response receipt time,
+not request start. Local exponential backoff remains bounded, but no longer
+shortens a valid later CA deadline. Existing order administration exposes the
+queued deadline. There is no schema migration or public API change.
+
+Two real localhost TLS proofs pass through the Rustls ACME client, executor,
+driver and retry service. They assert one remote request, the exact retry command
+and receipt, no checkpoint advancement, an absolute HTTP date, and a relative
+delay after five seconds of controlled response latency. The authority here is
+a recording fixture: this proves wire-to-command composition, not new SQLite,
+multi-process restart or public-CA acceptance.
+
+The complete ACME crate's **44 tests passed in 0.07 seconds**; the final focused
+daemon run's **18 certificate-order tests passed in 0.13 seconds** after a
+17.37-second incremental build. Affected all-target/all-feature Clippy passed
+with warnings denied in **6.52 seconds**. An earlier Clippy conversion-style
+failure was corrected without an exception. Rust/JavaScript advisory scans and
+the Rust licence check passed. The final full local integration gate remains.
+
+`httpdate` 1.0.3 was already in the resolved graph. Its direct ACME reference
+adds no package/version or runtime dependency; its MIT option remains permitted
+by the existing licence gate. The standard library has no HTTP-date parser, so
+this reuses the existing purpose-built implementation. Upstream is not archived;
+no unsupported older release line was selected as a compatibility workaround.
+Sources: [HTTP retry syntax](https://www.rfc-editor.org/rfc/rfc9110.html#name-retry-after),
+[ACME rate limits](https://www.rfc-editor.org/rfc/rfc8555.html#section-6.6), and
+[httpdate upstream](https://github.com/pyfisch/httpdate).
+
+Task 2 remains open at **8 points**; Stage 10 remains **147 points** until this
+slice's integration verification. Successful-resource polling hints, worker
+replacement, full challenge lifecycle and multi-gateway order sharing remain
+separate outstanding acceptance within task 2. Live CA proof remains task 5.
+No release, tag, package/image publication or Actions run occurred.
+
 ## Task 1 — mesh-local HTTPS lifecycle and trust-download integration
 
 The new independent `headless_process::local_certificates` proof uses real child

@@ -20,7 +20,6 @@ const OPERATION_ID_DOMAIN: &[u8] = b"meshspan.acme-retry.operation.v1\0";
 const AUDIT_ID_DOMAIN: &[u8] = b"meshspan.acme-retry.audit.v1\0";
 const SECOND_MICROS: u64 = 1_000_000;
 const MAXIMUM_BACKOFF_MICROS: u64 = 6 * 60 * 60 * SECOND_MICROS;
-const MAXIMUM_RETRY_AFTER_MICROS: u64 = 7 * 24 * 60 * 60 * SECOND_MICROS;
 
 /// Redacted failure family used to select an automatic retry cadence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -85,8 +84,9 @@ where
 {
     /// Returns a live claim to the queue using bounded exponential backoff and stable jitter.
     ///
-    /// A valid later `retry_after` supplied by the CA wins over the local delay, capped at seven
-    /// days so a hostile or erroneous peer cannot silently suppress renewal forever.
+    /// A valid later `retry_after` supplied by the CA wins over the local delay. Only local
+    /// exponential backoff is capped; shortening the authority's deadline would violate its
+    /// rate limit. The queued deadline stays visible through existing order administration.
     ///
     /// # Errors
     ///
@@ -214,15 +214,11 @@ fn calculate_retry_at(
     let local_delay = base.saturating_add(jitter).min(MAXIMUM_BACKOFF_MICROS);
     let failed_at_micros =
         u64::try_from(failed_at.get()).map_err(|_| CertificateOrderRetryError::InvalidInput)?;
-    let latest_retry_after = failed_at_micros
-        .checked_add(MAXIMUM_RETRY_AFTER_MICROS)
-        .ok_or(CertificateOrderRetryError::InvalidInput)?;
     let requested_retry = retry_after
         .map(UnixMicros::get)
         .map(u64::try_from)
         .transpose()
-        .map_err(|_| CertificateOrderRetryError::InvalidInput)?
-        .map(|value| value.min(latest_retry_after));
+        .map_err(|_| CertificateOrderRetryError::InvalidInput)?;
     let local_retry = failed_at_micros
         .checked_add(local_delay)
         .ok_or(CertificateOrderRetryError::InvalidInput)?;

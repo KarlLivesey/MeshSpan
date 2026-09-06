@@ -201,8 +201,7 @@ where
 
     async fn discover(&mut self, url: &str) -> Result<AcmeStepOutcome, AcmeWorkerError> {
         let response = self
-            .transport
-            .send(&request(AcmeHttpMethod::Get, url, Vec::new())?)
+            .send_remote(&request(AcmeHttpMethod::Get, url, Vec::new())?)
             .await?;
         Ok(AcmeStepOutcome::Advanced(
             AcmeMachineEvent::DirectoryDiscovered(AcmeWire::directory(&response)?),
@@ -211,8 +210,7 @@ where
 
     async fn acquire_nonce(&mut self, url: &str) -> Result<AcmeStepOutcome, AcmeWorkerError> {
         let response = self
-            .transport
-            .send(&request(AcmeHttpMethod::Head, url, Vec::new())?)
+            .send_remote(&request(AcmeHttpMethod::Head, url, Vec::new())?)
             .await?;
         Ok(AcmeStepOutcome::Advanced(AcmeMachineEvent::NonceAcquired(
             AcmeWire::nonce_response(&response)?,
@@ -266,7 +264,7 @@ where
         F: Fn(&str, &S) -> Result<AcmeSignedRequest, AcmeProtocolError>,
     {
         let first = build(nonce, &self.signer)?;
-        let response = self.transport.send(&signed_request(first)).await?;
+        let response = self.send_remote(&signed_request(first)).await?;
         if (200..300).contains(&response.status) {
             return Ok(response);
         }
@@ -276,10 +274,24 @@ where
             return Ok(response);
         };
         let second = build(&fresh_nonce, &self.signer)?;
-        let response = self.transport.send(&signed_request(second)).await?;
+        let response = self.send_remote(&signed_request(second)).await?;
         if !(200..300).contains(&response.status) {
             let second_problem = AcmeWire::problem(&response)?;
             let _ = retry.consume(&second_problem, &response)?;
+        }
+        Ok(response)
+    }
+
+    async fn send_remote(
+        &mut self,
+        request: &AcmeTransportRequest,
+    ) -> Result<crate::AcmeHttpResponse, AcmeWorkerError> {
+        let response = self.transport.send(request).await?;
+        if !(200..300).contains(&response.status) {
+            let retry_after = response.headers.retry_after()?;
+            if retry_after.is_some() || matches!(response.status, 429 | 503) {
+                return Err(AcmeWorkerError::RemoteRetry { retry_after });
+            }
         }
         Ok(response)
     }
@@ -334,6 +346,12 @@ pub enum AcmeWorkerError {
     /// ACME wire validation failed.
     #[error("ACME worker protocol failed")]
     Protocol,
+    /// The CA requests a later attempt; no remote text or secret material is retained.
+    #[error("ACME authority requested a later attempt")]
+    RemoteRetry {
+        /// Validated server guidance; absence leaves the scheduler's local backoff in effect.
+        retry_after: Option<crate::AcmeRetryAfter>,
+    },
     /// Challenge provider rejected or could not complete the action.
     #[error("ACME worker challenge failed")]
     Challenge,
