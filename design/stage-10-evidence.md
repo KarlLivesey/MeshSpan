@@ -39,8 +39,25 @@ Focused verification:
 - Affected all-target/all-feature Clippy with warnings denied passed in
   **21.28 seconds**. Rust formatting and `git diff --check` passed.
 
+The first full `pnpm check` on `ded7810`, tree
+`60118e27812acf25a8923aee89e57726b40eca2c`, failed in **270.51 seconds**. Static
+lanes and web tests passed; the Rust lane failed in the DNS process proof because
+the daemon's SMB bind returned `AddrInUse`, before any CA request. The competing
+owner was not captured. Diagnostic-only parallel reruns passed in **41.26** and
+**28.02 seconds**; these did not establish a cause or close the failure.
+
+Certificate lifecycle tests never connect to SMB, so they now request an
+OS-selected SMB port (`:0`), atomically allocated by the real daemon's bind. The
+service still starts normally, but this test no longer has an unnecessary
+probe-to-child-start race for an unused fixed SMB address. The error path also
+records every allocated root/peer listener address. This removes that collision
+opportunity for these two proofs; it does not claim all fixed-address process
+fixtures are now race-free. The full focused headless suite then passed in
+**32.46 seconds** (eight passed, two container-dependent tests explicitly ignored),
+after a 2.81-second build. No timeout increase or serialisation was introduced.
+
 No production implementation, dependency, schema or protocol changed. Full local
-integration remains pending for this slice; task 2 stays at **6 points** and Stage
+integration remains pending for the corrected slice; task 2 stays at **6 points** and Stage
 10 at **145** until that gate passes. Cloudflare/webhook/manual lifecycle,
 interrupted and long-running orders, successful polling hints and active gateway
 challenge distribution remain open. No publication or Actions ran.

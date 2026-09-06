@@ -48,11 +48,15 @@ async fn dns01_issuance_survives_restart_and_gateway_join_without_another_order(
 }
 
 async fn prove_lifecycle(
-    root: ProcessFixture,
+    mut root: ProcessFixture,
     target: challenge::ValidationTarget,
     settings: serde_json::Value,
 ) -> Result<(), Box<dyn Error>> {
-    let peer = ProcessFixture::new()?;
+    let mut peer = ProcessFixture::new()?;
+    // This proof never connects to SMB. Bind it atomically to an OS-selected port instead of
+    // leaving an unnecessary probe-to-child-start gap for an unused fixed listener address.
+    root.smb_address.set_port(0);
+    peer.smb_address.set_port(0);
     let ca = authority::TestAuthority::start(target).await?;
     let trust_file = root.temporary.path().join("test-ca.pem");
     fs::write(&trust_file, &ca.anchor_pem)?;
@@ -110,7 +114,9 @@ async fn prove_lifecycle(
             .map(|child| format!("{:?}", child.try_wait()))
             .collect::<Vec<_>>();
         format!(
-            "{error}; child exits {exits:?}; CA observations {:?}",
+            "{error}; root listeners HTTPS={} HTTP01={} SMB={} QUIC={}; peer listeners HTTPS={} HTTP01={} SMB={} QUIC={}; child exits {exits:?}; CA observations {:?}",
+            root.address, root.http01_address, root.smb_address, root.private_address,
+            peer.address, peer.http01_address, peer.smb_address, peer.private_address,
             ca.observations()
         )
         .into()
