@@ -29,6 +29,13 @@ real TCP malformed-payload probe. Its existing policy, restart, peer catch-up an
 original-node-loss assertions remain intact. This negative SMB listener probe is
 not a claim of external SMB client file-transfer interoperability.
 
+The complete local NVM-default `MESHSPAN_CHECK_WORKERS=4 pnpm check` passed on
+the implementation in `360be29` in **680.01 seconds**. Rust workspace tests took
+617.99 seconds and web tests took 5.57 seconds. Generated-contract drift,
+embedded web build, Rust format/Clippy, web/tooling formatting and lint,
+TypeScript, scheduler tests and both licence gates passed. This was one local
+gate run, not a GitHub Actions run; this evidence addition changes no code.
+
 No dependency, SQL migration, public API schema or private protocol changed.
 This closes dispatch instrumentation only, not the broader OPS-019 catalogue or
 Stage 10. No release, tag, image or publication workflow was run.
