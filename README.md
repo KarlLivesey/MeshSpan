@@ -65,6 +65,9 @@ streaming erasure coding and degraded reads. See the
 [Stage 6 evidence](design/stage-6-evidence.md),
 [retrofit evidence](design/pre-stage-6-retrofit-evidence.md),
 [federation contract](design/federation.md) and [roadmap](design/roadmap.md).
+Current work is **Stage 10: certificates, packaging and operations**. The
+[Stage 10 evidence](design/stage-10-evidence.md) records implemented behaviour,
+local test results and remaining work. Stage 11 has not started; releases remain on hold.
 The accepted requirements, architecture and implementation order are in the
 [design review pack](design/README.md).
 

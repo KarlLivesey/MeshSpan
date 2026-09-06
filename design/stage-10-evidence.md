@@ -130,8 +130,15 @@ field to the internal Rust certificate projection, not a SQL migration, public
 API or wire change. After rebuilding, all **four** ordinary process tests passed
 in parallel in **22.63 seconds**, including automatic multi-node backup placement,
 encrypted download and restore-readiness, node joining, restart and original-node
-loss. The two opt-in SMB-container cases were ignored, not executed. The final
-complete local gate remains pending before branch integration.
+loss. The two opt-in SMB-container cases were ignored, not executed.
+
+The final complete NVM-default `MESHSPAN_CHECK_WORKERS=4 pnpm check` passed on
+`65ea7ef` in **553.90 seconds**. Rust workspace/all-target/all-feature tests took
+**515.59 seconds** and web tests took **4.63 seconds**. Generated-contract drift,
+embedded web build, Rust format, workspace Clippy, both dependency licence gates,
+workspace format, full web lint, TypeScript and tooling tests all passed. This is
+local integration evidence, not hardware, soak or ignored SMB-container evidence.
+No release, tag, image or publication workflow was run.
 
 ## Runtime diagnostic bundle and download control
 
