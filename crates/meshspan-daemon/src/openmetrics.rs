@@ -35,7 +35,7 @@ pub fn encode_openmetrics(snapshot: &RuntimeMetricSnapshot) -> Result<Vec<u8>, C
         write_family(&mut output, &family).map_err(|_| ContractError::InternalContract)?;
     }
     output.push_str("# EOF\n");
-    // Closed names and fifteen fixed-size families bound allocation before this final guard.
+    // The closed fixed-size catalogue bounds allocation before this final guard.
     if output.len() > MAX_OPENMETRICS_BYTES {
         return Err(ContractError::ResourceExhausted);
     }

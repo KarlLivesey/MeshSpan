@@ -66,6 +66,7 @@ pub use filesystem::{
     namespace_reconciliation_result_digest, namespace_snapshot_restore_result_digest,
 };
 pub use metrics::{
+    GatewayDispatchObservation, GatewayDispatchObserver, GatewayDispatchOutcome, GatewayProtocol,
     LatencyHistogram, MAX_RUNTIME_METRIC_FAMILIES, METRIC_LATENCY_BOUNDARIES_MICROS, RuntimeMetric,
     RuntimeMetricSnapshot, RuntimeMetricSource,
 };

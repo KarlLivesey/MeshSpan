@@ -11,7 +11,7 @@ The current source reads the existing process-local observation store without
 provider IO, network requests or waiting for the storage worker. Contention
 returns unavailable evidence, not a synthetic empty/healthy snapshot.
 
-The current catalogue has fifteen distinct families. Names carry `meshspan_v1_`;
+The current catalogue has 23 distinct families. Names carry `meshspan_v1_`;
 counter samples additionally carry `_total`.
 
 | Family suffix                             | Type      | Meaning                                                   |
@@ -31,6 +31,14 @@ counter samples additionally carry `_total`.
 | `storage_open_targets`                    | Gauge     | Last-cycle open handles, not guaranteed read availability |
 | `storage_pending_return_scans`            | Gauge     | Last-cycle return-scan admission backlog                  |
 | `storage_reconciliation_failed_steps`     | Gauge     | Last-cycle failed steps                                   |
+| `https_dispatches`                        | Counter   | Ended HTTPS handler dispatches, including cancellations    |
+| `https_server_error_responses`            | Counter   | Dispatches returning a 5xx response                        |
+| `https_cancelled_dispatches`              | Counter   | Dispatch futures dropped before returning a response      |
+| `https_dispatch_duration_seconds`         | Histogram | HTTPS handler lifetime, not response-body streaming        |
+| `smb_dispatches`                          | Counter   | Ended complete-payload dispatches, including cancellations |
+| `smb_dispatch_errors`                     | Counter   | Handler errors, not ordinary SMB error-status responses    |
+| `smb_cancelled_dispatches`                | Counter   | Dispatch futures dropped before returning                 |
+| `smb_dispatch_duration_seconds`           | Histogram | SMB payload handler lifetime, not socket writes            |
 
 The histograms aggregate the process lifetime, independently of eviction from
 the diagnostic windows. Inclusive finite buckets are 0.001, 0.005, 0.025, 0.1,
@@ -39,6 +47,19 @@ checked integer accumulation; overflow rejects the whole observation without
 partially advancing its histogram. Durations retain nanosecond precision.
 Unobserved last-cycle gauges are absent. Counters restart with the process;
 dropped observations mean distributions are incomplete.
+
+Gateway observations cover the composed HTTPS router and embedded SMB payload
+handler. HTTPS timing excludes TLS admission and subsequent response-body
+streaming; SMB counts one complete Direct TCP payload, not each command in a
+compound request, and excludes socket reads/writes. HTTP-01 challenge traffic
+uses its separate listener and is not included. These counters do not certify
+file-operation success, delivery or durability. A cancelled dispatch future may
+leave an already-started owned blocking job running; the cancellation counter is
+not proof that the operation was cancelled. Unpolled futures are not dispatches.
+
+The fixed-size observation sink uses a non-waiting lock attempt and performs no
+IO or request-derived labelling. Contention or overflow drops the observation
+and increments the drop counter, without changing the gateway's response.
 
 The encoder implements the fixed text subset of
 [OpenMetrics 1.0](https://prometheus.io/docs/specs/om/open_metrics_spec/): typed
@@ -102,7 +123,8 @@ been suspended; that user's current credentials still cannot authorise scraping.
 
 This initial catalogue is not completion of OPS-019. Protection/locality debt,
 capacity/reservations, repair/scrub/drain/rebalance work, target IO/integrity,
-HTTPS/SMB, consensus/catch-up, coding/degraded reads, packs/deduplication,
+HTTPS/SMB transfer throughput and operation outcomes beyond dispatch,
+consensus/catch-up, coding/degraded reads, packs/deduplication,
 federation backlog, authentication rejection, certificates, backups, updates,
 runtime resources and clock uncertainty still need their corresponding
 instrumentation. Bounded downsampled panel history and durable deduplicated

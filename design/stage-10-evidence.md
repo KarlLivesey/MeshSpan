@@ -3,6 +3,36 @@
 Status: **in progress**. Stage 11 has not started. Publication remains on hold
 pending the owner's dependency review.
 
+## HTTPS and SMB dispatch measurements
+
+The daemon now records aggregate dispatch counts, handler failures, cancellations
+and fixed-bucket latency for its composed HTTPS router and embedded SMB handler.
+The replaceable observation sink performs no IO or waiting, takes no request
+strings, and cannot change the returned response. It records dropped observations
+separately. The [catalogue](metrics.md) defines the eight new families and their
+limits: dispatch completion is not transfer completion or file durability; SMB
+handler errors are not ordinary SMB error-status responses.
+
+Four metrics contract tests, six observation tests, three gateway adapter tests
+and two encoder tests passed; each focused test harness completed in **0.01
+seconds or less**, excluding compilation. They cover response/payload preservation,
+5xx versus client rejection, exact cancellation counts, unpolled futures, lock
+contention, atomic overflow, histogram validation and bounded encoding. The
+catalogue expansion initially failed an old family-count assertion; it now
+requires all 23 families and still omits the five unobserved last-cycle gauges.
+Affected all-target/all-feature Clippy passed in **9.71 seconds**.
+
+The real-process exporter case passed in **17.15 seconds** after a **24.70-second**
+integration build. It exercises both the creating gateway and an enrolled peer,
+asserting positive HTTPS dispatch counts and SMB handler-error counts after a
+real TCP malformed-payload probe. Its existing policy, restart, peer catch-up and
+original-node-loss assertions remain intact. This negative SMB listener probe is
+not a claim of external SMB client file-transfer interoperability.
+
+No dependency, SQL migration, public API schema or private protocol changed.
+This closes dispatch instrumentation only, not the broader OPS-019 catalogue or
+Stage 10. No release, tag, image or publication workflow was run.
+
 ## Metrics collection and encoding — in progress
 
 The [metrics contract and catalogue](metrics.md) now have a typed replaceable

@@ -188,6 +188,7 @@ struct ApplianceServiceComposition {
     smb_connections: SmbConnectionFactory,
     certificates: CertificateRuntime,
     https_identity: RotatingHttpsIdentity,
+    gateway_observations: Arc<dyn meshspan_contracts::GatewayDispatchObserver>,
 }
 
 struct DaemonNodeRuntime {
@@ -624,6 +625,8 @@ fn compose_appliance_services(
         .ok_or(DaemonProcessError::PrivateNetworkState)?;
     spawn_data_plane_runtime(Arc::clone(&storage_targets), received_data_streams);
     spawn_storage_target_reconciler(Arc::clone(&storage_targets));
+    let gateway_observations: Arc<dyn meshspan_contracts::GatewayDispatchObserver> =
+        Arc::new(readiness.observations.clone());
     let gateway = GatewaySessionIdentity::new(node.local_state.node_id(), 1)?;
     let smb_connections = SmbConnectionFactory::new(
         SmbConnectionFactoryConfiguration {
@@ -677,10 +680,14 @@ fn compose_appliance_services(
         )?)
         .fallback(crate::web_assets::serve);
     Ok(ApplianceServiceComposition {
-        router,
+        router: crate::gateway_measurements::observe_https(
+            router,
+            Arc::clone(&gateway_observations),
+        ),
         smb_connections,
         certificates,
         https_identity,
+        gateway_observations,
     })
 }
 
@@ -859,10 +866,21 @@ where
     });
     let smb_stop = stop.subscribe();
     let connections = services.smb_connections;
+    let observations = services.gateway_observations;
     tasks.spawn(async move {
-        smb.run_until(move || connections.open(), wait_for_shutdown(smb_stop))
-            .await
-            .map_err(DaemonProcessError::from)
+        smb.run_until(
+            move || {
+                connections.open().map(|handler| {
+                    crate::gateway_measurements::ObservedSmbHandler::new(
+                        handler,
+                        Arc::clone(&observations),
+                    )
+                })
+            },
+            wait_for_shutdown(smb_stop),
+        )
+        .await
+        .map_err(DaemonProcessError::from)
     });
     let certificate_stop = stop.subscribe();
     tasks.spawn(async move {

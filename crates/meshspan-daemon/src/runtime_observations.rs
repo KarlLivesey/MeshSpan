@@ -28,6 +28,8 @@ struct ObservationOwner {
 
 #[derive(Clone, Default)]
 struct ObservationState {
+    https: gateway::GatewayMeasurements,
+    smb: gateway::GatewayMeasurements,
     sequence: u64,
     target_evictions: u64,
     event_evictions: u64,
@@ -270,6 +272,9 @@ mod projection;
 
 #[path = "runtime_observations_metrics.rs"]
 mod metrics;
+
+#[path = "runtime_observations_gateway.rs"]
+mod gateway;
 
 #[cfg(test)]
 #[path = "runtime_observations_tests.rs"]
