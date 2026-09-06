@@ -61,6 +61,26 @@ where
         context: meshspan_contracts::RequestContext,
         digest: [u8; 32],
     ) -> Result<(), AcmeWorkerError> {
+        if self
+            .expected_publication_receipt(publication, context)?
+            .publication_digest
+            != digest
+        {
+            return Err(AcmeWorkerError::InvalidInput);
+        }
+        Ok(())
+    }
+
+    /// Derives provider-bound cleanup identity without publishing or asserting visibility.
+    ///
+    /// # Errors
+    ///
+    /// Rejects incompatible material, configuration, fence or an empty receipt digest.
+    pub fn expected_publication_receipt(
+        &self,
+        publication: &AcmeChallengePublication,
+        context: meshspan_contracts::RequestContext,
+    ) -> Result<CertificateChallengeReceipt, AcmeWorkerError> {
         let request = publication.request(context)?;
         let expected = self.challenge.expected_receipt(&request)?;
         if expected.configuration_revision
@@ -68,12 +88,11 @@ where
                 .expected_revision
                 .ok_or(AcmeWorkerError::InvalidInput)?
             || expected.order_epoch != publication.order_epoch()
-            || expected.publication_digest != digest
-            || digest == [0; 32]
+            || expected.publication_digest == [0; 32]
         {
             return Err(AcmeWorkerError::InvalidInput);
         }
-        Ok(())
+        Ok(expected)
     }
 
     pub(super) async fn publish_challenge(

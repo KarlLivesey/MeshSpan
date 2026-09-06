@@ -141,6 +141,44 @@ pub(in crate::repository) fn load_checkpoint(
     Ok(record)
 }
 
+/// Called inside completion's transaction: failed validation or later queue changes roll back
+/// checkpoint removal together with the live claim, so recovery cannot bypass the retry time.
+pub(super) fn consume_retired_checkpoint(
+    transaction: &Transaction<'_>,
+    completion: &crate::CompleteCertificateOrder,
+    expected_digest: [u8; 32],
+) -> Result<(), RepositoryError> {
+    let checkpoint = load_checkpoint(transaction, completion.order_id)?
+        .ok_or(RepositoryError::InvalidCommand)?;
+    let machine = meshspan_acme::AcmeOrderMachine::decode_checkpoint(&checkpoint.checkpoint)
+        .map_err(|_| RepositoryError::CorruptState)?;
+    let manual_cleanup_pending: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM manual_dns_tasks WHERE order_id = ?1 AND phase IN (1, 2, 3))",
+        [completion.order_id.as_bytes().as_slice()],
+        |row| row.get(0),
+    )?;
+    if checkpoint.checkpoint_digest != expected_digest
+        || manual_cleanup_pending
+        || checkpoint.claim_generation != completion.claim_generation
+        || checkpoint.worker_node_id != completion.worker_node_id
+        || checkpoint.worker_incarnation != completion.worker_incarnation
+        || checkpoint.fence != completion.fence
+        || !matches!(
+            machine.action(),
+            Ok(meshspan_acme::AcmeMachineAction::Retired { .. })
+        )
+    {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    transaction
+        .execute(
+            "DELETE FROM certificate_order_checkpoints WHERE order_id = ?1",
+            [completion.order_id.as_bytes().as_slice()],
+        )
+        .map_err(RepositoryError::from)
+        .and_then(exactly_one)
+}
+
 fn validate_checkpoint_binding(
     connection: &rusqlite::Connection,
     value: &CheckpointCertificateOrder,

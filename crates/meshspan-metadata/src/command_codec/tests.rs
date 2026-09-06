@@ -903,6 +903,49 @@ fn acme_commands_round_trip_configuration_claims_and_both_outcomes()
 }
 
 #[test]
+fn acme_restart_round_trips_and_binds_both_retirement_and_retry_evidence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (context, _) = fixture()?;
+    let order_id = CertificateOrderId::from_bytes([101; 16])?;
+    let worker_node_id = NodeId::from_bytes([104; 16])?;
+    let make = |proof, delay| {
+        AuthoritativeCommand::CompleteCertificateOrder(CompleteCertificateOrder {
+            order_id,
+            claim_generation: 4,
+            worker_node_id,
+            worker_incarnation: 5,
+            fence: 6,
+            outcome: CertificateOrderCompletion::Restart {
+                failure_digest: [105; 32],
+                retry_at: UnixMicros::new(delay),
+                retired_checkpoint_digest: proof,
+            },
+        })
+    };
+    let command = make([106; 32], 900);
+    assert_round_trip(context, command.clone())?;
+    let mut bytes = encode_authoritative_command(context, &command)?;
+    let mut expected_outcome = vec![3];
+    expected_outcome.extend_from_slice(&[105; 32]);
+    expected_outcome.extend_from_slice(&900_i64.to_be_bytes());
+    expected_outcome.extend_from_slice(&[106; 32]);
+    assert_eq!(&bytes[bytes.len() - 73..], expected_outcome);
+    let discriminator = bytes.len() - 73;
+    bytes[discriminator] = 4;
+    assert!(decode_authoritative_command(&bytes).is_err());
+    assert_ne!(
+        command.request_digest(context),
+        make([107; 32], 900).request_digest(context)
+    );
+    assert_ne!(
+        command.request_digest(context),
+        make([106; 32], 901).request_digest(context)
+    );
+    assert!(encode_authoritative_command(context, &make([0; 32], 900)).is_err());
+    Ok(())
+}
+
+#[test]
 fn provision_acme_round_trips_as_one_command() -> Result<(), Box<dyn std::error::Error>> {
     let (context, _) = fixture()?;
     let config_id = AcmeConfigurationId::from_bytes([100; 16])?;

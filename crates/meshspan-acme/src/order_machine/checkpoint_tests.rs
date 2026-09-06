@@ -90,7 +90,7 @@ fn hostile_checkpoint_version_shape_and_size_fail_closed() -> Result<(), Box<dyn
     let machine = machine()?;
     let encoded = machine.encode_checkpoint()?;
     let mut value: Value = serde_json::from_slice(&encoded)?;
-    value["version"] = Value::from(4);
+    value["version"] = Value::from(5);
     assert!(AcmeOrderMachine::decode_checkpoint(&serde_json::to_vec(&value)?).is_err());
 
     let mut value: Value = serde_json::from_slice(&encoded)?;
@@ -188,6 +188,13 @@ fn assert_round_trip(machine: &AcmeOrderMachine) -> Result<(), Box<dyn std::erro
     let decoded = AcmeOrderMachine::decode_checkpoint(&machine.encode_checkpoint()?)?;
     assert_eq!(decoded, *machine);
     assert_eq!(decoded.action()?, machine.action()?);
+    // v3 has the same fields but cannot describe the retirement states introduced in v4.
+    let mut previous: Value = serde_json::from_slice(&machine.encode_checkpoint()?)?;
+    previous["version"] = Value::from(3);
+    assert_eq!(
+        AcmeOrderMachine::decode_checkpoint(&serde_json::to_vec(&previous)?)?,
+        *machine
+    );
     // Every original phase remains readable in v2 (without retained publication material).
     let mut legacy: Value = serde_json::from_slice(&machine.encode_checkpoint()?)?;
     legacy["version"] = Value::from(2);

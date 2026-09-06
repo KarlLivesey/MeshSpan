@@ -4074,6 +4074,16 @@ digest_simple_record!(
         digest.unsigned(value.worker_incarnation);
         digest.unsigned(value.fence);
         match &value.outcome {
+            CertificateOrderCompletion::Restart {
+                failure_digest,
+                retry_at,
+                retired_checkpoint_digest,
+            } => {
+                digest.byte(3);
+                digest.bytes(failure_digest);
+                digest.signed(retry_at.get());
+                digest.bytes(retired_checkpoint_digest);
+            }
             CertificateOrderCompletion::Retry {
                 failure_digest,
                 retry_at,

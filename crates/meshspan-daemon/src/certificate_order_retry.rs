@@ -70,6 +70,14 @@ pub struct CertificateOrderRetryService<A> {
     authority: A,
 }
 
+/// One scheduling decision; fresh attempts additionally bind the consumed retirement proof.
+#[derive(Clone, Copy)]
+struct RetryPlan {
+    failure_class: CertificateOrderFailureClass,
+    retry_after: Option<UnixMicros>,
+    retired_checkpoint_digest: Option<[u8; 32]>,
+}
+
 impl<A> CertificateOrderRetryService<A> {
     /// Binds retry policy to one authoritative certificate-order store.
     #[must_use]
@@ -100,6 +108,67 @@ where
         failure_class: CertificateOrderFailureClass,
         retry_after: Option<UnixMicros>,
     ) -> Result<CertificateOrderRetryCommit, CertificateOrderRetryError> {
+        self.schedule(
+            actor_principal_id,
+            failed_at,
+            assignment,
+            RetryPlan {
+                failure_class,
+                retry_after,
+                retired_checkpoint_digest: None,
+            },
+        )
+    }
+
+    /// Queues a fresh CA order only after exact cleanup has reached a durable retired state.
+    /// The authority consumes that checkpoint and schedules the retry in one transaction.
+    ///
+    /// # Errors
+    ///
+    /// Rejects incomplete retirement, stale claims, substituted checkpoints and failed commits.
+    pub fn restart(
+        &self,
+        actor_principal_id: PrincipalId,
+        failed_at: UnixMicros,
+        assignment: &CertificateOrderAssignment,
+        machine: &meshspan_acme::AcmeOrderMachine,
+    ) -> Result<CertificateOrderRetryCommit, CertificateOrderRetryError> {
+        let Ok(meshspan_acme::AcmeMachineAction::Retired { reason }) = machine.action() else {
+            return Err(CertificateOrderRetryError::InvalidInput);
+        };
+        let failure_class = match reason {
+            meshspan_acme::AcmeOrderRetirementReason::PublicationExpired => {
+                CertificateOrderFailureClass::Challenge
+            }
+            meshspan_acme::AcmeOrderRetirementReason::AuthorizationRejected
+            | meshspan_acme::AcmeOrderRetirementReason::OrderRejected => {
+                CertificateOrderFailureClass::Protocol
+            }
+        };
+        let checkpoint = machine
+            .encode_checkpoint()
+            .map_err(|_| CertificateOrderRetryError::InvalidInput)?;
+        self.schedule(
+            actor_principal_id,
+            failed_at,
+            assignment,
+            RetryPlan {
+                failure_class,
+                retry_after: machine
+                    .poll_not_before()
+                    .filter(|instant| *instant > failed_at),
+                retired_checkpoint_digest: Some(Sha256::digest(checkpoint).into()),
+            },
+        )
+    }
+
+    fn schedule(
+        &self,
+        actor_principal_id: PrincipalId,
+        failed_at: UnixMicros,
+        assignment: &CertificateOrderAssignment,
+        plan: RetryPlan,
+    ) -> Result<CertificateOrderRetryCommit, CertificateOrderRetryError> {
         let claim = assignment
             .order
             .claim
@@ -107,7 +176,7 @@ where
         if assignment.order.attempt_count == 0
             || failed_at.get() < 0
             || claim.lease_expires_at <= failed_at
-            || retry_after.is_some_and(|instant| instant <= failed_at)
+            || plan.retry_after.is_some_and(|instant| instant <= failed_at)
         {
             return Err(CertificateOrderRetryError::InvalidInput);
         }
@@ -115,8 +184,8 @@ where
             failed_at,
             assignment.order.order_id.as_bytes(),
             assignment.order.attempt_count,
-            failure_class,
-            retry_after,
+            plan.failure_class,
+            plan.retry_after,
         )?;
         let failure_digest = derived_digest(
             FAILURE_DIGEST_DOMAIN,
@@ -124,7 +193,7 @@ where
             claim,
             failed_at,
             retry_at,
-            failure_class,
+            plan,
         );
         let operation_id = OperationId::from_bytes(uuid_v8(prefix(derived_digest(
             OPERATION_ID_DOMAIN,
@@ -132,28 +201,24 @@ where
             claim,
             failed_at,
             retry_at,
-            failure_class,
+            plan,
         ))))?;
-        if let Some(receipt) = self
-            .authority
-            .resolve_certificate_order_completion(operation_id)?
-        {
-            validate_receipt(receipt, operation_id, None, assignment)?;
-            return Ok(CertificateOrderRetryCommit {
-                failure_digest,
-                retry_at,
-                revision: receipt.committed_revision,
-            });
-        }
         let command = AuthoritativeCommand::CompleteCertificateOrder(CompleteCertificateOrder {
             order_id: assignment.order.order_id,
             claim_generation: claim.generation,
             worker_node_id: claim.worker_node_id,
             worker_incarnation: claim.worker_incarnation,
             fence: claim.fence,
-            outcome: CertificateOrderCompletion::Retry {
-                failure_digest,
-                retry_at,
+            outcome: match plan.retired_checkpoint_digest {
+                Some(retired_checkpoint_digest) => CertificateOrderCompletion::Restart {
+                    failure_digest,
+                    retry_at,
+                    retired_checkpoint_digest,
+                },
+                None => CertificateOrderCompletion::Retry {
+                    failure_digest,
+                    retry_at,
+                },
             },
         });
         let context = CommandContext {
@@ -165,21 +230,22 @@ where
                 claim,
                 failed_at,
                 retry_at,
-                failure_class,
+                plan,
             ))))?,
             occurred_at: failed_at,
             expected_revision: None,
         };
         let expected_request_digest = command.request_digest(context);
-        let receipt = self
+        let receipt = match self
             .authority
-            .complete_certificate_order(context, &command)?;
-        validate_receipt(
-            receipt,
-            operation_id,
-            Some(expected_request_digest),
-            assignment,
-        )?;
+            .resolve_certificate_order_completion(operation_id)?
+        {
+            Some(receipt) => receipt,
+            None => self
+                .authority
+                .complete_certificate_order(context, &command)?,
+        };
+        validate_receipt(receipt, operation_id, expected_request_digest, assignment)?;
         Ok(CertificateOrderRetryCommit {
             failure_digest,
             retry_at,
@@ -234,7 +300,7 @@ fn derived_digest(
     claim: meshspan_metadata::CertificateOrderClaim,
     failed_at: UnixMicros,
     retry_at: UnixMicros,
-    failure_class: CertificateOrderFailureClass,
+    plan: RetryPlan,
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(domain);
@@ -247,7 +313,11 @@ fn derived_digest(
     digest.update(claim.fence.to_be_bytes());
     digest.update(failed_at.get().to_be_bytes());
     digest.update(retry_at.get().to_be_bytes());
-    digest.update([failure_class.code()]);
+    digest.update([plan.failure_class.code()]);
+    if let Some(checkpoint_digest) = plan.retired_checkpoint_digest {
+        digest.update(b"restart\0");
+        digest.update(checkpoint_digest);
+    }
     digest.finalize().into()
 }
 
@@ -260,11 +330,11 @@ fn prefix(digest: [u8; 32]) -> [u8; 16] {
 fn validate_receipt(
     receipt: CommandReceipt,
     operation_id: OperationId,
-    expected_request_digest: Option<[u8; 32]>,
+    expected_request_digest: [u8; 32],
     assignment: &CertificateOrderAssignment,
 ) -> Result<(), CertificateOrderRetryError> {
     if receipt.operation_id != operation_id
-        || expected_request_digest.is_some_and(|digest| receipt.request_digest != digest)
+        || receipt.request_digest != expected_request_digest
         || receipt.request_digest == [0; 32]
         || receipt.result_digest == [0; 32]
         || receipt.committed_revision == Revision::ZERO

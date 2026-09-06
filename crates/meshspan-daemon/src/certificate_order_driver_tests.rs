@@ -30,6 +30,7 @@ use crate::{
 };
 
 mod deadlines;
+mod retirement;
 mod tls_retry;
 
 #[test]
@@ -318,7 +319,8 @@ impl RecordingAuthority {
         let state = self.0.lock().ok()?;
         match state.completion.as_ref()? {
             AuthoritativeCommand::CompleteCertificateOrder(command) => match command.outcome {
-                meshspan_metadata::CertificateOrderCompletion::Retry { retry_at, .. } => {
+                meshspan_metadata::CertificateOrderCompletion::Retry { retry_at, .. }
+                | meshspan_metadata::CertificateOrderCompletion::Restart { retry_at, .. } => {
                     Some(retry_at)
                 }
                 meshspan_metadata::CertificateOrderCompletion::Issued { .. } => None,

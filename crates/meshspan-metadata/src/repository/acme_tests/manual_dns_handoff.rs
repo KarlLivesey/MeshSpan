@@ -13,6 +13,8 @@ use meshspan_contracts::{
 
 use super::*;
 
+mod retirement;
+
 #[test]
 fn manual_task_survives_database_restart_and_natural_claim_expiry() -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;

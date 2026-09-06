@@ -7,6 +7,99 @@ use crate::{
 };
 
 #[test]
+fn rejected_authorization_keeps_exact_cleanup_instead_of_aborting_the_machine()
+-> Result<(), Box<dyn std::error::Error>> {
+    for status in [
+        AcmeResourceStatus::Invalid,
+        AcmeResourceStatus::Expired,
+        AcmeResourceStatus::Deactivated,
+        AcmeResourceStatus::Revoked,
+    ] {
+        let mut machine = machine(AcmeChallengePreference::Http01)?;
+        drive_to_challenge(&mut machine)?;
+        machine.advance(AcmeMachineEvent::ChallengePublished {
+            publication_digest: [9; 32],
+        })?;
+        machine.advance(AcmeMachineEvent::ChallengeNotified {
+            replay_nonce: "nonce_5".to_owned(),
+        })?;
+        machine.advance(AcmeMachineEvent::AuthorizationPolled {
+            authorization: authorization(status, false),
+            replay_nonce: "nonce_6".to_owned(),
+        })?;
+        assert!(
+            matches!(machine.action()?, AcmeMachineAction::CleanupChallenge {
+            publication_digest, order_epoch: 7, ..
+        } if publication_digest == [9; 32])
+        );
+        let restored = AcmeOrderMachine::decode_checkpoint(&machine.encode_checkpoint()?)?;
+        assert_eq!(restored.action()?, machine.action()?);
+        machine.resume_under_fence(88)?;
+        machine.advance(AcmeMachineEvent::ChallengeCleaned)?;
+        assert_eq!(
+            machine.action()?,
+            AcmeMachineAction::Retired {
+                reason: crate::AcmeOrderRetirementReason::AuthorizationRejected,
+            }
+        );
+        assert_eq!(machine.publication_digest(), None);
+        assert_eq!(
+            AcmeOrderMachine::decode_checkpoint(&machine.encode_checkpoint()?)?,
+            machine
+        );
+        let mut checkpoint: serde_json::Value =
+            serde_json::from_slice(&machine.encode_checkpoint()?)?;
+        assert_eq!(checkpoint["version"], 4);
+        assert_eq!(checkpoint["machine"]["authorization_index"], 0);
+        checkpoint["version"] = serde_json::json!(3);
+        assert!(AcmeOrderMachine::decode_checkpoint(&serde_json::to_vec(&checkpoint)?).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn invalid_order_is_retired_without_fabricating_a_publication()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut machine = machine(AcmeChallengePreference::Http01)?;
+    drive_to_challenge(&mut machine)?;
+    machine.advance(AcmeMachineEvent::ChallengePublished {
+        publication_digest: [9; 32],
+    })?;
+    machine.advance(AcmeMachineEvent::ChallengeNotified {
+        replay_nonce: "nonce_5".to_owned(),
+    })?;
+    machine.advance(AcmeMachineEvent::AuthorizationPolled {
+        authorization: authorization(AcmeResourceStatus::Valid, false),
+        replay_nonce: "nonce_6".to_owned(),
+    })?;
+    machine.advance(AcmeMachineEvent::ChallengeCleaned)?;
+    machine.advance_with_retry(
+        AcmeMachineEvent::OrderPolled {
+            order: order(AcmeResourceStatus::Invalid, None),
+            replay_nonce: "nonce_7".to_owned(),
+        },
+        meshspan_domain::UnixMicros::new(1_000_000),
+        Some(crate::AcmeRetryAfter::DelayMicros(30_000_000)),
+    )?;
+    assert_eq!(
+        machine.action()?,
+        AcmeMachineAction::Retired {
+            reason: crate::AcmeOrderRetirementReason::OrderRejected
+        }
+    );
+    assert_eq!(
+        machine.poll_not_before(),
+        Some(meshspan_domain::UnixMicros::new(31_000_000))
+    );
+    assert_eq!(machine.publication_action()?, None);
+    assert_eq!(
+        AcmeOrderMachine::decode_checkpoint(&machine.encode_checkpoint()?)?,
+        machine
+    );
+    Ok(())
+}
+
+#[test]
 fn polled_challenge_identity_cannot_replace_the_published_token_or_url()
 -> Result<(), Box<dyn std::error::Error>> {
     for change_token in [true, false] {

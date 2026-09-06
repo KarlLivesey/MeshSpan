@@ -22,6 +22,8 @@ mod publication;
 pub enum CertificateOrderStepResult {
     /// External visibility is not yet proven; the same action remains current.
     Pending,
+    /// Cleanup is durably complete; atomically clear this attempt and queue a fresh one.
+    Retired,
     /// One event advanced and the resulting next-action state is authoritative.
     Checkpointed(CertificateOrderCheckpointCommit),
     /// The terminal machine state yielded certificate-chain bytes for validation.
@@ -131,45 +133,42 @@ where
                 candidate,
             );
         }
+        if let Some(candidate) = self.expired_publication(context, now)? {
+            return self.checkpoint_candidate(
+                checkpoint_service,
+                actor_principal_id,
+                now,
+                candidate,
+            );
+        }
         if self.needs_publication_restore()? {
             return self
                 .restore_publication(clock, context, challenge_expires_at)
                 .await;
         }
-        if self
-            .machine
-            .poll_not_before()
-            .is_some_and(|instant| now < instant)
+        if self.machine.retirement_reason().is_none()
+            && self
+                .machine
+                .poll_not_before()
+                .is_some_and(|instant| now < instant)
         {
             return Ok(CertificateOrderStepResult::Pending);
         }
-        let action = self.machine.action()?;
-        let remaining_micros = u64::try_from(context.deadline.get() - now.get())
-            .map_err(|_| CertificateOrderExecutionError::InvalidInput)?;
-        // The worker owns the deadline, even when a replaceable transport/provider does not.
-        // Only the external action is cancellable here; authoritative checkpointing is not.
-        let outcome = tokio::time::timeout(
-            std::time::Duration::from_micros(remaining_micros),
-            self.executor.execute(
-                &action,
-                AcmeChallengeExecution {
-                    context,
-                    challenge_expires_at,
-                    publication: self.machine.publication(),
-                    csr_der: &self.csr_der,
-                },
-            ),
-        )
-        .await
-        .map_err(|_| CertificateOrderExecutionError::DeadlineElapsed)??;
-        let received_at = clock.now();
-        if received_at < now {
-            return Err(CertificateOrderExecutionError::InvalidInput);
-        }
-        if received_at >= context.deadline {
-            return Err(CertificateOrderExecutionError::DeadlineElapsed);
-        }
+        let (outcome, received_at) = self
+            .execute_current_action(clock, now, context, challenge_expires_at)
+            .await?;
         let (event, retry_after) = match outcome {
+            AcmeStepOutcome::Retired => {
+                // A replacement worker must bind even an already-retired checkpoint to its
+                // current claim before the atomic restart command may consume it.
+                self.checkpoint_candidate(
+                    checkpoint_service,
+                    actor_principal_id,
+                    received_at,
+                    self.machine.clone(),
+                )?;
+                return Ok(CertificateOrderStepResult::Retired);
+            }
             AcmeStepOutcome::Pending => return Ok(CertificateOrderStepResult::Pending),
             AcmeStepOutcome::Complete(certificate_chain) => {
                 return Ok(CertificateOrderStepResult::ReadyForCompletion { certificate_chain });
@@ -196,6 +195,42 @@ where
         )?;
         self.publication_visible |= publication_visible;
         Ok(result)
+    }
+
+    /// Owns the cancellable external boundary and validates receipt time before its result
+    /// becomes eligible for an uncancellable authoritative state transition.
+    async fn execute_current_action(
+        &mut self,
+        clock: &impl Clock,
+        started_at: UnixMicros,
+        context: RequestContext,
+        challenge_expires_at: UnixMicros,
+    ) -> Result<(AcmeStepOutcome, UnixMicros), CertificateOrderExecutionError> {
+        let action = self.machine.action()?;
+        let remaining_micros = u64::try_from(context.deadline.get() - started_at.get())
+            .map_err(|_| CertificateOrderExecutionError::InvalidInput)?;
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_micros(remaining_micros),
+            self.executor.execute(
+                &action,
+                AcmeChallengeExecution {
+                    context,
+                    challenge_expires_at,
+                    publication: self.machine.publication(),
+                    csr_der: &self.csr_der,
+                },
+            ),
+        )
+        .await
+        .map_err(|_| CertificateOrderExecutionError::DeadlineElapsed)??;
+        let received_at = clock.now();
+        if received_at < started_at {
+            return Err(CertificateOrderExecutionError::InvalidInput);
+        }
+        if received_at >= context.deadline {
+            return Err(CertificateOrderExecutionError::DeadlineElapsed);
+        }
+        Ok((outcome, received_at))
     }
 
     fn checkpoint_candidate<A: CertificateOrderCheckpointAuthority>(

@@ -521,6 +521,18 @@ fn encode_complete(
             encoder.fixed(failure_digest)?;
             encoder.i64(retry_at.get())
         }
+        CertificateOrderCompletion::Restart {
+            failure_digest,
+            retry_at,
+            retired_checkpoint_digest,
+        } => {
+            nonzero_digest(*failure_digest)?;
+            nonzero_digest(*retired_checkpoint_digest)?;
+            encoder.u8(3)?;
+            encoder.fixed(failure_digest)?;
+            encoder.i64(retry_at.get())?;
+            encoder.fixed(retired_checkpoint_digest)
+        }
         CertificateOrderCompletion::Issued {
             certificate,
             not_before,
@@ -548,6 +560,11 @@ fn decode_complete(
 ) -> Result<CompleteCertificateOrder, MetadataCommandCodecError> {
     let identity = decode_claim_identity(decoder)?;
     let outcome = match decoder.u8()? {
+        3 => CertificateOrderCompletion::Restart {
+            failure_digest: nonzero_digest(decoder.fixed()?)?,
+            retry_at: UnixMicros::new(decoder.i64()?),
+            retired_checkpoint_digest: nonzero_digest(decoder.fixed()?)?,
+        },
         1 => CertificateOrderCompletion::Retry {
             failure_digest: nonzero_digest(decoder.fixed()?)?,
             retry_at: UnixMicros::new(decoder.i64()?),

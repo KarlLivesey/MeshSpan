@@ -16,7 +16,9 @@ mod checkpoint;
 mod checkpoint_tests;
 mod polling;
 mod publication;
+mod retirement;
 use publication::PublicationState;
+pub use retirement::AcmeOrderRetirementReason;
 
 /// Configured challenge family for one immutable order.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -142,6 +144,11 @@ pub enum AcmeMachineAction {
         /// Bounded certificate response awaiting cryptographic validation.
         certificate: Vec<u8>,
     },
+    /// Cleanup is complete; the owner must durably queue a fresh protocol attempt.
+    Retired {
+        /// Closed reason, without remote diagnostic text or secrets.
+        reason: AcmeOrderRetirementReason,
+    },
 }
 
 /// One proven result fed back after completing the current machine action.
@@ -223,6 +230,8 @@ enum Phase {
     NotifyChallenge,
     PollAuthorization,
     CleanupChallenge,
+    RetireChallenge(AcmeOrderRetirementReason),
+    Retired(AcmeOrderRetirementReason),
     FinalizeOrder,
     PollOrder,
     DownloadCertificate,
@@ -426,10 +435,10 @@ impl AcmeOrderMachine {
                     replay_nonce,
                 },
             ) => self.accept_authorization(authorization, replay_nonce, true)?,
-            (Phase::CleanupChallenge, AcmeMachineEvent::ChallengeCleaned) => {
-                self.advance_authorization()?;
-                self.clear_challenge();
-            }
+            (
+                Phase::CleanupChallenge | Phase::RetireChallenge(_),
+                AcmeMachineEvent::ChallengeCleaned,
+            ) => self.complete_challenge()?,
             (
                 Phase::FinalizeOrder,
                 AcmeMachineEvent::OrderFinalized {
@@ -453,7 +462,9 @@ impl AcmeOrderMachine {
             }
             _ => return Err(AcmeMachineError::InvalidTransition),
         }
-        self.poll_not_before = None;
+        if self.retirement_reason().is_none() {
+            self.poll_not_before = None;
+        }
         Ok(())
     }
 
@@ -493,7 +504,10 @@ impl AcmeOrderMachine {
             AcmeResourceStatus::Pending | AcmeResourceStatus::Processing => Phase::PollOrder,
             AcmeResourceStatus::Ready => Phase::FinalizeOrder,
             AcmeResourceStatus::Valid if order.certificate.is_some() => Phase::DownloadCertificate,
-            AcmeResourceStatus::Invalid => return Err(AcmeMachineError::RemoteRejected),
+            AcmeResourceStatus::Invalid => {
+                self.begin_retirement(AcmeOrderRetirementReason::OrderRejected);
+                return Ok(());
+            }
             _ => return Err(AcmeMachineError::InvalidRemoteState),
         };
         Ok(())
@@ -521,7 +535,12 @@ impl AcmeOrderMachine {
             }
             // The CA advances challenge status independently of our publication receipt.
             // Retain the exact published identity while checkpointing its current status.
-            self.challenge = Some(updated);
+            if matches!(
+                authorization.status,
+                AcmeResourceStatus::Pending | AcmeResourceStatus::Valid
+            ) {
+                self.challenge = Some(updated);
+            }
         }
         self.nonce = Some(replay_nonce);
         match authorization.status {
@@ -546,7 +565,9 @@ impl AcmeOrderMachine {
             AcmeResourceStatus::Invalid
             | AcmeResourceStatus::Deactivated
             | AcmeResourceStatus::Expired
-            | AcmeResourceStatus::Revoked => return Err(AcmeMachineError::RemoteRejected),
+            | AcmeResourceStatus::Revoked => {
+                self.begin_retirement(AcmeOrderRetirementReason::AuthorizationRejected);
+            }
             _ => return Err(AcmeMachineError::InvalidRemoteState),
         }
         Ok(())
