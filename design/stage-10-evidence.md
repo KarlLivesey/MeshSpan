@@ -12,6 +12,48 @@ not close an unexplained failure.
 
 ## Task 2 — interrupted challenge recovery
 
+### Integrated cleanup and manual-DNS polling candidate
+
+The complete local gate passed on signed commit
+`cf277358f2a0a5ddf7cf888aafb55da84731c957`, tree
+`dfca2f599625d426f447a7d03cbe57608cd9eef0`, in **1,011.68 seconds**.
+Rust workspace tests passed in **886.89 seconds** and web tests in **9.57 seconds**.
+Generated drift (2.75 seconds), embedded bundle (1.45), Rust format (3.62), Rust
+lint (82.42), Rust licences (0.68), JavaScript licences (1.27), workspace format
+(5.03), web lint (33.86), web typecheck (11.69) and tooling tests (1.61) passed.
+The candidate remained unchanged throughout this run. Ignored or external tests
+are not covered by this result; publication remains prohibited.
+
+The exact invocation, from a non-login Bash shell after sourcing NVM and selecting
+the repository default (Node 26.8.1, pnpm 11.19.0), was:
+
+```sh
+CARGO_BUILD_JOBS=4 MESHSPAN_CHECK_WORKERS=4 \
+  /Users/karllivesey/.cargo/bin/rustup run 1.98.0 pnpm check
+```
+
+Read-only investigation found that login shells selected Homebrew Rust while
+non-login shells selected rustup. Although both reported Rust 1.98.0 and the same
+upstream commit, their Cargo compiler fingerprints differed. Alternating them
+invalidated compiler caches and made prior timing comparisons inconsistent. This
+gate explicitly used rustup for the harness and its children; no global shell or
+tool installation was changed. This finding does **not** explain or close the
+earlier cluster-admission timeout. Its diagnostic state retention stays in place;
+no timeout or concurrency assertion was relaxed to obtain this pass.
+
+The two exact manual-DNS runtime queries were also extracted and explained against
+all current partition migration SQL in an in-memory system SQLite database.
+Claim validation used indexed order/fence, order identity and configuration
+identity lookups; task observation used the existing order/fence/task-digest
+index. There was no task-history scan. This checks query shape on system SQLite,
+not bundled-engine performance or a real daemon restart.
+
+This closes validation of the current cleanup and no-op polling slice, not all
+interrupted-order recovery. Task 2 remains **5 points**, Stage 10 **144**, and
+Stage 11 **126**. Original publication identity/lifetime across worker handoff,
+long-running manual tasks, successful-response polling guidance, remaining DNS
+provider process proofs and active-gateway challenge distribution remain open.
+
 Manual-DNS polling now checks the exact retained task and live claim before
 proposing another transition. The claim and task are read in one SQLite read
 transaction; a satisfied phase creates no operation, audit entry or revision.
