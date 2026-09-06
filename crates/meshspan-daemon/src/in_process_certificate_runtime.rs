@@ -694,6 +694,14 @@ mod tests {
     struct NeverAuthority;
 
     impl ManualDnsTaskCommitAuthority for NeverAuthority {
+        fn manual_dns_task_transition_satisfied(
+            &self,
+            _now: UnixMicros,
+            _transition: &meshspan_metadata::AdvanceManualDnsTask,
+        ) -> Result<bool, ContractError> {
+            Err(ContractError::Unavailable)
+        }
+
         fn resolve_manual_dns_task(
             &self,
             _operation_id: OperationId,

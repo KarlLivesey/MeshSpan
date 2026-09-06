@@ -12,6 +12,41 @@ not close an unexplained failure.
 
 ## Task 2 — interrupted challenge recovery
 
+Manual-DNS polling now checks the exact retained task and live claim before
+proposing another transition. The claim and task are read in one SQLite read
+transaction; a satisfied phase creates no operation, audit entry or revision.
+An absent task or genuinely later phase still goes through the normal
+authoritative command and its receipt checks. Identity mismatch, expired or
+replaced claims, superseded tasks and unavailable observations cannot take the
+no-op path. This is not an in-memory success cache, lease renewal or a new grant
+of authority; subsequent writes retain their normal authoritative checks.
+
+The old timestamp-derived operation identity caused two commits when the same
+request was polled at times 10 and 11. The regression failed in **0.01 seconds**
+after a 2-minute-25-second build. It now passes with one commit across advancing
+clocks and adapter reconstruction. A separate SQL regression proved that manual
+task writes were incorrectly accepted exactly at claim expiry (**0.63 seconds**,
+38.65-second build); both observation and mutation now use exclusive lease
+expiry. Cleanup still permits the original publication expiry to be in the past.
+
+Verification for this slice:
+
+- Seven focused metadata cases passed in **5.03 seconds** after a 13.94-second
+  build. They cover every claim/publication field, missing tasks, unchanged
+  revisions, later/earlier phases, expiry and hostile superseded state.
+- Eight daemon manual-DNS, projection and API cases passed in **0.19 seconds**
+  after a 24.63-second build. Lost commit replies recover from confirmed task
+  state without another write; unavailable/stale reads do not fall back to writes.
+- All 19 ACME metadata cases passed in **17.41 seconds**. Affected all-target/
+  all-feature Clippy passed first in 1 minute 15 seconds, then in **13.42 seconds**
+  after the additional tests. Formatting and diff checks passed.
+
+The database cases use the existing SQLite fixtures, and adapter reconstruction
+uses a recording authority; these are not a full daemon restart or manual-DNS
+wire-lifecycle proof. No schema, persisted record format, wire message or dependency
+changed. Task 2 remains **5 points**, Stage 10 **144**. The failed full gate recorded
+below remains unresolved, and this slice has not been merged.
+
 After the preceding candidate reached `main`, two new HTTP-01 cleanup regressions
 failed with `NotFound` in **0.00 seconds** (18.69-second build): replay after a
 successful removal, and receipt validation against an empty restarted catalogue.
