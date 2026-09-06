@@ -40,7 +40,13 @@ daemon run's **18 certificate-order tests passed in 0.13 seconds** after a
 17.37-second incremental build. Affected all-target/all-feature Clippy passed
 with warnings denied in **6.52 seconds**. An earlier Clippy conversion-style
 failure was corrected without an exception. Rust/JavaScript advisory scans and
-the Rust licence check passed. The final full local integration gate remains.
+the Rust licence check passed. The final `pnpm check:dependency-update` on signed
+commit `d83002b`, tree `c2c7dab8fbb6cb5c0fecb0936ddff4c725f0c7d0`, passed.
+Its integration gate took **1,059.56 seconds** with four workers, including Rust
+workspace tests in **936.18 seconds** and web tests in **10.63 seconds**. This
+is slower than task 1's prior gate; no test-speed improvement is claimed.
+All static, generation, advisory and licence lanes passed. Ignored/environmental
+tests are not covered by that result.
 
 `httpdate` 1.0.3 was already in the resolved graph. Its direct ACME reference
 adds no package/version or runtime dependency; its MIT option remains permitted
@@ -51,8 +57,8 @@ Sources: [HTTP retry syntax](https://www.rfc-editor.org/rfc/rfc9110.html#name-re
 [ACME rate limits](https://www.rfc-editor.org/rfc/rfc8555.html#section-6.6), and
 [httpdate upstream](https://github.com/pyfisch/httpdate).
 
-Task 2 remains open at **8 points**; Stage 10 remains **147 points** until this
-slice's integration verification. Successful-resource polling hints, worker
+Integration closes this error-response retry slice: task 2 falls **8 → 7 points**,
+and Stage 10 **147 → 146 points**. Successful-resource polling hints, worker
 replacement, full challenge lifecycle and multi-gateway order sharing remain
 separate outstanding acceptance within task 2. Live CA proof remains task 5.
 No release, tag, package/image publication or Actions run occurred.
