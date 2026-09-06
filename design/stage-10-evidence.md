@@ -12,6 +12,62 @@ not close an unexplained failure.
 
 ## Task 2 — interrupted challenge recovery
 
+### Rejected CA responses retain accepted state
+
+Signed, pushed, GitHub-verified commit
+`17e633d89398f3ec68acee46908741b29d2c4208`, tree
+`13b669e124626d78b352e4c13d7a1a3d121a8ded`, separates semantic CA refusal from
+local execution failure. [PR #249](https://github.com/KarlLivesey/MeshSpan/pull/249)
+contains this candidate. The full NVM-default local gate passed on that source
+in **489.14 seconds**: Rust workspace tests **453.02 seconds**, web tests **4.84
+seconds**, Rust lint **10.13 seconds**, and web lint **20.88 seconds**. Generated
+drift, embedded bundle, formatting, both licence checks, TypeScript and tooling
+tests also passed. The command was
+`CARGO_BUILD_JOBS=4 MESHSPAN_CHECK_WORKERS=4 rustup run 1.98.0 pnpm check` after
+initialising NVM. Closing edits are evidence only; no implementation changed
+after the final gate.
+Both opt-in real-process recovery tests passed together in **336.74 seconds**
+on the rebuilt candidate executable: actual lease-expiry takeover and rejected
+order cleanup/reissuance after queued-daemon restart. The command selected
+`acme_lifecycle:: --ignored --test-threads=4`; both ran in parallel and neither
+production lease nor retry delay was shortened.
+
+Before the correction, the new driver regressions failed with
+`Execution(Machine(NameMismatch))` and
+`Execution(Machine(InvalidRemoteState))`. These errors escaped the automatic
+certificate worker instead of queuing a retry. The execution boundary now
+validates an external event against a cloned candidate and reports a distinct,
+redacted `RejectedResponse` for remote semantic refusal. The driver queues the
+existing protocol retry without checkpointing the rejected candidate, clearing
+the old checkpoint or pretending the order succeeded. Valid retry guidance is
+resolved at response receipt time and retained in the authoritative retry.
+Local publication/cleanup events, invalid transitions, corrupt state and invalid
+local inputs are not reclassified as remote retries.
+
+The **47 focused certificate-order tests passed in 0.37 seconds** after an
+**11.22-second build**. New vectors cover foreign names, unexpected wildcards,
+unsupported challenge families, substituted order/finalisation URLs and changes
+to an already-published challenge's token, URL or family. They assert unchanged
+checkpoint bytes, exact queued retry time, no new checkpoint, ordinary Retry
+rather than Restart, and continued service of the original token without
+publishing the substituted token. The explicit error-classification table covers
+local versus remote origin for every current machine-error variant. Affected
+all-target/all-feature Clippy passed in **6.86 seconds**. Rebuilt normal HTTP-01
+and RFC 2136 DNS-01 daemon lifecycles passed together in **20.30 seconds**.
+
+There is no dependency, database or wire-format change; the Rust execution error
+adds the rejected-response variant. This focused correction is not a complete
+hostile-CA process campaign, a claim about every malformed response's retry
+handling, DNS-provider lifecycle completion or active-gateway challenge delivery.
+In particular, inspection of `executor/remote_steps.rs` found that successful
+response-body parsing precedes `progress_with_retry`: a valid retry header can
+therefore be lost when body parsing returns a protocol error. That separate
+wire-response path still needs a failing regression and correction; this
+candidate handles already-parsed responses refused by the state machine.
+Task 2 remains **2 points**, Stage 10 **141**, Stage 11 **126** while those gaps
+remain. The earlier unexplained cluster timeout remains open. No release, tag,
+package/image publication or GitHub Actions were run.
+
 ### Rejected-order process restart and replacement issuance
 
 Signed, pushed, GitHub-verified commit
