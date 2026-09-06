@@ -12,11 +12,16 @@ mod conformance;
 mod data;
 mod federation_storage;
 mod filesystem;
+mod maintenance_metrics;
 mod metrics;
 mod observability;
 mod security;
 mod storage;
+mod storage_usage;
 mod suites;
+
+pub use maintenance_metrics::{MaintenanceMetric, MaintenanceMetricKind};
+pub use storage_usage::{StorageUsageMetric, StorageUsageObservation, StorageUsageSource};
 
 pub use access::{
     AccessConnector, AccessIntent, AccessOperation, AccessResult, AccessSession,

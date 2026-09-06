@@ -50,6 +50,7 @@ impl RuntimeSnapshot {
                 RuntimeMetric::LastReconciliationFailedSteps(count(cycle.summary.failed_steps)?),
             ]);
         }
+        state.storage.append_metrics(self.captured, &mut samples);
         RuntimeMetricSnapshot::new(samples)
     }
 }

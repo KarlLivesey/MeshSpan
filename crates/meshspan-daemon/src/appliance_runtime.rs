@@ -2391,6 +2391,7 @@ struct StorageTargetRuntime {
     native_filesystem: NativeFilesystemRuntime,
     configured_paths: Vec<PathBuf>,
     active: BTreeMap<PathBuf, NativeStorageTarget>,
+    usage_dirty: bool,
     pending_return_scans: BTreeMap<TargetId, (u64, UnixMicros)>,
     next_target_health_probe_at: Option<UnixMicros>,
     scrub_admission_cursor: Option<meshspan_metadata::DueStorageScrubCursor>,
@@ -2450,6 +2451,7 @@ impl StorageTargetRuntime {
             native_filesystem,
             configured_paths,
             active: BTreeMap::new(),
+            usage_dirty: false,
             pending_return_scans: BTreeMap::new(),
             next_target_health_probe_at: None,
             scrub_admission_cursor: None,
@@ -2805,6 +2807,10 @@ impl StorageTargetRuntime {
         let Some(assignment) = self.next_maintenance_assignment(now, WorkKind::Scrub)? else {
             return Ok(());
         };
+        let observation = self
+            .readiness
+            .observations
+            .begin_maintenance(meshspan_contracts::MaintenanceMetricKind::Scrub);
         let WorkSubject::Scrub {
             target_id,
             target_generation,
@@ -2840,21 +2846,27 @@ impl StorageTargetRuntime {
             actor,
             now,
         )?;
-        execute_resumable_storage_scrub(
-            &self.maintenance_authority,
-            &mut provider,
-            &mut findings,
-            &mut self.maintenance_progress,
-            &execution,
+        observation.finish(
+            execute_resumable_storage_scrub(
+                &self.maintenance_authority,
+                &mut provider,
+                &mut findings,
+                &mut self.maintenance_progress,
+                &execution,
+            )
+            .map(|_| ())
+            .map_err(|_| ()),
         )
-        .map(|_| ())
-        .map_err(|_| ())
     }
 
     fn execute_one_reconciliation(&mut self, now: UnixMicros) -> Result<(), ()> {
         let Some(assignment) = self.next_maintenance_assignment(now, WorkKind::Reconcile)? else {
             return Ok(());
         };
+        let observation = self
+            .readiness
+            .observations
+            .begin_maintenance(meshspan_contracts::MaintenanceMetricKind::Reconcile);
         let WorkSubject::Reconcile {
             target_id,
             target_generation,
@@ -2890,21 +2902,35 @@ impl StorageTargetRuntime {
             actor,
             now,
         )?;
-        execute_resumable_target_reconciliation(
-            &self.maintenance_authority,
-            &mut provider,
-            &mut findings,
-            &mut self.maintenance_progress,
-            &execution,
+        observation.finish(
+            execute_resumable_target_reconciliation(
+                &self.maintenance_authority,
+                &mut provider,
+                &mut findings,
+                &mut self.maintenance_progress,
+                &execution,
+            )
+            .map(|_| ())
+            .map_err(|_| ()),
         )
-        .map(|_| ())
-        .map_err(|_| ())
     }
 
     fn execute_one_repair(&mut self, now: UnixMicros) -> Result<(), ()> {
         let Some(assignment) = self.next_maintenance_assignment(now, WorkKind::Repair)? else {
             return Ok(());
         };
+        let observation = self
+            .readiness
+            .observations
+            .begin_maintenance(meshspan_contracts::MaintenanceMetricKind::Repair);
+        observation.finish(self.execute_repair_assignment(assignment, now))
+    }
+
+    fn execute_repair_assignment(
+        &mut self,
+        assignment: crate::MaintenanceDispatchAssignment,
+        now: UnixMicros,
+    ) -> Result<(), ()> {
         let WorkSubject::Repair {
             volume_id,
             manifest_id,
@@ -3019,6 +3045,10 @@ impl StorageTargetRuntime {
         if !owes_attestation && !completion_recovery {
             return Ok(());
         }
+        let observation = self
+            .readiness
+            .observations
+            .begin_maintenance(meshspan_contracts::MaintenanceMetricKind::Drain);
         let observed_authority_revision = reader.current_revision().map_err(|_| ())?;
         let catalogue = self
             .native_filesystem
@@ -3032,20 +3062,26 @@ impl StorageTargetRuntime {
             observed_authority_revision,
             now,
         )?;
-        execute_target_drain_step(
-            &self.maintenance_authority,
-            &catalogue,
-            &mut OperatingSystemRandom,
-            &execution,
+        observation.finish(
+            execute_target_drain_step(
+                &self.maintenance_authority,
+                &catalogue,
+                &mut OperatingSystemRandom,
+                &execution,
+            )
+            .map(|_| ())
+            .map_err(|_| ()),
         )
-        .map(|_| ())
-        .map_err(|_| ())
     }
 
     fn execute_one_rebalance(&mut self, now: UnixMicros) -> Result<(), ()> {
         let Some(assignment) = self.next_maintenance_assignment(now, WorkKind::Rebalance)? else {
             return Ok(());
         };
+        let observation = self
+            .readiness
+            .observations
+            .begin_maintenance(meshspan_contracts::MaintenanceMetricKind::Rebalance);
         let WorkSubject::Rebalance { volume_id, .. } = assignment.subject else {
             return Err(());
         };
@@ -3061,16 +3097,18 @@ impl StorageTargetRuntime {
         let actor = self.maintenance_actor(now)?;
         let execution =
             maintenance_rebalance_execution(assignment, self.local_node_id, actor, now)?;
-        execute_rebalance_step(
-            &self.maintenance_authority,
-            &catalogue,
-            &configuration,
-            &meshspan_placement::FaultAwarePlacement::new(),
-            &mut OperatingSystemRandom,
-            &execution,
+        observation.finish(
+            execute_rebalance_step(
+                &self.maintenance_authority,
+                &catalogue,
+                &configuration,
+                &meshspan_placement::FaultAwarePlacement::new(),
+                &mut OperatingSystemRandom,
+                &execution,
+            )
+            .map(|_| ())
+            .map_err(|_| ()),
         )
-        .map(|_| ())
-        .map_err(|_| ())
     }
 
     fn next_maintenance_assignment(
@@ -3112,6 +3150,7 @@ impl StorageTargetRuntime {
         }
         self.next_target_health_probe_at =
             now.checked_add(DurationMicros::new(TARGET_HEALTH_PROBE_INTERVAL_MICROS));
+        let mut usage = crate::runtime_observations::StorageUsagePass::default();
         let unavailable = self
             .active
             .iter()
@@ -3124,9 +3163,15 @@ impl StorageTargetRuntime {
                     started.elapsed(),
                     current_time().ok(),
                 );
+                usage.observe(if passed {
+                    meshspan_contracts::StorageUsageSource::observe_usage(&target.provider())
+                } else {
+                    Err(meshspan_contracts::ContractError::Unavailable)
+                });
                 (!passed).then_some(canonical_path.clone())
             })
             .collect::<Vec<_>>();
+        self.readiness.observations.record_storage_usage(usage);
         if unavailable.is_empty() {
             return Ok(0);
         }
@@ -3204,6 +3249,7 @@ impl StorageTargetRuntime {
                                 canonical_path,
                                 NativeStorageTarget::new(context, provider),
                             );
+                            self.usage_dirty = true;
                         }
                         Err(_) => failures = failures.saturating_add(1),
                     }
@@ -3224,6 +3270,10 @@ impl StorageTargetRuntime {
             }
         }
         self.readiness.store_degraded(failures > 0);
+        if self.usage_dirty {
+            self.observe_open_target_usage();
+            self.usage_dirty = false;
+        }
         self.readiness.observations.record_cycle(
             crate::runtime_observations::StorageCycleSummary {
                 configured_folders: self.configured_paths.len(),
@@ -3234,6 +3284,16 @@ impl StorageTargetRuntime {
             started.elapsed(),
             current_time().ok(),
         );
+    }
+
+    fn observe_open_target_usage(&self) {
+        let mut usage = crate::runtime_observations::StorageUsagePass::default();
+        for target in self.active.values() {
+            usage.observe(meshspan_contracts::StorageUsageSource::observe_usage(
+                &target.provider(),
+            ));
+        }
+        self.readiness.observations.record_storage_usage(usage);
     }
 }
 

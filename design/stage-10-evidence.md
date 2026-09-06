@@ -3,6 +3,50 @@
 Status: **in progress**. Stage 11 has not started. Publication remains on hold
 pending the owner's dependency review.
 
+## Target accounting and selected maintenance measurements
+
+The [metrics catalogue](metrics.md) now includes seven target-accounting gauges
+and fifteen selected-maintenance families across repair, target drain, rebalance,
+return reconciliation and scrub. Observations do not authorise work, reserve
+capacity or certify job completion. The replaceable usage source reads existing
+target accounting, including backup holds, and skips busy provider locks. No
+provider IO happens on scrape. Partial or overflowed sampling omits byte totals;
+the exporter reports coverage and age instead of inventing complete capacity.
+
+Five contract tests passed in under **0.01 seconds**. Four shared-provider tests
+passed in **0.12 seconds**, exercising real shard reservation/publication,
+backup hold/commit/release accounting, policy ceilings and contention. Ten
+runtime observation tests passed in **0.01 seconds**, including distinct work-kind
+counts, successful/failed/early-return attempts, exact aggregate accounting,
+partial passes, overflow, recovery after missing evidence and non-waiting
+observation loss. Affected all-target/all-feature Clippy passed in **10.61 seconds**.
+Its repair-function size warning was resolved by separating selection/observation
+from execution of an already-selected repair; no responsibility rule was relaxed.
+
+The real-process exporter proof first failed because startup sampled the empty
+open-target set before reopening persisted folders. A diagnostic reproduction
+failed in **26.07 seconds**, reporting zero sampled targets but four reconciliation
+attempts. New/opened target membership now marks accounting dirty and the existing
+worker refreshes it; administration does not scan providers, and the health-probe
+interval remains unchanged. The same process case then passed in **16.50 seconds**
+(14.45-second build), requiring fresh non-zero target coverage, byte units,
+accounting gauges and real reconciliation-attempt observations after restart.
+Existing HTTPS, SMB dispatch, policy replication and node-loss assertions remain.
+
+The complete NVM-default `MESHSPAN_CHECK_WORKERS=4 pnpm check` passed in
+**515.56 seconds** against staged tree
+`ff08c4ecbaa838dc6324334186c9e81933c7b13e`. Rust workspace tests took 463.01
+seconds and web tests took 4.53 seconds. Both licence gates, workspace Clippy,
+formatting, web/tooling lint, TypeScript, scheduler tests, generated-contract
+drift and the embedded web build passed. The tree identifies the tested source
+because 1Password signing failed before a commit could be created. This evidence
+addition changes no implementation code.
+
+This is partial OPS-019 coverage, not whole-stage completion. Scope-drain job
+progress, queue/debt state, complete physical-space attribution and the other
+operational measurement categories remain outstanding. No dependency, schema,
+private protocol, release, tag, image or publication workflow was introduced.
+
 ## HTTPS and SMB dispatch measurements
 
 The daemon now records aggregate dispatch counts, handler failures, cancellations

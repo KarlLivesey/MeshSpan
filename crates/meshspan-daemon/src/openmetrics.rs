@@ -47,6 +47,7 @@ fn write_family(output: &mut String, family: &Descriptor<'_>) -> std::fmt::Resul
     let (kind, unit) = match family.measurement {
         Measurement::Counter(_) => ("counter", None),
         Measurement::Gauge(_) => ("gauge", None),
+        Measurement::Bytes(_) => ("gauge", Some("bytes")),
         Measurement::Seconds(_) => ("gauge", Some("seconds")),
         Measurement::Latency(_) => ("histogram", Some("seconds")),
     };
@@ -57,7 +58,7 @@ fn write_family(output: &mut String, family: &Descriptor<'_>) -> std::fmt::Resul
     writeln!(output, "# HELP {name} {}", family.help)?;
     match family.measurement {
         Measurement::Counter(value) => writeln!(output, "{name}_total {value}"),
-        Measurement::Gauge(value) => writeln!(output, "{name} {value}"),
+        Measurement::Gauge(value) | Measurement::Bytes(value) => writeln!(output, "{name} {value}"),
         Measurement::Seconds(value) => writeln!(output, "{name} {}", seconds(value)),
         Measurement::Latency(value) => write_histogram(output, &name, value),
     }

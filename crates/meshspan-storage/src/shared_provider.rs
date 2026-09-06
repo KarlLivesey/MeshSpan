@@ -111,6 +111,18 @@ impl<P> Clone for SharedStorageProvider<P> {
     }
 }
 
+impl<P: meshspan_contracts::StorageUsageSource> meshspan_contracts::StorageUsageSource
+    for SharedStorageProvider<P>
+{
+    fn observe_usage(&self) -> Result<meshspan_contracts::StorageUsageObservation, ContractError> {
+        // Monitoring skips a busy target rather than queuing ahead of foreground IO.
+        self.inner
+            .try_lock()
+            .map_err(|_| ContractError::Unavailable)?
+            .observe_usage()
+    }
+}
+
 impl SharedStorageProvider<FolderShardStore> {
     /// Revalidates the owned folder and both target-local databases under the target lock.
     ///
@@ -227,7 +239,8 @@ where
 mod tests {
     use meshspan_contracts::{
         ContractVersion, PutShardRequest, RequestContext, ReservationClass, ReserveStorageRequest,
-        ShardIdentity, ShardReadPermit, StoragePermitMacKey, StorageProvider, read_permit_mac,
+        ShardIdentity, ShardReadPermit, StoragePermitMacKey, StorageProvider, StorageUsageSource,
+        read_permit_mac,
     };
     use meshspan_domain::{
         EntropyError, MeshId, OperationId, RandomSource, Revision, TargetId, UnixMicros,
@@ -265,6 +278,8 @@ mod tests {
             bytes: u64::try_from(bytes.len())?,
             observed_at: UnixMicros::new(2),
         })?;
+        assert_eq!(reader.observe_usage()?.reserved_bytes, 13);
+        assert_eq!(reader.observe_usage()?.committed_bytes, 0);
         writer.put_exact(
             PutShardRequest {
                 context,
@@ -276,6 +291,8 @@ mod tests {
             },
             UnixMicros::new(3),
         )?;
+        assert_eq!(reader.observe_usage()?.committed_bytes, 13);
+        assert_eq!(reader.observe_usage()?.reserved_bytes, 0);
         let mut permit = ShardReadPermit {
             operation_id: context.operation_id,
             mesh_id: registration.mesh_id,
@@ -305,6 +322,23 @@ mod tests {
         let shared = SharedStorageProvider::new(provider);
 
         assert!(shared.capacity_ceiling()? > 0);
+        let usage = shared.observe_usage()?;
+        assert_eq!(usage.configured_limit_bytes, shared.capacity_ceiling()?);
+        assert_eq!(
+            (
+                usage.committed_bytes,
+                usage.reserved_bytes,
+                usage.repair_reserve_bytes
+            ),
+            (0, 0, 0)
+        );
+        let locked = shared.inner.lock().map_err(|_| "poisoned provider")?;
+        assert_eq!(
+            shared.observe_usage(),
+            Err(meshspan_contracts::ContractError::Unavailable)
+        );
+        drop(locked);
+        assert_eq!(shared.observe_usage()?, usage);
         assert!(shared.shares_owner_with(&shared.clone()));
         Ok(())
     }
@@ -337,6 +371,29 @@ mod tests {
             shared.inventory(None, 1),
             Err(meshspan_contracts::ContractError::Unavailable)
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn shared_usage_includes_backup_holds_and_committed_payloads()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (_directory, provider, _) = provider()?;
+        let mut shared = SharedStorageProvider::new(provider);
+        let object = meshspan_contracts::BackupObjectIdentity {
+            destination_id: meshspan_domain::BackupDestinationId::from_bytes([8; 16])?,
+            backup_id: meshspan_domain::BackupId::from_bytes([9; 16])?,
+            provider_generation: 1,
+            byte_length: 7,
+            digest: [3; 32],
+        };
+        meshspan_contracts::BackupCapacityBudget::reserve(&mut shared, object)?;
+        assert_eq!(shared.observe_usage()?.reserved_bytes, 7);
+        assert_eq!(shared.observe_usage()?.committed_bytes, 0);
+        meshspan_contracts::BackupCapacityBudget::commit(&mut shared, object)?;
+        assert_eq!(shared.observe_usage()?.reserved_bytes, 0);
+        assert_eq!(shared.observe_usage()?.committed_bytes, 7);
+        meshspan_contracts::BackupCapacityBudget::release(&mut shared, object)?;
+        assert_eq!(shared.observe_usage()?.committed_bytes, 0);
         Ok(())
     }
 

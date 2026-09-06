@@ -4,7 +4,9 @@
 
 use std::time::Duration;
 
-use crate::{BoundedItems, ContractError};
+use crate::{
+    BoundedItems, ContractError, MaintenanceMetric, MaintenanceMetricKind, StorageUsageMetric,
+};
 
 /// Version-one latency boundaries, inclusive, in microseconds; the count is the +Inf bucket.
 pub const METRIC_LATENCY_BOUNDARIES_MICROS: [u64; 8] = [
@@ -12,7 +14,7 @@ pub const METRIC_LATENCY_BOUNDARIES_MICROS: [u64; 8] = [
 ];
 
 /// Maximum distinct families in a version-one runtime snapshot.
-pub const MAX_RUNTIME_METRIC_FAMILIES: usize = 23;
+pub const MAX_RUNTIME_METRIC_FAMILIES: usize = 45;
 
 /// Closed access-protocol identity; request paths and client identities are never labels.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -110,6 +112,10 @@ impl LatencyHistogram {
 /// Closed version-one measurement vocabulary; identities and free-text labels are absent.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RuntimeMetric {
+    /// Selected maintenance-attempt observations by fixed kind and measurement.
+    Maintenance(MaintenanceMetricKind, MaintenanceMetric),
+    /// Last-pass target usage, explicitly separate from physical available space.
+    StorageUsage(StorageUsageMetric),
     /// Monotonic process lifetime, not wall-clock or mesh-clock accuracy.
     Uptime(Duration),
     /// Observation updates lost to contention, invalid time or exhausted counters.
@@ -192,7 +198,7 @@ impl RuntimeMetricSnapshot {
         for (index, sample) in self.samples().iter().enumerate() {
             if self.samples()[..index]
                 .iter()
-                .any(|previous| std::mem::discriminant(previous) == std::mem::discriminant(sample))
+                .any(|previous| same_family(previous, sample))
             {
                 return Err(ContractError::InvalidInput);
             }
@@ -203,8 +209,26 @@ impl RuntimeMetricSnapshot {
             {
                 histogram.validate()?;
             }
+            if let RuntimeMetric::Maintenance(_, MaintenanceMetric::Duration(histogram)) = sample {
+                histogram.validate()?;
+            }
         }
         Ok(())
+    }
+}
+
+fn same_family(left: &RuntimeMetric, right: &RuntimeMetric) -> bool {
+    match (left, right) {
+        (
+            RuntimeMetric::Maintenance(left_kind, left),
+            RuntimeMetric::Maintenance(right_kind, right),
+        ) => {
+            left_kind == right_kind && std::mem::discriminant(left) == std::mem::discriminant(right)
+        }
+        (RuntimeMetric::StorageUsage(left), RuntimeMetric::StorageUsage(right)) => {
+            std::mem::discriminant(left) == std::mem::discriminant(right)
+        }
+        _ => std::mem::discriminant(left) == std::mem::discriminant(right),
     }
 }
 

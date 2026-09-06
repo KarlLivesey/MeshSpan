@@ -28,6 +28,7 @@ struct ObservationOwner {
 
 #[derive(Clone, Default)]
 struct ObservationState {
+    storage: storage::StorageMeasurements,
     https: gateway::GatewayMeasurements,
     smb: gateway::GatewayMeasurements,
     sequence: u64,
@@ -43,6 +44,10 @@ struct ObservationState {
     targets: BTreeMap<(TargetId, u64), TargetCheckObservation>,
     events: VecDeque<RuntimeEvent>,
 }
+
+#[path = "runtime_observations_storage.rs"]
+mod storage;
+pub(crate) use storage::StorageUsagePass;
 
 pub(crate) struct RuntimeSnapshot {
     pub captured: Instant,
