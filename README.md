@@ -84,7 +84,10 @@ npm run check
 The command checks generated-contract drift before running independent Rust and web lanes in
 parallel. `MESHSPAN_CHECK_WORKERS` may set a bounded worker count from 1 to 32; the default is the
 smallest safe limit derived from four workers, available CPU parallelism and available system
-memory. Regenerate the committed OpenAPI, TypeScript, native-Fetch and Zod artefacts with
+memory. The Rust test harness receives the same worker budget rather than starting an
+independent CPU-sized pool inside its lane. This limits concurrent test cases, not the
+nodes or workers exercised inside each case. Regenerate the committed OpenAPI, TypeScript,
+native-Fetch and Zod artefacts with
 `npm run generate:api`.
 
 Early development uses local verification only. There are deliberately no GitHub Actions yet.

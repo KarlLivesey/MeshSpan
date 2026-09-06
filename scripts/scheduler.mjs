@@ -34,6 +34,28 @@ export function readWorkerCount(value) {
   return workers;
 }
 
+// Cargo otherwise starts an independent CPU-sized harness inside the bounded
+// Rust lane. Multi-daemon cases multiply that demand again through child processes.
+export function rustTestArguments(workers) {
+  if (
+    !Number.isSafeInteger(workers) ||
+    workers < 1 ||
+    workers > MAXIMUM_WORKERS
+  ) {
+    throw new Error("Rust test workers must be an integer from 1 to 32");
+  }
+  return [
+    "test",
+    "--workspace",
+    "--all-targets",
+    "--all-features",
+    "--quiet",
+    "--",
+    "--test-threads",
+    String(workers),
+  ];
+}
+
 export async function runWithLimit(items, limit, execute) {
   if (!Number.isSafeInteger(limit) || limit < 1) {
     throw new Error("scheduler limit must be a positive safe integer");

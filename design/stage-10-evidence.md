@@ -170,6 +170,30 @@ schema or wire format changed. Full local integration remains required before
 merge. Lease renewal, interrupted challenge
 recovery and successful CA polling hints remain separate open task-2 scope.
 
+### Combined candidate and bounded Rust test scheduling
+
+Signed merge `9942e63` combines DNS lifecycle and certificate deadlines on the
+candidate branch, not on `main`. The combined tree passed all **27 certificate-order
+tests in 0.40 seconds** after a 19.24-second build. Both source histories remain
+intact; neither PR is claimed merged into `main` yet.
+
+Inspection found that `MESHSPAN_CHECK_WORKERS` bounded outer lanes but was not
+passed to Cargo's Rust test harness. In this suite, each harness case additionally
+launches multiple real daemon processes. An unchanged combined-candidate run with
+four concurrent test cases passed **all eight active process tests in 34.62 seconds**
+(13.69-second build); the two existing container-image-dependent cases remained
+explicitly ignored. No readiness deadline, assertion or case topology changed.
+
+The canonical runner now passes its existing selected worker count to the Rust
+harness, retaining workspace/all-target/all-feature coverage. Five scheduler
+tests passed in **0.05 seconds**, including exact command arguments and rejected
+invalid budgets. The new test first failed because this scheduling boundary did
+not exist. Targeted ESLint, formatting and diff checks passed. This is bounded
+test scheduling, not a daemon startup optimisation: the earlier higher-concurrency
+timeouts remain observed evidence for startup-cost and scale measurements. It
+does not establish a maximum supported mesh size. The combined candidate still
+needs the complete local integration gate before `main` integration.
+
 ## Task 2 — real HTTP-01 issuance, restart and gateway delivery
 
 The new `headless_process::acme_lifecycle` proof runs real child daemons and a
