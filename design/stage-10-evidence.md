@@ -12,6 +12,33 @@ not close an unexplained failure.
 
 ## Task 2 — interrupted challenge recovery
 
+### Integrated publication recovery candidate
+
+The complete local integration gate passed on signed, pushed and GitHub-verified
+commit `aa4f5e8bdeaed2685d744e4f33c32777285f8305`, tree
+`d012ed17b32415f8133c170da19797d4281f541e`, in **748.09 seconds**. Command:
+NVM-default `CARGO_BUILD_JOBS=4 MESHSPAN_CHECK_WORKERS=4 rustup run 1.98.0 pnpm check`.
+Rust workspace tests passed in **687.72 seconds**, web tests in **5.46 seconds**,
+workspace Clippy in **34.53 seconds** and web lint in **20.27 seconds**. Generated
+drift, embedded bundle, both licence gates, formatting, TypeScript and tooling
+tests also passed. No source changes followed this gate; the integration evidence
+and task-list updates are prose only.
+
+[PR #245](https://github.com/KarlLivesey/MeshSpan/pull/245) integrates the three
+recovery increments below: publication material retained before IO, exact
+manual-task continuation across claims, and receipt-verified ordinary legacy
+lifetime recovery. This supersedes their earlier unintegrated status; it does not
+claim universal interrupted-order recovery. The historical unexplained cluster
+timeout remains an open Stage 11 finding despite this passing run. Ignored SMB
+image cases, live CA, hardware and soak proofs are not provided by this gate.
+
+Task 2 remains **4 points**, Stage 10 **143**, Stage 11 **126**. The next lifecycle
+work separates challenge lifetime from the five-minute worker lease and tests
+expired/taken-over work without renewing old publication identity by assumption.
+Actual interrupted-process issuance, remaining DNS-provider lifecycles and
+active-gateway challenge distribution are still outstanding. Publication remains
+on hold; no release, tag, package/image publication or GitHub Actions were run.
+
 ### Verified legacy publication lifetime
 
 The checkpoint reader now exposes the original publication claim's retained
