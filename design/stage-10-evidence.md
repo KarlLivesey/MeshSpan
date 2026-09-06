@@ -12,6 +12,83 @@ not close an unexplained failure.
 
 ## Task 2 — interrupted challenge recovery
 
+### Exact retirement and atomic fresh-order retry
+
+The final full NVM-default local gate passed on signed, pushed, GitHub-verified
+commit `6dc6dbeb6a2e72a8d99beb7a95fd411624e9f0de`, tree
+`6a8770f56b492a64b3065a1ddd9b4dec8483ac1e`, in **590.19 seconds**. The command was
+`CARGO_BUILD_JOBS=4 MESHSPAN_CHECK_WORKERS=4 rustup run 1.98.0 pnpm check` after
+initialising NVM. Rust workspace tests took **536.36 seconds**, web tests **6.19
+seconds**, Rust lint **25.60 seconds**, and web lint **21.36 seconds**. Generated
+drift, embedded web build, both licence checks, formatting, TypeScript and tooling
+tests also passed. No implementation changes followed this gate. The closing
+commit updates evidence only. [PR #247](https://github.com/KarlLivesey/MeshSpan/pull/247)
+contains this slice; the open validation statement below records its pre-gate
+state, not a remaining integration-check failure.
+
+The `codex/stage10-task2-order-retirement` candidate distinguishes ordinary
+transport retry from abandoning an unusable protocol attempt. Terminal
+authorisation rejection and an invalid CA order now produce a retirement state,
+not the previous fatal machine error. Reaching the retained publication deadline
+also starts retirement; that deadline is a local budget, not evidence that the CA
+declared its order invalid. Published or prepared material retains its original
+payload, receipt identity, configuration, epoch and expiry until exact cleanup
+completes. Valid authorisations already in cleanup still proceed normally.
+
+The worker checkpoints retirement intent before provider cleanup and preserves
+CA retry guidance without delaying cleanup itself. Failed checkpoint commits
+cannot change executable state or remove the challenge. A replacement worker
+binds completed retirement to its current claim before the new authoritative
+`Restart` completion consumes it. Checkpoint deletion, claim completion and the
+future queue deadline commit atomically. Ordinary `Retry` keeps the existing
+checkpoint; it cannot accidentally become a fresh CA order. The encrypted
+leaf-key generation is not deleted or replaced by restart.
+
+The checkpoint format is **4**. Original phases remain readable in formats
+**1–3**, but those versions reject the new retirement variants rather than
+silently adopting newer semantics. The private completion codec adds outcome
+**3** with failure digest, retry instant and exact retired-checkpoint digest;
+existing Retry/Issued outcomes **1/2** are unchanged. There is no SQL schema,
+public HTTP API or dependency change. Restart requires the exact current claim
+and completed checkpoint; outstanding manual-DNS cleanup tasks also prevent it.
+Manual DNS may proceed from never-observed publication to removal/completion
+only with matching durable retirement material, including recovery before the
+operator task was first created.
+
+Local focused checks under Rust 1.98.0 with four test workers passed: **60 ACME
+tests in 0.07 seconds** (2.89-second build), **30 metadata ACME tests in 19.34
+seconds** (8.80-second build), and **43 daemon certificate-order tests in 0.31
+seconds** (29.80-second build). Coverage includes all four rejected authorisation
+statuses, no false validated-name advancement, version substitution, exact
+receipt rejection, expiry without CA IO, checkpoint refusal, CA-guided restart,
+wrong retirement digest, early claim refusal, operation replay at a new log
+position, and real SQLite reopen after all four apply fault points. The
+repository fixture's sentinel secret bytes are checked for exact preservation;
+that is not a new cryptographic key-recovery proof.
+Affected ACME, metadata and daemon Clippy, all targets/features with warnings
+denied, passed in **24.11 seconds**; Rust formatting and `git diff --check` passed.
+
+Development failures were local: two new-test compile mistakes (a missing new
+enum match and an owned rather than borrowed test authority), an extra expected
+checkpoint commit where exact same-time replay returned the existing receipt,
+and two repository fixture assumptions. The latter attempted reuse of a consumed
+Raft log position and cryptographic decoding of the fixture's deliberately
+synthetic secret row. The corrected tests use a fresh log position and assert
+the sentinel bytes directly. Initial lint findings concerned duplicate match
+arms, documentation, a boolean expression and the expanded transition function;
+normal and retired cleanup now share their publication lifecycle owner. None of
+these results closes the earlier unexplained cluster timeout.
+
+At the initial progress commit, full integration validation and merge were pending.
+This is not a new whole-process CA rejection/reissuance proof, live public-CA
+acceptance, support for every CA error response, or completion of the remaining
+DNS-provider lifecycle and active-gateway challenge distribution work. No
+release, tag, package/image publication or GitHub Actions were run. Estimates
+remain task 2 **3**, Stage 10 **142**, Stage 11 **126**: the production retirement
+path and its focused persistence proof are integrated, but the whole-process
+rejected-order/reissuance acceptance still needs to close alongside the other
+remaining task-2 work. No unit-test result is being presented as that proof.
+
 ### Integrated independent-lifetime and takeover proof
 
 The final opt-in HTTP-01 process-loss test passed in **325.02 seconds** on signed,

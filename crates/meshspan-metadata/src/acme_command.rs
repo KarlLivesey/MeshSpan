@@ -167,6 +167,15 @@ pub struct CheckpointCertificateOrder {
 /// Result of one exact fenced ACME attempt.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CertificateOrderCompletion {
+    /// Atomically consume an exactly retired checkpoint and queue a fresh protocol order.
+    Restart {
+        /// Typed and redacted failure evidence digest.
+        failure_digest: [u8; 32],
+        /// Future authority-agreed retry instant.
+        retry_at: UnixMicros,
+        /// Exact current-claim checkpoint proving cleanup has completed.
+        retired_checkpoint_digest: [u8; 32],
+    },
     /// Return the order to the queue without making any certificate safety claim.
     Retry {
         /// Typed and redacted failure evidence digest.

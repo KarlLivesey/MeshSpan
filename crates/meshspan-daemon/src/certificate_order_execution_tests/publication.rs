@@ -8,6 +8,7 @@ use meshspan_acme::{
 use super::*;
 
 mod legacy;
+mod retirement;
 
 #[tokio::test]
 async fn retained_publication_outlives_the_worker_claim_without_extending_on_takeover()

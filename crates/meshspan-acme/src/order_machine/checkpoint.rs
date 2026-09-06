@@ -10,7 +10,7 @@ use super::{
     PublicationState, select_challenge, validate_nonce,
 };
 
-const CHECKPOINT_VERSION: u8 = 3;
+const CHECKPOINT_VERSION: u8 = 4;
 pub(super) const MAXIMUM_CHECKPOINT_BYTES: usize = 8 * 1_024 * 1_024;
 
 #[derive(Serialize)]
@@ -107,7 +107,7 @@ impl AcmeOrderMachine {
             (1, CheckpointField::Absent, CheckpointField::Absent)
                 | (2, CheckpointField::Present(_), CheckpointField::Absent)
                 | (
-                    CHECKPOINT_VERSION,
+                    3 | CHECKPOINT_VERSION,
                     CheckpointField::Present(_),
                     CheckpointField::Present(_)
                 )
@@ -115,6 +115,9 @@ impl AcmeOrderMachine {
             return Err(AcmeMachineError::CorruptState);
         }
         let machine = checkpoint.machine.into_machine();
+        if checkpoint.version < 4 && machine.retirement_reason().is_some() {
+            return Err(AcmeMachineError::CorruptState);
+        }
         machine
             .validate_checkpoint()
             .map_err(closed_checkpoint_error)?;
@@ -160,9 +163,10 @@ impl AcmeOrderMachine {
             validate_authorization(authorization)?;
             let expected_status = match self.phase {
                 Phase::CleanupChallenge => AcmeResourceStatus::Valid,
-                Phase::PublishChallenge | Phase::NotifyChallenge | Phase::PollAuthorization => {
-                    AcmeResourceStatus::Pending
-                }
+                Phase::PublishChallenge
+                | Phase::NotifyChallenge
+                | Phase::PollAuthorization
+                | Phase::RetireChallenge(_) => AcmeResourceStatus::Pending,
                 _ => return Err(AcmeMachineError::CorruptState),
             };
             if authorization.status != expected_status {
@@ -211,7 +215,18 @@ impl AcmeOrderMachine {
             | Phase::PublishChallenge
             | Phase::NotifyChallenge
             | Phase::PollAuthorization
-            | Phase::CleanupChallenge => order.status == AcmeResourceStatus::Pending,
+            | Phase::CleanupChallenge
+            | Phase::RetireChallenge(
+                super::AcmeOrderRetirementReason::PublicationExpired
+                | super::AcmeOrderRetirementReason::AuthorizationRejected,
+            )
+            | Phase::Retired(
+                super::AcmeOrderRetirementReason::AuthorizationRejected
+                | super::AcmeOrderRetirementReason::PublicationExpired,
+            ) => order.status == AcmeResourceStatus::Pending,
+            Phase::Retired(super::AcmeOrderRetirementReason::OrderRejected) => {
+                order.status == AcmeResourceStatus::Invalid
+            }
             Phase::FinalizeOrder => order.status == AcmeResourceStatus::Ready,
             Phase::PollOrder => matches!(
                 order.status,
@@ -220,7 +235,8 @@ impl AcmeOrderMachine {
             Phase::DownloadCertificate | Phase::Complete => {
                 order.status == AcmeResourceStatus::Valid && order.certificate.is_some()
             }
-            Phase::DiscoverDirectory
+            Phase::RetireChallenge(super::AcmeOrderRetirementReason::OrderRejected)
+            | Phase::DiscoverDirectory
             | Phase::AcquireNonce
             | Phase::CreateAccount
             | Phase::CreateOrder => false,
@@ -233,6 +249,7 @@ impl AcmeOrderMachine {
                     | Phase::NotifyChallenge
                     | Phase::PollAuthorization
                     | Phase::CleanupChallenge
+                    | Phase::RetireChallenge(_)
             ) && self.authorization_index >= order.authorizations.len()
         {
             return Err(AcmeMachineError::CorruptState);
@@ -301,9 +318,13 @@ fn validate_presence(machine: &AcmeOrderMachine) -> Result<(), AcmeMachineError>
         Phase::FetchAuthorization
         | Phase::FinalizeOrder
         | Phase::PollOrder
-        | Phase::DownloadCertificate => ORDERED_STATE,
+        | Phase::DownloadCertificate
+        | Phase::Retired(_) => ORDERED_STATE,
         Phase::PublishChallenge => ORDERED_STATE | AUTHORIZATION_PRESENT | CHALLENGE_PRESENT,
-        Phase::NotifyChallenge | Phase::PollAuthorization | Phase::CleanupChallenge => {
+        Phase::NotifyChallenge
+        | Phase::PollAuthorization
+        | Phase::CleanupChallenge
+        | Phase::RetireChallenge(_) => {
             ORDERED_STATE | AUTHORIZATION_PRESENT | CHALLENGE_PRESENT | PUBLICATION_PRESENT
         }
         Phase::Complete => ORDERED_STATE | CERTIFICATE_PRESENT,

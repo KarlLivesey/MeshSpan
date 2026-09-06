@@ -37,6 +37,12 @@ impl AcmeOrderMachine {
             self.poll_not_before = retry_after
                 .and_then(|hint| hint.not_before(received_at))
                 .map(UnixMicros::get);
+        } else if self.retirement_reason().is_some() {
+            self.poll_not_before = self.poll_not_before.max(
+                retry_after
+                    .and_then(|hint| hint.not_before(received_at))
+                    .map(UnixMicros::get),
+            );
         }
         Ok(())
     }
@@ -46,7 +52,11 @@ impl AcmeOrderMachine {
             instant <= 0
                 || !matches!(
                     self.phase,
-                    Phase::PollAuthorization | Phase::PollOrder | Phase::PublishChallenge
+                    Phase::PollAuthorization
+                        | Phase::PollOrder
+                        | Phase::PublishChallenge
+                        | Phase::RetireChallenge(_)
+                        | Phase::Retired(_)
                 )
         }) {
             // A replacement fence can require republication before polling; it must not

@@ -172,6 +172,32 @@ where
                 )
                 .await;
             match step {
+                Ok(CertificateOrderStepResult::Retired) => {
+                    let now = self.clock.now();
+                    if claim_expired(execution, now)? {
+                        return Ok(CertificateOrderDriveOutcome::ClaimExpired);
+                    }
+                    let failure_class = match execution.machine().retirement_reason() {
+                        Some(meshspan_acme::AcmeOrderRetirementReason::PublicationExpired) => {
+                            CertificateOrderFailureClass::Challenge
+                        }
+                        Some(
+                            meshspan_acme::AcmeOrderRetirementReason::AuthorizationRejected
+                            | meshspan_acme::AcmeOrderRetirementReason::OrderRejected,
+                        ) => CertificateOrderFailureClass::Protocol,
+                        None => return Err(CertificateOrderDriverError::InvalidInput),
+                    };
+                    let commit = self.retry.restart(
+                        actor_principal_id,
+                        now,
+                        execution.assignment(),
+                        execution.machine(),
+                    )?;
+                    return Ok(CertificateOrderDriveOutcome::Retried {
+                        failure_class,
+                        commit,
+                    });
+                }
                 Ok(CertificateOrderStepResult::Pending) => {
                     return Ok(CertificateOrderDriveOutcome::Pending);
                 }

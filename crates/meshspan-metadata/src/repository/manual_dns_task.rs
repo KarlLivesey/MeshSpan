@@ -108,9 +108,10 @@ pub(super) fn advance(
     validate_live_manual_claim(transaction, context.occurred_at, value)?;
     let retained = handoff::retained_publication_epoch(transaction, value)?;
     let existing = load_existing(transaction, value, retained.is_some())?;
+    let retiring = retained.is_some_and(|publication| publication.retiring);
     match existing {
-        None => create(transaction, context, value, revision)?,
-        Some(phase) => advance_existing(transaction, context, value, phase, revision)?,
+        None => create(transaction, context, value, revision, retiring)?,
+        Some(phase) => advance_existing(transaction, context, value, phase, revision, retiring)?,
     }
     transaction.execute(
         "UPDATE certificate_orders SET revision = ?1 WHERE order_id = ?2",
@@ -232,8 +233,15 @@ fn create(
     context: CommandContext,
     value: &AdvanceManualDnsTask,
     revision: Revision,
+    retiring: bool,
 ) -> Result<(), RepositoryError> {
-    if value.phase != ManualDnsTaskPhase::AwaitingPublication {
+    if value.phase != ManualDnsTaskPhase::AwaitingPublication
+        && !(retiring
+            && matches!(
+                value.phase,
+                ManualDnsTaskPhase::AwaitingRemoval | ManualDnsTaskPhase::Complete
+            ))
+    {
         return Err(RepositoryError::InvalidCommand);
     }
     transaction.execute(
@@ -251,7 +259,7 @@ fn create(
         "INSERT INTO manual_dns_tasks(
             task_digest, order_id, claim_generation, worker_node_id, worker_incarnation, fence,
             record_name, record_value, expires_at, phase, created_at, transitioned_at, revision
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10, ?10, ?11)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?12, ?10, ?10, ?11)",
         params![
             value.task_digest.as_slice(),
             value.order_id.as_bytes().as_slice(),
@@ -264,6 +272,7 @@ fn create(
             value.expires_at.get(),
             context.occurred_at.get(),
             to_i64(revision.get())?,
+            phase_code(value.phase),
         ],
     )?;
     Ok(())
@@ -275,6 +284,7 @@ fn advance_existing(
     value: &AdvanceManualDnsTask,
     current: i64,
     revision: Revision,
+    retiring: bool,
 ) -> Result<(), RepositoryError> {
     let requested = phase_code(value.phase);
     if current == TASK_SUPERSEDED || !(1..=4).contains(&current) {
@@ -283,7 +293,9 @@ fn advance_existing(
     if requested <= current {
         return Ok(());
     }
-    if !matches!((current, requested), (1, 2) | (2, 3 | 4) | (3, 4)) {
+    if !(matches!((current, requested), (1, 2) | (2, 3 | 4) | (3, 4))
+        || retiring && matches!((current, requested), (1, 3 | 4)))
+    {
         return Err(RepositoryError::InvalidCommand);
     }
     transaction.execute(
@@ -334,7 +346,11 @@ impl AuthoritativeRepository {
         let read_view = self.database.connection().unchecked_transaction()?;
         validate_live_manual_claim(&read_view, now, value)?;
         let retained = handoff::retained_publication_epoch(&read_view, value)?;
-        if publication_epoch != retained.unwrap_or(value.fence) {
+        if publication_epoch
+            != retained
+                .as_ref()
+                .map_or(value.fence, |publication| publication.epoch)
+        {
             return Err(RepositoryError::InvalidCommand);
         }
         let satisfied = match load_existing(&read_view, value, retained.is_some())? {

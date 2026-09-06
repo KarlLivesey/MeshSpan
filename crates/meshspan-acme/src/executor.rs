@@ -82,6 +82,8 @@ pub enum AcmeStepOutcome {
     Pending,
     /// No side effect remains; certificate bytes are ready for validation and completion.
     Complete(Vec<u8>),
+    /// Exact cleanup completed; the caller must atomically retire and reschedule the order.
+    Retired,
 }
 
 /// Executes exactly one machine action and never advances state itself.
@@ -205,6 +207,7 @@ where
             AcmeMachineAction::Complete { certificate } => {
                 Ok(AcmeStepOutcome::Complete(certificate.clone()))
             }
+            AcmeMachineAction::Retired { .. } => Ok(AcmeStepOutcome::Retired),
         }
     }
 

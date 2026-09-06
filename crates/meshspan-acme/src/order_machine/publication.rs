@@ -149,6 +149,21 @@ impl AcmeOrderMachine {
                 | Phase::NotifyChallenge
                 | Phase::PollAuthorization
                 | Phase::CleanupChallenge
+                | Phase::RetireChallenge(_)
         )
+    }
+
+    /// Cleanup clears publication identity in both paths, but only a valid authorisation
+    /// advances the validated-name set. Retirement must never count a rejected name as valid.
+    pub(super) fn complete_challenge(&mut self) -> Result<(), AcmeMachineError> {
+        if let Phase::RetireChallenge(reason) = self.phase {
+            self.phase = Phase::Retired(reason);
+        } else if self.phase == Phase::CleanupChallenge {
+            self.advance_authorization()?;
+        } else {
+            return Err(AcmeMachineError::InvalidTransition);
+        }
+        self.clear_challenge();
+        Ok(())
     }
 }

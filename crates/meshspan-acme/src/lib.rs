@@ -68,7 +68,7 @@ pub use manual_dns01::{
 };
 pub use order_machine::{
     AcmeChallengePreference, AcmeMachineAction, AcmeMachineError, AcmeMachineEvent,
-    AcmeOrderMachine,
+    AcmeOrderMachine, AcmeOrderRetirementReason,
 };
 pub use publication::AcmeChallengePublication;
 pub use retry_after::AcmeRetryAfter;

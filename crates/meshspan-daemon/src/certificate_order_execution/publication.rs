@@ -14,6 +14,26 @@ use super::{
 };
 
 impl<T: AcmeTransport, C: CertificateChallenge> CertificateOrderExecution<T, C> {
+    pub(super) fn expired_publication(
+        &self,
+        context: RequestContext,
+        now: UnixMicros,
+    ) -> Result<Option<AcmeOrderMachine>, CertificateOrderExecutionError> {
+        let Some(publication) = self.machine.publication() else {
+            return Ok(None);
+        };
+        if publication.expires_at() > now || self.machine.retirement_reason().is_some() {
+            return Ok(None);
+        }
+        let receipt = self
+            .executor
+            .expected_publication_receipt(publication, context)?;
+        let mut candidate = self.machine.clone();
+        Ok(candidate
+            .expire_publication(now, receipt.publication_digest)?
+            .then_some(candidate))
+    }
+
     pub(super) fn prepare_publication(
         &self,
         context: RequestContext,

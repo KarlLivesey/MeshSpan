@@ -48,7 +48,7 @@ impl AcmeOrderMachine {
                 nonce: self.nonce()?,
                 account_url: self.account_url()?,
             }),
-            Phase::CleanupChallenge => {
+            Phase::CleanupChallenge | Phase::RetireChallenge(_) => {
                 let authorization = self.authorization()?;
                 Ok(AcmeMachineAction::CleanupChallenge {
                     dns_name: authorization.dns_name.clone(),
@@ -85,6 +85,7 @@ impl AcmeOrderMachine {
                     .clone()
                     .ok_or(AcmeMachineError::CorruptState)?,
             }),
+            Phase::Retired(reason) => Ok(AcmeMachineAction::Retired { reason }),
         }
     }
 

@@ -9,10 +9,15 @@ use rusqlite::Transaction;
 
 use crate::{AdvanceManualDnsTask, RepositoryError};
 
+pub(super) struct RetainedPublication {
+    pub epoch: u64,
+    pub retiring: bool,
+}
+
 pub(super) fn retained_publication_epoch(
     transaction: &Transaction<'_>,
     value: &AdvanceManualDnsTask,
-) -> Result<Option<u64>, RepositoryError> {
+) -> Result<Option<RetainedPublication>, RepositoryError> {
     let Some(checkpoint) = super::super::acme::load_checkpoint(transaction, value.order_id)? else {
         return Ok(None);
     };
@@ -54,5 +59,8 @@ pub(super) fn retained_publication_epoch(
     {
         return Err(RepositoryError::InvalidCommand);
     }
-    Ok(Some(task.order_epoch))
+    Ok(Some(RetainedPublication {
+        epoch: task.order_epoch,
+        retiring: machine.retirement_reason().is_some(),
+    }))
 }

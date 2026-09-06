@@ -416,6 +416,17 @@ pub(super) fn complete(
         &value.outcome,
         revision,
     )?;
+    if let CertificateOrderCompletion::Restart {
+        retired_checkpoint_digest,
+        ..
+    } = value.outcome
+    {
+        order_checkpoint::consume_retired_checkpoint(
+            transaction,
+            value,
+            retired_checkpoint_digest,
+        )?;
+    }
     let changed = transaction.execute(
         "UPDATE certificate_order_claims
          SET state = ?1, finished_at = ?2, result_digest = ?3, retry_at = ?4, revision = ?5
@@ -898,6 +909,11 @@ fn completion_values(
         CertificateOrderCompletion::Retry {
             failure_digest,
             retry_at,
+        }
+        | CertificateOrderCompletion::Restart {
+            failure_digest,
+            retry_at,
+            ..
         } if *failure_digest != [0; 32] && *retry_at > context.occurred_at => {
             Ok(CompletionValues {
                 order_state: ORDER_QUEUED,
