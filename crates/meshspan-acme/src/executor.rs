@@ -215,18 +215,22 @@ where
         let response = self
             .send_remote(&request(AcmeHttpMethod::Get, url, Vec::new())?)
             .await?;
-        Ok(AcmeStepOutcome::Advanced(
-            AcmeMachineEvent::DirectoryDiscovered(AcmeWire::directory(&response)?),
-        ))
+        remote_steps::progress_with_retry(&response, |response| {
+            Ok(AcmeMachineEvent::DirectoryDiscovered(AcmeWire::directory(
+                response,
+            )?))
+        })
     }
 
     async fn acquire_nonce(&mut self, url: &str) -> Result<AcmeStepOutcome, AcmeWorkerError> {
         let response = self
             .send_remote(&request(AcmeHttpMethod::Head, url, Vec::new())?)
             .await?;
-        Ok(AcmeStepOutcome::Advanced(AcmeMachineEvent::NonceAcquired(
-            AcmeWire::nonce_response(&response)?,
-        )))
+        remote_steps::progress_with_retry(&response, |response| {
+            Ok(AcmeMachineEvent::NonceAcquired(AcmeWire::nonce_response(
+                response,
+            )?))
+        })
     }
 
     async fn create_account(
@@ -239,12 +243,12 @@ where
                 AcmeWire::new_account(url, fresh_nonce, signer)
             })
             .await?;
-        Ok(AcmeStepOutcome::Advanced(
-            AcmeMachineEvent::AccountCreated {
-                account_url: AcmeWire::account_location(&response)?,
-                replay_nonce: AcmeWire::replay_nonce(&response)?,
-            },
-        ))
+        remote_steps::progress_with_retry(&response, |response| {
+            Ok(AcmeMachineEvent::AccountCreated {
+                account_url: AcmeWire::account_location(response)?,
+                replay_nonce: AcmeWire::replay_nonce(response)?,
+            })
+        })
     }
 
     async fn create_order(
@@ -260,14 +264,13 @@ where
                 AcmeWire::new_order(url, fresh_nonce, &binding, order, signer)
             })
             .await?;
-        remote_steps::progress_with_retry(
-            AcmeMachineEvent::OrderCreated {
-                order_url: AcmeWire::resource_location(&response)?,
-                order: AcmeWire::order(&response)?,
-                replay_nonce: AcmeWire::replay_nonce(&response)?,
-            },
-            &response,
-        )
+        remote_steps::progress_with_retry(&response, |response| {
+            Ok(AcmeMachineEvent::OrderCreated {
+                order_url: AcmeWire::resource_location(response)?,
+                order: AcmeWire::order(response)?,
+                replay_nonce: AcmeWire::replay_nonce(response)?,
+            })
+        })
     }
 
     async fn post_signed<F>(

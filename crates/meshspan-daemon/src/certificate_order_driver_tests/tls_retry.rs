@@ -21,6 +21,7 @@ async fn tls_ca_deadline_is_committed_without_an_immediate_second_request()
     assert_tls_retry(
         "Sun, 06 Nov 1994 08:49:37 GMT",
         UnixMicros::new(784_111_777_000_000),
+        StatusCode::SERVICE_UNAVAILABLE,
     )
     .await
 }
@@ -28,12 +29,24 @@ async fn tls_ca_deadline_is_committed_without_an_immediate_second_request()
 #[tokio::test]
 async fn tls_relative_delay_starts_when_the_response_arrives_not_when_the_request_started()
 -> Result<(), Box<dyn std::error::Error>> {
-    assert_tls_retry("3600", UnixMicros::new(3_625_000_000)).await
+    assert_tls_retry(
+        "3600",
+        UnixMicros::new(3_625_000_000),
+        StatusCode::SERVICE_UNAVAILABLE,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn malformed_tls_success_preserves_the_received_ca_delay()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_tls_retry("3600", UnixMicros::new(3_625_000_000), StatusCode::OK).await
 }
 
 async fn assert_tls_retry(
     hint: &'static str,
     expected: UnixMicros,
+    response_status: StatusCode,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let ca = CertificateAuthority::new()?;
     let issued = ca.issue_node("localhost")?.into_parts();
@@ -55,7 +68,7 @@ async fn assert_tls_retry(
             response_clock.store(25_000_000, Ordering::SeqCst);
             async move {
                 (
-                    StatusCode::SERVICE_UNAVAILABLE,
+                    response_status,
                     [("retry-after", hint)],
                     "temporarily unavailable",
                 )

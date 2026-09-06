@@ -111,7 +111,7 @@ impl CertificateOrderResultService {
                 .map_err(|_| CertificateOrderResultError::InvalidCertificate)?;
             self.verifier
                 .verify_server_cert(&leaf, &intermediates, &server_name, &[], now)
-                .map_err(|_| CertificateOrderResultError::InvalidTrust)?;
+                .map_err(|_| CertificateOrderResultError::UntrustedCertificate)?;
         }
         Ok(())
     }
@@ -146,6 +146,9 @@ pub enum CertificateOrderResultError {
     /// The configured external-certificate trust anchors are unusable.
     #[error("certificate order result trust configuration is invalid")]
     InvalidTrust,
+    /// The downloaded chain is not trusted by the configured, usable trust anchors.
+    #[error("certificate order result is not trusted")]
+    UntrustedCertificate,
     /// The downloaded certificate violates its exact semantic contract.
     #[error("certificate order result is invalid")]
     InvalidCertificate,

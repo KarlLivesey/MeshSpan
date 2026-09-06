@@ -30,6 +30,14 @@ use crate::{
 };
 
 #[test]
+fn empty_local_trust_configuration_remains_a_configuration_error() {
+    assert!(matches!(
+        CertificateOrderResultService::new(RootCertStore::empty()),
+        Err(CertificateOrderResultError::InvalidTrust)
+    ));
+}
+
+#[test]
 fn trusted_terminal_result_commits_once_and_untrusted_chain_commits_nothing()
 -> Result<(), Box<dyn std::error::Error>> {
     let now = current_unix_micros()?;
@@ -69,7 +77,7 @@ fn trusted_terminal_result_commits_once_and_untrusted_chain_commits_nothing()
             &execution,
             &response,
         ),
-        Err(CertificateOrderResultError::InvalidTrust)
+        Err(CertificateOrderResultError::UntrustedCertificate)
     ));
     assert_eq!(rejected_authority.commit_count(), 0);
     Ok(())

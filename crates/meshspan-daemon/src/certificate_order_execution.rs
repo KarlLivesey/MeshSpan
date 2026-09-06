@@ -31,6 +31,8 @@ pub enum CertificateOrderStepResult {
     ReadyForCompletion {
         /// Bounded CA response bytes still requiring chain/name/key/lifetime validation.
         certificate_chain: Vec<u8>,
+        /// Receipt-time CA guidance to retain if terminal certificate validation rejects it.
+        retry_not_before: Option<UnixMicros>,
     },
 }
 
@@ -172,7 +174,10 @@ where
             }
             AcmeStepOutcome::Pending => return Ok(CertificateOrderStepResult::Pending),
             AcmeStepOutcome::Complete(certificate_chain) => {
-                return Ok(CertificateOrderStepResult::ReadyForCompletion { certificate_chain });
+                return Ok(CertificateOrderStepResult::ReadyForCompletion {
+                    certificate_chain,
+                    retry_not_before: None,
+                });
             }
             AcmeStepOutcome::Advanced(event) => (event, None),
             AcmeStepOutcome::AdvancedWithRetry { event, retry_after } => (event, Some(retry_after)),
@@ -185,6 +190,7 @@ where
         if let meshspan_acme::AcmeMachineAction::Complete { certificate } = candidate.action()? {
             return Ok(CertificateOrderStepResult::ReadyForCompletion {
                 certificate_chain: certificate,
+                retry_not_before: retry_after.and_then(|hint| hint.not_before(received_at)),
             });
         }
         let result = self.checkpoint_candidate(

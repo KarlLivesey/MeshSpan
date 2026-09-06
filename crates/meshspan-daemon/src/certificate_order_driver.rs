@@ -208,8 +208,16 @@ where
                         });
                     }
                 }
-                Ok(CertificateOrderStepResult::ReadyForCompletion { certificate_chain }) => {
-                    return self.complete_or_retry(execution, self.clock.now(), &certificate_chain);
+                Ok(CertificateOrderStepResult::ReadyForCompletion {
+                    certificate_chain,
+                    retry_not_before,
+                }) => {
+                    return self.complete_or_retry(
+                        execution,
+                        self.clock.now(),
+                        &certificate_chain,
+                        retry_not_before,
+                    );
                 }
                 Err(error) => return self.execution_failure(execution, self.clock.now(), error),
             }
@@ -300,6 +308,7 @@ where
         execution: &CertificateOrderExecution<T, Challenge>,
         now: UnixMicros,
         certificate_chain: &[u8],
+        retry_not_before: Option<UnixMicros>,
     ) -> Result<CertificateOrderDriveOutcome, CertificateOrderDriverError> {
         if claim_expired(execution, now)? {
             return Ok(CertificateOrderDriveOutcome::ClaimExpired);
@@ -314,12 +323,13 @@ where
             Ok(commit) => Ok(CertificateOrderDriveOutcome::Completed(commit)),
             Err(
                 CertificateOrderResultError::InvalidCertificate
+                | CertificateOrderResultError::UntrustedCertificate
                 | CertificateOrderResultError::Validation(_),
             ) => self.retry(
                 execution,
                 now,
                 CertificateOrderFailureClass::Certificate,
-                None,
+                retry_not_before.filter(|instant| *instant > now),
             ),
             Err(error) => Err(error.into()),
         }
