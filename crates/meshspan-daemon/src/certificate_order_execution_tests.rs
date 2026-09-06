@@ -78,7 +78,8 @@ async fn downloaded_chain_goes_to_terminal_validation_not_an_incomplete_checkpoi
     assert_eq!(
         result,
         CertificateOrderStepResult::ReadyForCompletion {
-            certificate_chain: expected
+            certificate_chain: expected,
+            retry_not_before: None,
         }
     );
     assert_eq!(authority.commit_count()?, 0);

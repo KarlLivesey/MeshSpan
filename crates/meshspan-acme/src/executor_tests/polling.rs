@@ -63,7 +63,7 @@ async fn ambiguous_successful_hints_fail_without_an_inline_retry()
     Ok(())
 }
 
-fn actions() -> Result<Vec<AcmeMachineAction>, Box<dyn std::error::Error>> {
+pub(super) fn actions() -> Result<Vec<AcmeMachineAction>, Box<dyn std::error::Error>> {
     let url = "https://ca.example.test/resource".to_owned();
     let nonce = "nonce_1".to_owned();
     let account_url = "https://ca.example.test/account/1".to_owned();

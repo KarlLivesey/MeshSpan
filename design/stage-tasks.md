@@ -129,9 +129,15 @@ the stage; publication-dependent acceptance remains held separately and visible.
    [Semantic CA-response rejection](stage-10-evidence.md#rejected-ca-responses-retain-accepted-state)
    now queues retry without replacing accepted state or masking local corruption.
    Its full gate on `17e633d` passed in **489.14 seconds**, and both opt-in
-   process-recovery cases passed in parallel in **336.74 seconds**. Valid retry
-   guidance on malformed successful-response bodies still needs a separate
-   correction; this does not close the remaining task-2 scope or reduce its estimate.
+   process-recovery cases passed in parallel in **336.74 seconds**.
+   [Response and certificate retry guidance](stage-10-evidence.md#retry-guidance-survives-parsing-and-terminal-certificate-refusal)
+   now preserves valid hints when parsing or terminal certificate validation
+   rejects a response, and separates remote trust refusal from invalid local
+   trust configuration. The full gate on `9ff95fe` passed in **619.72 seconds**
+   (Rust **568.60**, web **8.40**); both opt-in recovery cases passed together in
+   **337.22 seconds**. This closes the identified response-guidance/trust gaps,
+   not the remaining provider lifecycles or active-gateway challenge distribution.
+   Task 2 remains **2 points** pending that integrated acceptance.
 
 3. **Encrypted certificate delivery and rotation — Partial.** **5 points remaining.**
    PKI-001/002/005/007/010; accepted decisions §7.

@@ -96,7 +96,7 @@ async fn assert_requeued_unchanged(
     Ok(())
 }
 
-fn order(
+pub(super) fn order(
     status: AcmeResourceStatus,
 ) -> Result<PreparedCertificateOrder, Box<dyn std::error::Error>> {
     let mut prepared = prepared()?;
@@ -122,7 +122,8 @@ fn order(
             dns_names: vec!["files.example.test".to_owned()],
             authorizations: vec!["https://ca.example.test/authorization/1".to_owned()],
             finalize: "https://ca.example.test/finalize/1".to_owned(),
-            certificate: None,
+            certificate: (status == AcmeResourceStatus::Valid)
+                .then(|| "https://ca.example.test/certificate/1".to_owned()),
         },
     })?;
     Ok(prepared)
