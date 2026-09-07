@@ -6,6 +6,8 @@ use serde_json::{Map, Value, json};
 use std::sync::{Arc, OnceLock};
 #[path = "openapi_metrics.rs"]
 mod metrics;
+#[path = "openapi_notifications.rs"]
+mod notifications;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -133,6 +135,11 @@ fn components() -> Value {
     let schemas = Map::from_iter(
         [
             schema_response::<ApiError>("ApiError"),
+            schema_request::<crate::ConfigureNotificationRequest>("ConfigureNotificationRequest"),
+            schema_response::<crate::ConfigureNotificationResponse>(
+                "ConfigureNotificationResponse",
+            ),
+            schema_response::<crate::NotificationsResponse>("NotificationsResponse"),
             schema_request::<crate::ConfigureBackupScheduleRequest>(
                 "ConfigureBackupScheduleRequest",
             ),
@@ -567,6 +574,7 @@ fn administration_paths() -> Vec<(String, Value)> {
                 metrics::configuration_path(),
             ),
             ("/metrics".to_owned(), metrics::scrape_path()),
+            ("/admin/notifications".to_owned(), notifications::path()),
             ("/admin/metrics/history".to_owned(), metrics::history_path()),
             ("/admin/backups/runs".to_owned(), backup_runs_path()),
             (

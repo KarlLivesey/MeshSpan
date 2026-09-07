@@ -11,6 +11,84 @@ use crate::{
 use meshspan_domain::{ComponentInstanceId, WorkId};
 
 #[test]
+fn notification_credentials_and_configuration_commit_together()
+-> Result<(), Box<dyn std::error::Error>> {
+    use crate::repository::apply::{ApplyFaultPoint, apply_committed_with_fault};
+    let mut fixture = Fixture::new()?;
+    let channel = ComponentInstanceId::from_bytes([70; 16])?;
+    let AuthoritativeCommand::ConfigureNotificationChannel(mut value) =
+        configuration(channel, 0, true)?
+    else {
+        return Err("wrong fixture command".into());
+    };
+    value.new_settings = Some(Box::new(super::redistributed_secret(
+        NOTIFICATION_SETTINGS_SECRET_KIND,
+        [71; 16],
+        1,
+        &fixture,
+        44,
+    )?));
+    let command = AuthoritativeCommand::ConfigureNotificationChannel(value);
+    let context = CommandContext {
+        operation_id: OperationId::from_bytes([3; 16])?,
+        audit_event_id: AuditEventId::from_bytes([103; 16])?,
+        actor_principal_id: fixture.administrator,
+        occurred_at: UnixMicros::new(2),
+        expected_revision: Some(Revision::new(2)),
+    };
+    let secret = SecretContext::new(NOTIFICATION_SETTINGS_SECRET_KIND, [71; 16], 1)?;
+    for fault in [
+        ApplyFaultPoint::AfterCommand,
+        ApplyFaultPoint::AfterAudit,
+        ApplyFaultPoint::BeforeCommit,
+    ] {
+        assert!(
+            apply_committed_with_fault(
+                &mut fixture.repository.database,
+                LogPosition { index: 3, term: 1 },
+                context,
+                &command,
+                fault
+            )
+            .is_err()
+        );
+        assert!(fixture.repository.notification_channel(channel)?.is_none());
+        assert!(fixture.repository.secret_generation(secret)?.is_none());
+    }
+    fixture.apply(3, 2, &command)?;
+    assert!(fixture.repository.secret_generation(secret)?.is_some());
+    assert_eq!(
+        fixture
+            .repository
+            .notification_channel(channel)?
+            .ok_or("channel absent")?
+            .settings_commitment,
+        [74; 32]
+    );
+    let encoded = crate::encode_authoritative_command(context, &command)?;
+    assert_eq!(
+        crate::decode_authoritative_command(&encoded)?.command,
+        command
+    );
+    fixture.apply(4, 3, &configuration(channel, 1, false)?)?;
+    assert!(
+        fixture
+            .repository
+            .notification_configuration(channel, 1)?
+            .ok_or("historic channel absent")?
+            .enabled
+    );
+    assert!(
+        !fixture
+            .repository
+            .notification_channel(channel)?
+            .ok_or("current channel absent")?
+            .enabled
+    );
+    Ok(())
+}
+
+#[test]
 fn notification_outbox_deduplicates_and_retries_one_exact_committed_event()
 -> Result<(), Box<dyn std::error::Error>> {
     let (mut fixture, channel, event) = configured(std::path::Path::new(":memory:"))?;
@@ -311,6 +389,8 @@ fn configuration(
                 generation: 1,
             },
             enabled,
+            settings_commitment: [74; 32],
+            new_settings: None,
             event_filter: 15,
         },
     ))

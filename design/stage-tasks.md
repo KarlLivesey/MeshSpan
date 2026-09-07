@@ -17,7 +17,7 @@ Update the relevant task when work changes its status. Report the current task,
 what behaviour changed, what remains and what was tested. Do not replace this
 with “nearly done”, a count of commits or an unweighted completion percentage.
 
-Remaining-effort estimate, 2026-09-07: **Stage 10: 128 points; Stage 11: 126
+Remaining-effort estimate, 2026-09-07: **Stage 10: 123 points; Stage 11: 126
 points; Stage 12: 55 points.** These are preliminary engineering judgements from
 the task scope and recorded gaps, not measured hours or completion guarantees.
 Uncertainty is high until the open integration/proof work is exercised.
@@ -338,7 +338,7 @@ the stage; publication-dependent acceptance remains held separately and visible.
     checks and a real two-gateway restart proof pass. Remaining work is the
     assembled-stage pass: **5 → 1 points**.
 
-21. **Durable notifications — Partial; outbox and transports implemented.** **8 points remaining.**
+21. **Durable notifications — Partial; configured daemon delivery implemented.** **3 points remaining.**
     OPS-010/020. Implement/verify optional email and authenticated generic webhooks
     from durable deduplicated events, with explicit configuration, allow-listing,
     redaction, retry and restart behaviour. Include manual-DNS renewal tasks from
@@ -347,8 +347,15 @@ the stage; publication-dependent acceptance remains held separately and visible.
     covers encrypted configuration references, real committed ACME source events,
     deduplication, fenced claims, retries, cancellation and file-backed restart.
     Bounded scheduling reads and real local authenticated HTTPS/SMTP transport
-    tests also pass. API/panel, daemon delivery and gateway enrolment integration
-    remain; the estimate stays unchanged until the complete delivery path runs.
+    tests also pass. The manager API, generated client, panel and owned daemon
+    worker now connect configuration to real receiver delivery. A real daemon
+    proves authenticated configuration, transient failure, restart, exact replay,
+    credential retention and changed-retry rejection. Gateway recipient
+    redistribution is wired. Remaining: exercise that redistribution through a
+    newly joined delivery gateway, SMTP through the daemon, manual-DNS alert
+    lifecycle, and expose retained delivery/rejection outcomes in the panel.
+    This integrated slice reduces the estimate **8 → 3 points**; it does not
+    close the task or the assembled-stage acceptance pass.
 
 22. **Mesh-wide rolling updates — Open.** **13 points remaining.**
     Accepted decisions §7, PER-003/006, TST-007. Provide one administrator-selected

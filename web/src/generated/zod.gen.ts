@@ -1028,6 +1028,116 @@ export const zConfigureMetricsExporterResponse = z
   .strict();
 
 /**
+ * ConfigureNotificationRequest
+ *
+ * One complete channel update, protected by operation identity and expected sequence.
+ */
+export const zConfigureNotificationRequest = z
+  .strictObject({
+    channel_id: z
+      .string()
+      .length(36)
+      .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+    display_name: z.string().min(1).max(256),
+    enabled: z.boolean(),
+    event_filter: z.int().gte(1).lte(15),
+    expected_sequence: z.int().gte(0).lte(9007199254740990),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    settings: z.union([
+      z
+        .strictObject({
+          mode: z.literal("retain"),
+        })
+        .strict(),
+      z
+        .strictObject({
+          destination: z.union([
+            z
+              .strictObject({
+                bearer_token: z
+                  .string()
+                  .min(16)
+                  .max(2048)
+                  .regex(/^[A-Za-z0-9._~+\/-]+=*$/),
+                endpoint: z
+                  .string()
+                  .min(9)
+                  .max(2048)
+                  .regex(/^https:\/\/[^\s#@]+$/),
+                kind: z.literal("webhook"),
+              })
+              .strict(),
+            z
+              .strictObject({
+                host: z
+                  .string()
+                  .min(1)
+                  .max(253)
+                  .regex(/^[A-Za-z0-9.:-]+$/),
+                kind: z.literal("email"),
+                password: z
+                  .string()
+                  .min(1)
+                  .max(128)
+                  .regex(/^[\x20-\x7e]+$/),
+                port: z.int().gte(1).lte(65535),
+                recipients: z
+                  .array(
+                    z
+                      .string()
+                      .min(3)
+                      .max(254)
+                      .regex(
+                        /^[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9.-]+$/,
+                      ),
+                  )
+                  .min(1)
+                  .max(32),
+                sender: z
+                  .string()
+                  .min(3)
+                  .max(254)
+                  .regex(/^[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9.-]+$/),
+                tls: z.union([z.literal("implicit"), z.literal("starttls")]),
+                username: z
+                  .string()
+                  .min(1)
+                  .max(128)
+                  .regex(/^[\x21-\x7e]+$/),
+              })
+              .strict(),
+          ]),
+          mode: z.literal("replace"),
+        })
+        .strict(),
+    ]),
+  })
+  .strict();
+
+/**
+ * ConfigureNotificationResponse
+ *
+ * Original durable configuration result, including on exact retry.
+ */
+export const zConfigureNotificationResponse = z
+  .strictObject({
+    committed_revision: z.int().gte(1).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    sequence: z.int().gte(1).lte(9007199254740991),
+  })
+  .strict();
+
+/**
  * ConfirmRecoveryBundleRequest
  *
  * One authenticated idempotent save-verification request.
@@ -5446,6 +5556,40 @@ export const zMetricsExporterResponse = z
   .strict();
 
 /**
+ * NotificationsResponse
+ *
+ * Complete bounded configuration list and this gateway's worker health.
+ */
+export const zNotificationsResponse = z
+  .strictObject({
+    channels: z
+      .array(
+        z
+          .strictObject({
+            channel_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+              ),
+            display_name: z.string().min(1).max(256),
+            enabled: z.boolean(),
+            event_filter: z.int().gte(1).lte(15),
+            kind: z.union([z.literal("webhook"), z.literal("email")]),
+            sequence: z.int().gte(1).lte(9007199254740991),
+          })
+          .strict(),
+      )
+      .max(64),
+    worker: z.union([
+      z.literal("running"),
+      z.literal("retrying"),
+      z.literal("stopped"),
+    ]),
+  })
+  .strict();
+
+/**
  * OperationStatusResponse
  *
  * Current durable state of one exact operation visible to the caller.
@@ -7449,6 +7593,30 @@ export const zCreateNodeJoinGrantBody = zCreateNodeJoinGrantRequest;
  * Committed join invitation
  */
 export const zCreateNodeJoinGrantResponse2 = zCreateNodeJoinGrantResponse;
+
+/**
+ * Redacted configuration; no credentials or destination URLs
+ */
+export const zGetNotificationsResponse = zNotificationsResponse;
+
+/**
+ * Complete configuration and explicit destination update
+ */
+export const zConfigureNotificationBody = zConfigureNotificationRequest;
+
+export const zConfigureNotificationHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Original committed configuration receipt
+ */
+export const zConfigureNotificationResponse2 = zConfigureNotificationResponse;
 
 export const zListOperationsQuery = z
   .object({

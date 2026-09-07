@@ -45,6 +45,9 @@ import type {
   CertificateStatusResponse,
   BackupScheduleResponse,
   MetricsExporterResponse,
+  NotificationsResponse,
+  ConfigureNotificationRequest,
+  ConfigureNotificationResponse,
   GetMetricHistoryData,
   MetricHistoryResponse,
   ConfigureMetricsExporterRequest,
@@ -166,6 +169,9 @@ import {
   zGetCertificateStatusResponse,
   zGetBackupScheduleResponse,
   zGetMetricsExporterResponse,
+  zGetNotificationsResponse,
+  zConfigureNotificationBody,
+  zConfigureNotificationResponse2,
   zGetMetricHistoryQuery,
   zGetMetricHistoryResponse,
   zConfigureMetricsExporterBody,
@@ -475,6 +481,11 @@ export interface MeshSpanFetchClient {
     query?: GetMetricHistoryData["query"],
   ): Promise<MetricHistoryResponse>;
   getNextMetricHistory(nextPageUrl: string): Promise<MetricHistoryResponse>;
+  getNotifications(): Promise<NotificationsResponse>;
+  configureNotification(
+    request: ConfigureNotificationRequest,
+    csrfToken?: string,
+  ): Promise<ConfigureNotificationResponse>;
   listBackupDestinations(
     query?: ListBackupDestinationsQuery,
   ): Promise<ListBackupDestinationsResponse>;
@@ -1020,8 +1031,7 @@ export function createMeshSpanFetchClient(
     async getMetricHistory(query = {}): Promise<MetricHistoryResponse> {
       const input = zGetMetricHistoryQuery.parse(query);
       const parameters = new URLSearchParams();
-      if (input.resolution !== undefined)
-        parameters.set("resolution", input.resolution);
+      parameters.set("resolution", input.resolution);
       if (input.history_id !== undefined)
         parameters.set("history_id", input.history_id);
       if (input.before !== undefined) parameters.set("before", input.before);
@@ -1041,6 +1051,30 @@ export function createMeshSpanFetchClient(
         { method: "GET" },
         zGetMetricHistoryResponse,
         1048576,
+      );
+    },
+    async getNotifications(): Promise<NotificationsResponse> {
+      return requestJson(
+        context,
+        "/admin/notifications",
+        { method: "GET" },
+        zGetNotificationsResponse,
+      );
+    },
+    async configureNotification(
+      request,
+      csrfToken,
+    ): Promise<ConfigureNotificationResponse> {
+      const body = zConfigureNotificationBody.parse(request);
+      return requestJson(
+        context,
+        "/admin/notifications",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "PUT",
+        },
+        zConfigureNotificationResponse2,
       );
     },
     async listBackupDestinations(

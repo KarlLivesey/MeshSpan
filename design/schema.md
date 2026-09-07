@@ -1407,21 +1407,37 @@ domain_events(
 )
 
 notification_channels(
-  channel_id PK, channel_kind, display_name,
-  settings_ciphertext, event_filter, state, revision
+  channel_id PK, active_sequence, created_revision, revision
+)
+
+notification_channel_configurations(
+  channel_id -> notification_channels, sequence, channel_kind, display_name,
+  settings_kind, settings_id, settings_generation -> secret_generations,
+  settings_commitment, enabled, event_filter, configured_by -> principals, revision,
+  PK(channel_id, sequence)
 )
 
 notification_deliveries(
   delivery_id PK, channel_id -> notification_channels,
-  event_id -> domain_events, attempt, state,
-  next_attempt_at NULL, delivered_at NULL, last_error_kind NULL,
-  UNIQUE(channel_id, event_id, attempt)
+  channel_sequence -> notification_channel_configurations,
+  event_id -> audit_events, event_kind, occurred_at, attempt, state,
+  next_attempt_at, worker_node_id NULL, worker_incarnation NULL,
+  claim_expires_at NULL, delivered_at NULL, revision,
+  UNIQUE(channel_id, event_id)
 )
 ```
 
 Projection cursors and metrics may be rebuilt from committed events and current
 state. Delivery retries are bounded and deduplicated; notification ciphertext is
 never included in event payloads.
+
+The initial implementation projects a closed allow-list of committed audit facts;
+it does not duplicate their payloads into a second generic event log. Retries
+advance one delivery row and retain its identity. New encrypted settings and an
+immutable channel revision commit in the same transaction. A private random nonce
+inside the encrypted settings envelope binds recipient redistribution to unchanged
+settings without exposing a reusable password-verification hash. Configuration
+history retains the original generation for exact request/receipt verification.
 
 ## 24. Capacity accounting
 

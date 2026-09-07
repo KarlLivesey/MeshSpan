@@ -47,6 +47,10 @@ mod metrics_exporter;
 mod metrics_exporter_tests;
 mod metrics_exporter_validation;
 mod notification_destination;
+#[cfg(test)]
+mod notification_tests;
+mod notification_validation;
+mod notifications;
 pub use metric_history::{
     HistoricalMetric, HistoricalMetricValue, MAX_METRIC_HISTORY_BYTES, MetricHistoryPoint,
     MetricHistoryResolution, MetricHistoryResponse, MetricSeconds,
@@ -63,6 +67,14 @@ pub use metrics_exporter_validation::{
 pub use notification_destination::{
     NotificationDestination, NotificationMailbox, NotificationSmtpTls,
     decode_notification_destination,
+};
+pub use notification_validation::{
+    MAX_CONFIGURE_NOTIFICATION_BYTES, decode_configure_notification_request,
+    encode_configure_notification_response, encode_notifications_response,
+};
+pub use notifications::{
+    ConfigureNotificationRequest, ConfigureNotificationResponse, NotificationChannelStatus,
+    NotificationKind, NotificationSettingsUpdate, NotificationWorkerStatus, NotificationsResponse,
 };
 mod runtime_diagnostics;
 #[cfg(test)]

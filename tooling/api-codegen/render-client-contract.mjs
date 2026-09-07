@@ -3,6 +3,7 @@
 import { renderAuthenticationClientInterface } from "./render-authentication-client.mjs";
 import { renderBackupScheduleClientInterface } from "./render-backup-schedule-client.mjs";
 import { renderMetricsClientInterface } from "./render-metrics-client.mjs";
+import { renderNotificationClientInterface } from "./render-notification-client.mjs";
 import { renderBackupDestinationClientInterface } from "./render-backup-destination-client.mjs";
 import { renderBackupHistoryClientInterface } from "./render-backup-history-client.mjs";
 import { renderBackupExportClientInterface } from "./render-backup-export-client.mjs";
@@ -125,6 +126,7 @@ function renderClientInterface() {
   ${renderCertificateClientInterface()}
   ${renderBackupScheduleClientInterface()}
   ${renderMetricsClientInterface()}
+  ${renderNotificationClientInterface()}
   ${renderBackupDestinationClientInterface()}
   ${renderBackupHistoryClientInterface()}
   /** Collects a bounded metadata-only diagnostic snapshot; not an availability proof. */

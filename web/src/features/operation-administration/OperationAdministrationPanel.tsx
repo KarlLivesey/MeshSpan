@@ -11,10 +11,12 @@ import { OperationList } from "./OperationList";
 import { DiagnosticsDownload } from "./DiagnosticsDownload";
 import { MetricsAdministration } from "../metrics-administration/MetricsAdministration";
 import type { MetricsClient } from "../metrics-administration/model";
+import { NotificationAdministration } from "../notification-administration/NotificationAdministration";
+import type { NotificationClient } from "../notification-administration/model";
 
 export function OperationAdministrationPanel(
   props: Readonly<{
-    client: OperationAdministrationClient & MetricsClient;
+    client: OperationAdministrationClient & MetricsClient & NotificationClient;
     csrfToken: string;
   }>,
 ): JSX.Element {
@@ -33,6 +35,10 @@ export function OperationAdministrationPanel(
       </header>
       <AdministrationNavigation current="operations" />
       <DiagnosticsDownload client={props.client} />
+      <NotificationAdministration
+        client={props.client}
+        csrfToken={props.csrfToken}
+      />
       <MetricsAdministration
         client={props.client}
         csrfToken={props.csrfToken}

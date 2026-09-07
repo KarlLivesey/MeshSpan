@@ -3,6 +3,10 @@
 //! Daemon process composition, configuration and local secret presentation.
 
 mod api_http;
+mod notification_api;
+mod notification_runtime;
+mod notification_service;
+mod notification_settings;
 mod notification_smtp;
 mod notification_transport;
 #[cfg(test)]

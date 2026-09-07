@@ -25,6 +25,8 @@ pub struct NotificationChannelRecord {
     pub kind: NotificationChannelKind,
     /// Encrypted kind-10 settings generation.
     pub settings: SecretGenerationReference,
+    /// Binds redistributed ciphertext to the same private settings envelope.
+    pub settings_commitment: [u8; 32],
     /// Explicit administrator opt-in.
     pub enabled: bool,
     /// Allowed closed event kinds.
@@ -47,6 +49,37 @@ impl AuthoritativeRepository {
         id: ComponentInstanceId,
     ) -> Result<Option<NotificationChannelRecord>, RepositoryError> {
         load(self.database.connection(), id)
+    }
+
+    /// Finds the current recipient generation without changing the bound destination.
+    /// Callers must verify decrypted plaintext against the channel's settings commitment.
+    ///
+    /// # Errors
+    /// Rejects a missing secret generation or unavailable persistence.
+    pub fn notification_settings_generation(
+        &self,
+        settings: SecretGenerationReference,
+    ) -> Result<SecretGenerationReference, RepositoryError> {
+        super::secret_generation::latest_reference(
+            &self.database,
+            crate::NOTIFICATION_SETTINGS_SECRET_KIND,
+            settings,
+        )
+    }
+
+    /// Reads an immutable configuration for exact operation retry verification.
+    ///
+    /// # Errors
+    /// Rejects invalid sequence bounds, malformed records or unavailable persistence.
+    pub fn notification_configuration(
+        &self,
+        id: ComponentInstanceId,
+        sequence: u64,
+    ) -> Result<Option<NotificationChannelRecord>, RepositoryError> {
+        if sequence == 0 {
+            return Err(RepositoryError::InvalidCommand);
+        }
+        load_revision(self.database.connection(), id, Some(to_i64(sequence)?))
     }
 }
 
@@ -76,6 +109,7 @@ pub(super) fn configure(
     if !(1..=15).contains(&value.event_filter)
         || value.settings.generation == 0
         || value.settings.secret_id == [0; 16]
+        || value.settings_commitment == [0; 32]
         || context.occurred_at.get() < 0
     {
         return Err(RepositoryError::InvalidCommand);
@@ -83,6 +117,16 @@ pub(super) fn configure(
     let current = load(tx, value.channel_id)?;
     if current.as_ref().map_or(0, |record| record.sequence) != value.expected_sequence {
         return Err(RepositoryError::StaleRevision);
+    }
+    if let Some(secret) = &value.new_settings {
+        let binding = secret.secret.context;
+        if binding.kind() != crate::NOTIFICATION_SETTINGS_SECRET_KIND
+            || binding.id() != value.settings.secret_id
+            || binding.generation() != value.settings.generation
+        {
+            return Err(RepositoryError::InvalidCommand);
+        }
+        super::secret_generation::commit(tx, context, secret, revision)?;
     }
     let sequence = to_i64(
         value
@@ -108,8 +152,8 @@ pub(super) fn configure(
     tx.execute(
         "INSERT INTO notification_channel_configurations(
         channel_id, sequence, display_name, channel_kind, settings_id, settings_generation,
-        enabled, event_filter, configured_by, revision)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        enabled, event_filter, configured_by, revision, settings_commitment)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             channel.as_slice(),
             sequence,
@@ -120,7 +164,8 @@ pub(super) fn configure(
             value.enabled,
             value.event_filter,
             context.actor_principal_id.as_bytes().as_slice(),
-            revision
+            revision,
+            value.settings_commitment.as_slice()
         ],
     )?;
     tx.execute(
@@ -218,14 +263,22 @@ pub(super) fn load(
     connection: &Connection,
     id: ComponentInstanceId,
 ) -> Result<Option<NotificationChannelRecord>, RepositoryError> {
+    load_revision(connection, id, None)
+}
+
+fn load_revision(
+    connection: &Connection,
+    id: ComponentInstanceId,
+    sequence: Option<i64>,
+) -> Result<Option<NotificationChannelRecord>, RepositoryError> {
     let stored = connection
         .query_row(
             "SELECT c.sequence, substr(c.display_name, 1, 257),
         c.channel_kind, c.settings_id, c.settings_generation, c.enabled, c.event_filter,
-        c.configured_by, h.created_revision, c.revision FROM notification_channels h
+        c.configured_by, h.created_revision, c.revision, c.settings_commitment FROM notification_channels h
         JOIN notification_channel_configurations c ON c.channel_id = h.channel_id
-        AND c.sequence = h.active_sequence WHERE h.channel_id = ?1",
-            [id.as_bytes().as_slice()],
+        AND c.sequence = COALESCE(?2, h.active_sequence) WHERE h.channel_id = ?1",
+            params![id.as_bytes().as_slice(), sequence],
             |row| {
                 Ok(NotificationChannelRecord {
                     channel_id: id,
@@ -241,6 +294,7 @@ pub(super) fn load(
                         secret_id: row.get(3)?,
                         generation: unsigned(row, 4)?,
                     },
+                    settings_commitment: row.get(10)?,
                     enabled: row.get(5)?,
                     event_filter: row.get(6)?,
                     configured_by: PrincipalId::from_bytes(row.get(7)?).map_err(corrupt_row)?,

@@ -27,6 +27,11 @@ pub(super) fn encode(
             encoder.u8(value.kind as u8)?;
             encoder.identifier(value.settings.secret_id)?;
             encoder.u64(value.settings.generation)?;
+            encoder.fixed(&value.settings_commitment)?;
+            encoder.bool(value.new_settings.is_some())?;
+            if let Some(secret) = &value.new_settings {
+                super::secret_generation::encode_payload(encoder, secret)?;
+            }
             encoder.bool(value.enabled)?;
             encoder.u8(value.event_filter)?;
         }
@@ -74,6 +79,12 @@ pub(super) fn decode(
                 secret_id: decoder.identifier()?,
                 generation: decoder.u64()?,
             };
+            let settings_commitment = decoder.fixed()?;
+            let new_settings = if decoder.bool()? {
+                Some(Box::new(super::secret_generation::decode_payload(decoder)?))
+            } else {
+                None
+            };
             let enabled = decoder.bool()?;
             let event_filter = decoder.u8()?;
             if settings.generation == 0 || !(1..=15).contains(&event_filter) {
@@ -86,6 +97,8 @@ pub(super) fn decode(
                     display_name,
                     kind,
                     settings,
+                    settings_commitment,
+                    new_settings,
                     enabled,
                     event_filter,
                 },
