@@ -3012,6 +3012,47 @@ manual-DNS/renewal delivery acceptance and the assembled-stage check. Task 21
 remains partial with its existing estimate until the complete delivery path runs.
 No dependencies, release, tag, publication or GitHub Actions were introduced.
 
+### Notification transport slice
+
+The in-process sender now supports authenticated HTTPS webhooks and authenticated
+SMTP submission with implicit TLS or required STARTTLS. Destination settings are
+typed Rust schema inputs, bounded to 16 KiB, and revalidated after decryption or
+direct construction. Unknown/duplicate fields, plaintext webhook URLs, header
+injection and duplicate recipients are rejected. The configured endpoint/relay
+and recipient list form the explicit destination allow-list; event content never
+selects a destination. Settings deliberately have no `Debug` implementation.
+
+Each attempt has a 35-second deadline. HTTPS follows no redirects and sends a
+stable canonical UUID `Idempotency-Key`; SMTP sends the same stable `Message-ID`
+on retry. Only the closed event code, source ID, delivery ID, schema version and
+source timestamp leave the appliance. Endpoint acceptance is not proof of inbox
+arrival or exactly-once remote side effects. HTTP temporary failures request an
+outbox retry; SMTP never falls back to plaintext and requires fresh EHLO/AUTH
+inside TLS ([STARTTLS specification](https://www.rfc-editor.org/rfc/rfc3207),
+[SMTP authentication](https://www.rfc-editor.org/rfc/rfc4954)). The initial SMTP
+adapter supports SASL PLAIN over verified TLS and explicit ASCII mailboxes, not
+automatic MX discovery or an arbitrary MIME/message editor. The current provider
+and wire proof use TLS 1.3.
+
+One settings-boundary test passed in **0.01 seconds** and three real local wire
+tests passed in **0.25 seconds** after a **13.76-second build**. The wire tests
+assert exact webhook JSON/authentication/idempotency values, success/redirect/
+temporary-failure classifications, complete implicit-TLS and STARTTLS SMTP
+conversations, and connection closure without credentials when STARTTLS is absent.
+The first run exposed internal unhyphenated IDs leaking into the wire format;
+the sender now uses the established canonical UUID formatter. A subsequent
+webhook failure exposed `Connection: close` completing the connection driver in
+the same poll that made the response available. The driver now consumes the
+request's final result; the original expected success assertion remains unchanged.
+
+Affected API/daemon all-target/all-feature Clippy passed in **10.37 seconds**;
+`cargo deny check licenses` passed. No whole-workspace gate was run.
+
+The sender reuses the existing locked Base64 and HTTP-date libraries; no versions
+were added or upgraded. This remains transport-level evidence, not an operational
+outbox-to-receiver workflow. Scheduling, administrative endpoints, panel controls,
+gateway enrolment redistribution and the owned runtime worker still need wiring.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in

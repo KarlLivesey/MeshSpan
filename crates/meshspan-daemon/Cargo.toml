@@ -12,12 +12,14 @@ version.workspace = true
 
 [dependencies]
 axum.workspace = true
+base64 = "0.22.1"
 blake3.workspace = true
 chacha20poly1305.workspace = true
 form_urlencoded.workspace = true
 getrandom.workspace = true
 hmac.workspace = true
 hyper.workspace = true
+httpdate.workspace = true
 hyper-util.workspace = true
 meshspan-api-contract = { path = "../meshspan-api-contract" }
 meshspan-acme = { path = "../meshspan-acme" }
@@ -53,7 +55,6 @@ tokio-rustls.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-base64 = "0.22.1"
 meshspan-test-certificates = { path = "../meshspan-test-certificates" }
 p256.workspace = true
 rusqlite.workspace = true
