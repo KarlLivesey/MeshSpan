@@ -12,6 +12,19 @@ pub(crate) fn rollout(
         .update_progress_counts(record.rollout_id)
         .map_err(|_| UpdateError::Unavailable)?;
     Ok(UpdateRolloutStatus {
+        artifacts: record
+            .manifest
+            .artifacts()
+            .map_err(|_| UpdateError::Failed)?
+            .into_iter()
+            .map(
+                |(target, artifact)| meshspan_api_contract::UpdateArtifactDescriptor {
+                    target,
+                    byte_length: artifact.size,
+                    sha256: artifact.sha256,
+                },
+            )
+            .collect(),
         rollout_id: identifier(record.rollout_id.as_bytes()),
         signer_id: identifier(record.signer_id.as_bytes()),
         version: record

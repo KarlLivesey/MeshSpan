@@ -41,13 +41,21 @@ pub(crate) enum UpdateError {
     Failed,
     #[error("update body exceeds its limit")]
     BodyTooLarge,
-    #[error("update management requires JSON")]
+    #[error("update request has an unsupported content type")]
     MediaType,
 }
 
 pub(crate) struct UpdateService {
     authority: ConsensusAuthenticationAuthority,
     gateway: GatewaySessionIdentity,
+}
+
+/// Exact public operation and typed replicated command, shared by JSON controls and byte staging.
+struct UpdateMutation {
+    operation_id: meshspan_api_contract::OperationId,
+    resource_id: UpdateIdentifier,
+    entity_kind: EntityKind,
+    command: AuthoritativeCommand,
 }
 
 impl UpdateService {
@@ -114,19 +122,44 @@ impl UpdateService {
             &serde_json::to_vec(request).map_err(|_| UpdateError::Invalid)?,
         )
         .map_err(|_| UpdateError::Invalid)?;
+        let (kind, resource) = match &request.action {
+            UpdateAction::ConfigureSigner { signer_id, .. } => {
+                (EntityKind::UpdateSigner, signer_id)
+            }
+            UpdateAction::SelectCandidate { rollout_id, .. }
+            | UpdateAction::Control { rollout_id, .. } => (EntityKind::UpdateRollout, rollout_id),
+        };
+        self.submit(
+            administrator,
+            &UpdateMutation {
+                operation_id: request.operation_id.clone(),
+                resource_id: resource.clone(),
+                entity_kind: kind,
+                command: command(&request.action)?,
+            },
+        )
+    }
+
+    fn submit(
+        &self,
+        administrator: IdentityAdministrator,
+        request: &UpdateMutation,
+    ) -> Result<ManageUpdateResponse, UpdateError> {
         let operation = OperationId::from_bytes(parse(request.operation_id.as_str())?)
             .map_err(|_| UpdateError::Invalid)?;
-        let command = command(&request.action)?;
         let original = self
             .authority
             .reader()
             .resolve_operation(operation)
             .map_err(|_| UpdateError::Unavailable)?;
         if let Some(receipt) = original {
-            return self.retry(administrator, request, &command, receipt);
+            return self.retry(administrator, request, receipt);
         }
         let context = context(administrator, operation)?;
-        let receipt = match self.authority.commit_authoritative(context, &command) {
+        let receipt = match self
+            .authority
+            .commit_authoritative(context, &request.command)
+        {
             Ok(receipt) => receipt,
             Err(error) => {
                 if let Some(receipt) = self
@@ -135,7 +168,7 @@ impl UpdateService {
                     .resolve_operation(operation)
                     .map_err(|_| UpdateError::Unavailable)?
                 {
-                    return self.retry(administrator, request, &command, receipt);
+                    return self.retry(administrator, request, receipt);
                 }
                 return Err(match error {
                     MetadataAuthorityRequestError::Conflict
@@ -147,14 +180,13 @@ impl UpdateService {
                 });
             }
         };
-        verify_receipt(request, context, &command, receipt)
+        verify_receipt(request, context, receipt)
     }
 
     fn retry(
         &self,
         mut administrator: IdentityAdministrator,
-        request: &ManageUpdateRequest,
-        command: &AuthoritativeCommand,
+        request: &UpdateMutation,
         receipt: CommandReceipt,
     ) -> Result<ManageUpdateResponse, UpdateError> {
         let operation = OperationId::from_bytes(parse(request.operation_id.as_str())?)
@@ -169,12 +201,78 @@ impl UpdateService {
             return Err(UpdateError::Conflict);
         }
         administrator.now = status.started_at;
-        verify_receipt(
-            request,
-            context(administrator, operation)?,
-            command,
-            receipt,
-        )
+        verify_receipt(request, context(administrator, operation)?, receipt)
+    }
+
+    /// Called before IO and again before publication; a cache file never grants update authority.
+    pub(crate) fn candidate(
+        &self,
+        id: WorkId,
+    ) -> Result<meshspan_metadata::UpdateRolloutRecord, UpdateError> {
+        let record = self
+            .authority
+            .reader()
+            .update_rollout(id)
+            .map_err(|_| UpdateError::Unavailable)?
+            .ok_or(UpdateError::Invalid)?;
+        let trusted = self
+            .authority
+            .reader()
+            .update_signers()
+            .map_err(|_| UpdateError::Unavailable)?
+            .into_iter()
+            .any(|signer| signer.signer_id == record.signer_id && signer.enabled);
+        if !trusted
+            || !matches!(
+                record.state,
+                meshspan_metadata::UpdateRolloutState::Running
+                    | meshspan_metadata::UpdateRolloutState::Paused
+            )
+        {
+            return Err(UpdateError::Conflict);
+        }
+        Ok(record)
+    }
+
+    pub(crate) fn publish_artifact(
+        &self,
+        administrator: IdentityAdministrator,
+        operation_id: meshspan_api_contract::OperationId,
+        rollout_id: WorkId,
+        target: String,
+    ) -> Result<meshspan_api_contract::StageUpdateArtifactResponse, UpdateError> {
+        let record = self.candidate(rollout_id)?;
+        let artifact = record
+            .manifest
+            .artifact(&target)
+            .map_err(|_| UpdateError::Invalid)?;
+        let command =
+            AuthoritativeCommand::PublishUpdateArtifact(meshspan_metadata::PublishUpdateArtifact {
+                rollout_id,
+                node_id: self.gateway.node_id,
+                incarnation: self.gateway.incarnation,
+                target: target.clone(),
+                byte_length: artifact.size,
+                sha256: artifact.sha256.clone(),
+            });
+        let receipt = self.submit(
+            administrator,
+            &UpdateMutation {
+                operation_id,
+                resource_id: identifier(rollout_id.as_bytes()),
+                entity_kind: EntityKind::UpdateRollout,
+                command,
+            },
+        )?;
+        Ok(meshspan_api_contract::StageUpdateArtifactResponse {
+            operation_id: receipt.operation_id,
+            rollout_id: receipt.resource_id,
+            node_id: identifier(self.gateway.node_id.as_bytes()),
+            target,
+            byte_length: artifact.size.to_string(),
+            sha256: artifact.sha256,
+            committed_revision: receipt.committed_revision,
+        })
     }
 }
 
@@ -268,27 +366,21 @@ fn context(
 }
 
 fn verify_receipt(
-    request: &ManageUpdateRequest,
+    request: &UpdateMutation,
     context: CommandContext,
-    command: &AuthoritativeCommand,
     receipt: CommandReceipt,
 ) -> Result<ManageUpdateResponse, UpdateError> {
-    let (kind, id) = match &request.action {
-        UpdateAction::ConfigureSigner { signer_id, .. } => (EntityKind::UpdateSigner, signer_id),
-        UpdateAction::SelectCandidate { rollout_id, .. }
-        | UpdateAction::Control { rollout_id, .. } => (EntityKind::UpdateRollout, rollout_id),
-    };
     if receipt.operation_id != context.operation_id
-        || receipt.request_digest != command.request_digest(context)
-        || receipt.entity.kind != kind
-        || receipt.entity.id != parse(&id.0)?
+        || receipt.request_digest != request.command.request_digest(context)
+        || receipt.entity.kind != request.entity_kind
+        || receipt.entity.id != parse(&request.resource_id.0)?
         || receipt.result_digest == [0; 32]
     {
         return Err(UpdateError::Conflict);
     }
     Ok(ManageUpdateResponse {
         operation_id: request.operation_id.clone(),
-        resource_id: id.clone(),
+        resource_id: request.resource_id.clone(),
         committed_revision: receipt.committed_revision.get(),
     })
 }

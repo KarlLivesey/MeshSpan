@@ -628,6 +628,7 @@ fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
                 | AuthoritativeCommand::StartUpdateRollout(_)
                 | AuthoritativeCommand::AdvanceUpdateNode(_)
                 | AuthoritativeCommand::ControlUpdateRollout(_)
+                | AuthoritativeCommand::PublishUpdateArtifact(_)
                 | AuthoritativeCommand::ConfigureMetricsExporter(_)
                 | AuthoritativeCommand::ConfigureNotificationChannel(_)
                 | AuthoritativeCommand::QueueNotification(_)
@@ -1486,6 +1487,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::StartUpdateRollout(_) => 149,
         AuthoritativeCommand::AdvanceUpdateNode(_) => 150,
         AuthoritativeCommand::ControlUpdateRollout(_) => 151,
+        AuthoritativeCommand::PublishUpdateArtifact(_) => 152,
     }
 }
 

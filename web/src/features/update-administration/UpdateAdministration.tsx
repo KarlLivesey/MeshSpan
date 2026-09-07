@@ -9,6 +9,7 @@ import {
   type UpdateModel,
 } from "./model";
 import { CandidateForm, PublisherForm } from "./UpdateForms";
+import { ArtifactUpload } from "./ArtifactUpload";
 
 export function UpdateAdministration(
   props: Readonly<{ client: UpdateClient; csrfToken: string }>,
@@ -35,30 +36,12 @@ export function UpdateAdministration(
         fallback={<p>Update status has not been loaded.</p>}
       >
         {(status) => (
-          <>
-            <Show when={!status().installation_available}>
-              <p>
-                Installation is not connected in this build. You can configure
-                publisher trust and select a candidate; no running software will
-                be replaced.
-              </p>
-            </Show>
-            <Show
-              when={status().rollout}
-              fallback={
-                <p>
-                  No active candidate. Choose a signed candidate after pinning
-                  its publisher.
-                </p>
-              }
-            >
-              {(rollout) => (
-                <RolloutProgress rollout={rollout()} model={model} />
-              )}
-            </Show>
-            <CandidateForm model={model} signers={status().signers} />
-            <PublisherTrust model={model} signers={status().signers} />
-          </>
+          <UpdateStatus
+            status={status()}
+            model={model}
+            client={props.client}
+            csrfToken={props.csrfToken}
+          />
         )}
       </Show>
       <Show when={model.pending()}>
@@ -88,10 +71,53 @@ export function UpdateAdministration(
   );
 }
 
-function RolloutProgress(
+function UpdateStatus(
+  props: Readonly<{
+    status: UpdatesResponse;
+    model: UpdateModel;
+    client: UpdateClient;
+    csrfToken: string;
+  }>,
+): JSX.Element {
+  return (
+    <>
+      <Show when={!props.status.installation_available}>
+        <p>
+          Installation is not connected in this build. You can configure
+          publisher trust, select a candidate and upload its executables; no
+          running software will be replaced.
+        </p>
+      </Show>
+      <Show
+        when={props.status.rollout}
+        fallback={
+          <p>
+            No active candidate. Choose a signed candidate after pinning its
+            publisher.
+          </p>
+        }
+      >
+        {(rollout) => (
+          <SelectedUpdate
+            rollout={rollout()}
+            model={props.model}
+            client={props.client}
+            csrfToken={props.csrfToken}
+          />
+        )}
+      </Show>
+      <CandidateForm model={props.model} signers={props.status.signers} />
+      <PublisherTrust model={props.model} signers={props.status.signers} />
+    </>
+  );
+}
+
+function SelectedUpdate(
   props: Readonly<{
     rollout: NonNullable<UpdatesResponse["rollout"]>;
     model: UpdateModel;
+    client: UpdateClient;
+    csrfToken: string;
   }>,
 ): JSX.Element {
   return (
@@ -116,6 +142,17 @@ function RolloutProgress(
         </p>
       </Show>
       <RolloutControls rollout={props.rollout} model={props.model} />
+      <Show
+        when={
+          props.rollout.state === "running" || props.rollout.state === "paused"
+        }
+      >
+        <ArtifactUpload
+          rollout={props.rollout}
+          client={props.client}
+          csrfToken={props.csrfToken}
+        />
+      </Show>
     </div>
   );
 }

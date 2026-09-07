@@ -4,6 +4,24 @@
 
 use meshspan_domain::{ComponentInstanceId, NodeId, UnixMicros, WorkId};
 
+/// Advertise a node-local executable only after its signed bytes have been fsynced.
+/// Consumers still authenticate the peer and verify the complete bytes before using them.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublishUpdateArtifact {
+    /// Immutable candidate selection.
+    pub rollout_id: WorkId,
+    /// Source holding the verified executable.
+    pub node_id: NodeId,
+    /// Exact active source incarnation.
+    pub incarnation: u64,
+    /// Platform selected from the signed manifest.
+    pub target: String,
+    /// Exact signed executable length.
+    pub byte_length: u64,
+    /// Canonical lowercase signed SHA-256.
+    pub sha256: String,
+}
+
 /// Explicit administrator-managed trust, never imported implicitly from a candidate.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConfigureUpdateSigner {

@@ -12,6 +12,7 @@ pub(super) const CONFIGURE: u16 = 84;
 pub(super) const START: u16 = 85;
 pub(super) const ADVANCE: u16 = 86;
 pub(super) const CONTROL: u16 = 87;
+pub(super) const PUBLISH_ARTIFACT: u16 = 88;
 
 pub(super) fn encode(
     encoder: &mut Encoder,
@@ -50,6 +51,15 @@ pub(super) fn encode(
             encoder.identifier(value.rollout_id.as_bytes())?;
             encoder.u64(value.expected_sequence)?;
             encoder.u8(value.action as u8)?;
+        }
+        AuthoritativeCommand::PublishUpdateArtifact(value) => {
+            encoder.u16(PUBLISH_ARTIFACT)?;
+            encoder.identifier(value.rollout_id.as_bytes())?;
+            encoder.identifier(value.node_id.as_bytes())?;
+            encoder.u64(value.incarnation)?;
+            encoder.text(&value.target, 64)?;
+            encoder.u64(value.byte_length)?;
+            encoder.text(&value.sha256, 64)?;
         }
         _ => return Ok(false),
     }
@@ -101,6 +111,16 @@ pub(super) fn decode(
                 _ => return Err(MetadataCommandCodecError::Invalid),
             },
         }),
+        PUBLISH_ARTIFACT => {
+            AuthoritativeCommand::PublishUpdateArtifact(crate::PublishUpdateArtifact {
+                rollout_id: WorkId::from_bytes(decoder.identifier()?)?,
+                node_id: NodeId::from_bytes(decoder.identifier()?)?,
+                incarnation: decoder.u64()?,
+                target: decoder.text(64)?,
+                byte_length: decoder.u64()?,
+                sha256: decoder.text(64)?,
+            })
+        }
         _ => return Err(MetadataCommandCodecError::Invalid),
     })
 }

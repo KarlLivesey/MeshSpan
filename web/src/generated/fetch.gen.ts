@@ -49,6 +49,7 @@ import type {
   UpdatesResponse,
   ManageUpdateRequest,
   ManageUpdateResponse,
+  StageUpdateArtifactResponse,
   ConfigureNotificationRequest,
   ConfigureNotificationResponse,
   GetMetricHistoryData,
@@ -177,6 +178,9 @@ import {
   zGetUpdatesResponse,
   zManageUpdateBody,
   zManageUpdateResponse2,
+  zStageUpdateArtifactPath,
+  zStageUpdateArtifactHeaders,
+  zStageUpdateArtifactResponse2,
   zConfigureNotificationBody,
   zConfigureNotificationResponse2,
   zGetMetricHistoryQuery,
@@ -498,6 +502,13 @@ export interface MeshSpanFetchClient {
     request: ManageUpdateRequest,
     csrfToken?: string,
   ): Promise<ManageUpdateResponse>;
+  stageUpdateArtifact(
+    rolloutId: string,
+    target: string,
+    operationId: string,
+    bytes: Blob,
+    csrfToken?: string,
+  ): Promise<StageUpdateArtifactResponse>;
   listBackupDestinations(
     query?: ListBackupDestinationsQuery,
   ): Promise<ListBackupDestinationsResponse>;
@@ -1111,6 +1122,47 @@ export function createMeshSpanFetchClient(
           method: "PUT",
         },
         zManageUpdateResponse2,
+      );
+    },
+    async stageUpdateArtifact(
+      rolloutId,
+      target,
+      operationId,
+      bytes,
+      csrfToken,
+    ): Promise<StageUpdateArtifactResponse> {
+      const path = zStageUpdateArtifactPath.parse({
+        rollout_id: rolloutId,
+        target,
+      });
+      const headers = zStageUpdateArtifactHeaders.parse({
+        "MeshSpan-Operation-Id": operationId,
+        "Content-Length": String(bytes.size),
+      });
+      if (bytes.size <= 0 || bytes.size > 8589934592)
+        throw new RangeError(
+          "executable exceeds the signed candidate format bounds",
+        );
+      return requestJson(
+        context,
+        substitutePathParameter(
+          substitutePathParameter(
+            "/admin/updates/{rollout_id}/artifacts/{target}",
+            "rollout_id",
+            path.rollout_id,
+          ),
+          "target",
+          path.target,
+        ),
+        {
+          body: bytes,
+          method: "PUT",
+          headers: {
+            ...mutationHeaders("application/octet-stream", csrfToken),
+            "MeshSpan-Operation-Id": headers["MeshSpan-Operation-Id"],
+          },
+        },
+        zStageUpdateArtifactResponse2,
       );
     },
     async listBackupDestinations(

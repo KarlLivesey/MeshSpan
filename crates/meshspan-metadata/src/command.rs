@@ -84,6 +84,8 @@ pub enum AuthoritativeCommand {
     AdvanceUpdateNode(crate::AdvanceUpdateNode),
     /// Pauses, resumes or cancels one exact rollout sequence.
     ControlUpdateRollout(crate::ControlUpdateRollout),
+    /// Publish one verified local candidate source, not a node installation result.
+    PublishUpdateArtifact(crate::PublishUpdateArtifact),
     /// Replaces one opted-in encrypted notification channel configuration.
     ConfigureNotificationChannel(crate::ConfigureNotificationChannel),
     /// Projects one existing committed audit event into a deduplicated delivery.
@@ -498,6 +500,7 @@ impl AuthoritativeCommand {
             Self::StartUpdateRollout(value) => value.update_digest(digest),
             Self::AdvanceUpdateNode(value) => value.update_digest(digest),
             Self::ControlUpdateRollout(value) => value.update_digest(digest),
+            Self::PublishUpdateArtifact(value) => value.update_digest(digest),
             Self::QueueNotification(value) => value.update_digest(digest),
             Self::ClaimNotification(value) => value.update_digest(digest),
             Self::CompleteNotification(value) => value.update_digest(digest),
@@ -2827,6 +2830,19 @@ digest_simple_record!(
         digest.identifier(value.rollout_id.as_bytes());
         digest.unsigned(value.expected_sequence);
         digest.unsigned(value.action as u64);
+    }
+);
+
+digest_simple_record!(
+    crate::PublishUpdateArtifact,
+    b"publish-update-artifact-v1",
+    |value, digest| {
+        digest.identifier(value.rollout_id.as_bytes());
+        digest.identifier(value.node_id.as_bytes());
+        digest.unsigned(value.incarnation);
+        digest.bytes(value.target.as_bytes());
+        digest.unsigned(value.byte_length);
+        digest.bytes(value.sha256.as_bytes());
     }
 );
 

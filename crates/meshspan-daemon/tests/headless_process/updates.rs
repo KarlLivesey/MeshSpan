@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 const API: &str = "/api/latest/admin/updates";
 const SIGNER: &str = "00000000-0000-4000-8000-000000000401";
 const ROLLOUT: &str = "00000000-0000-4000-8000-000000000402";
+const ARTIFACT_DIGEST: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
 #[tokio::test]
 async fn update_administration_preserves_trust_selection_and_exact_retry_after_restart()
@@ -38,6 +39,10 @@ async fn update_administration_preserves_trust_selection_and_exact_retry_after_r
         let candidate = candidate(&root, &signer)?;
         let selected = api.manage(&candidate, "200 OK").await?;
         assert_eq!(selected["resource_id"], ROLLOUT);
+        let staged = api.stage(b"abc", "200 OK").await?;
+        assert_eq!(staged["sha256"], ARTIFACT_DIGEST);
+        assert_eq!(staged["byte_length"], "3");
+        assert_eq!(std::fs::read(root.state_path.join("update-artifacts").join(ARTIFACT_DIGEST))?, b"abc");
         let status = api.status(false).await?;
         assert_eq!(status["installation_available"], false);
         assert_eq!(status["rollout"]["state"], "running");
@@ -50,6 +55,8 @@ async fn update_administration_preserves_trust_selection_and_exact_retry_after_r
         super::wait_for_status(root.address, &client, "configured").await?;
         assert_eq!(api.manage(&pin, "200 OK").await?, pin_receipt);
         assert_eq!(api.manage(&candidate, "200 OK").await?, selected);
+        assert_eq!(api.stage(b"abc", "200 OK").await?, staged);
+        api.stage(b"abd", "400 Bad Request").await?;
         let paused = api.status(true).await?;
         assert_eq!(paused["rollout"]["state"], "paused");
         assert_eq!(paused["signers"][0]["sequence"], 1);
@@ -78,7 +85,7 @@ fn candidate(root: &ProcessFixture, signer: &NodeIdentityKey) -> Result<Value, B
         "source_commit":"a".repeat(40), "api_sha256":"b".repeat(64),
         "compatibility":{"private_protocol_major":1, "partition_schema_min":schema, "partition_schema_max":schema,
             "partition_schema_target":schema, "rollback_supported":false},
-        "artifacts":[{"target":"aarch64-apple-darwin", "size":"47", "sha256":"c".repeat(64)}]}),
+        "artifacts":[{"target":"aarch64-apple-darwin", "size":"3", "sha256":ARTIFACT_DIGEST}]}),
     )?;
     let mut transcript = UPDATE_SIGNATURE_DOMAIN.to_vec();
     transcript.extend_from_slice(&manifest);
@@ -102,6 +109,28 @@ struct UpdateApi<'a> {
 }
 
 impl UpdateApi<'_> {
+    async fn stage(&self, bytes: &[u8], expected: &str) -> Result<Value, Box<dyn Error>> {
+        let endpoint = format!("{API}/{ROLLOUT}/artifacts/aarch64-apple-darwin");
+        let response = super::request_with_content_type(
+            self.root.address,
+            self.client,
+            "PUT",
+            &endpoint,
+            Some(bytes),
+            "application/octet-stream",
+            &[
+                ("Authorization", &format!("Bearer {}", self.key)),
+                (
+                    "MeshSpan-Operation-Id",
+                    "00000000-0000-4000-8000-000000000408",
+                ),
+            ],
+        )
+        .await?;
+        require_status(&response, expected, "stage exact signed executable")?;
+        Ok(serde_json::from_str(response_body(&response)?)?)
+    }
+
     async fn manage(&self, request: &Value, expected: &str) -> Result<Value, Box<dyn Error>> {
         let bytes = serde_json::to_vec(request)?;
         let response = request_with_headers(

@@ -49,7 +49,9 @@ mod cleanup_permit;
 mod cleanup_reclamation;
 mod cluster;
 mod component;
+mod update_artifact;
 mod update_restart;
+pub use update_artifact::UpdateArtifactSource;
 mod update_rollout;
 mod update_rollout_queries;
 #[cfg(test)]
