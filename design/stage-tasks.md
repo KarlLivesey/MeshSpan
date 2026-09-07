@@ -358,7 +358,7 @@ the stage; publication-dependent acceptance remains held separately and visible.
     This integrated slice reduces the estimate **8 → 3 points**; it does not
     close the task or the assembled-stage acceptance pass.
 
-22. **Mesh-wide rolling updates — Partial; candidate admission, journal and administration implemented.** **13 points remaining.**
+22. **Mesh-wide rolling updates — Partial; admission, journal, administration and executable upload implemented.** **13 points remaining.**
     Accepted decisions §7, PER-003/006, TST-007. Provide one administrator-selected
     signed candidate, compatibility checks, availability-aware node ordering,
     durable progress and stop-on-failed-probe behaviour. Prove interrupted update
@@ -372,8 +372,12 @@ the stage; publication-dependent acceptance remains held separately and visible.
     quorum/gateway admission uses the real stable/joint predicates.
     [Manager API and panel](stage-10-evidence.md#task-22--native-update-administration)
     now pin/revoke publisher trust, select signed manifests, show checkpoint counts
-    and pause/resume/cancel with exact retries across daemon restart. Automated
-    peer probe collection, all-scope workload readiness, node installation
+    and pause/resume/cancel with exact retries across daemon restart.
+    [Executable upload](stage-10-evidence.md#task-22--verified-executable-upload)
+    now streams signed bytes to a private fsynced cache and commits an exact
+    node/incarnation source advertisement, through HTTPS, the SDK and panel.
+    Automatic peer distribution, peer probe collection, all-scope workload
+    readiness, node installation
     and real rolling availability remain unimplemented. The
     estimate stays unchanged until these pieces form an operating updater.
 

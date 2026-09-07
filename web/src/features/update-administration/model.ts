@@ -12,7 +12,7 @@ import { MeshSpanApiError } from "../../generated/fetch.gen";
 
 export type UpdateClient = Pick<
   MeshSpanFetchClient,
-  "getUpdates" | "manageUpdate"
+  "getUpdates" | "manageUpdate" | "stageUpdateArtifact"
 >;
 export type UpdateModel = Readonly<{
   status: Accessor<UpdatesResponse | undefined>;

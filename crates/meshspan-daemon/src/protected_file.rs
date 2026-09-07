@@ -25,10 +25,22 @@ pub(crate) fn publish(
     bytes: &[u8],
     mode: PublishMode,
 ) -> Result<(), ProtectedFileError> {
+    publish_checked(path, mode, |file| {
+        file.write_all(bytes).map_err(ProtectedFileError::Io)
+    })
+}
+
+/// Publish streamed contents only after their owning boundary accepts the complete file.
+/// The callback must finish all validation before returning success; failures never publish.
+pub(crate) fn publish_checked(
+    path: &Path,
+    mode: PublishMode,
+    write_and_check: impl FnOnce(&mut File) -> Result<(), ProtectedFileError>,
+) -> Result<(), ProtectedFileError> {
     validate_destination(path)?;
     let (temporary_path, mut temporary_file) = create_temporary(path)?;
     let result = (|| {
-        temporary_file.write_all(bytes)?;
+        write_and_check(&mut temporary_file)?;
         temporary_file.sync_all()?;
         validate_metadata(&temporary_file.metadata()?)?;
         drop(temporary_file);

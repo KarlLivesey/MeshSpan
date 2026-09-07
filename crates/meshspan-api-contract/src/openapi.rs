@@ -140,6 +140,7 @@ fn components() -> Value {
             schema_request::<crate::ManageUpdateRequest>("ManageUpdateRequest"),
             schema_response::<crate::ManageUpdateResponse>("ManageUpdateResponse"),
             schema_response::<crate::UpdatesResponse>("UpdatesResponse"),
+            schema_response::<crate::StageUpdateArtifactResponse>("StageUpdateArtifactResponse"),
             schema_request::<crate::ConfigureNotificationRequest>("ConfigureNotificationRequest"),
             schema_response::<crate::ConfigureNotificationResponse>(
                 "ConfigureNotificationResponse",
@@ -581,6 +582,10 @@ fn administration_paths() -> Vec<(String, Value)> {
             ("/metrics".to_owned(), metrics::scrape_path()),
             ("/admin/notifications".to_owned(), notifications::path()),
             ("/admin/updates".to_owned(), updates::path()),
+            (
+                "/admin/updates/{rollout_id}/artifacts/{target}".to_owned(),
+                updates::artifact_path(),
+            ),
             ("/admin/metrics/history".to_owned(), metrics::history_path()),
             ("/admin/backups/runs".to_owned(), backup_runs_path()),
             (

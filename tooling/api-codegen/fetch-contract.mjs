@@ -106,6 +106,7 @@ function readObservabilityRoutes(operations) {
     getNotifications: requireOperation(operations, "getNotifications"),
     getUpdates: requireOperation(operations, "getUpdates"),
     manageUpdate: requireOperation(operations, "manageUpdate"),
+    stageUpdateArtifact: requireOperation(operations, "stageUpdateArtifact"),
     configureNotification: requireOperation(
       operations,
       "configureNotification",

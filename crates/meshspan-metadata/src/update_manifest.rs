@@ -35,6 +35,21 @@ pub struct UpdateManifest {
 }
 
 impl UpdateManifest {
+    /// Signed platform entries in manifest order, bounded to four by admission.
+    ///
+    /// # Errors
+    /// Rejects malformed internal representation.
+    pub fn artifacts(&self) -> Result<Vec<(String, UpdateArtifact)>, UpdateManifestError> {
+        self.value["artifacts"]
+            .as_array()
+            .ok_or(UpdateManifestError::Manifest)?
+            .iter()
+            .map(|value| {
+                let target = text(value, "target")?;
+                Ok((target.to_owned(), self.artifact(target)?))
+            })
+            .collect()
+    }
     /// Authenticated candidate version.
     ///
     /// # Errors

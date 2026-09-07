@@ -18,6 +18,75 @@ const request: ManageUpdateRequest = {
   },
 };
 
+it("uploads raw executable bytes with a validated receipt and rejects malformed requests before fetch", async () => {
+  const bytes = new Blob(["abc"]);
+  const rollout = "00000000-0000-4000-8000-000000000002";
+  const target = "aarch64-apple-darwin";
+  let calls = 0;
+  const client = createMeshSpanFetchClient({
+    baseUrl: "https://node.example/api/latest/",
+    fetch: async (input, init) => {
+      calls += 1;
+      expect(input instanceof Request ? input.url : input.toString()).toBe(
+        `https://node.example/api/latest/admin/updates/${rollout}/artifacts/${target}`,
+      );
+      expect(init?.body).toBe(bytes);
+      expect(init?.method).toBe("PUT");
+      const headers = new Headers(init?.headers);
+      expect(headers.get("content-type")).toBe("application/octet-stream");
+      expect(headers.get("MeshSpan-Operation-Id")).toBe(request.operation_id);
+      expect(headers.has("Content-Length")).toBe(false);
+      return new Response(
+        JSON.stringify({
+          operation_id: request.operation_id,
+          rollout_id: rollout,
+          node_id: "00000000-0000-4000-8000-000000000003",
+          target,
+          byte_length: calls === 1 ? "3" : "invalid",
+          sha256: "b".repeat(64),
+          committed_revision: 11,
+        }),
+        {
+          headers: {
+            "content-type": "application/json",
+            "MeshSpan-API-Version": "latest",
+            "MeshSpan-API-Schema": `sha256:${"a".repeat(64)}`,
+          },
+        },
+      );
+    },
+  });
+  expect(
+    (
+      await client.stageUpdateArtifact(
+        rollout,
+        target,
+        request.operation_id,
+        bytes,
+      )
+    ).byte_length,
+  ).toBe("3");
+  await expect(
+    client.stageUpdateArtifact(rollout, target, "invalid", bytes),
+  ).rejects.toThrow();
+  await expect(
+    client.stageUpdateArtifact(rollout, "../bad", request.operation_id, bytes),
+  ).rejects.toThrow();
+  await expect(
+    client.stageUpdateArtifact(
+      rollout,
+      target,
+      request.operation_id,
+      new Blob(),
+    ),
+  ).rejects.toThrow();
+  expect(calls).toBe(1);
+  await expect(
+    client.stageUpdateArtifact(rollout, target, request.operation_id, bytes),
+  ).rejects.toThrow();
+  expect(calls).toBe(2);
+});
+
 it("generates strict update boundaries without client installation claims", () => {
   expect(zManageUpdateBody.safeParse(request).success).toBe(true);
   for (const invalid of [

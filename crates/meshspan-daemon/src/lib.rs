@@ -14,6 +14,9 @@ mod notification_transport;
 #[cfg(test)]
 mod notification_transport_tests;
 mod update_api;
+mod update_artifact_store;
+#[cfg(test)]
+mod update_artifact_store_tests;
 mod update_service;
 mod update_status;
 pub use notification_transport::NotificationTransport;

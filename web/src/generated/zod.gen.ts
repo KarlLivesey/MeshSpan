@@ -6581,6 +6581,49 @@ export const zSetupStatusResponse = z
   .strict();
 
 /**
+ * StageUpdateArtifactResponse
+ *
+ * Durable source publication, not node staging readiness or software installation.
+ */
+export const zStageUpdateArtifactResponse = z
+  .strictObject({
+    byte_length: z
+      .string()
+      .min(1)
+      .max(10)
+      .regex(/^[1-9][0-9]*$/),
+    committed_revision: z.int().gte(1).lte(9007199254740991),
+    node_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    rollout_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    sha256: z
+      .string()
+      .length(64)
+      .regex(/^[0-9a-f]{64}$/),
+    target: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^(aarch64|x86_64)-(apple-darwin|unknown-linux-musl)$/),
+  })
+  .strict();
+
+/**
  * StepUpCurrentSessionRequest
  *
  * Input for atomically rotating the current browser session after a fresh factor.
@@ -6687,6 +6730,27 @@ export const zUpdatesResponse = z
     rollout: z
       .strictObject({
         allow_service_interruption: z.boolean(),
+        artifacts: z
+          .array(
+            z
+              .strictObject({
+                byte_length: z.int().gte(1).lte(8589934592),
+                sha256: z
+                  .string()
+                  .length(64)
+                  .regex(/^[0-9a-f]{64}$/),
+                target: z
+                  .string()
+                  .min(1)
+                  .max(64)
+                  .regex(
+                    /^(aarch64|x86_64)-(apple-darwin|unknown-linux-musl)$/,
+                  ),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(4),
         progress: z
           .strictObject({
             failed: z
@@ -8301,6 +8365,45 @@ export const zManageUpdateHeaders = z
  * Original committed command receipt
  */
 export const zManageUpdateResponse2 = zManageUpdateResponse;
+
+export const zStageUpdateArtifactBody = z.string();
+
+export const zStageUpdateArtifactHeaders = z
+  .object({
+    "MeshSpan-Operation-Id": z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    "Content-Length": z.string().regex(/^[1-9][0-9]{0,9}$/),
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+export const zStageUpdateArtifactPath = z
+  .object({
+    rollout_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    target: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^(aarch64|x86_64)-(apple-darwin|unknown-linux-musl)$/),
+  })
+  .strict();
+
+/**
+ * Verified source and original authoritative publication receipt
+ */
+export const zStageUpdateArtifactResponse2 = zStageUpdateArtifactResponse;
 
 export const zListUsersQuery = z
   .object({

@@ -273,7 +273,7 @@ fn decode_command(
         return Ok(command);
     }
     match kind {
-        update::CONFIGURE..=update::CONTROL => update::decode(kind, decoder),
+        update::CONFIGURE..=update::PUBLISH_ARTIFACT => update::decode(kind, decoder),
         notification::CONFIGURE..=notification::COMPLETE => notification::decode(kind, decoder),
         metrics_exporter::CONFIGURE_METRICS_EXPORTER => {
             metrics_exporter::decode(decoder).map(AuthoritativeCommand::ConfigureMetricsExporter)

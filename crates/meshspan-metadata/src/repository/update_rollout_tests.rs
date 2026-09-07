@@ -18,6 +18,67 @@ use crate::{
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[test]
+fn artifact_source_is_bound_to_signed_bytes_and_current_node_incarnation() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.start()?;
+    let source = crate::PublishUpdateArtifact {
+        rollout_id: fixture.rollout,
+        node_id: NodeId::from_bytes([6; 16])?,
+        incarnation: 1,
+        target: "aarch64-apple-darwin".to_owned(),
+        byte_length: 47,
+        sha256: "c".repeat(64),
+    };
+    let mut invalid = source.clone();
+    invalid.sha256 = "d".repeat(64);
+    assert!(
+        fixture
+            .commit(AuthoritativeCommand::PublishUpdateArtifact(invalid))
+            .is_err()
+    );
+    let mut invalid = source.clone();
+    invalid.incarnation = 2;
+    assert!(
+        fixture
+            .commit(AuthoritativeCommand::PublishUpdateArtifact(invalid))
+            .is_err()
+    );
+    fixture.commit(AuthoritativeCommand::PublishUpdateArtifact(source))?;
+    fixture.reopen()?;
+    let sources = fixture.repository.update_artifact_sources(
+        fixture.rollout,
+        "aarch64-apple-darwin",
+        None,
+        PageLimit::new(10)?,
+    )?;
+    assert_eq!(
+        sources,
+        vec![crate::UpdateArtifactSource {
+            node_id: NodeId::from_bytes([6; 16])?,
+            incarnation: 1
+        }]
+    );
+    assert!(
+        fixture
+            .repository
+            .update_artifact_sources(
+                fixture.rollout,
+                "aarch64-apple-darwin",
+                Some(sources[0].node_id),
+                PageLimit::new(10)?
+            )?
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .nodes()?
+            .iter()
+            .all(|node| node.phase == UpdateNodePhase::Pending)
+    );
+    Ok(())
+}
+
+#[test]
 fn rollout_requires_all_staged_and_resumes_exact_progress_after_database_restart() -> TestResult {
     let mut fixture = Fixture::new()?;
     fixture.start()?;

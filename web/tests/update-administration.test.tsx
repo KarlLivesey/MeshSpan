@@ -26,6 +26,7 @@ it("reads bounded public key and signed candidate files with interruption consen
     installation_available: false,
   };
   const client: UpdateClient = {
+    stageUpdateArtifact: vi.fn<UpdateClient["stageUpdateArtifact"]>(),
     getUpdates: async () => structuredClone(status),
     manageUpdate: vi.fn<UpdateClient["manageUpdate"]>(async (request) => {
       const action = request.action;
@@ -86,6 +87,42 @@ function readableFile(bytes: Uint8Array<ArrayBuffer>): File {
     arrayBuffer: async (): Promise<ArrayBuffer> => bytes.slice().buffer,
   });
 }
+
+it("retries the identical executable and operation after a lost upload reply without claiming installation", async () => {
+  const client = fixture();
+  const bytes = new File(["abc"], "meshspan-daemon");
+  const upload = vi
+    .spyOn(client, "stageUpdateArtifact")
+    .mockRejectedValueOnce(new Error("lost upload reply"))
+    .mockImplementation(async (rollout, target, operation) => ({
+      operation_id: operation,
+      rollout_id: rollout,
+      target,
+      node_id: SIGNER,
+      byte_length: "3",
+      sha256: "b".repeat(64),
+      committed_revision: 12,
+    }));
+  const fields = new Map<string, FormDataEntryValue>([
+    ["update_executable", bytes],
+    ["update_platform", "aarch64-apple-darwin"],
+  ]);
+  vi.spyOn(FormData.prototype, "get").mockImplementation(
+    (name) => fields.get(name) ?? null,
+  );
+  mount(client);
+  await shows("Upload candidate executables");
+  submitForm("update_executable");
+  await shows("Upload outcome is not confirmed");
+  button("Retry executable upload").click();
+  await shows(
+    "Executable verified and stored on this node. Installation is not confirmed.",
+  );
+  expect(upload.mock.calls).toHaveLength(2);
+  expect(upload.mock.calls[0]).toEqual(upload.mock.calls[1]);
+  expect(upload.mock.calls[0]?.[3]).toBe(bytes);
+  expect(upload.mock.calls[0]?.[4]).toBe(CSRF);
+});
 
 function submitForm(field: string): void {
   const form = document.querySelector(`[name="${field}"]`)?.closest("form");
@@ -181,6 +218,13 @@ function initial(): UpdatesResponse {
       signer_id: SIGNER,
       version: "0.1.0",
       source_commit: "a".repeat(40),
+      artifacts: [
+        {
+          target: "aarch64-apple-darwin",
+          byte_length: 3,
+          sha256: "b".repeat(64),
+        },
+      ],
       sequence: 3,
       state: "running",
       allow_service_interruption: false,
@@ -199,6 +243,7 @@ function initial(): UpdatesResponse {
 function fixture(): UpdateClient {
   const status = initial();
   return {
+    stageUpdateArtifact: vi.fn<UpdateClient["stageUpdateArtifact"]>(),
     getUpdates: async () => structuredClone(status),
     manageUpdate: async (request) => {
       const action = request.action;

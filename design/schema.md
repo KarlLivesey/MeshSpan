@@ -1552,6 +1552,7 @@ authoritative metadata, not daemon-local configuration:
 | `update_signers` | Immutable public key per signer identity, explicit enablement and trust sequence. New keys require new identities. |
 | `update_rollouts` | Exact signed candidate, original interruption consent, selecting principal, aggregate state and sequence. |
 | `update_rollout_nodes` | Snapshotted active node/incarnation, monotonic checkpoint sequence, selected target, evidence digest and unresolved-restart ownership. |
+| `update_artifact_sources` (migration 092) | Candidate/platform/node source advertisement with exact incarnation, signed byte length/digest and committed revision. A retrieval hint, not installation or current byte-availability proof. |
 
 One partial unique index permits only one running/paused rollout. Another permits
 only one unresolved restart in that rollout, including a failed attempt that may
@@ -1561,7 +1562,8 @@ reinstallation. Cancellation does not roll back already verified nodes.
 
 The canonical private metadata command codec remains version 4. After its normal
 command context, the update body begins with a big-endian `u16` kind: 84 signer
-configuration, 85 candidate selection, 86 node checkpoint, 87 rollout control.
+configuration, 85 candidate selection, 86 node checkpoint, 87 rollout control,
+88 executable source publication.
 Exact field order is defined in
 [`command_codec/update.rs`](../crates/meshspan-metadata/src/command_codec/update.rs)
 and documented typed records in

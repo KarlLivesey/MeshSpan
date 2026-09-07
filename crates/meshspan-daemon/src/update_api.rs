@@ -2,6 +2,9 @@
 
 //! Manager-authenticated, bounded update configuration jobs.
 
+#[path = "update_artifact_api.rs"]
+mod artifact;
+
 use crate::{
     PublicContractApiError,
     api_http::{
@@ -36,19 +39,30 @@ struct UpdateApi {
     admission: Arc<Semaphore>,
     jobs: Mutex<JoinSet<()>>,
     digest: HeaderValue,
+    artifact_admission: Arc<Semaphore>,
+    state_directory: std::path::PathBuf,
 }
 
-pub(crate) fn router(service: UpdateService) -> Result<Router, PublicContractApiError> {
+pub(crate) fn router(
+    service: UpdateService,
+    state_directory: &std::path::Path,
+) -> Result<Router, PublicContractApiError> {
     let document = generate_openapi().map_err(PublicContractApiError::Contract)?;
     let digest =
         HeaderValue::from_str(document.digest()).map_err(PublicContractApiError::SchemaDigest)?;
     Ok(Router::new()
         .route("/api/latest/admin/updates", get(read).put(configure))
+        .route(
+            "/api/latest/admin/updates/{rollout_id}/artifacts/{target}",
+            axum::routing::put(artifact::upload),
+        )
         .with_state(Arc::new(UpdateApi {
             service: Arc::new(Mutex::new(service)),
             admission: Arc::new(Semaphore::new(1)),
             jobs: Mutex::new(JoinSet::new()),
             digest,
+            artifact_admission: Arc::new(Semaphore::new(2)),
+            state_directory: state_directory.to_path_buf(),
         })))
 }
 

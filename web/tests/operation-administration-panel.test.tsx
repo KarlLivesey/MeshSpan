@@ -35,6 +35,7 @@ describe("operation administration panel", () => {
         installation_available: false,
       }),
       manageUpdate: vi.fn<UpdateClient["manageUpdate"]>(),
+      stageUpdateArtifact: vi.fn<UpdateClient["stageUpdateArtifact"]>(),
       getNotifications: async () => ({ channels: [], worker: "running" }),
       configureNotification:
         vi.fn<NotificationClient["configureNotification"]>(),

@@ -158,6 +158,9 @@ pub struct UpdateProgress {
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateRolloutStatus {
+    /// Executables admitted by the signed manifest; upload bytes are verified independently.
+    #[schemars(length(min = 1, max = 4))]
+    pub artifacts: Vec<crate::UpdateArtifactDescriptor>,
     /// Exact work identity, usable to inspect a completed or cancelled rollout.
     pub rollout_id: UpdateIdentifier,
     /// Publisher trust identity.

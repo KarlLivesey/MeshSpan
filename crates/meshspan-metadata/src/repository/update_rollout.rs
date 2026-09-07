@@ -24,6 +24,9 @@ pub(super) fn execute(
         AuthoritativeCommand::StartUpdateRollout(value) => start(tx, context, value, revision),
         AuthoritativeCommand::AdvanceUpdateNode(value) => advance(tx, context, value, revision),
         AuthoritativeCommand::ControlUpdateRollout(value) => control(tx, *value, revision),
+        AuthoritativeCommand::PublishUpdateArtifact(value) => {
+            super::update_artifact::publish(tx, value, revision)
+        }
         _ => return None,
     })
 }

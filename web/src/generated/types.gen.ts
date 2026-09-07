@@ -6072,6 +6072,42 @@ export type SetupStatusResponse = {
 };
 
 /**
+ * StageUpdateArtifactResponse
+ *
+ * Durable source publication, not node staging readiness or software installation.
+ */
+export type StageUpdateArtifactResponse = {
+  /**
+   * Exact signed byte count, represented without floating-point loss.
+   */
+  byte_length: string;
+  /**
+   * Original authoritative revision advertising this source.
+   */
+  committed_revision: number;
+  /**
+   * Node holding the locally fsynced, verified executable.
+   */
+  node_id: string;
+  /**
+   * Original public operation identity.
+   */
+  operation_id: string;
+  /**
+   * Selected candidate.
+   */
+  rollout_id: string;
+  /**
+   * Independently reverified signed SHA-256.
+   */
+  sha256: string;
+  /**
+   * Signed executable platform.
+   */
+  target: string;
+};
+
+/**
  * StepUpCurrentSessionRequest
  *
  * Input for atomically rotating the current browser session after a fresh factor.
@@ -6184,6 +6220,23 @@ export type UpdatesResponse = {
      * Original explicit consent, never inferred from topology.
      */
     allow_service_interruption: boolean;
+    /**
+     * Executables admitted by the signed manifest; upload bytes are verified independently.
+     */
+    artifacts: Array<{
+      /**
+       * Expected positive executable bytes, at most eight GiB.
+       */
+      byte_length: number;
+      /**
+       * Exact signed executable digest.
+       */
+      sha256: string;
+      /**
+       * Platform in the signed manifest.
+       */
+      target: string;
+    }>;
     /**
      * Indexed local checkpoint counts; concurrent progress may advance the aggregate.
      */
@@ -9589,6 +9642,77 @@ export type ManageUpdateResponses = {
 
 export type ManageUpdateResponse2 =
   ManageUpdateResponses[keyof ManageUpdateResponses];
+
+export type StageUpdateArtifactData = {
+  body: Blob | File;
+  headers: {
+    /**
+     * OperationId
+     *
+     * A client-generated idempotency key for a mutation.
+     */
+    "MeshSpan-Operation-Id": string;
+    "Content-Length": string;
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    rollout_id: string;
+    target: string;
+  };
+  query?: never;
+  url: "/admin/updates/{rollout_id}/artifacts/{target}";
+};
+
+export type StageUpdateArtifactErrors = {
+  /**
+   * Invalid envelope or executable
+   */
+  400: ApiError;
+  /**
+   * Authentication required
+   */
+  401: ApiError;
+  /**
+   * Manager authority required
+   */
+  403: ApiError;
+  /**
+   * Candidate, trust or operation conflict
+   */
+  409: ApiError;
+  /**
+   * Body exceeds signed length
+   */
+  413: ApiError;
+  /**
+   * Raw executable bytes required
+   */
+  415: ApiError;
+  /**
+   * Invalid stored or outgoing evidence
+   */
+  500: ApiError;
+  /**
+   * Unavailable or outcome unresolved
+   */
+  503: ApiError;
+};
+
+export type StageUpdateArtifactError =
+  StageUpdateArtifactErrors[keyof StageUpdateArtifactErrors];
+
+export type StageUpdateArtifactResponses = {
+  /**
+   * Verified source and original authoritative publication receipt
+   */
+  200: StageUpdateArtifactResponse;
+};
+
+export type StageUpdateArtifactResponse2 =
+  StageUpdateArtifactResponses[keyof StageUpdateArtifactResponses];
 
 export type ListUsersData = {
   body?: never;

@@ -376,7 +376,7 @@ fn canonical_candidate(path: &Path) -> Result<PathBuf, DaemonLocalStateError> {
     }
 }
 
-fn ensure_private_directory(path: &Path) -> Result<PathBuf, DaemonLocalStateError> {
+pub(crate) fn ensure_private_directory(path: &Path) -> Result<PathBuf, DaemonLocalStateError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => validate_private_directory(&metadata)?,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {

@@ -3333,6 +3333,56 @@ handwritten tests; seven web cases passed again in **1.39 seconds** after fixtur
 lint corrections. Final affected Rust Clippy and formatting passed in
 **10.89 seconds** after the route's HTTP bound was aligned with the 24 KiB contract.
 
+## Task 22 — verified executable upload
+
+The native `PUT /api/latest/admin/updates/{rollout_id}/artifacts/{target}` now
+streams raw executable bytes for a selected, trusted candidate. Managers are
+authenticated before reading bytes and again before publishing the source.
+The signed manifest supplies the only accepted platform, byte length and SHA-256.
+Two owned transfer workers, bounded frames and a 30-minute deadline separate
+bulk IO from short control jobs, so revocation/pause can run during an upload.
+
+The daemon writes a private temporary file, verifies the entire stream, fsyncs it
+and atomically publishes its immutable hash-named cache entry. Interrupted,
+truncated, oversized or changed bytes do not become a published executable.
+Existing cached bytes are reverified, including after restart. Only then does
+typed metadata command 88 advertise this gateway's exact node/incarnation as a
+source. Migration 092 stores these bounded, indexed retrieval hints. Source rows
+are not node-staging, installation or continued byte-availability claims.
+
+Rust generates the API contract, Fetch upload and Zod validation. The panel uses
+the existing update layout and distinguishes upload receipt from installation.
+Its upload model retains the exact file and operation for ambiguous retries;
+the view displays the candidate's signed platform/size choices. Fetch sends a
+Blob directly, leaving Content-Length to the browser rather than buffering JSON.
+
+Focused local evidence:
+
+- Five file-backed metadata cases passed in **3.26 seconds** (build **12.29**),
+  including codec round-trip, wrong digest/incarnation rejection, reopen and
+  keyset source lookup without marking the node staged.
+- Two real file-store cases passed in **0.06 seconds** (build **9.82**): exact
+  bytes, truncation, excess, changed hash, interrupted read, reopen and corruption.
+- Real HTTPS daemon lifecycle passed in **6.97 seconds** (build **29.32**):
+  signed upload, exact on-disk bytes, kill/restart, original receipt retry and
+  changed-body rejection. This uses disposable local signing material only.
+- Nine focused SDK/Zod/headless DOM cases passed in **1.51 seconds**. They cover
+  raw transport, invalid inputs rejected before fetch, response validation and
+  identical retry after a lost reply without claiming installation.
+- Affected all-target/all-feature Clippy passed in **15.14 seconds**; Rust
+  formatting, generated drift, web type-checking and affected strict ESLint passed.
+  The final web bundle built in **0.301 seconds**.
+
+Task 22 remains partial: peer distribution, owned executable replacement,
+authenticated readiness and rolling availability are still to be connected.
+The assembled-stage pass must also cover cache reclamation and receipt recovery
+after candidate cancellation/revocation (upload currently requires a live trusted
+candidate, including on retry). There is no install or public advance-node API.
+The full-workspace gate was not repeated during feature construction. No new
+dependency, release, tag, package/image publication, GitHub Actions or browser
+operation occurred. Stage 10 remains **121 points**, including task 22's **13**,
+until these pieces form an operating updater.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in

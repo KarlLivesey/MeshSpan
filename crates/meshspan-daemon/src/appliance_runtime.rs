@@ -786,6 +786,7 @@ fn compose_operation_administration(
     );
     let routes = crate::notification_api::router(service)?.merge(crate::update_api::router(
         crate::update_service::UpdateService::new(open()?, gateway),
+        node.local_state.state_directory(),
     )?);
     Ok((runtime, routes))
 }

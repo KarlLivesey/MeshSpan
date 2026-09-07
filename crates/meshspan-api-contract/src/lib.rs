@@ -51,6 +51,7 @@ mod notification_destination;
 mod notification_tests;
 mod notification_validation;
 mod notifications;
+mod update_artifact;
 #[cfg(test)]
 mod update_tests;
 mod update_validation;
@@ -80,6 +81,10 @@ pub use notifications::{
     ConfigureNotificationRequest, ConfigureNotificationResponse, NotificationChannelStatus,
     NotificationDeliveryCounts, NotificationKind, NotificationSettingsUpdate,
     NotificationWorkerStatus, NotificationsResponse,
+};
+pub use update_artifact::{
+    MAX_UPDATE_ARTIFACT_BYTES, StageUpdateArtifactResponse, UpdateArtifactDescriptor,
+    encode_stage_update_artifact_response,
 };
 pub use update_validation::{
     MAX_MANAGE_UPDATE_BYTES, decode_manage_update_request, encode_manage_update_response,
