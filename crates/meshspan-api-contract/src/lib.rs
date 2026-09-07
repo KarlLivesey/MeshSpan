@@ -67,7 +67,9 @@ pub use runtime_diagnostics_validation::encode_diagnostics_bundle_response;
 mod metadata_diagnostics_tests;
 mod model;
 pub use metadata_diagnostics::{
+    DiagnosticBackupPolicy, DiagnosticCertificateSource, DiagnosticConfiguration,
     DiagnosticConsensus, DiagnosticConsensusRole, DiagnosticCounter, DiagnosticIdentifier,
+    DiagnosticMaintenanceKind, DiagnosticMaintenanceState, DiagnosticMaintenanceWork,
     DiagnosticNode, DiagnosticOperation, DiagnosticSection, DiagnosticTarget,
     MAX_METADATA_DIAGNOSTICS_BYTES, MetadataDiagnosticsResponse,
     encode_metadata_diagnostics_response,

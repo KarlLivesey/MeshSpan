@@ -249,6 +249,18 @@ address that was never stored. New bootstrap commands retain the legacy encoding
 when no endpoint exists and use a bounded, explicitly tagged endpoint extension
 otherwise; the endpoint participates in the request digest.
 
+Private certificate renewal implementation (migration 88) keeps immutable
+`node_certificate_rotations` identities keyed by `(node_id, generation)`, binding
+the previous generation, incarnation, exact issuer generation/DER and staging
+revision. At most one unfinished rotation exists per node. A signed installation
+acknowledgement atomically selects the new `node_certificates` row and records
+installation revision/time and overlap retirement deadline; retirement changes the
+previous row to retired without deleting historical certificate evidence. Stage,
+installation and retirement share the ordinary authoritative receipt/audit
+transaction. This does not move node private keys into metadata.
+Expired uninstalled candidates enter a separate abandoned state; their generation
+is never reused and the still-active previous leaf is not retired by abandonment.
+
 ## 5. Metadata partitions and routing
 
 ```text

@@ -65,6 +65,12 @@ fn fixture() -> Result<MetadataDiagnosticsResponse, Error> {
         "partition_id": "22222222-2222-4222-8222-222222222222",
         "node_id": "33333333-3333-4333-8333-333333333333",
         "daemon_version": "0.1.0", "collected_at_epoch_micros": 100,
+        "configuration": {
+            "operating_system": "linux", "architecture": "aarch64",
+            "metrics_exporter_enabled": null, "backup": null,
+            "public_certificate_source": null, "node_certificate_generation": null
+        },
+        "pending_work": {"items": [], "truncated": false},
         "revision_before": "1", "revision_after": "1", "consensus": null,
         "nodes": {"items": [], "truncated": false},
         "targets": {"items": [], "truncated": false},

@@ -21,6 +21,7 @@ mod maintenance_work;
 mod mesh_local_certificate;
 mod metrics_exporter;
 mod namespace;
+mod node_certificate;
 mod node_wrapping_key;
 mod protection_policy;
 mod recovery;
@@ -214,6 +215,9 @@ fn encode_extension_command(
     encoder: &mut Encoder,
     command: &AuthoritativeCommand,
 ) -> Result<bool, MetadataCommandCodecError> {
+    if node_certificate::encode(encoder, command)? {
+        return Ok(true);
+    }
     if acme::encode_command(encoder, command)? {
         return Ok(true);
     }
@@ -239,6 +243,9 @@ fn decode_command(
     decoder: &mut Decoder<'_>,
 ) -> Result<AuthoritativeCommand, MetadataCommandCodecError> {
     let kind = decoder.u16()?;
+    if (node_certificate::STAGE..=node_certificate::RETIRE).contains(&kind) {
+        return node_certificate::decode(kind, decoder);
+    }
     if acme::is_command_kind(kind) {
         return acme::decode_command(kind, decoder);
     }

@@ -17,7 +17,7 @@ Update the relevant task when work changes its status. Report the current task,
 what behaviour changed, what remains and what was tested. Do not replace this
 with “nearly done”, a count of commits or an unweighted completion percentage.
 
-Remaining-effort estimate, 2026-09-07: **Stage 10: 140 points; Stage 11: 126
+Remaining-effort estimate, 2026-09-07: **Stage 10: 138 points; Stage 11: 126
 points; Stage 12: 55 points.** These are preliminary engineering judgements from
 the task scope and recorded gaps, not measured hours or completion guarantees.
 Uncertainty is high until the open integration/proof work is exercised.
@@ -188,6 +188,12 @@ the stage; publication-dependent acceptance remains held separately and visible.
    12 transport, 10 network and 10 enabled headless tests pass, as does affected
    Clippy. Full integration remains pending; durable automatic lifecycle work is
    still required and the estimate remains unchanged.
+   The [automatic daemon renewal implementation](stage-10-evidence.md#automatic-daemon-renewal-implementation)
+   now passes a real two-process renewal/join/forced-restart proof in **14.91 seconds**,
+   with exact private TLS selection and unchanged identity key. Scheduling,
+   installation acknowledgement and overlap retirement are wired into the daemon.
+   Expired/offline readmission, issuer/federation rollover and stage-wide integration
+   remain open; task 3 remains partial, not a blocker on implementing other Stage 10 tasks.
 
 4. **External automated certificate publisher — Partial.** **5 points remaining.**
    PKI-009. [API tests](../crates/meshspan-daemon/src/external_certificate_publisher_api_tests.rs)
@@ -255,13 +261,19 @@ the stage; publication-dependent acceptance remains held separately and visible.
     incremental updates. Verify accessible, responsive, non-blocking behaviour
     through equivalent APIs and panels, including degraded/unknown states.
 
-13. **Complete redacted diagnostic bundle — Partial.** **3 points remaining.**
+13. **Complete redacted diagnostic bundle — Implemented; stage-wide verification pending.** **1 point remaining.**
     OPS-011/020. [Metadata diagnostics](stage-10-evidence.md#native-metadata-diagnostics)
     and [runtime bundle/download](stage-10-evidence.md#runtime-diagnostic-bundle-and-download-control)
     have passing evidence. Reconcile all required versions, configuration,
     logs/events, topology, target health, quorum and work sections; close missing
     coverage and prove bounded collection, absent/stale evidence and secret/content
     exclusion. Collection must not start repair or depend on remote telemetry.
+    The [completed projection implementation](stage-10-evidence.md#task-13--complete-diagnostic-projection-implementation)
+    adds allow-listed operational configuration and bounded indexed pending work
+    to the existing version/topology/health/quorum/event bundle. Focused Rust,
+    SQLite, generated-client/download and actual two-daemon HTTPS checks pass;
+    no source subjects, keys or raw configurations are serialised. Remaining
+    effort is the assembled-stage acceptance pass, not further feature scaffolding.
 
 14. **Bounded metrics foundation and authenticated exporter — Recorded complete.** **0 points remaining.**
     OPS-012/017/018/020. [Exporter integration](stage-10-evidence.md#replicated-opt-in-and-authenticated-exporter-integration)
@@ -329,12 +341,18 @@ the stage; publication-dependent acceptance remains held separately and visible.
     invent a compatibility promise. Published-artefact evidence remains held by
     the publication prohibition, even if local candidate tests pass.
 
-24. **Native and container packaging — Open.** **8 points remaining.**
+24. **Native and container packaging — Partial.** **8 points remaining.**
     REL-003/004, TST-009. Prepare self-contained Linux/macOS artefacts and the
     supported minimal container image, including built-in HTTPS/SMB and panels.
     Verify entry points, state/storage paths and dependency/licence inventory.
     The development daemon build and an SMB test-client image do not close this
     product packaging task. Local preparation only while publication is held.
+    [Local package assembly](stage-10-evidence.md#tasks-2427--local-native-package-and-packaged-process-execution)
+    now builds an inspected macOS ARM64 dev archive with embedded panels,
+    licence/inventory/provenance/checksums and passes a packaged setup/join/renewal/
+    restart proof. Static Linux packaging and a minimal container recipe are
+    implemented but not executed; musl tooling, other native targets and complete
+    candidate acceptance remain outstanding. No publication command was added.
 
 25. **Local signed release/update tooling — Open; publication held.** **5 points remaining.**
     REL-001/003/004; accepted decisions §7. Prepare complete local validation,
@@ -350,12 +368,17 @@ the stage; publication-dependent acceptance remains held separately and visible.
     candidate still needs fresh evidence; this is not perpetual advisory clearance
     or the independent security review required by Stage 11.
 
-27. **Packaged-platform HTTPS/SMB acceptance — Open.** **8 points remaining.**
+27. **Packaged-platform HTTPS/SMB acceptance — Partial; integration defects recorded.** **8 points remaining.**
     Stage 10 exit gate, TST-004/007/009, REL-003. Run complete real-client file
     cycles, backup/recovery and upgrade paths using the accepted native/container
     artefacts, including Linux-only, macOS-only and mixed-host meshes. Keep local
     candidate results separate from the still-held published-artefact gate.
     Ignored SMB-container tests and headless DOM checks are not this proof.
+    The [packaged macOS process proof](stage-10-evidence.md#tasks-2427--local-native-package-and-packaged-process-execution)
+    passes setup, embedded assets, join and private TLS renewal/restart. Broader
+    tests exposed an isolated-backup-restore `409` and a cross-gateway SMB file
+    remaining length zero rather than 47 bytes. Both defects remain open; neither
+    the complete HTTPS operator cycle nor SMB acceptance is claimed passing.
 
 ## Stage 11 — minimal useful product proof
 

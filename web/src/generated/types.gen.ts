@@ -2533,6 +2533,56 @@ export type DiagnosticsBundleResponse = {
      */
     collected_at_epoch_micros: number;
     /**
+     * Explicit allow-listed configuration, never a raw component payload.
+     */
+    configuration: {
+      /**
+       * Compiled CPU architecture, not runtime resource capacity.
+       */
+      architecture: string;
+      /**
+       * Current local partition policy, without destination names or secret envelopes.
+       */
+      backup: {
+        /**
+         * Whether automatic scheduling is configured on.
+         */
+        enabled: boolean;
+        /**
+         * Exact interval between attempts in microseconds.
+         */
+        interval_micros: string;
+        /**
+         * Requested independent copies, no greater than requested verified copies.
+         */
+        minimum_independent_copies: number;
+        /**
+         * Number of verified copies requested.
+         */
+        minimum_verified_copies: number;
+        /**
+         * Number of newest usable generations requested for retention.
+         */
+        retained_generations: number;
+      } | null;
+      /**
+       * Null means no exporter policy has been configured; no recipients are exposed.
+       */
+      metrics_exporter_enabled: boolean | null;
+      /**
+       * Locally observed active private generation; not a live installation acknowledgement.
+       */
+      node_certificate_generation: string | null;
+      /**
+       * Compiled operating-system family, not a host name.
+       */
+      operating_system: string;
+      /**
+       * Selected public-certificate issuer category, without names or certificate bytes.
+       */
+      public_certificate_source: "mesh_local" | "acme" | "external" | null;
+    };
+    /**
      * One coherent local reactor observation, or null if it did not answer within its budget.
      */
     consensus: {
@@ -2648,6 +2698,44 @@ export type DiagnosticsBundleResponse = {
      * Local queried metadata partition.
      */
     partition_id: string;
+    /**
+     * Bounded unfinished-work selection, separate from recent command receipts.
+     */
+    pending_work: {
+      /**
+       * At most one hundred explicitly redacted records.
+       */
+      items: Array<{
+        /**
+         * Fenced attempts created so far.
+         */
+        attempt_count: string;
+        /**
+         * Closed maintenance operation family.
+         */
+        kind: "repair" | "scrub" | "drain" | "rebalance" | "reconcile";
+        /**
+         * Earliest next claim time; not a completion estimate.
+         */
+        next_attempt_at_epoch_micros: number;
+        /**
+         * Revision of the observed transition.
+         */
+        revision: string;
+        /**
+         * Last observed durable state; claimed does not imply a currently live worker.
+         */
+        state: "queued" | "claimed" | "complete";
+        /**
+         * Opaque correlation identity, never a subject identifier.
+         */
+        work_id: string;
+      }>;
+      /**
+       * More records existed at this section's read; use the normal inventory API for paging.
+       */
+      truncated: boolean;
+    };
     /**
      * Newest recorded operation outcomes, not the complete background-work inventory.
      */
@@ -4451,6 +4539,56 @@ export type MetadataDiagnosticsResponse = {
    */
   collected_at_epoch_micros: number;
   /**
+   * Explicit allow-listed configuration, never a raw component payload.
+   */
+  configuration: {
+    /**
+     * Compiled CPU architecture, not runtime resource capacity.
+     */
+    architecture: string;
+    /**
+     * Current local partition policy, without destination names or secret envelopes.
+     */
+    backup: {
+      /**
+       * Whether automatic scheduling is configured on.
+       */
+      enabled: boolean;
+      /**
+       * Exact interval between attempts in microseconds.
+       */
+      interval_micros: string;
+      /**
+       * Requested independent copies, no greater than requested verified copies.
+       */
+      minimum_independent_copies: number;
+      /**
+       * Number of verified copies requested.
+       */
+      minimum_verified_copies: number;
+      /**
+       * Number of newest usable generations requested for retention.
+       */
+      retained_generations: number;
+    } | null;
+    /**
+     * Null means no exporter policy has been configured; no recipients are exposed.
+     */
+    metrics_exporter_enabled: boolean | null;
+    /**
+     * Locally observed active private generation; not a live installation acknowledgement.
+     */
+    node_certificate_generation: string | null;
+    /**
+     * Compiled operating-system family, not a host name.
+     */
+    operating_system: string;
+    /**
+     * Selected public-certificate issuer category, without names or certificate bytes.
+     */
+    public_certificate_source: "mesh_local" | "acme" | "external" | null;
+  };
+  /**
    * One coherent local reactor observation, or null if it did not answer within its budget.
    */
   consensus: {
@@ -4566,6 +4704,44 @@ export type MetadataDiagnosticsResponse = {
    * Local queried metadata partition.
    */
   partition_id: string;
+  /**
+   * Bounded unfinished-work selection, separate from recent command receipts.
+   */
+  pending_work: {
+    /**
+     * At most one hundred explicitly redacted records.
+     */
+    items: Array<{
+      /**
+       * Fenced attempts created so far.
+       */
+      attempt_count: string;
+      /**
+       * Closed maintenance operation family.
+       */
+      kind: "repair" | "scrub" | "drain" | "rebalance" | "reconcile";
+      /**
+       * Earliest next claim time; not a completion estimate.
+       */
+      next_attempt_at_epoch_micros: number;
+      /**
+       * Revision of the observed transition.
+       */
+      revision: string;
+      /**
+       * Last observed durable state; claimed does not imply a currently live worker.
+       */
+      state: "queued" | "claimed" | "complete";
+      /**
+       * Opaque correlation identity, never a subject identifier.
+       */
+      work_id: string;
+    }>;
+    /**
+     * More records existed at this section's read; use the normal inventory API for paging.
+     */
+    truncated: boolean;
+  };
   /**
    * Newest recorded operation outcomes, not the complete background-work inventory.
    */

@@ -50,7 +50,7 @@ const CONTROL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
 const RECONNECT_BACKOFF: Duration = Duration::from_millis(100);
 
 /// One exact enrolled peer route and leaf-certificate binding.
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct ConsensusPeerConfig {
     /// Permanent enrolled node identity.
     pub node_id: NodeId,
@@ -144,6 +144,7 @@ pub struct ConsensusNetwork {
 
 struct ConsensusPeers {
     routes: BTreeMap<NodeId, ConsensusPeerConfig>,
+    overlapping_fingerprints: BTreeMap<NodeId, [u8; 32]>,
     registry: PeerRegistry,
     outbound: BTreeMap<NodeId, mpsc::Sender<CoreMessage>>,
 }
@@ -315,6 +316,7 @@ impl ConsensusNetwork {
             transport,
             peers: Arc::new(RwLock::new(ConsensusPeers {
                 routes: peers,
+                overlapping_fingerprints: BTreeMap::new(),
                 registry,
                 outbound: BTreeMap::new(),
             })),
@@ -372,9 +374,30 @@ impl ConsensusNetwork {
     ///
     /// Rejects the local node, an invalid route/certificate binding or poisoned peer state.
     pub fn upsert_peer(&self, peer: &ConsensusPeerConfig) -> Result<(), ConsensusNetworkError> {
+        self.upsert_peer_with_overlap(peer, None)
+    }
+
+    /// Installs the committed peer route and its optional make-before-break certificate.
+    ///
+    /// Both leaves bind the same node and incarnation. The daemon owns generation,
+    /// validity and installation-acknowledgement policy; this method neither invents
+    /// overlap nor expires it from a local clock. Passing `None` retires prior trust.
+    /// Other nodes' staged rotations are preserved.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid or excessive certificate material, identity collisions and poisoned
+    /// state. TLS chain validation still precedes use of either registered fingerprint.
+    pub fn upsert_peer_with_overlap(
+        &self,
+        peer: &ConsensusPeerConfig,
+        overlapping_certificate_der: Option<&[u8]>,
+    ) -> Result<(), ConsensusNetworkError> {
         if peer.node_id == self.local_node_id
             || peer.incarnation == 0
             || peer.certificate_der.is_empty()
+            || peer.certificate_der.len() > 65_536
+            || overlapping_certificate_der.is_some_and(|der| der.is_empty() || der.len() > 65_536)
             || peer.certificate_name.is_empty()
             || peer.certificate_name.len() > 253
         {
@@ -384,11 +407,41 @@ impl ConsensusNetwork {
             .peers
             .write()
             .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?;
-        let mut routes = peers.routes.clone();
-        routes.insert(peer.node_id, peer.clone());
-        let registry = peer_registry(&routes)?;
+        let overlap = overlapping_certificate_der
+            .map(|der| certificate_fingerprint(&CertificateDer::from(der)));
+        if peers.routes.get(&peer.node_id) == Some(peer)
+            && peers.overlapping_fingerprints.get(&peer.node_id).copied() == overlap
+        {
+            return Ok(());
+        }
+        let mut registry = peers.registry.clone();
+        let current = PeerBinding {
+            node_id: peer.node_id,
+            incarnation: peer.incarnation,
+            certificate_fingerprint: certificate_fingerprint(&CertificateDer::from(
+                peer.certificate_der.as_slice(),
+            )),
+        };
+        let mut bindings = vec![current];
+        if let Some(der) = overlapping_certificate_der {
+            bindings.push(PeerBinding {
+                certificate_fingerprint: certificate_fingerprint(&CertificateDer::from(der)),
+                ..current
+            });
+        }
+        registry.replace_node_bindings(peer.node_id, &bindings)?;
         let (sender, receiver) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
-        peers.routes = routes;
+        peers.routes.insert(peer.node_id, peer.clone());
+        match overlap {
+            Some(fingerprint) => {
+                peers
+                    .overlapping_fingerprints
+                    .insert(peer.node_id, fingerprint);
+            }
+            None => {
+                peers.overlapping_fingerprints.remove(&peer.node_id);
+            }
+        }
         peers.registry = registry;
         peers.outbound.insert(peer.node_id, sender);
         drop(peers);
@@ -565,6 +618,12 @@ impl ConsensusNetwork {
     #[must_use]
     pub const fn local_node_id(&self) -> NodeId {
         self.local_node_id
+    }
+
+    /// Returns the exact local incarnation carried by this process's private handshakes.
+    #[must_use]
+    pub const fn local_incarnation(&self) -> u64 {
+        self.local_incarnation
     }
 
     /// Returns a consistent snapshot of every currently enrolled peer route.

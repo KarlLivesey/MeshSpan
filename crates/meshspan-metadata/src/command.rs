@@ -76,6 +76,12 @@ pub struct CommandContext {
 /// Closed authoritative command families implemented by the Stage 2 kernel.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AuthoritativeCommand {
+    /// Stages one exact finite same-key private-node certificate renewal.
+    StageNodeCertificate(crate::StageNodeCertificate),
+    /// Activates a staged renewal after the owning node's signed installation statement.
+    AcknowledgeNodeCertificateInstallation(crate::AcknowledgeNodeCertificateInstallation),
+    /// Retires acknowledged private overlap or an expired uninstalled candidate.
+    RetireNodeCertificate(crate::RetireNodeCertificate),
     /// Creates the first mesh, administrator, host, node and partition records.
     BootstrapMesh(BootstrapMesh),
     /// Atomically bootstraps the first mesh and its administrator's usable login method.
@@ -468,6 +474,9 @@ impl AuthoritativeCommand {
             Self::AcknowledgeExternalCertificateInstallation(value) => value.update_digest(digest),
             Self::CreateMeshLocalCertificateAuthority(value) => value.update_digest(digest),
             Self::IssueMeshLocalCertificate(value) => value.update_digest(digest),
+            Self::StageNodeCertificate(value) => value.update_digest(digest),
+            Self::AcknowledgeNodeCertificateInstallation(value) => value.update_digest(digest),
+            Self::RetireNodeCertificate(value) => value.update_digest(digest),
             Self::AcknowledgeMeshLocalCertificateInstallation(value) => {
                 value.update_digest(digest);
             }
@@ -2658,6 +2667,38 @@ macro_rules! digest_simple_record {
         }
     };
 }
+
+digest_simple_record!(
+    crate::StageNodeCertificate,
+    b"stage-node-certificate-v1",
+    |value, digest| {
+        digest.identifier(value.node_id.as_bytes());
+        digest.unsigned(value.incarnation);
+        digest.unsigned(value.previous_generation);
+        digest.unsigned(value.generation);
+        digest.unsigned(value.issuer_generation);
+        digest.bytes(&value.certificate_der);
+        digest.signed(value.valid_from.get());
+        digest.signed(value.valid_until.get());
+    }
+);
+digest_simple_record!(
+    crate::AcknowledgeNodeCertificateInstallation,
+    b"acknowledge-node-certificate-v1",
+    |value, digest| {
+        digest.bytes(&value.signing_transcript());
+        digest.bytes(&value.signature);
+    }
+);
+digest_simple_record!(
+    crate::RetireNodeCertificate,
+    b"retire-node-certificate-v1",
+    |value, digest| {
+        digest.identifier(value.node_id.as_bytes());
+        digest.unsigned(value.incarnation);
+        digest.unsigned(value.generation);
+    }
+);
 
 digest_simple_record!(BootstrapMesh, b"bootstrap", |value, digest| {
     digest.identifier(value.mesh_id.as_bytes());

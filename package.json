@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build:daemon": "node scripts/build-daemon.mjs",
+    "package:local": "node scripts/package-local.mjs",
     "check": "node scripts/check.mjs",
     "check:advisories": "cargo deny check advisories && pnpm audit",
     "check:dependency-update": "pnpm check:advisories && pnpm check",

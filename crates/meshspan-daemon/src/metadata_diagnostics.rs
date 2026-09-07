@@ -116,6 +116,10 @@ impl MetadataDiagnosticsController for MetadataDiagnosticsService {
         check()?;
         let recent_operations = projection::operations(repository)?;
         check()?;
+        let pending_work = projection::pending_work(repository)?;
+        check()?;
+        let configuration = projection::configuration(repository, self.gateway.node_id)?;
+        check()?;
         let after = repository
             .current_revision()
             .map_err(|_| DiagnosticsError::Failed)?;
@@ -128,6 +132,7 @@ impl MetadataDiagnosticsController for MetadataDiagnosticsService {
                 self.gateway.node_id.as_bytes(),
             )),
             daemon_version: env!("CARGO_PKG_VERSION").to_owned(),
+            configuration,
             collected_at_epoch_micros: now.get(),
             revision_before: DiagnosticCounter(before.get().to_string()),
             revision_after: DiagnosticCounter(after.get().to_string()),
@@ -135,6 +140,7 @@ impl MetadataDiagnosticsController for MetadataDiagnosticsService {
             nodes,
             targets,
             recent_operations,
+            pending_work,
         })
     }
 }

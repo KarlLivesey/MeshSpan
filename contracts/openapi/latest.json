@@ -5402,6 +5402,129 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "configuration": {
+                "additionalProperties": false,
+                "description": "Explicit allow-listed configuration, never a raw component payload.",
+                "properties": {
+                  "architecture": {
+                    "description": "Compiled CPU architecture, not runtime resource capacity.",
+                    "maxLength": 32,
+                    "minLength": 1,
+                    "pattern": "^[a-z0-9_]+$",
+                    "type": "string"
+                  },
+                  "backup": {
+                    "additionalProperties": false,
+                    "description": "Current local partition policy, without destination names or secret envelopes.",
+                    "properties": {
+                      "enabled": {
+                        "description": "Whether automatic scheduling is configured on.",
+                        "type": "boolean"
+                      },
+                      "interval_micros": {
+                        "description": "Exact interval between attempts in microseconds.",
+                        "maxLength": 20,
+                        "minLength": 1,
+                        "pattern": "^(0|[1-9][0-9]*)$",
+                        "type": "string"
+                      },
+                      "minimum_independent_copies": {
+                        "description": "Requested independent copies, no greater than requested verified copies.",
+                        "format": "uint8",
+                        "maximum": 255,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "minimum_verified_copies": {
+                        "description": "Number of verified copies requested.",
+                        "format": "uint8",
+                        "maximum": 255,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "retained_generations": {
+                        "description": "Number of newest usable generations requested for retention.",
+                        "format": "uint16",
+                        "maximum": 65535,
+                        "minimum": 1,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "enabled",
+                      "interval_micros",
+                      "retained_generations",
+                      "minimum_verified_copies",
+                      "minimum_independent_copies"
+                    ],
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "metrics_exporter_enabled": {
+                    "description": "Null means no exporter policy has been configured; no recipients are exposed.",
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "node_certificate_generation": {
+                    "description": "Locally observed active private generation; not a live installation acknowledgement.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "operating_system": {
+                    "description": "Compiled operating-system family, not a host name.",
+                    "maxLength": 32,
+                    "minLength": 1,
+                    "pattern": "^[a-z0-9_]+$",
+                    "type": "string"
+                  },
+                  "public_certificate_source": {
+                    "anyOf": [
+                      {
+                        "description": "Closed public certificate source, without identifiers or publisher URLs.",
+                        "oneOf": [
+                          {
+                            "const": "mesh_local",
+                            "description": "Internal HTTPS authority.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "acme",
+                            "description": "Automated public ACME authority.",
+                            "type": "string"
+                          },
+                          {
+                            "const": "external",
+                            "description": "Authenticated automated external publisher.",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Selected public-certificate issuer category, without names or certificate bytes."
+                  }
+                },
+                "required": [
+                  "operating_system",
+                  "architecture",
+                  "metrics_exporter_enabled",
+                  "backup",
+                  "public_certificate_source",
+                  "node_certificate_generation"
+                ],
+                "type": "object"
+              },
               "consensus": {
                 "additionalProperties": false,
                 "description": "One coherent local reactor observation, or null if it did not answer within its budget.",
@@ -5655,6 +5778,118 @@
                 "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
                 "type": "string"
               },
+              "pending_work": {
+                "additionalProperties": false,
+                "description": "Bounded unfinished-work selection, separate from recent command receipts.",
+                "properties": {
+                  "items": {
+                    "description": "At most one hundred explicitly redacted records.",
+                    "items": {
+                      "additionalProperties": false,
+                      "description": "One redacted durable job. No subjects, file identities, fences or result payloads are emitted.",
+                      "properties": {
+                        "attempt_count": {
+                          "description": "Fenced attempts created so far.",
+                          "maxLength": 20,
+                          "minLength": 1,
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "description": "Closed maintenance operation family.",
+                          "oneOf": [
+                            {
+                              "const": "repair",
+                              "description": "Restore protection.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "scrub",
+                              "description": "Verify stored bytes.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "drain",
+                              "description": "Move data off a retiring scope.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "rebalance",
+                              "description": "Improve placement.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "reconcile",
+                              "description": "Reconcile returning storage.",
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "next_attempt_at_epoch_micros": {
+                          "description": "Earliest next claim time; not a completion estimate.",
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "revision": {
+                          "description": "Revision of the observed transition.",
+                          "maxLength": 20,
+                          "minLength": 1,
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "type": "string"
+                        },
+                        "state": {
+                          "description": "Last observed durable state; claimed does not imply a currently live worker.",
+                          "oneOf": [
+                            {
+                              "const": "queued",
+                              "description": "Waiting for admission or retry.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "claimed",
+                              "description": "An execution claim has been recorded, possibly expired.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "complete",
+                              "description": "Completed concurrently with collection of the unfinished-work window.",
+                              "type": "string"
+                            }
+                          ]
+                        },
+                        "work_id": {
+                          "description": "Opaque correlation identity, never a subject identifier.",
+                          "maxLength": 36,
+                          "minLength": 36,
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "work_id",
+                        "kind",
+                        "state",
+                        "attempt_count",
+                        "revision",
+                        "next_attempt_at_epoch_micros"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 100,
+                    "type": "array"
+                  },
+                  "truncated": {
+                    "description": "More records existed at this section's read; use the normal inventory API for paging.",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "items",
+                  "truncated"
+                ],
+                "type": "object"
+              },
               "recent_operations": {
                 "additionalProperties": false,
                 "description": "Newest recorded operation outcomes, not the complete background-work inventory.",
@@ -5907,13 +6142,15 @@
               "partition_id",
               "node_id",
               "daemon_version",
+              "configuration",
               "collected_at_epoch_micros",
               "revision_before",
               "revision_after",
               "consensus",
               "nodes",
               "targets",
-              "recent_operations"
+              "recent_operations",
+              "pending_work"
             ],
             "type": "object"
           },
@@ -9979,6 +10216,129 @@
             "minimum": 0,
             "type": "integer"
           },
+          "configuration": {
+            "additionalProperties": false,
+            "description": "Explicit allow-listed configuration, never a raw component payload.",
+            "properties": {
+              "architecture": {
+                "description": "Compiled CPU architecture, not runtime resource capacity.",
+                "maxLength": 32,
+                "minLength": 1,
+                "pattern": "^[a-z0-9_]+$",
+                "type": "string"
+              },
+              "backup": {
+                "additionalProperties": false,
+                "description": "Current local partition policy, without destination names or secret envelopes.",
+                "properties": {
+                  "enabled": {
+                    "description": "Whether automatic scheduling is configured on.",
+                    "type": "boolean"
+                  },
+                  "interval_micros": {
+                    "description": "Exact interval between attempts in microseconds.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": "string"
+                  },
+                  "minimum_independent_copies": {
+                    "description": "Requested independent copies, no greater than requested verified copies.",
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "minimum_verified_copies": {
+                    "description": "Number of verified copies requested.",
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "retained_generations": {
+                    "description": "Number of newest usable generations requested for retention.",
+                    "format": "uint16",
+                    "maximum": 65535,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "enabled",
+                  "interval_micros",
+                  "retained_generations",
+                  "minimum_verified_copies",
+                  "minimum_independent_copies"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "metrics_exporter_enabled": {
+                "description": "Null means no exporter policy has been configured; no recipients are exposed.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "node_certificate_generation": {
+                "description": "Locally observed active private generation; not a live installation acknowledgement.",
+                "maxLength": 20,
+                "minLength": 1,
+                "pattern": "^(0|[1-9][0-9]*)$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "operating_system": {
+                "description": "Compiled operating-system family, not a host name.",
+                "maxLength": 32,
+                "minLength": 1,
+                "pattern": "^[a-z0-9_]+$",
+                "type": "string"
+              },
+              "public_certificate_source": {
+                "anyOf": [
+                  {
+                    "description": "Closed public certificate source, without identifiers or publisher URLs.",
+                    "oneOf": [
+                      {
+                        "const": "mesh_local",
+                        "description": "Internal HTTPS authority.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "acme",
+                        "description": "Automated public ACME authority.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "external",
+                        "description": "Authenticated automated external publisher.",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Selected public-certificate issuer category, without names or certificate bytes."
+              }
+            },
+            "required": [
+              "operating_system",
+              "architecture",
+              "metrics_exporter_enabled",
+              "backup",
+              "public_certificate_source",
+              "node_certificate_generation"
+            ],
+            "type": "object"
+          },
           "consensus": {
             "additionalProperties": false,
             "description": "One coherent local reactor observation, or null if it did not answer within its budget.",
@@ -10232,6 +10592,118 @@
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
             "type": "string"
           },
+          "pending_work": {
+            "additionalProperties": false,
+            "description": "Bounded unfinished-work selection, separate from recent command receipts.",
+            "properties": {
+              "items": {
+                "description": "At most one hundred explicitly redacted records.",
+                "items": {
+                  "additionalProperties": false,
+                  "description": "One redacted durable job. No subjects, file identities, fences or result payloads are emitted.",
+                  "properties": {
+                    "attempt_count": {
+                      "description": "Fenced attempts created so far.",
+                      "maxLength": 20,
+                      "minLength": 1,
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "type": "string"
+                    },
+                    "kind": {
+                      "description": "Closed maintenance operation family.",
+                      "oneOf": [
+                        {
+                          "const": "repair",
+                          "description": "Restore protection.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "scrub",
+                          "description": "Verify stored bytes.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "drain",
+                          "description": "Move data off a retiring scope.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "rebalance",
+                          "description": "Improve placement.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "reconcile",
+                          "description": "Reconcile returning storage.",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "next_attempt_at_epoch_micros": {
+                      "description": "Earliest next claim time; not a completion estimate.",
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "revision": {
+                      "description": "Revision of the observed transition.",
+                      "maxLength": 20,
+                      "minLength": 1,
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "type": "string"
+                    },
+                    "state": {
+                      "description": "Last observed durable state; claimed does not imply a currently live worker.",
+                      "oneOf": [
+                        {
+                          "const": "queued",
+                          "description": "Waiting for admission or retry.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "claimed",
+                          "description": "An execution claim has been recorded, possibly expired.",
+                          "type": "string"
+                        },
+                        {
+                          "const": "complete",
+                          "description": "Completed concurrently with collection of the unfinished-work window.",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "work_id": {
+                      "description": "Opaque correlation identity, never a subject identifier.",
+                      "maxLength": 36,
+                      "minLength": 36,
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "work_id",
+                    "kind",
+                    "state",
+                    "attempt_count",
+                    "revision",
+                    "next_attempt_at_epoch_micros"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "truncated": {
+                "description": "More records existed at this section's read; use the normal inventory API for paging.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "items",
+              "truncated"
+            ],
+            "type": "object"
+          },
           "recent_operations": {
             "additionalProperties": false,
             "description": "Newest recorded operation outcomes, not the complete background-work inventory.",
@@ -10484,13 +10956,15 @@
           "partition_id",
           "node_id",
           "daemon_version",
+          "configuration",
           "collected_at_epoch_micros",
           "revision_before",
           "revision_after",
           "consensus",
           "nodes",
           "targets",
-          "recent_operations"
+          "recent_operations",
+          "pending_work"
         ],
         "title": "MetadataDiagnosticsResponse",
         "type": "object"

@@ -83,14 +83,14 @@ keys, paths, topology or record existence.
 
 ## 4. Connection messages
 
-| Message                                        | Essential fields                                                                        | Result                               |
-| ---------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------ |
-| `NodeHello`                                    | versions, mesh/node/incarnation, roles, component implementations, feature bits, limits | Authenticates and negotiates         |
-| `NodeWelcome`                                  | selected version, peer identity, partition route/leader hints, limits                   | Opens normal streams                 |
+| Message                                          | Essential fields                                                                        | Result                                |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------- | ------------------------------------- |
+| `NodeHello`                                      | versions, mesh/node/incarnation, roles, component implementations, feature bits, limits | Authenticates and negotiates          |
+| `NodeWelcome`                                    | selected version, peer identity, partition route/leader hints, limits                   | Opens normal streams                  |
 | `NodeActivationRequest` / `NodeActivationResult` | header identity, exact roles, capability digest, operation result and active revision   | Continues one HTTPS-admitted identity |
-| `Ping` / `Pong`                                | nonce, monotonic timings                                                                | Liveness and latency sample          |
-| `GoAway`                                       | reason, retry hint                                                                      | Graceful connection retirement       |
-| `ProtocolError`                                | stable code, offending request                                                          | Closes invalid traffic safely        |
+| `Ping` / `Pong`                                  | nonce, monotonic timings                                                                | Liveness and latency sample           |
+| `GoAway`                                         | reason, retry hint                                                                      | Graceful connection retirement        |
+| `ProtocolError`                                  | stable code, offending request                                                          | Closes invalid traffic safely         |
 
 Certificate identity and `NodeHello` must agree exactly. Limits are the lower of
 both peers' advertised safe bounds.
@@ -454,6 +454,34 @@ The durable job remains in metadata; peer-to-peer messages do not create a
 second scheduler truth.
 
 ## 13. Certificate and secret distribution
+
+Private node renewal is separate from public endpoint issuance. The version-4
+authoritative command envelope carries these closed command kinds:
+
+| Kind | Command                                  | Ordered payload after the kind                                                                                          |
+| ---: | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+|   77 | `StageNodeCertificate`                   | node ID, incarnation, previous generation, new generation, issuer generation, bounded leaf DER, valid-from, valid-until |
+|   78 | `AcknowledgeNodeCertificateInstallation` | node ID, incarnation, generation, leaf fingerprint, staging revision, bounded node signature                            |
+|   79 | `RetireNodeCertificate`                  | node ID, incarnation, rotation generation                                                                               |
+
+IDs and fingerprints are fixed 16/32-byte fields; counters are big-endian u64;
+times are signed microseconds aligned to seconds. DER is at most 65,536 bytes;
+the canonical P-256 DER signature is at most 72 bytes. Existing envelope context,
+operation/digest replay, authority checks and trailing-byte rejection apply.
+Durable operation kinds are 141–143. Unrecognised kinds fail closed; there is no
+mixed-version compatibility promise.
+
+Staging requires the next generation, exact current incarnation, unchanged
+node-owned public key, current online issuer, exact node DNS name and an explicit
+lifetime of at most 30 days. It does not select the new local identity. The
+installation signature covers the domain-separated node/incarnation/generation/
+fingerprint/staging-revision statement. Acknowledgement selects the replacement
+and starts one hour of old-leaf overlap; retirement cannot run before that deadline
+or before installation. An expired uninstalled candidate can instead be abandoned;
+the previous active leaf is left unchanged. A subsequent attempt uses the next
+unused generation, not the abandoned number. No private node key enters a command. The transport accepts
+only the exact current and optional overlap fingerprint for that incarnation.
+These implemented commands are not yet proof of an automatic daemon lifecycle.
 
 Only the elected, fenced certificate worker completes ACME HTTP-01 or DNS-01.
 After issuance it submits a certificate bundle encrypted separately for each

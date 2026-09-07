@@ -194,6 +194,7 @@ struct ApplianceServiceComposition {
     router: Router,
     smb_connections: SmbConnectionFactory,
     certificates: CertificateRuntime,
+    private_certificates: crate::private_certificate_renewal::PrivateCertificateRenewal,
     https_identity: RotatingHttpsIdentity,
     gateway_observations: Arc<dyn meshspan_contracts::GatewayDispatchObserver>,
 }
@@ -681,6 +682,12 @@ fn compose_appliance_services(
         https_identity.clone(),
         started_at,
     )?;
+    let private_certificates = compose_private_certificate_runtime(
+        &node.local_state,
+        &private_authority.authority,
+        &node.private_network,
+        started_at,
+    )?;
     let router = Router::new()
         .merge(public_contract_api_router(readiness)?)
         .merge(join_grant_routes(
@@ -722,6 +729,7 @@ fn compose_appliance_services(
         ),
         smb_connections,
         certificates,
+        private_certificates,
         https_identity,
         gateway_observations,
     })
@@ -756,6 +764,30 @@ fn compose_certificate_runtime(
         1,
     )
     .map_err(|_| DaemonProcessError::Certificate)
+}
+
+fn compose_private_certificate_runtime(
+    local_state: &DaemonLocalState,
+    authority: &MetadataAuthorityHandle,
+    private_network: &Arc<PrivateConsensusRuntime>,
+    now: UnixMicros,
+) -> Result<crate::private_certificate_renewal::PrivateCertificateRenewal, DaemonProcessError> {
+    let open_authority =
+        || open_authentication_authority(local_state, authority, Arc::clone(private_network), now);
+    Ok(
+        crate::private_certificate_renewal::PrivateCertificateRenewal::new(
+            open_authority()?,
+            crate::OnlineAuthorityLoadingService::new(
+                open_authority()?,
+                local_state.open_wrapping_key()?,
+            ),
+            meshspan_certificates::NodeIdentityKey::from_pkcs8(
+                local_state.node_identity_private_key_pkcs8(),
+            )
+            .map_err(|_| DaemonProcessError::Certificate)?,
+            Arc::clone(private_network),
+        ),
+    )
 }
 
 fn setup_and_enrolment_routes(
@@ -922,6 +954,14 @@ where
         .map_err(DaemonProcessError::from)
     });
     let certificate_stop = stop.subscribe();
+    let private_certificate_stop = stop.subscribe();
+    tasks.spawn(async move {
+        services
+            .private_certificates
+            .run_until(wait_for_shutdown(private_certificate_stop))
+            .await
+            .map_err(|_| DaemonProcessError::Certificate)
+    });
     tasks.spawn(async move {
         services
             .certificates
@@ -1921,6 +1961,7 @@ struct ActivePeerRoute {
     incarnation: u64,
     private_endpoint: String,
     certificate_der: Vec<u8>,
+    overlapping_certificate_der: Option<Vec<u8>>,
 }
 
 fn load_active_peer_routes(
@@ -1942,11 +1983,25 @@ fn load_active_peer_routes(
             let certificate = repository
                 .active_node_certificate(node.node_id)?
                 .ok_or(DaemonProcessError::PrivateNetworkState)?;
+            let overlapping_certificate_der = repository
+                .node_certificate_rotation(node.node_id)?
+                .filter(|rotation| rotation.incarnation == node.incarnation)
+                .and_then(|rotation| match rotation.state {
+                    meshspan_metadata::NodeCertificateRotationState::Staged => {
+                        Some(rotation.certificate_der)
+                    }
+                    meshspan_metadata::NodeCertificateRotationState::Installed => {
+                        Some(rotation.previous_certificate_der)
+                    }
+                    meshspan_metadata::NodeCertificateRotationState::Retired
+                    | meshspan_metadata::NodeCertificateRotationState::Abandoned => None,
+                });
             routes.push(ActivePeerRoute {
                 node_id: node.node_id,
                 incarnation: node.incarnation,
                 private_endpoint,
                 certificate_der: certificate.certificate_der,
+                overlapping_certificate_der,
             });
         }
         after = page.next;
@@ -1958,12 +2013,6 @@ fn load_active_peer_routes(
 }
 
 async fn reconcile_active_peer_routes(network: &ConsensusNetwork, routes: Vec<ActivePeerRoute>) {
-    let current = network
-        .peer_routes()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|peer| (peer.node_id, peer))
-        .collect::<BTreeMap<_, _>>();
     for route in routes {
         let Ok(mut addresses) = tokio::net::lookup_host(&route.private_endpoint).await else {
             continue;
@@ -1978,14 +2027,13 @@ async fn reconcile_active_peer_routes(network: &ConsensusNetwork, routes: Vec<Ac
             certificate_der: route.certificate_der,
             certificate_name: certificate_name(route.node_id),
         };
-        let unchanged = current.get(&route.node_id).is_some_and(|existing| {
-            existing.incarnation == peer.incarnation
-                && existing.address == peer.address
-                && existing.certificate_der == peer.certificate_der
-                && existing.certificate_name == peer.certificate_name
-        });
-        if !unchanged {
-            let _updated = network.upsert_peer(&peer);
+        // The network treats an unchanged route and overlap as an exact no-op, retaining
+        // its queues/connections. A failed refresh leaves its previous binding intact.
+        if network
+            .upsert_peer_with_overlap(&peer, route.overlapping_certificate_der.as_deref())
+            .is_err()
+        {
+            return;
         }
     }
 }

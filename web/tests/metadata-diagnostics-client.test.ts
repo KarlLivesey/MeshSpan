@@ -11,6 +11,15 @@ const EMPTY: MetadataDiagnosticsResponse = {
   partition_id: ID,
   node_id: ID,
   daemon_version: "0.1.0",
+  configuration: {
+    operating_system: "linux",
+    architecture: "aarch64",
+    metrics_exporter_enabled: null,
+    backup: null,
+    public_certificate_source: null,
+    node_certificate_generation: null,
+  },
+  pending_work: { items: [], truncated: false },
   collected_at_epoch_micros: 1,
   revision_before: "9007199254740993",
   revision_after: "9007199254740993",
@@ -42,6 +51,19 @@ describe("generated metadata diagnostic client", () => {
       { collected_at_epoch_micros: -1 },
       { consensus: {} },
       { daemon_version: "private/path" },
+      {
+        configuration: { ...EMPTY.configuration, private_key: "never allowed" },
+      },
+      {
+        configuration: { ...EMPTY.configuration, architecture: "private/path" },
+      },
+      {
+        pending_work: {
+          items: [],
+          truncated: false,
+          subject_payload: "never allowed",
+        },
+      },
       { node_id: "not-an-id" },
       { private_key: "never allowed" },
     ]) {

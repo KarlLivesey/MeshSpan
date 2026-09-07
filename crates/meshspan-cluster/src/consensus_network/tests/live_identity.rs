@@ -55,7 +55,9 @@ async fn network_selects_a_new_local_certificate_without_restarting_its_listener
         &NodePublicIdentity::from_sec1(identity.public_key_sec1())?,
         "meshspan.internal",
     )?;
-    second.upsert_peer(&peer(first_node, first_address, &leaf))?;
+    // Stage the new fingerprint while the routed/current certificate is still the old leaf.
+    let current_peer = peer(first_node, first_address, first_identity.certificate_der());
+    second.upsert_peer_with_overlap(&current_peer, Some(&leaf))?;
     let selected = first.install_local_certificate(
         2,
         NodeCredentials::new(

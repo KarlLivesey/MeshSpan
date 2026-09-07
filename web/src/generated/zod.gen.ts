@@ -2720,6 +2720,48 @@ export const zDiagnosticsBundleResponse = z
     metadata: z
       .strictObject({
         collected_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+        configuration: z
+          .strictObject({
+            architecture: z
+              .string()
+              .min(1)
+              .max(32)
+              .regex(/^[a-z0-9_]+$/),
+            backup: z
+              .strictObject({
+                enabled: z.boolean(),
+                interval_micros: z
+                  .string()
+                  .min(1)
+                  .max(20)
+                  .regex(/^(0|[1-9][0-9]*)$/),
+                minimum_independent_copies: z.int().gte(0).lte(255),
+                minimum_verified_copies: z.int().gte(1).lte(255),
+                retained_generations: z.int().gte(1).lte(65535),
+              })
+              .strict()
+              .nullable(),
+            metrics_exporter_enabled: z.boolean().nullable(),
+            node_certificate_generation: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/)
+              .nullable(),
+            operating_system: z
+              .string()
+              .min(1)
+              .max(32)
+              .regex(/^[a-z0-9_]+$/),
+            public_certificate_source: z
+              .union([
+                z.literal("mesh_local"),
+                z.literal("acme"),
+                z.literal("external"),
+              ])
+              .nullable(),
+          })
+          .strict(),
         consensus: z
           .strictObject({
             applied_index: z
@@ -2850,6 +2892,51 @@ export const zDiagnosticsBundleResponse = z
           .regex(
             /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
           ),
+        pending_work: z
+          .strictObject({
+            items: z
+              .array(
+                z
+                  .strictObject({
+                    attempt_count: z
+                      .string()
+                      .min(1)
+                      .max(20)
+                      .regex(/^(0|[1-9][0-9]*)$/),
+                    kind: z.union([
+                      z.literal("repair"),
+                      z.literal("scrub"),
+                      z.literal("drain"),
+                      z.literal("rebalance"),
+                      z.literal("reconcile"),
+                    ]),
+                    next_attempt_at_epoch_micros: z
+                      .int()
+                      .gte(0)
+                      .lte(9007199254740991),
+                    revision: z
+                      .string()
+                      .min(1)
+                      .max(20)
+                      .regex(/^(0|[1-9][0-9]*)$/),
+                    state: z.union([
+                      z.literal("queued"),
+                      z.literal("claimed"),
+                      z.literal("complete"),
+                    ]),
+                    work_id: z
+                      .string()
+                      .length(36)
+                      .regex(
+                        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+                      ),
+                  })
+                  .strict(),
+              )
+              .max(100),
+            truncated: z.boolean(),
+          })
+          .strict(),
         recent_operations: z
           .strictObject({
             items: z
@@ -4837,6 +4924,48 @@ export const zListVolumesResponse = z
 export const zMetadataDiagnosticsResponse = z
   .strictObject({
     collected_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    configuration: z
+      .strictObject({
+        architecture: z
+          .string()
+          .min(1)
+          .max(32)
+          .regex(/^[a-z0-9_]+$/),
+        backup: z
+          .strictObject({
+            enabled: z.boolean(),
+            interval_micros: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+            minimum_independent_copies: z.int().gte(0).lte(255),
+            minimum_verified_copies: z.int().gte(1).lte(255),
+            retained_generations: z.int().gte(1).lte(65535),
+          })
+          .strict()
+          .nullable(),
+        metrics_exporter_enabled: z.boolean().nullable(),
+        node_certificate_generation: z
+          .string()
+          .min(1)
+          .max(20)
+          .regex(/^(0|[1-9][0-9]*)$/)
+          .nullable(),
+        operating_system: z
+          .string()
+          .min(1)
+          .max(32)
+          .regex(/^[a-z0-9_]+$/),
+        public_certificate_source: z
+          .union([
+            z.literal("mesh_local"),
+            z.literal("acme"),
+            z.literal("external"),
+          ])
+          .nullable(),
+      })
+      .strict(),
     consensus: z
       .strictObject({
         applied_index: z
@@ -4967,6 +5096,51 @@ export const zMetadataDiagnosticsResponse = z
       .regex(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       ),
+    pending_work: z
+      .strictObject({
+        items: z
+          .array(
+            z
+              .strictObject({
+                attempt_count: z
+                  .string()
+                  .min(1)
+                  .max(20)
+                  .regex(/^(0|[1-9][0-9]*)$/),
+                kind: z.union([
+                  z.literal("repair"),
+                  z.literal("scrub"),
+                  z.literal("drain"),
+                  z.literal("rebalance"),
+                  z.literal("reconcile"),
+                ]),
+                next_attempt_at_epoch_micros: z
+                  .int()
+                  .gte(0)
+                  .lte(9007199254740991),
+                revision: z
+                  .string()
+                  .min(1)
+                  .max(20)
+                  .regex(/^(0|[1-9][0-9]*)$/),
+                state: z.union([
+                  z.literal("queued"),
+                  z.literal("claimed"),
+                  z.literal("complete"),
+                ]),
+                work_id: z
+                  .string()
+                  .length(36)
+                  .regex(
+                    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+                  ),
+              })
+              .strict(),
+          )
+          .max(100),
+        truncated: z.boolean(),
+      })
+      .strict(),
     recent_operations: z
       .strictObject({
         items: z

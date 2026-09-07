@@ -10,7 +10,170 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 13 — complete diagnostic projection implementation
+
+The existing diagnostic download now includes explicitly allow-listed operational
+configuration and a bounded unfinished-work window. Configuration exposes only
+compiled OS/architecture, exporter enabled state, backup interval/retention/copy
+policy, public certificate source category and observed private generation.
+Destination paths, host/domain names, recipient identities, raw component payloads
+and all key material are omitted by construction.
+
+Pending work includes only opaque work identity, closed kind/state, attempt count,
+revision and retry instant. It never serialises subjects, file/shard identities,
+claims, fences or result payloads. Selection uses the existing maintenance-ready
+index with a limit-plus-one truncation probe. It does not claim work, retry it,
+perform provider IO or scan the complete queue. Concurrent completion remains
+explicitly representable; metadata revision-before/after still exposes collection
+across concurrent changes. Existing bounded events, target probes, topology,
+reactor observations and command outcomes remain part of the bundle.
+
+Focused implementation verification:
+
+- Five Rust response/diagnostic tests passed in **0.04 seconds**, including nested
+  secret-field rejection and contradictory configuration/counter rejection.
+- Four HTTP diagnostic tests passed in **0.11 seconds**, covering pre-collection
+  authentication, revocation, cancelled-job ownership and invalid output.
+- The SQLite bounded-window/read-only/index-plan test passed in **0.28 seconds**.
+  It verifies truncation and unchanged revision/unclaimed jobs, plus indexed
+  ordering without a temporary sort. A `usize` SQL-binding compile mistake was
+  corrected before these tests. Combined affected-crate build: **33.25 seconds**.
+- Rust-generated OpenAPI/TypeScript/Zod artefacts were regenerated. Eleven web
+  diagnostic/client/download tests passed in **1.48 seconds**; web typecheck and
+  affected ESLint passed.
+- The real two-daemon setup/join/renewal/restart test now verifies the complete
+  diagnostic download through both gateways. It passed in **15.46 seconds**, after
+  a **35.14-second build**, with rebuilt embedded web assets.
+- Affected API/metadata/daemon all-target/all-feature Clippy passed in **31.40 seconds**.
+
+Task 13 implementation is ready for the assembled-stage verification pass;
+remaining estimate **3 → 1 points**, Stage 10 **140 → 138 points**. This is not
+stage completion. The packaged backup-restore and cross-gateway SMB failures below
+remain open and are not erased by this independent successful diagnostic proof.
+
+## Tasks 24/27 — local native package and packaged-process execution
+
+`pnpm package:local` now builds the embedded web bundle and daemon, runs both
+licence gates, checks architecture and linkage, and assembles a fresh local
+directory/archive with `GPL-2.0-only` text, operating instructions, conservative
+Rust/web dependency inventory, source/toolchain observations and SHA-256 checksums.
+It has no publish, release, tag or push command. `--plan` only reports build steps;
+`--profile dev` provides an explicitly labelled fast development artefact. Default
+release-profile builds are local builds, not signed releases or acceptance proof.
+
+macOS rejects non-system library dependencies. Linux packaging requires a static
+musl executable. The prepared `scratch` container recipe runs as an unprivileged
+user with explicit persistent state/storage mounts and an operator-supplied public
+CA bundle; it installs no packages or external services. Linux/container execution
+is not yet proved: the inspected local Linux builder has only
+`aarch64-unknown-linux-gnu` installed, not the required musl target.
+
+Three focused packaging tests passed in **73.34 milliseconds**, covering exact
+bytes/checksums, immutable output directories, inventory scope/path exclusion and
+rejected options. Tooling ESLint passed. The actual macOS ARM64 dev package passed
+both licence gates, rebuilt the embedded web bundle in **350 milliseconds** and
+the daemon in **7.21 seconds**. Linkage inspection found only Apple system libraries.
+This is a conservative package inventory, not yet the complete third-party
+notices, signed provenance or link-level SBOM required by task 25.
+
+The existing headless harness now accepts an absolute, existing
+`MESHSPAN_DAEMON_PROOF_BINARY`, allowing the same real tests to execute the packaged
+binary rather than silently testing the Cargo output. The package used here has
+binary SHA-256 `52e58e31fafeb429aa357753861fd36a5fb5a13d2e948373b11a41b33623ea5c`;
+its provenance records source `a47dce1`, a dirty working tree and `dev` profile.
+The packaged setup/panel/join/private-renewal/forced-restart proof passed in
+**12.70 seconds**, after a **3.81-second harness build**.
+
+Two broader packaged-process failures are open for the assembled-stage fixing pass:
+
+- The operator workflow failed in **10.60 seconds** with HTTP `409 state_conflict`
+  while verifying an isolated restore of an actual automatic backup. Both daemons
+  were still running. Private fixtures were retained locally; they must not be
+  uploaded as evidence. No cause or fix has been established.
+- The real three-gateway SMB test failed in **36.30 seconds**: the remote gateway
+  still listed `remote-only.bin` as length **0**, while the expected written length
+  was **47**. This is not an SMB interoperability pass. That run's fixture was not
+  retained by the older harness; failure retention is now added before further
+  investigation. No timeout was increased or assertion weakened.
+
+The SMB harness also accepts an explicit immutable `MESHSPAN_SMB_PROOF_IMAGE` and
+always uses `--pull=never`. This run used the existing local client image
+`sha256:9daac97f82472b031c7bc56e5cdd2446ab01ceafd6dc2a4705cdd20a8ae90d6d`, avoiding
+the broken tag lookup without downloading an image. Native/container acceptance,
+backup/recovery, signed update tooling and the above defects remain open. Tasks
+24 and 27 are partial; no stage completion or release is claimed.
+
 ## Task 3 — live internal TLS credential selection
+
+### Automatic daemon renewal implementation
+
+The daemon now owns a private-certificate worker independently of public ACME.
+It scans bounded topology pages, stages due same-key renewals through the
+authoritative command path, installs its own staged credentials without rebinding,
+signs installation acknowledgements and retires completed overlaps. Unknown
+commit outcomes retain the exact operation for retry. Private keys stay local.
+
+The real two-process test
+`private_node_renewal_runs_automatically_and_survives_restart_and_join` passed in
+**14.91 seconds**, after a **5.72-second build**. It shortens only the initial
+single-node fixture's scheduling deadline, then exercises the normal worker:
+generation 2 activation, unchanged node key, continued public HTTPS, joining a
+second daemon, exact renewed private TLS fingerprint, forced process loss and
+fresh-handshake selection after restart. It does not simulate a month passing or
+prove expired-credential recovery. The fixture reuses the workspace's existing
+SQLite dependency; no dependency version or external package was added.
+
+Affected daemon/cluster/metadata all-target/all-feature Clippy passed in
+**12.94 seconds**. A private-database test access mistake and collapsible conditions
+were corrected before this evidence. Offline/expired-credential readmission,
+issuer/federation rollover and the assembled-stage integration pass remain open.
+Task 3 is still partial; this checkpoint does not claim those missing behaviours.
+
+### Stage-first renewal implementation checkpoint
+
+Explicit same-key renewal now binds its exact generation, DNS name and at-most
+30-day validity into a replay-stable signed certificate. Metadata reuses the
+existing MeshSpan certificate crate to validate the signature, admitted key,
+issuer and exact interval rather than introducing an external library.
+
+Migration 88 and private command kinds 77–79 implement durable staging, signed
+node installation acknowledgement, atomic activation and prior-leaf retirement
+after one hour of overlap. Transport bindings permit the exact current plus one
+overlapping leaf for the same incarnation. Updating another node does not erase
+that overlap; explicit retirement rejects subsequent old-connection requests.
+
+Focused evidence during implementation:
+
+- All 18 certificate tests passed in **0.15 seconds**; the later renewal-validator
+  tests passed in **0.06 seconds** after a **2.26-second build**.
+- Two peer-registry tests passed in **0.00 seconds** after **6.90 seconds** of build.
+- Eleven actual QUIC network tests passed in **0.48 seconds** after **24.60 seconds**
+  of build, including staged fresh-handshake admission and old-connection retirement.
+- Three SQLite renewal tests passed in **1.53 seconds** after **7.13 seconds** of
+  build: exact replay/reopen, signed activation, deadline-gated retirement and
+  rejected stale/substituted input without a mutation.
+- Affected certificate/transport/metadata/cluster all-target/all-feature Clippy
+  passed in **8.85 seconds**. Earlier compile/type mistakes and overlong tests
+  were corrected; the latter were separated by staging versus installation scope.
+
+The subsequent daemon topology integration reads staged/installed overlap from
+replicated rotation records. An exact unchanged route/overlap refresh is a no-op,
+preserving queues and connections. An expired uninstalled candidate can be
+abandoned without retiring the active leaf; a fresh candidate uses the next
+unused generation and can later activate and retire its actual predecessor.
+The four focused SQLite tests passed in **2.41 seconds** after a **4.43-second
+build**, including generation 2 abandonment followed by generation 3 activation
+and retirement of generation 1. Final affected all-target/all-feature Clippy,
+including the daemon, passed in **20.83 seconds**. No full integration rerun was
+used for this implementation checkpoint.
+Rust and JavaScript licence gates passed; the lockfile adds only the internal
+metadata-to-certificate crate edge, with no new external package or version.
+
+This is an implementation checkpoint, not Task 3 completion. Daemon
+scheduling, acknowledgements, catch-up and federation rollover remain to be
+integrated on the same stage-completion branch. No full workspace or unrelated
+slow-suite run was added between these changes; stage-wide acceptance follows
+the assembled implementation. Stage 10 remains 140 points, Stage 11 126.
 
 The private transport can now replace its client and server TLS configurations
 without restarting or rebinding either socket. Preparation validates the complete
