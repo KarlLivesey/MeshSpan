@@ -16,6 +16,7 @@ ed25519-dalek.workspace = true
 meshspan-contracts = { path = "../meshspan-contracts" }
 meshspan-acme = { path = "../meshspan-acme" }
 meshspan-backup = { path = "../meshspan-backup" }
+meshspan-certificates = { path = "../meshspan-certificates" }
 meshspan-consensus = { path = "../meshspan-consensus" }
 meshspan-domain = { path = "../meshspan-domain" }
 meshspan-secret-envelope = { path = "../meshspan-secret-envelope" }

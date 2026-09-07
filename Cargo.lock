@@ -1409,6 +1409,7 @@ dependencies = [
  "ed25519-dalek",
  "meshspan-acme",
  "meshspan-backup",
+ "meshspan-certificates",
  "meshspan-consensus",
  "meshspan-contracts",
  "meshspan-domain",

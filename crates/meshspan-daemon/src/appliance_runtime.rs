@@ -1921,6 +1921,7 @@ struct ActivePeerRoute {
     incarnation: u64,
     private_endpoint: String,
     certificate_der: Vec<u8>,
+    overlapping_certificate_der: Option<Vec<u8>>,
 }
 
 fn load_active_peer_routes(
@@ -1942,11 +1943,25 @@ fn load_active_peer_routes(
             let certificate = repository
                 .active_node_certificate(node.node_id)?
                 .ok_or(DaemonProcessError::PrivateNetworkState)?;
+            let overlapping_certificate_der = repository
+                .node_certificate_rotation(node.node_id)?
+                .filter(|rotation| rotation.incarnation == node.incarnation)
+                .and_then(|rotation| match rotation.state {
+                    meshspan_metadata::NodeCertificateRotationState::Staged => {
+                        Some(rotation.certificate_der)
+                    }
+                    meshspan_metadata::NodeCertificateRotationState::Installed => {
+                        Some(rotation.previous_certificate_der)
+                    }
+                    meshspan_metadata::NodeCertificateRotationState::Retired
+                    | meshspan_metadata::NodeCertificateRotationState::Abandoned => None,
+                });
             routes.push(ActivePeerRoute {
                 node_id: node.node_id,
                 incarnation: node.incarnation,
                 private_endpoint,
                 certificate_der: certificate.certificate_der,
+                overlapping_certificate_der,
             });
         }
         after = page.next;
@@ -1958,12 +1973,6 @@ fn load_active_peer_routes(
 }
 
 async fn reconcile_active_peer_routes(network: &ConsensusNetwork, routes: Vec<ActivePeerRoute>) {
-    let current = network
-        .peer_routes()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|peer| (peer.node_id, peer))
-        .collect::<BTreeMap<_, _>>();
     for route in routes {
         let Ok(mut addresses) = tokio::net::lookup_host(&route.private_endpoint).await else {
             continue;
@@ -1978,14 +1987,13 @@ async fn reconcile_active_peer_routes(network: &ConsensusNetwork, routes: Vec<Ac
             certificate_der: route.certificate_der,
             certificate_name: certificate_name(route.node_id),
         };
-        let unchanged = current.get(&route.node_id).is_some_and(|existing| {
-            existing.incarnation == peer.incarnation
-                && existing.address == peer.address
-                && existing.certificate_der == peer.certificate_der
-                && existing.certificate_name == peer.certificate_name
-        });
-        if !unchanged {
-            let _updated = network.upsert_peer(&peer);
+        // The network treats an unchanged route and overlap as an exact no-op, retaining
+        // its queues/connections. A failed refresh leaves its previous binding intact.
+        if network
+            .upsert_peer_with_overlap(&peer, route.overlapping_certificate_der.as_deref())
+            .is_err()
+        {
+            return;
         }
     }
 }

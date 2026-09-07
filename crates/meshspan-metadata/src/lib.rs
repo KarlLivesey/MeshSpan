@@ -45,11 +45,16 @@ mod mesh_local_certificate_command;
 mod metrics_exporter_command;
 mod migration;
 mod name;
+mod node_certificate_command;
 mod repository;
 #[cfg(test)]
 mod test_support;
 
+pub use node_certificate_command::{
+    AcknowledgeNodeCertificateInstallation, RetireNodeCertificate, StageNodeCertificate,
+};
 pub use repository::{MetricsExporterConfiguration, metrics_exporter_instance_id};
+pub use repository::{NodeCertificateRotation, NodeCertificateRotationState};
 
 pub use acme_command::{
     AcknowledgePublicCertificateInstallation, AcmeChallengeKind, AdvanceManualDnsTask,

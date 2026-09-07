@@ -108,6 +108,9 @@ mod metrics_exporter;
 #[cfg(test)]
 mod metrics_exporter_tests;
 mod namespace;
+mod node_certificate;
+#[cfg(test)]
+mod node_certificate_rotation_tests;
 #[cfg(test)]
 mod node_certificate_tests;
 mod node_wrapping_key;
@@ -269,6 +272,7 @@ pub use mesh_local_certificate::{
 };
 pub use meshspan_domain::AuthenticationService;
 pub use metrics_exporter::{MetricsExporterConfiguration, metrics_exporter_instance_id};
+pub use node_certificate::{NodeCertificateRotation, NodeCertificateRotationState};
 pub use node_wrapping_key::NodeWrappingKeyRecord;
 pub use operation_status::{
     AuthoritativeOperationCursor, AuthoritativeOperationState, AuthoritativeOperationStatus,

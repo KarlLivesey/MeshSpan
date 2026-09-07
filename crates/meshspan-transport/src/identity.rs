@@ -95,6 +95,51 @@ impl PeerRegistry {
             Err(TransportError::UntrustedPeer)
         }
     }
+
+    /// Replaces one node's exact current and optional overlapping certificate bindings.
+    ///
+    /// The caller supplies committed rotation state and removes overlap at retirement.
+    /// This permits at most two certificates for the same incarnation, not additional
+    /// identities or indefinite trust inferred from an earlier handshake. An empty slice
+    /// retires the node. Other nodes' bindings are preserved; rejection is atomic.
+    ///
+    /// # Errors
+    ///
+    /// Rejects excessive overlap, duplicate fingerprints, inconsistent identities or
+    /// incarnations, zero fields and certificates already bound to a different node.
+    pub fn replace_node_bindings(
+        &mut self,
+        node_id: NodeId,
+        bindings: &[PeerBinding],
+    ) -> Result<(), TransportError> {
+        if bindings.len() > 2 {
+            return Err(TransportError::InvalidConfiguration);
+        }
+        let mut fingerprints = BTreeSet::new();
+        for binding in bindings {
+            if binding.node_id != node_id
+                || binding.incarnation == 0
+                || bindings
+                    .first()
+                    .is_some_and(|first| first.incarnation != binding.incarnation)
+                || binding.certificate_fingerprint == [0; 32]
+                || !fingerprints.insert(binding.certificate_fingerprint)
+                || self
+                    .by_fingerprint
+                    .get(&binding.certificate_fingerprint)
+                    .is_some_and(|existing| existing.node_id != node_id)
+            {
+                return Err(TransportError::InvalidConfiguration);
+            }
+        }
+        self.by_fingerprint
+            .retain(|_, binding| binding.node_id != node_id);
+        for binding in bindings {
+            self.by_fingerprint
+                .insert(binding.certificate_fingerprint, *binding);
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn connection_certificate_fingerprint(
@@ -246,6 +291,62 @@ pub fn certificate_fingerprint(certificate: &CertificateDer<'_>) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn committed_overlap_preserves_other_nodes_and_retires_exact_old_bindings()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let old = PeerBinding {
+            node_id: NodeId::from_bytes([1; 16])?,
+            incarnation: 1,
+            certificate_fingerprint: [2; 32],
+        };
+        let new = PeerBinding {
+            certificate_fingerprint: [3; 32],
+            ..old
+        };
+        let other = PeerBinding {
+            node_id: NodeId::from_bytes([4; 16])?,
+            certificate_fingerprint: [5; 32],
+            ..old
+        };
+        let mut registry = PeerRegistry::new([old, other])?;
+        registry.replace_node_bindings(old.node_id, &[old, new])?;
+        for binding in [old, new, other] {
+            registry.revalidate(AuthenticatedPeer(binding))?;
+        }
+        for invalid in [
+            vec![old, new, other],
+            vec![old, old],
+            vec![old, other],
+            vec![
+                old,
+                PeerBinding {
+                    incarnation: 2,
+                    ..new
+                },
+            ],
+            vec![PeerBinding {
+                certificate_fingerprint: other.certificate_fingerprint,
+                ..new
+            }],
+        ] {
+            assert!(
+                registry
+                    .replace_node_bindings(old.node_id, &invalid)
+                    .is_err()
+            );
+            for binding in [old, new, other] {
+                registry.revalidate(AuthenticatedPeer(binding))?;
+            }
+        }
+        registry.replace_node_bindings(old.node_id, &[new])?;
+        assert!(registry.revalidate(AuthenticatedPeer(old)).is_err());
+        registry.revalidate(AuthenticatedPeer(new))?;
+        registry.replace_node_bindings(old.node_id, &[])?;
+        assert!(registry.revalidate(AuthenticatedPeer(new)).is_err());
+        registry.revalidate(AuthenticatedPeer(other))?;
+        Ok(())
+    }
 
     #[test]
     fn prior_admission_requires_the_exact_current_binding() -> Result<(), Box<dyn std::error::Error>>

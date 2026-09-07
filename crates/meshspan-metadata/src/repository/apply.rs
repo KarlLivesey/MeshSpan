@@ -17,8 +17,8 @@ use super::{
     federation_assignment, federation_grant, federation_mutation_admission, federation_quarantine,
     federation_relationship, federation_storage_allocation, federation_succession, identity,
     locality_policy, maintenance_work, manual_dns_task, mesh_local_certificate, metrics_exporter,
-    namespace, node_wrapping_key, protection_policy, recovery_authority, retention,
-    root_delegation, routing, secret_generation, session, smb_export_configuration,
+    namespace, node_certificate, node_wrapping_key, protection_policy, recovery_authority,
+    retention, root_delegation, routing, secret_generation, session, smb_export_configuration,
     snapshot_schedule, storage_target, tags, topology, user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
@@ -670,7 +670,10 @@ fn is_backup_command(command: &AuthoritativeCommand) -> bool {
 fn is_certificate_command(command: &AuthoritativeCommand) -> bool {
     matches!(
         command,
-        AuthoritativeCommand::ConfigureAcme(_)
+        AuthoritativeCommand::StageNodeCertificate(_)
+            | AuthoritativeCommand::AcknowledgeNodeCertificateInstallation(_)
+            | AuthoritativeCommand::RetireNodeCertificate(_)
+            | AuthoritativeCommand::ConfigureAcme(_)
             | AuthoritativeCommand::ProvisionAcme(_)
             | AuthoritativeCommand::QueueCertificateOrder(_)
             | AuthoritativeCommand::ClaimCertificateOrder(_)
@@ -881,6 +884,15 @@ fn execute_certificate_command(
         }
         AuthoritativeCommand::CreateMeshLocalCertificateAuthority(value) => {
             mesh_local_certificate::create(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::StageNodeCertificate(value) => {
+            node_certificate::stage(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::AcknowledgeNodeCertificateInstallation(value) => {
+            node_certificate::acknowledge(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::RetireNodeCertificate(value) => {
+            node_certificate::retire(transaction, context, *value, revision)
         }
         AuthoritativeCommand::IssueMeshLocalCertificate(value) => {
             mesh_local_certificate::issue(transaction, context, value, revision)
@@ -1439,6 +1451,9 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::RecordBackupReclamation(_) => 138,
         AuthoritativeCommand::ReconcileMetadataBackupDefaults(_) => 139,
         AuthoritativeCommand::ConfigureMetricsExporter(_) => 140,
+        AuthoritativeCommand::StageNodeCertificate(_) => 141,
+        AuthoritativeCommand::AcknowledgeNodeCertificateInstallation(_) => 142,
+        AuthoritativeCommand::RetireNodeCertificate(_) => 143,
     }
 }
 

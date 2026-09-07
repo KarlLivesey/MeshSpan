@@ -3,6 +3,28 @@
 use super::*;
 
 #[tokio::test]
+async fn committed_overlap_keeps_old_connection_until_explicit_retirement()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (client, server, mut received) = cancellation::control_pair()?;
+    confirm_control(&client, &server, &mut received, 61).await?;
+    let original_connection = cached_connection(&client, &server)?.stable_id();
+    let original = server.peer_routes()?.pop().ok_or("missing peer")?;
+    let mut replacement = original.clone();
+    replacement.certificate_der = CertificateAuthority::new()?
+        .issue_node("meshspan.internal")?
+        .certificate_der()
+        .to_vec();
+    server.upsert_peer_with_overlap(&replacement, Some(&original.certificate_der))?;
+    confirm_control(&client, &server, &mut received, 62).await?;
+    assert_eq!(
+        cached_connection(&client, &server)?.stable_id(),
+        original_connection
+    );
+    server.upsert_peer(&replacement)?;
+    reject_retired_control(&client, &server, &mut received).await
+}
+
+#[tokio::test]
 async fn replaced_certificate_cannot_reuse_an_admitted_control_connection()
 -> Result<(), Box<dyn std::error::Error>> {
     let (client, server, mut received) = cancellation::control_pair()?;

@@ -12,6 +12,52 @@ not close an unexplained failure.
 
 ## Task 3 — live internal TLS credential selection
 
+### Stage-first renewal implementation checkpoint
+
+Explicit same-key renewal now binds its exact generation, DNS name and at-most
+30-day validity into a replay-stable signed certificate. Metadata reuses the
+existing MeshSpan certificate crate to validate the signature, admitted key,
+issuer and exact interval rather than introducing an external library.
+
+Migration 88 and private command kinds 77–79 implement durable staging, signed
+node installation acknowledgement, atomic activation and prior-leaf retirement
+after one hour of overlap. Transport bindings permit the exact current plus one
+overlapping leaf for the same incarnation. Updating another node does not erase
+that overlap; explicit retirement rejects subsequent old-connection requests.
+
+Focused evidence during implementation:
+
+- All 18 certificate tests passed in **0.15 seconds**; the later renewal-validator
+  tests passed in **0.06 seconds** after a **2.26-second build**.
+- Two peer-registry tests passed in **0.00 seconds** after **6.90 seconds** of build.
+- Eleven actual QUIC network tests passed in **0.48 seconds** after **24.60 seconds**
+  of build, including staged fresh-handshake admission and old-connection retirement.
+- Three SQLite renewal tests passed in **1.53 seconds** after **7.13 seconds** of
+  build: exact replay/reopen, signed activation, deadline-gated retirement and
+  rejected stale/substituted input without a mutation.
+- Affected certificate/transport/metadata/cluster all-target/all-feature Clippy
+  passed in **8.85 seconds**. Earlier compile/type mistakes and overlong tests
+  were corrected; the latter were separated by staging versus installation scope.
+
+The subsequent daemon topology integration reads staged/installed overlap from
+replicated rotation records. An exact unchanged route/overlap refresh is a no-op,
+preserving queues and connections. An expired uninstalled candidate can be
+abandoned without retiring the active leaf; a fresh candidate uses the next
+unused generation and can later activate and retire its actual predecessor.
+The four focused SQLite tests passed in **2.41 seconds** after a **4.43-second
+build**, including generation 2 abandonment followed by generation 3 activation
+and retirement of generation 1. Final affected all-target/all-feature Clippy,
+including the daemon, passed in **20.83 seconds**. No full integration rerun was
+used for this implementation checkpoint.
+Rust and JavaScript licence gates passed; the lockfile adds only the internal
+metadata-to-certificate crate edge, with no new external package or version.
+
+This is an implementation checkpoint, not Task 3 completion. Daemon
+scheduling, acknowledgements, catch-up and federation rollover remain to be
+integrated on the same stage-completion branch. No full workspace or unrelated
+slow-suite run was added between these changes; stage-wide acceptance follows
+the assembled implementation. Stage 10 remains 140 points, Stage 11 126.
+
 The private transport can now replace its client and server TLS configurations
 without restarting or rebinding either socket. Preparation validates the complete
 chain against the configured mesh roots, exact local DNS name, current TLS time,
