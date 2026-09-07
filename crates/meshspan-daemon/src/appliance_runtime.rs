@@ -273,6 +273,8 @@ impl PrivateNetworkStarter {
                 local_certificate.certificate_der,
                 online_authority.certificate_der,
             ],
+            certificate_generation: local_certificate.generation,
+            certificate_name: certificate_name(self.local_node_id),
             private_key_pkcs8: Zeroizing::new(self.local_private_key_pkcs8.to_vec()),
             trust_anchors: vec![recovery.root_certificate_der],
             peers: Vec::new(),

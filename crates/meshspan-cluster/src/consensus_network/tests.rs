@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 use super::*;
 
 mod cancellation;
+mod live_identity;
 mod rotation;
 
 #[tokio::test]
@@ -308,6 +309,8 @@ fn config(
         listen_address,
         client_address: SocketAddr::from(([127, 0, 0, 1], 0)),
         certificate_chain_der: vec![identity.certificate_der().to_vec()],
+        certificate_generation: 1,
+        certificate_name: "meshspan.internal".to_owned(),
         private_key_pkcs8: Zeroizing::new(identity.private_key().to_vec()),
         trust_anchors: vec![trust_anchor],
         peers: vec![peer],

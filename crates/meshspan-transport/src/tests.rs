@@ -931,13 +931,15 @@ fn certificate_parts(
     (CertificateDer::from(certificate), private_key)
 }
 
-fn roots(certificate: &CertificateDer<'static>) -> Result<RootCertStore, Box<dyn Error>> {
+pub(super) fn roots(
+    certificate: &CertificateDer<'static>,
+) -> Result<RootCertStore, Box<dyn Error>> {
     let mut roots = RootCertStore::empty();
     roots.add(certificate.clone())?;
     Ok(roots)
 }
 
-fn limits() -> Result<TransportLimits, Box<dyn Error>> {
+pub(super) fn limits() -> Result<TransportLimits, Box<dyn Error>> {
     let wire = meshspan_protocol::WireLimits::new(64 * 1_024, 64 * 1_024, 256, 4_096)?;
     Ok(TransportLimits::new(
         wire,
@@ -1036,7 +1038,7 @@ const fn version(major: u32, minor: u32) -> ProtocolVersion {
     ProtocolVersion { major, minor }
 }
 
-const fn loopback() -> SocketAddr {
+pub(super) const fn loopback() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
 }
 

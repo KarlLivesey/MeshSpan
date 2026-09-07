@@ -15,6 +15,7 @@ mod federation_storage_capability;
 mod federation_storage_inventory;
 mod federation_storage_receipt;
 mod identity;
+mod rotating_tls;
 mod snapshot;
 mod stream;
 mod tls;
@@ -22,6 +23,7 @@ mod tls;
 pub use identity::{
     AuthenticatedPeer, NegotiationConfig, PeerBinding, PeerRegistry, certificate_fingerprint,
 };
+pub use rotating_tls::{InstalledNodeCertificate, NodeTransportConfig, RotatingNodeTransport};
 pub use snapshot::{SnapshotStager, VerifiedSnapshot};
 pub use stream::{
     AcceptedStream, StreamKind, accept_stream, open_stream, receive_control, receive_data_control,

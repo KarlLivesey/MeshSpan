@@ -2,4 +2,6 @@
 
 //! Test-facing export of the same provider-neutral certificate implementation used by the daemon.
 
-pub use meshspan_certificates::{CertificateAuthority, CertificateError, IssuedCertificate};
+pub use meshspan_certificates::{
+    CertificateAuthority, CertificateError, IssuedCertificate, NodeIdentityKey, NodePublicIdentity,
+};
