@@ -3006,7 +3006,7 @@ Secret-reference fixtures do not prove SMTP/HTTPS transport or decryption.
 The first compile exposed conversion and migration-array-size mistakes; these
 were corrected before the passing runs. No whole-workspace gate was run.
 
-Still required: bounded scheduling reads, authenticated configuration/status API,
+Still required: authenticated configuration/status API,
 email and webhook transports, owned daemon delivery worker, operational panel,
 manual-DNS/renewal delivery acceptance and the assembled-stage check. Task 21
 remains partial with its existing estimate until the complete delivery path runs.
@@ -3052,6 +3052,21 @@ The sender reuses the existing locked Base64 and HTTP-date libraries; no version
 were added or upgraded. This remains transport-level evidence, not an operational
 outbox-to-receiver workflow. Scheduling, administrative endpoints, panel controls,
 gateway enrolment redistribution and the owned runtime worker still need wiring.
+
+### Notification scheduling reads
+
+The repository now exposes the bounded channel inventory, pending committed
+source events and queued/expired-claim delivery pages. Projection does not move
+a separate cursor: an event remains discoverable until its outbox row commits.
+The delivery uniqueness constraint suppresses already queued or terminal events;
+channel filters and the creation boundary are reapplied to each source page.
+The worker must still claim the exact observed attempt before doing IO.
+
+The four focused metadata cases, extended with source discovery and due-work
+assertions, passed in **2.41 seconds** after a **6.75-second build**. Affected
+metadata all-target/all-feature Clippy passed in **9.03 seconds**. These are
+scheduling projections, not an executing background worker. The complete
+outbox-to-transport integration and its restart proof remain required.
 
 ## Remaining backup integration
 

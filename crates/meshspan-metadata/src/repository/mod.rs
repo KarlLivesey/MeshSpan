@@ -111,6 +111,7 @@ mod namespace;
 mod node_certificate;
 mod notification;
 mod notification_delivery;
+mod notification_queries;
 
 pub use notification::{NotificationChannelRecord, notification_delivery_id};
 pub use notification_delivery::{NotificationDeliveryRecord, NotificationDeliveryState};

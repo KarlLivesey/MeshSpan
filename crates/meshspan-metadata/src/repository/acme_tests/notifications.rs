@@ -15,7 +15,20 @@ fn notification_outbox_deduplicates_and_retries_one_exact_committed_event()
 -> Result<(), Box<dyn std::error::Error>> {
     let (mut fixture, channel, event) = configured(std::path::Path::new(":memory:"))?;
     let queue = queue(channel, event);
+    assert_eq!(fixture.repository.notification_channels()?.len(), 1);
+    assert_eq!(
+        fixture
+            .repository
+            .pending_notification_events(channel, PageLimit::new(1)?)?,
+        vec![event]
+    );
     fixture.apply(6, 20, &queue)?;
+    assert!(
+        fixture
+            .repository
+            .pending_notification_events(channel, PageLimit::new(1)?)?
+            .is_empty()
+    );
     fixture.apply(7, 21, &queue)?;
     let delivery = notification_delivery_id(channel, event)?;
     let queued = fixture
@@ -29,6 +42,12 @@ fn notification_outbox_deduplicates_and_retries_one_exact_committed_event()
     );
     assert_eq!(queued.occurred_at, UnixMicros::new(10));
     fixture.apply(8, 22, &claim(&fixture, delivery, 0))?;
+    assert!(
+        fixture
+            .repository
+            .ready_notification_deliveries(UnixMicros::new(23), PageLimit::new(1)?)?
+            .is_empty()
+    );
     assert!(matches!(
         fixture.apply(9, 23, &claim(&fixture, delivery, 0)),
         Err(RepositoryError::StaleRevision)
@@ -45,6 +64,12 @@ fn notification_outbox_deduplicates_and_retries_one_exact_committed_event()
     let expected = 24 + 5_000_000 + i64::from(delivery.as_bytes()[0]) * 1000;
     assert_eq!(retried.next_attempt_at, UnixMicros::new(expected));
     assert_eq!(retried.state, NotificationDeliveryState::Queued);
+    assert_eq!(
+        fixture
+            .repository
+            .ready_notification_deliveries(UnixMicros::new(expected), PageLimit::new(1)?)?,
+        vec![retried]
+    );
     assert!(matches!(
         fixture.apply(10, expected - 1, &claim(&fixture, delivery, 1)),
         Err(RepositoryError::StaleRevision)
