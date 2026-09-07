@@ -119,6 +119,7 @@ fn notification_outbox_deduplicates_and_retries_one_exact_committed_event()
         NotificationEventKind::CertificateOrderQueued
     );
     assert_eq!(queued.occurred_at, UnixMicros::new(10));
+    assert_delivery_totals(&fixture, channel, [1, 0, 0, 0])?;
     fixture.apply(8, 22, &claim(&fixture, delivery, 0))?;
     assert!(
         fixture
@@ -173,6 +174,7 @@ fn notification_outbox_deduplicates_and_retries_one_exact_committed_event()
         .ok_or("missing receipt")?;
     assert_eq!(accepted.state, NotificationDeliveryState::Accepted);
     assert_eq!(accepted.attempt, 2);
+    assert_delivery_totals(&fixture, channel, [0, 1, 0, 0])?;
     let database = fixture.repository.into_database();
     assert_eq!(
         database.connection().query_row(
@@ -228,6 +230,13 @@ fn notification_claim_survives_reopen_and_expired_worker_cannot_complete()
             .ok_or("lost rejection")?
             .state,
         NotificationDeliveryState::Rejected
+    );
+    assert_eq!(
+        fixture
+            .repository
+            .notification_delivery_counts(channel)?
+            .rejected,
+        1
     );
     Ok(())
 }
@@ -287,6 +296,13 @@ fn notification_configuration_replacement_cancels_old_destination_and_rolls_back
             .ok_or("lost cancellation")?
             .state,
         NotificationDeliveryState::Cancelled
+    );
+    assert_eq!(
+        fixture
+            .repository
+            .notification_delivery_counts(channel)?
+            .cancelled,
+        1
     );
     assert!(matches!(
         fixture.apply(
@@ -394,6 +410,24 @@ fn configuration(
             event_filter: 15,
         },
     ))
+}
+
+fn assert_delivery_totals(
+    fixture: &Fixture,
+    channel: ComponentInstanceId,
+    expected: [u64; 4],
+) -> Result<(), RepositoryError> {
+    let counts = fixture.repository.notification_delivery_counts(channel)?;
+    assert_eq!(
+        [
+            counts.pending,
+            counts.accepted,
+            counts.rejected,
+            counts.cancelled
+        ],
+        expected
+    );
+    Ok(())
 }
 
 fn queue(channel: ComponentInstanceId, event: AuditEventId) -> AuthoritativeCommand {

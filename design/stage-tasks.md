@@ -338,7 +338,7 @@ the stage; publication-dependent acceptance remains held separately and visible.
     checks and a real two-gateway restart proof pass. Remaining work is the
     assembled-stage pass: **5 → 1 points**.
 
-21. **Durable notifications — Partial; configured daemon delivery implemented.** **3 points remaining.**
+21. **Durable notifications — Implemented; delivery acceptance remains.** **3 points remaining.**
     OPS-010/020. Implement/verify optional email and authenticated generic webhooks
     from durable deduplicated events, with explicit configuration, allow-listing,
     redaction, retry and restart behaviour. Include manual-DNS renewal tasks from
@@ -352,8 +352,9 @@ the stage; publication-dependent acceptance remains held separately and visible.
     proves authenticated configuration, transient failure, restart, exact replay,
     credential retention and changed-retry rejection. Gateway recipient
     redistribution is wired. Remaining: exercise that redistribution through a
-    newly joined delivery gateway, SMTP through the daemon, manual-DNS alert
-    lifecycle, and expose retained delivery/rejection outcomes in the panel.
+    newly joined delivery gateway, SMTP through the daemon and manual-DNS alert
+    lifecycle. The API and panel now expose retained pending, accepted, rejected
+    and cancelled totals, independent of local worker health.
     This integrated slice reduces the estimate **8 → 3 points**; it does not
     close the task or the assembled-stage acceptance pass.
 

@@ -3144,6 +3144,35 @@ delivery/rejection visibility, and the assembled-stage checks. The existing wire
 tests prove SMTP transport only. No full-workspace acceptance, release, tag,
 image publication or GitHub Actions run is claimed by this slice.
 
+### Retained notification outcome visibility
+
+Each redacted channel status now includes exact decimal-string totals for pending,
+receiver-accepted, permanently rejected and cancelled deliveries. Retries count
+once, not once per attempt. The panel distinguishes a running worker from retained
+rejections and explains that changed settings affect future events, not already
+rejected events. No credential or remote error body is exposed. Counts refresh
+on explicit status reads; no new polling loop or network request per delivery.
+
+The repository query groups at most five persisted states. A real `EXPLAIN QUERY
+PLAN` inspection selects the existing covering
+`notification_deliveries_channel_state` index by channel identity. The five
+focused metadata cases, extended with pending/accepted/rejected/cancelled totals,
+passed in **2.78 seconds** after a **13.25-second build**. The panel fixture also
+uses a counter above JavaScript's safe integer limit to require exact display.
+Task 21 now has its intended initial feature path implemented; joined-gateway,
+SMTP/manual-DNS and assembled-stage acceptance remain, so the estimate stays at
+three points. This is not a declaration that Stage 10 is complete.
+
+Affected all-target/all-feature Clippy passed in **26.46 seconds**. Complete API
+regeneration/drift, web type checks and strict ESLint passed; six focused
+web/client/component cases passed in **961 ms**, and the embedded web bundle
+built in **282 ms**. Verification remains scoped to this behaviour, not the
+whole-workspace gate.
+
+The real daemon restart/delivery case also passed with the exact persisted
+outcome totals in **10.76 seconds** (incremental build **0.14 seconds**). Rust
+formatting passed. No publication or GitHub Actions were run.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in

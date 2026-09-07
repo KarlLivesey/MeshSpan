@@ -90,18 +90,33 @@ impl NotificationService {
             .notification_channels()
             .map_err(|_| NotificationError::Unavailable)?
             .into_iter()
-            .map(|channel| NotificationChannelStatus {
-                channel_id: crate::create_mesh_setup::format_uuid(channel.channel_id.as_bytes()),
-                sequence: channel.sequence,
-                display_name: channel.display_name.display().to_owned(),
-                kind: match channel.kind {
-                    NotificationChannelKind::Webhook => NotificationKind::Webhook,
-                    NotificationChannelKind::Email => NotificationKind::Email,
-                },
-                enabled: channel.enabled,
-                event_filter: channel.event_filter,
+            .map(|channel| {
+                let counts = self
+                    .authority
+                    .reader()
+                    .notification_delivery_counts(channel.channel_id)
+                    .map_err(|_| NotificationError::Unavailable)?;
+                Ok(NotificationChannelStatus {
+                    channel_id: crate::create_mesh_setup::format_uuid(
+                        channel.channel_id.as_bytes(),
+                    ),
+                    sequence: channel.sequence,
+                    display_name: channel.display_name.display().to_owned(),
+                    kind: match channel.kind {
+                        NotificationChannelKind::Webhook => NotificationKind::Webhook,
+                        NotificationChannelKind::Email => NotificationKind::Email,
+                    },
+                    enabled: channel.enabled,
+                    event_filter: channel.event_filter,
+                    deliveries: meshspan_api_contract::NotificationDeliveryCounts {
+                        pending: counts.pending.to_string(),
+                        accepted: counts.accepted.to_string(),
+                        rejected: counts.rejected.to_string(),
+                        cancelled: counts.cancelled.to_string(),
+                    },
+                })
             })
-            .collect();
+            .collect::<Result<_, NotificationError>>()?;
         let worker = match self.health.code() {
             0 => NotificationWorkerStatus::Running,
             1 => NotificationWorkerStatus::Retrying,

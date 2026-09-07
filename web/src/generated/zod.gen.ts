@@ -5572,6 +5572,30 @@ export const zNotificationsResponse = z
               .regex(
                 /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
               ),
+            deliveries: z
+              .strictObject({
+                accepted: z
+                  .string()
+                  .min(1)
+                  .max(20)
+                  .regex(/^(0|[1-9][0-9]*)$/),
+                cancelled: z
+                  .string()
+                  .min(1)
+                  .max(20)
+                  .regex(/^(0|[1-9][0-9]*)$/),
+                pending: z
+                  .string()
+                  .min(1)
+                  .max(20)
+                  .regex(/^(0|[1-9][0-9]*)$/),
+                rejected: z
+                  .string()
+                  .min(1)
+                  .max(20)
+                  .regex(/^(0|[1-9][0-9]*)$/),
+              })
+              .strict(),
             display_name: z.string().min(1).max(256),
             enabled: z.boolean(),
             event_filter: z.int().gte(1).lte(15),

@@ -111,6 +111,7 @@ function ChannelList(
                 <li>
                   <strong>{channel.display_name}</strong> — {channel.kind},{" "}
                   {channel.enabled ? "enabled" : "off"}{" "}
+                  <DeliveryCounts channel={channel} />
                   <button
                     type="button"
                     class="quiet-action"
@@ -138,5 +139,25 @@ function ChannelList(
         </>
       )}
     </Show>
+  );
+}
+
+function DeliveryCounts(props: Readonly<{ channel: Channel }>): JSX.Element {
+  return (
+    <>
+      <p>
+        {props.channel.deliveries.pending} pending ·{" "}
+        {props.channel.deliveries.accepted} accepted ·{" "}
+        {props.channel.deliveries.rejected} rejected ·{" "}
+        {props.channel.deliveries.cancelled} cancelled
+      </p>
+      <Show when={props.channel.deliveries.rejected !== "0"}>
+        <p class="error">
+          Some deliveries were permanently rejected. Check the destination and
+          credentials. Updated settings apply to future events; rejected events
+          remain recorded.
+        </p>
+      </Show>
+    </>
   );
 }

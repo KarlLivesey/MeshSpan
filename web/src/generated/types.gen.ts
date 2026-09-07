@@ -5113,6 +5113,27 @@ export type NotificationsResponse = {
      */
     channel_id: string;
     /**
+     * Current retained delivery counts, not individual attempts or proof of inbox receipt.
+     */
+    deliveries: {
+      /**
+       * Receiver-accepted deliveries; not proof of inbox receipt.
+       */
+      accepted: string;
+      /**
+       * Deliveries cancelled by replacement or disabling a channel.
+       */
+      cancelled: string;
+      /**
+       * Queued or claimed deliveries, including scheduled retries.
+       */
+      pending: string;
+      /**
+       * Permanently rejected deliveries; retained rather than silently discarded.
+       */
+      rejected: string;
+    };
+    /**
      * Non-secret administrative label.
      */
     display_name: string;
