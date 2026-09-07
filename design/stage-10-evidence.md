@@ -10,6 +10,39 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 3 — retire private peer admission on reused connections
+
+The internal rotation review found that replacing a committed peer route updated
+new-connection checks but left existing QUIC connections carrying their original
+admission indefinitely. Two real-QUIC regressions reproduced subsequent control
+requests reaching authority after certificate or incarnation replacement. The
+three-case red run finished in **0.17 seconds** after a **16.20-second build**:
+both retirement cases failed, while unchanged-binding reuse passed.
+
+The current peer registry now revalidates previously authenticated bindings.
+Consensus, control, snapshot and data ingress recheck admission; decoded control
+headers and each snapshot frame retain the connection's exact identity rather
+than substituting the latest incarnation. Queue admission reserves capacity
+without a lock, then verifies and enqueues under the peer-registry read lock,
+linearising it against route replacement. Work already admitted is not claimed
+rolled back, and operation-specific authority remains required downstream. There
+is no automatic retry of an unknown mutation or new dependency/schema/wire format.
+
+The final focused network run passed **9 tests in 0.43 seconds** after an
+**8.84-second build**, including exact Pong responses, unchanged connection reuse,
+retirement rejection and a deterministically blocked queue. All **9 transport
+tests passed in 0.38 seconds** after a **6.52-second build**, including exact-binding
+replacement/removal, real mTLS and control/data isolation. Affected all-target,
+all-feature Clippy passed in **43.11 seconds**. Full integration is pending.
+
+Task 3 remains **5 points**: this is the retirement-admission correction, not
+automatic internal renewal. Remaining scope includes explicit node-certificate
+lifetimes, staged trust/installation generations, live local QUIC replacement,
+offline catch-up and federation identity rollover independent of public ACME.
+The existing HTTPS live resolver and public per-recipient envelope acknowledgements
+are not evidence that those internal lifecycle steps exist. Stage 10 remains
+**140 points**, Stage 11 **126**; publication stays prohibited.
+
 ## Task 2 — isolated DNS-provider process lifecycles
 
 The candidate adds real-daemon Cloudflare, authenticated webhook and manual-DNS

@@ -167,7 +167,7 @@ the stage; publication-dependent acceptance remains held separately and visible.
    remains an explicit dependency on task 21; it is not waived or replaced by
    simply listing tasks in the panel.
 
-3. **Encrypted certificate delivery and rotation — Partial.** **5 points remaining.**
+3. **Encrypted certificate delivery and rotation — Partial; current task.** **5 points remaining.**
    PKI-001/002/005/007/010; accepted decisions §7.
    [Gateway installation](../crates/meshspan-daemon/src/public_certificate_installation.rs)
    and [rotation](../crates/meshspan-daemon/src/public_certificate_rotation.rs) exist.
@@ -175,6 +175,11 @@ the stage; publication-dependent acceptance remains held separately and visible.
    same-generation gateway activation, restart/failover and make-before-break.
    Include internal node/federation rotation independently of public CA schedules;
    identity private keys must remain node-local.
+   The [private-peer retirement correction](stage-10-evidence.md#task-3--retire-private-peer-admission-on-reused-connections)
+   reproduces and corrects stale admission on reused QUIC connections, including
+   requests waiting on backpressure. Nine focused network tests and nine transport
+   tests pass; affected Clippy passes. Full integration is pending. This does not
+   complete automatic internal issuance, staged installation or federation rollover.
 
 4. **External automated certificate publisher — Partial.** **5 points remaining.**
    PKI-009. [API tests](../crates/meshspan-daemon/src/external_certificate_publisher_api_tests.rs)

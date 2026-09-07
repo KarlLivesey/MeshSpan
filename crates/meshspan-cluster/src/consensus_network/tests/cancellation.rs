@@ -108,7 +108,7 @@ async fn cancelled_old_call_cannot_evict_a_newer_connection()
     Ok(())
 }
 
-fn control_pair() -> Result<
+pub(super) fn control_pair() -> Result<
     (
         ConsensusNetwork,
         ConsensusNetwork,

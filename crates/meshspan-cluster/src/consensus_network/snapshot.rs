@@ -194,13 +194,13 @@ impl ConsensusNetwork {
 
     pub(super) async fn receive_snapshot(
         &self,
-        peer: NodeId,
+        peer: meshspan_transport::AuthenticatedPeer,
         state_path: &Path,
         stream: &mut meshspan_transport::AcceptedStream,
         snapshots: &mpsc::Sender<ReceivedConsensusSnapshot>,
     ) -> Result<(), ConsensusNetworkError> {
         let first = receive_control(&mut stream.receive, self.wire_limits).await?;
-        self.verify_header(&first, peer, self.peer_incarnation(peer)?)?;
+        self.verify_peer_header(&first, peer)?;
         let Message::SnapshotBegin(begin) = first
             .as_inner()
             .message
@@ -221,14 +221,16 @@ impl ConsensusNetwork {
         let included_position = verified.included_position;
         let snapshot_id = verified.snapshot_id;
         let (installed, receive_installed) = oneshot::channel();
-        snapshots
-            .send(ReceivedConsensusSnapshot {
-                from: peer,
+        self.admit_peer_message(
+            peer,
+            snapshots,
+            ReceivedConsensusSnapshot {
+                from: peer.node_id(),
                 snapshot: verified,
                 installed,
-            })
-            .await
-            .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
+            },
+        )
+        .await?;
         receive_installed
             .await
             .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
@@ -238,13 +240,13 @@ impl ConsensusNetwork {
 
     async fn receive_snapshot_chunks(
         &self,
-        peer: NodeId,
+        peer: meshspan_transport::AuthenticatedPeer,
         stream: &mut meshspan_transport::AcceptedStream,
         mut stager: SnapshotStager,
     ) -> Result<VerifiedSnapshot, ConsensusNetworkError> {
         loop {
             let envelope = receive_control(&mut stream.receive, self.wire_limits).await?;
-            self.verify_header(&envelope, peer, self.peer_incarnation(peer)?)?;
+            self.verify_peer_header(&envelope, peer)?;
             match envelope
                 .as_inner()
                 .message
