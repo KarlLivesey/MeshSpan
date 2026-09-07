@@ -358,7 +358,7 @@ the stage; publication-dependent acceptance remains held separately and visible.
     This integrated slice reduces the estimate **8 → 3 points**; it does not
     close the task or the assembled-stage acceptance pass.
 
-22. **Mesh-wide rolling updates — Partial; admission, journal, administration and executable distribution implemented.** **13 points remaining.**
+22. **Mesh-wide rolling updates — Partial; admission, journal, administration, distribution and runtime staging implemented.** **13 points remaining.**
     Accepted decisions §7, PER-003/006, TST-007. Provide one administrator-selected
     signed candidate, compatibility checks, availability-aware node ordering,
     durable progress and stop-on-failed-probe behaviour. Prove interrupted update
@@ -380,6 +380,12 @@ the stage; publication-dependent acceptance remains held separately and visible.
     now fetches each node's signed platform over authenticated QUIC, verifies the
     streamed bytes locally and publishes that node as a source. A real three-node
     lifecycle proves one upload fans out without per-node administration.
+    [Runtime staging](stage-10-evidence.md#task-22--executable-compatibility-and-durable-staging)
+    now executes the authenticated candidate's bounded read-only report, checks
+    the signed build/API/platform and unchanged persistence/command formats,
+    retains evidence and commits staged or failed/paused. Real daemon bytes pass
+    on the current macOS target; dummy executable bytes pause without restarting.
+    GNU development builds are not accepted as static-musl distribution binaries.
     Peer probe collection, all-scope workload readiness, node installation
     and real rolling availability remain unimplemented. The
     estimate stays unchanged until these pieces form an operating updater.

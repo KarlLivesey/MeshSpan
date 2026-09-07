@@ -4,6 +4,8 @@
 
 #[path = "update_distribution.rs"]
 pub(crate) mod distribution;
+#[path = "update_staging.rs"]
+mod staging;
 
 use crate::{
     ConsensusAuthenticationAuthority, GatewaySessionIdentity, IdentityAdministrator,

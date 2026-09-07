@@ -33,6 +33,11 @@ pub struct PartitionDatabase {
 }
 
 impl PartitionDatabase {
+    /// Latest schema this executable's partition migrations produce.
+    #[must_use]
+    pub const fn supported_schema_version() -> u32 {
+        PARTITION_SCHEMA_VERSION
+    }
     /// Opens, hardens, migrates and identity-binds one partition database.
     ///
     /// # Errors
@@ -124,6 +129,11 @@ pub struct LocalDatabase {
 }
 
 impl LocalDatabase {
+    /// Latest schema this executable's node-local migrations produce.
+    #[must_use]
+    pub const fn supported_schema_version() -> u32 {
+        LOCAL_SCHEMA_VERSION
+    }
     /// Opens, hardens, migrates and identity-binds one daemon-local database.
     ///
     /// # Errors

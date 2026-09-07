@@ -2818,6 +2818,9 @@ async fn request_with_content_type(
     }
     stream.write_all(headers.as_bytes()).await?;
     stream.write_all(body).await?;
+    // TLS write completion can leave the final record buffered. Flush before
+    // waiting for the server, which needs the complete Content-Length to reply.
+    stream.flush().await?;
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await?;
     Ok(String::from_utf8(response)?)

@@ -196,6 +196,18 @@ impl AuthoritativeRepository {
         .transpose()
     }
 
+    /// Reads one exact node checkpoint without scanning the mesh membership.
+    ///
+    /// # Errors
+    /// Rejects malformed stored progress or unavailable persistence.
+    pub fn update_rollout_node(
+        &self,
+        rollout_id: WorkId,
+        node_id: NodeId,
+    ) -> Result<Option<UpdateNodeRecord>, RepositoryError> {
+        node(self.database.connection(), rollout_id, node_id)
+    }
+
     /// Pages exact members by stable node identity; no whole-mesh allocation is required.
     ///
     /// # Errors
