@@ -47,6 +47,19 @@ mod migration;
 mod name;
 mod node_certificate_command;
 mod notification_command;
+mod update_command;
+mod update_manifest;
+pub use repository::{
+    UpdateNodeRecord, UpdateRolloutRecord, UpdateRolloutState, UpdateSignerRecord,
+};
+pub use update_command::{
+    AdvanceUpdateNode, ConfigureUpdateSigner, ControlUpdateRollout, StartUpdateRollout,
+    UpdateNodePhase, UpdateRolloutControl,
+};
+pub use update_command::{UpdateReadyNode, UpdateRestartReadiness};
+pub use update_manifest::{
+    UpdateArtifact, UpdateManifest, UpdateManifestError, authenticate_update_manifest,
+};
 
 pub use notification_command::{
     ClaimNotification, CompleteNotification, ConfigureNotificationChannel,

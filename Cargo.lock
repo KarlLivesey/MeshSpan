@@ -1418,6 +1418,7 @@ dependencies = [
  "meshspan-secret-envelope",
  "meshspan-work",
  "rusqlite",
+ "serde_json",
  "sha2",
  "tempfile",
  "thiserror",

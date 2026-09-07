@@ -30,6 +30,7 @@ mod secret_generation;
 mod session;
 mod smb_export;
 mod storage_target;
+mod update;
 mod volume_head;
 
 use meshspan_domain::{AuditEventId, OperationId, PrincipalId, Revision, UnixMicros};
@@ -112,7 +113,10 @@ fn encode_command(
     encoder: &mut Encoder,
     command: &AuthoritativeCommand,
 ) -> Result<(), MetadataCommandCodecError> {
-    if notification::encode(encoder, command)? || encode_extension_command(encoder, command)? {
+    if notification::encode(encoder, command)?
+        || update::encode(encoder, command)?
+        || encode_extension_command(encoder, command)?
+    {
         return Ok(());
     }
     match command {
@@ -269,6 +273,7 @@ fn decode_command(
         return Ok(command);
     }
     match kind {
+        update::CONFIGURE..=update::CONTROL => update::decode(kind, decoder),
         notification::CONFIGURE..=notification::COMPLETE => notification::decode(kind, decoder),
         metrics_exporter::CONFIGURE_METRICS_EXPORTER => {
             metrics_exporter::decode(decoder).map(AuthoritativeCommand::ConfigureMetricsExporter)

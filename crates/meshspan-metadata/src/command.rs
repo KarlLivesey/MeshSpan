@@ -76,6 +76,14 @@ pub struct CommandContext {
 /// Closed authoritative command families implemented by the Stage 2 kernel.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AuthoritativeCommand {
+    /// Explicitly configures one immutable update verification key.
+    ConfigureUpdateSigner(crate::ConfigureUpdateSigner),
+    /// Selects one authenticated candidate and snapshots active members.
+    StartUpdateRollout(crate::StartUpdateRollout),
+    /// Checkpoints one node's update without releasing ambiguous restart ownership.
+    AdvanceUpdateNode(crate::AdvanceUpdateNode),
+    /// Pauses, resumes or cancels one exact rollout sequence.
+    ControlUpdateRollout(crate::ControlUpdateRollout),
     /// Replaces one opted-in encrypted notification channel configuration.
     ConfigureNotificationChannel(crate::ConfigureNotificationChannel),
     /// Projects one existing committed audit event into a deduplicated delivery.
@@ -486,6 +494,10 @@ impl AuthoritativeCommand {
             Self::AcknowledgeNodeCertificateInstallation(value) => value.update_digest(digest),
             Self::RetireNodeCertificate(value) => value.update_digest(digest),
             Self::ConfigureNotificationChannel(value) => value.update_digest(digest),
+            Self::ConfigureUpdateSigner(value) => value.update_digest(digest),
+            Self::StartUpdateRollout(value) => value.update_digest(digest),
+            Self::AdvanceUpdateNode(value) => value.update_digest(digest),
+            Self::ControlUpdateRollout(value) => value.update_digest(digest),
             Self::QueueNotification(value) => value.update_digest(digest),
             Self::ClaimNotification(value) => value.update_digest(digest),
             Self::CompleteNotification(value) => value.update_digest(digest),
@@ -2759,6 +2771,62 @@ digest_simple_record!(
         digest.identifier(value.worker_node_id.as_bytes());
         digest.unsigned(value.worker_incarnation);
         digest.unsigned(value.outcome as u64);
+    }
+);
+
+digest_simple_record!(
+    crate::ConfigureUpdateSigner,
+    b"configure-update-signer-v1",
+    |value, digest| {
+        digest.identifier(value.signer_id.as_bytes());
+        digest.unsigned(value.expected_sequence);
+        digest.bytes(&value.public_key);
+        digest.boolean(value.enabled);
+    }
+);
+digest_simple_record!(
+    crate::StartUpdateRollout,
+    b"start-update-rollout-v1",
+    |value, digest| {
+        digest.identifier(value.rollout_id.as_bytes());
+        digest.identifier(value.signer_id.as_bytes());
+        digest.unsigned(value.signer_sequence);
+        digest.bytes(&value.manifest);
+        digest.bytes(&value.signature);
+        digest.boolean(value.allow_service_interruption);
+    }
+);
+digest_simple_record!(
+    crate::AdvanceUpdateNode,
+    b"advance-update-node-v1",
+    |value, digest| {
+        digest.identifier(value.rollout_id.as_bytes());
+        digest.identifier(value.node_id.as_bytes());
+        digest.unsigned(value.incarnation);
+        digest.unsigned(value.expected_sequence);
+        digest.unsigned(value.phase as u64);
+        digest.bytes(value.target.as_bytes());
+        digest.bytes(&value.evidence_digest);
+        digest.boolean(value.restart_readiness.is_some());
+        if let Some(readiness) = &value.restart_readiness {
+            digest.bytes(&readiness.quorum_plan_digest);
+            digest.signed(readiness.observed_at.get());
+            digest.unsigned(u64::try_from(readiness.ready_nodes.len()).unwrap_or(u64::MAX));
+            for node in &readiness.ready_nodes {
+                digest.identifier(node.node_id.as_bytes());
+                digest.unsigned(node.incarnation);
+                digest.unsigned(node.applied_index);
+            }
+        }
+    }
+);
+digest_simple_record!(
+    crate::ControlUpdateRollout,
+    b"control-update-rollout-v1",
+    |value, digest| {
+        digest.identifier(value.rollout_id.as_bytes());
+        digest.unsigned(value.expected_sequence);
+        digest.unsigned(value.action as u64);
     }
 );
 

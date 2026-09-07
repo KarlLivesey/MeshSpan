@@ -154,6 +154,10 @@ pub enum EntityKind {
     NotificationChannel = 59,
     /// One deduplicated, finitely claimed notification delivery.
     NotificationDelivery = 60,
+    /// Explicitly pinned software-update publisher identity.
+    UpdateSigner = 61,
+    /// Durable mesh-wide software rollout.
+    UpdateRollout = 62,
 }
 
 impl EntityKind {
@@ -219,6 +223,8 @@ impl EntityKind {
             58 => Ok(Self::MetadataBackupRun),
             59 => Ok(Self::NotificationChannel),
             60 => Ok(Self::NotificationDelivery),
+            61 => Ok(Self::UpdateSigner),
+            62 => Ok(Self::UpdateRollout),
             _ => Err(RepositoryError::CorruptState),
         }
     }

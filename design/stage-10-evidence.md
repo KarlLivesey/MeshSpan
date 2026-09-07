@@ -3214,6 +3214,66 @@ quorum/gateway-aware order, failed-probe interruption/recovery, manager API/pane
 complete notices/SBOM and the assembled-stage proof. No user signing key, real
 release or publication command has been used; tests sign disposable fixtures.
 
+## Task 22 — replicated rollout journal and restart admission
+
+Partition schema **91** adds independently configured immutable update signer
+keys, one running-or-paused candidate and indexed per-node progress. Selecting
+a candidate authenticates the exact manifest against the separately configured
+enabled key and snapshots active members with `INSERT ... SELECT`; it does not
+allocate a whole mesh-sized command. Reads page by node identity. Existing
+schema-90 migration bytes remain unchanged. This is additive schema preparation,
+not evidence of a real binary upgrade or downgrade support.
+
+Typed canonical command kinds **84–87** configure a signer, start a rollout,
+advance one node, and pause/resume/cancel. They use the existing manager
+authorisation, transaction, audit, digest and exact-retry receipt path. Restart
+admission requires every selected node staged and reserves one exclusive restart.
+A failed or ambiguous restart pauses the rollout **without freeing that slot**;
+resume continues probing it, and cancellation cannot pretend it is resolved.
+Only verified node outcomes produce aggregate completion. Disabling a signer
+pauses its running work; enabling it does not silently resume installation.
+
+The restart witness binds the current compiled root stable/joint plan and fresh
+ordered node-incarnation/catch-up observations. It must leave an eligible leader,
+satisfy the actual election/write/read predicates and retain an available gateway,
+unless the original selection explicitly accepted service interruption. Its
+19-entry limit is a sufficient quorum/gateway witness, not a mesh-size or
+connection limit. The runtime must still acquire these observations through
+authenticated peers and check affected workload/placement and every delegated
+group before authorising process replacement. **No automatic installer or public
+advance-node endpoint is connected by this slice.**
+
+Signed-manifest parsing moved from the CLI into the metadata owner so admission
+and inspection use one Rust implementation. Metadata now directly uses the
+already-present workspace `serde_json`; no package/version was added or upgraded.
+The CLI retains only bounded file IO and exact executable hashing.
+
+Four focused file-backed metadata cases passed in **2.80 seconds** after a
+**6.01-second build**: ordered staging/completion, reopen with an active restart,
+ambiguous failure/resume/cancellation, signer revocation, exact operation replay,
+and two-versus-three-voter admission. Every command also round-trips the canonical
+wire codec. These are persistence/protocol fixtures, not actual multi-node
+installation or service-availability proof. Initial compilation exposed explicit
+SQL integer conversion requirements; affected lint caught missing error docs and
+an enlarged infrastructure dispatcher. The update command dispatcher now lives
+with the update state transitions rather than extending unrelated dispatch code.
+Affected all-target/all-feature Clippy passed in **26.63 seconds**, and
+`cargo deny check licenses` passed.
+
+After requiring a remaining eligible leader as well as the quorum predicates,
+the four cases passed again in **2.81 seconds** (build **4.40 seconds**) and
+affected metadata Clippy passed in **16.97 seconds**. The rebuilt real daemon
+also passed all four local candidate/Node-to-Rust verification cases in
+**2.54 seconds**, with no skips; the shared-parser move preserved executable
+verification and wrong-key/altered-byte rejection. No full-workspace gate was
+repeated for this slice.
+
+Remaining task-22 construction: manager endpoints and panel, signed candidate
+staging/distribution, owned node replacement/restart, authenticated probes,
+workload/delegated-group readiness and real interrupted rolling-update proof.
+The estimate remains **13 points**; Stage 10 remains **121 points**. No release,
+tag, publication, GitHub Actions or user-browser operation occurred.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in
