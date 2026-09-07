@@ -74,7 +74,8 @@ pub use notification_validation::{
 };
 pub use notifications::{
     ConfigureNotificationRequest, ConfigureNotificationResponse, NotificationChannelStatus,
-    NotificationKind, NotificationSettingsUpdate, NotificationWorkerStatus, NotificationsResponse,
+    NotificationDeliveryCounts, NotificationKind, NotificationSettingsUpdate,
+    NotificationWorkerStatus, NotificationsResponse,
 };
 mod runtime_diagnostics;
 #[cfg(test)]

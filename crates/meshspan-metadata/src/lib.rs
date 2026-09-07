@@ -63,8 +63,8 @@ pub use node_certificate_command::{
 pub use repository::{MetricsExporterConfiguration, metrics_exporter_instance_id};
 pub use repository::{NodeCertificateRotation, NodeCertificateRotationState};
 pub use repository::{
-    NotificationChannelRecord, NotificationDeliveryRecord, NotificationDeliveryState,
-    notification_delivery_id,
+    NotificationChannelRecord, NotificationDeliveryCounts, NotificationDeliveryRecord,
+    NotificationDeliveryState, notification_delivery_id,
 };
 
 pub use acme_command::{

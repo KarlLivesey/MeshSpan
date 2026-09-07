@@ -115,6 +115,12 @@ function fixture(): NotificationClient {
             display_name: request.display_name,
             enabled: request.enabled,
             event_filter: request.event_filter,
+            deliveries: {
+              pending: "0",
+              accepted: "0",
+              rejected: "0",
+              cancelled: "0",
+            },
             sequence: request.expected_sequence + 1,
             kind:
               request.settings.mode === "replace"
@@ -131,6 +137,34 @@ function fixture(): NotificationClient {
     },
   };
 }
+
+it("shows retained rejection separately from a running worker", async () => {
+  const client = fixture();
+  vi.spyOn(client, "getNotifications").mockResolvedValue({
+    worker: "running",
+    channels: [
+      {
+        channel_id: "00000000-0000-4000-8000-000000000001",
+        sequence: 1,
+        display_name: "Office alerts",
+        kind: "webhook",
+        enabled: true,
+        event_filter: 15,
+        deliveries: {
+          pending: "1",
+          accepted: "9007199254740993",
+          rejected: "2",
+          cancelled: "3",
+        },
+      },
+    ],
+  });
+  mount(client);
+  await shows("Some deliveries were permanently rejected.");
+  expect(document.body.textContent).toContain("9007199254740993 accepted");
+  expect(document.body.textContent).toContain("2 rejected");
+  expect(document.body.textContent).toContain("Local delivery worker: running");
+});
 
 function mount(client: NotificationClient): void {
   const root = document.createElement("div");

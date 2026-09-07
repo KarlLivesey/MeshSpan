@@ -110,6 +110,10 @@ async fn notification_channel_delivers_retries_after_restart_and_retains_credent
         let status: Value = serde_json::from_str(text)?;
         assert_eq!(status["channels"][0]["enabled"], false);
         assert_eq!(status["channels"][0]["sequence"], 2);
+        assert_eq!(
+            status["channels"][0]["deliveries"],
+            json!({"pending": "0", "accepted": "1", "rejected": "0", "cancelled": "0"})
+        );
         let mut changed = request;
         changed["settings"]["destination"]["bearer_token"] = json!("changed-test-token-0123456789");
         let body = serde_json::to_vec(&changed)?;

@@ -79,6 +79,26 @@ pub struct NotificationChannelStatus {
     /// Closed event selection mask.
     #[schemars(range(min = 1, max = 15))]
     pub event_filter: u8,
+    /// Current retained delivery counts, not individual attempts or proof of inbox receipt.
+    pub deliveries: NotificationDeliveryCounts,
+}
+
+/// Exact decimal counters avoid loss of precision in JavaScript clients.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationDeliveryCounts {
+    /// Queued or claimed deliveries, including scheduled retries.
+    #[schemars(length(min = 1, max = 20), pattern(r"^(0|[1-9][0-9]*)$"))]
+    pub pending: String,
+    /// Receiver-accepted deliveries; not proof of inbox receipt.
+    #[schemars(length(min = 1, max = 20), pattern(r"^(0|[1-9][0-9]*)$"))]
+    pub accepted: String,
+    /// Permanently rejected deliveries; retained rather than silently discarded.
+    #[schemars(length(min = 1, max = 20), pattern(r"^(0|[1-9][0-9]*)$"))]
+    pub rejected: String,
+    /// Deliveries cancelled by replacement or disabling a channel.
+    #[schemars(length(min = 1, max = 20), pattern(r"^(0|[1-9][0-9]*)$"))]
+    pub cancelled: String,
 }
 
 /// Local worker health, not proof of inbox delivery or remote exactly-once execution.

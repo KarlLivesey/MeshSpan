@@ -115,6 +115,7 @@ mod notification_queries;
 
 pub use notification::{NotificationChannelRecord, notification_delivery_id};
 pub use notification_delivery::{NotificationDeliveryRecord, NotificationDeliveryState};
+pub use notification_queries::NotificationDeliveryCounts;
 #[cfg(test)]
 mod node_certificate_rotation_tests;
 #[cfg(test)]

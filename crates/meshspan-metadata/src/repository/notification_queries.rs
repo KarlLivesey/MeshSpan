@@ -10,7 +10,53 @@ use super::{
     RepositoryError, notification, notification_delivery,
 };
 
+/// Current durable delivery totals; attempts do not create duplicate deliveries.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct NotificationDeliveryCounts {
+    /// Queued or currently claimed, including scheduled retries.
+    pub pending: u64,
+    /// Accepted by the configured receiver, not proof of inbox arrival.
+    pub accepted: u64,
+    /// Permanently rejected and retained for administrative visibility.
+    pub rejected: u64,
+    /// Cancelled by a newer channel configuration.
+    pub cancelled: u64,
+}
+
 impl AuthoritativeRepository {
+    /// Reads delivery totals through the channel/state covering index, returning at most five rows.
+    ///
+    /// # Errors
+    /// Rejects unavailable storage, invalid persisted states or unrepresentable counts.
+    pub fn notification_delivery_counts(
+        &self,
+        channel: ComponentInstanceId,
+    ) -> Result<NotificationDeliveryCounts, RepositoryError> {
+        let mut statement = self.database.connection().prepare(
+            "SELECT state, count(*) FROM notification_deliveries WHERE channel_id = ?1 GROUP BY state",
+        )?;
+        let mut counts = NotificationDeliveryCounts::default();
+        let rows = statement.query_map([channel.as_bytes().as_slice()], |row| {
+            Ok((row.get::<_, u8>(0)?, notification::unsigned(row, 1)?))
+        })?;
+        for row in rows {
+            let (state, count) = row?;
+            match state {
+                1 | 2 => {
+                    counts.pending = counts
+                        .pending
+                        .checked_add(count)
+                        .ok_or(RepositoryError::CorruptState)?;
+                }
+                3 => counts.accepted = count,
+                4 => counts.rejected = count,
+                5 => counts.cancelled = count,
+                _ => return Err(RepositoryError::CorruptState),
+            }
+        }
+        Ok(counts)
+    }
+
     /// Lists the explicitly bounded channel inventory in stable identity order.
     ///
     /// # Errors

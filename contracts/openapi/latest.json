@@ -11557,6 +11557,47 @@
                   "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
                   "type": "string"
                 },
+                "deliveries": {
+                  "additionalProperties": false,
+                  "description": "Current retained delivery counts, not individual attempts or proof of inbox receipt.",
+                  "properties": {
+                    "accepted": {
+                      "description": "Receiver-accepted deliveries; not proof of inbox receipt.",
+                      "maxLength": 20,
+                      "minLength": 1,
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "type": "string"
+                    },
+                    "cancelled": {
+                      "description": "Deliveries cancelled by replacement or disabling a channel.",
+                      "maxLength": 20,
+                      "minLength": 1,
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "type": "string"
+                    },
+                    "pending": {
+                      "description": "Queued or claimed deliveries, including scheduled retries.",
+                      "maxLength": 20,
+                      "minLength": 1,
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "type": "string"
+                    },
+                    "rejected": {
+                      "description": "Permanently rejected deliveries; retained rather than silently discarded.",
+                      "maxLength": 20,
+                      "minLength": 1,
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "pending",
+                    "accepted",
+                    "rejected",
+                    "cancelled"
+                  ],
+                  "type": "object"
+                },
                 "display_name": {
                   "description": "Non-secret administrative label.",
                   "maxLength": 256,
@@ -11602,7 +11643,8 @@
                 "display_name",
                 "kind",
                 "enabled",
-                "event_filter"
+                "event_filter",
+                "deliveries"
               ],
               "type": "object"
             },
