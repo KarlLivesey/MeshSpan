@@ -10,6 +10,35 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 4 — external publisher gateway lifecycle
+
+The implemented external-publisher API now has a real two-daemon HTTPS proof.
+An authenticated API-key caller publishes a finite externally issued certificate;
+a gateway joining afterwards receives its encrypted delivery. A second generation
+is published and the peer is forcibly restarted before waiting for installation.
+Both gateways must then acknowledge the current publication and select the exact
+expected leaf on a fresh TLS handshake. Exact retries through either gateway
+return their original receipt; replaying the old publication cannot roll back
+the live selection. Wrong names, mismatched keys, invalid chains, expired leaves,
+non-increasing generations and changed operation retries are rejected.
+
+The first test build exposed two fixture API mismatches, corrected locally. Its
+first execution incorrectly inspected a resumable TLS client's retained peer
+certificate when checking the new leaf. The proof now explicitly disables session
+resumption for leaf inspection: existing sessions may retain their original
+identity, while a full new handshake must select the current certificate. It
+compares complete leaf bytes, not merely acceptance by the same issuer. Mismatch
+returns through the fixture cleanup/retention path rather than panicking.
+
+Final affected daemon Clippy passed in **2.78 seconds**. The process test passed
+in **19.55 seconds**, after a **3.11-second build** (the preceding corrected run
+also passed in **19.59 seconds**). No external CA, browser or publication service
+was contacted. No dependency or production certificate interface changed.
+
+This closes the missing lifecycle proof, not the full assembled-stage gate:
+task 4 **5 → 1 points**, Stage 10 **136 → 132 points**. Existing packaged backup
+restore and SMB findings remain open.
+
 ## Task 18 — local consensus measurements
 
 The daemon now samples its existing local consensus reactor independently of

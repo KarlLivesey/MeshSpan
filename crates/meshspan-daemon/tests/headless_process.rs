@@ -8,6 +8,8 @@ mod acme_lifecycle;
 mod backup_history;
 #[path = "headless_process/diagnostics.rs"]
 mod diagnostics;
+#[path = "headless_process/external_certificates.rs"]
+mod external_certificates;
 #[path = "headless_process/local_certificates.rs"]
 mod local_certificates;
 #[path = "headless_process/metrics.rs"]
