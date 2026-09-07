@@ -23,6 +23,7 @@ mod metrics_exporter;
 mod namespace;
 mod node_certificate;
 mod node_wrapping_key;
+mod notification;
 mod protection_policy;
 mod recovery;
 mod secret_generation;
@@ -111,7 +112,7 @@ fn encode_command(
     encoder: &mut Encoder,
     command: &AuthoritativeCommand,
 ) -> Result<(), MetadataCommandCodecError> {
-    if encode_extension_command(encoder, command)? {
+    if notification::encode(encoder, command)? || encode_extension_command(encoder, command)? {
         return Ok(());
     }
     match command {
@@ -268,6 +269,7 @@ fn decode_command(
         return Ok(command);
     }
     match kind {
+        notification::CONFIGURE..=notification::COMPLETE => notification::decode(kind, decoder),
         metrics_exporter::CONFIGURE_METRICS_EXPORTER => {
             metrics_exporter::decode(decoder).map(AuthoritativeCommand::ConfigureMetricsExporter)
         }

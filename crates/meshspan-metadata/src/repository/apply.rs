@@ -17,9 +17,10 @@ use super::{
     federation_assignment, federation_grant, federation_mutation_admission, federation_quarantine,
     federation_relationship, federation_storage_allocation, federation_succession, identity,
     locality_policy, maintenance_work, manual_dns_task, mesh_local_certificate, metrics_exporter,
-    namespace, node_certificate, node_wrapping_key, protection_policy, recovery_authority,
-    retention, root_delegation, routing, secret_generation, session, smb_export_configuration,
-    snapshot_schedule, storage_target, tags, topology, user_snapshot, version_cleanup, volume_head,
+    namespace, node_certificate, node_wrapping_key, notification, notification_delivery,
+    protection_policy, recovery_authority, retention, root_delegation, routing, secret_generation,
+    session, smb_export_configuration, snapshot_schedule, storage_target, tags, topology,
+    user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -624,6 +625,10 @@ fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
             command,
             AuthoritativeCommand::CreateComponent(_)
                 | AuthoritativeCommand::ConfigureMetricsExporter(_)
+                | AuthoritativeCommand::ConfigureNotificationChannel(_)
+                | AuthoritativeCommand::QueueNotification(_)
+                | AuthoritativeCommand::ClaimNotification(_)
+                | AuthoritativeCommand::CompleteNotification(_)
                 | AuthoritativeCommand::ConfigureComponent(_)
                 | AuthoritativeCommand::AssignComponent(_)
                 | AuthoritativeCommand::RegisterStorageTarget(_)
@@ -706,6 +711,18 @@ fn execute_infrastructure_command(
     match command {
         AuthoritativeCommand::CreateComponent(value) => {
             component::create(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::ConfigureNotificationChannel(value) => {
+            notification::configure(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::QueueNotification(value) => {
+            notification::queue(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::ClaimNotification(value) => {
+            notification_delivery::claim(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::CompleteNotification(value) => {
+            notification_delivery::complete(transaction, context, *value, revision)
         }
         AuthoritativeCommand::ConfigureMetricsExporter(value) => {
             metrics_exporter::configure(transaction, context, value, revision)
@@ -1454,6 +1471,10 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::StageNodeCertificate(_) => 141,
         AuthoritativeCommand::AcknowledgeNodeCertificateInstallation(_) => 142,
         AuthoritativeCommand::RetireNodeCertificate(_) => 143,
+        AuthoritativeCommand::ConfigureNotificationChannel(_) => 144,
+        AuthoritativeCommand::QueueNotification(_) => 145,
+        AuthoritativeCommand::ClaimNotification(_) => 146,
+        AuthoritativeCommand::CompleteNotification(_) => 147,
     }
 }
 

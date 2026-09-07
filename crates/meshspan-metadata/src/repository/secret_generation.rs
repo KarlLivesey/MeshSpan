@@ -71,7 +71,8 @@ pub(super) fn commit(
     }
     if matches!(
         secret.context().kind(),
-        ACME_ACCOUNT_KEY_SECRET_KIND
+        crate::NOTIFICATION_SETTINGS_SECRET_KIND
+            | ACME_ACCOUNT_KEY_SECRET_KIND
             | ACME_CHALLENGE_SETTINGS_SECRET_KIND
             | MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND
             | PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND

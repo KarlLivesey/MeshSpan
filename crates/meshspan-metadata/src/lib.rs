@@ -46,6 +46,13 @@ mod metrics_exporter_command;
 mod migration;
 mod name;
 mod node_certificate_command;
+mod notification_command;
+
+pub use notification_command::{
+    ClaimNotification, CompleteNotification, ConfigureNotificationChannel,
+    NOTIFICATION_SETTINGS_SECRET_KIND, NotificationChannelKind, NotificationDeliveryOutcome,
+    NotificationEventKind, QueueNotification,
+};
 mod repository;
 #[cfg(test)]
 mod test_support;
@@ -55,6 +62,10 @@ pub use node_certificate_command::{
 };
 pub use repository::{MetricsExporterConfiguration, metrics_exporter_instance_id};
 pub use repository::{NodeCertificateRotation, NodeCertificateRotationState};
+pub use repository::{
+    NotificationChannelRecord, NotificationDeliveryRecord, NotificationDeliveryState,
+    notification_delivery_id,
+};
 
 pub use acme_command::{
     AcknowledgePublicCertificateInstallation, AcmeChallengeKind, AdvanceManualDnsTask,

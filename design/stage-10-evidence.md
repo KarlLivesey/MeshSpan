@@ -2975,6 +2975,43 @@ remain available. Those recovery workflows remain outstanding. No dependency,
 SQL migration, private wire change, release, tag, image or publication workflow
 was introduced. Panel checks use headless DOM tests, not live-browser evidence.
 
+## Task 21 — durable notification outbox
+
+The first notification slice implements replicated channel configuration and
+delivery transitions, not an operational notification sender yet. Migration 89
+adds immutable channel configurations referencing envelope-encrypted kind-10
+settings. Settings must use the same complete gateway/recovery recipient check
+as other mesh-wide service credentials. Channels are explicitly enabled and
+select a closed event allow-list. No endpoint, credential or source audit payload
+is copied into an outbox event.
+
+Committed certificate-order, manual-DNS-task and backup-run events can produce
+one deterministic delivery per channel/event pair. New channels do not replay
+events predating channel creation. Claims bind the attempt, active node and
+incarnation for 60 seconds; an expired attempt cannot acknowledge delivery.
+Temporary failures retain the delivery identity and schedule bounded exponential
+backoff with deterministic identity jitter. Configuration replacement cancels
+queued/claimed work instead of silently sending it to a different destination.
+Already-started remote IO cannot be undone; stable external idempotency is still
+needed for ambiguous replies. Permanent rejection and cancellation retain their
+deduplication records.
+
+Four focused metadata tests passed in **2.44 seconds** after a **13.05-second
+build**: actual committed ACME source events, duplicate enqueue, retry timing,
+stale attempt rejection, file-backed reopen, configuration cancellation and
+transaction rollback, plus command codec truncation/unknown-variant checks.
+Affected metadata all-target/all-feature Clippy passed in **25.60 seconds**.
+The downstream daemon and its Rust dependencies compiled in **27.62 seconds**.
+Secret-reference fixtures do not prove SMTP/HTTPS transport or decryption.
+The first compile exposed conversion and migration-array-size mistakes; these
+were corrected before the passing runs. No whole-workspace gate was run.
+
+Still required: bounded scheduling reads, authenticated configuration/status API,
+email and webhook transports, owned daemon delivery worker, operational panel,
+manual-DNS/renewal delivery acceptance and the assembled-stage check. Task 21
+remains partial with its existing estimate until the complete delivery path runs.
+No dependencies, release, tag, publication or GitHub Actions were introduced.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in

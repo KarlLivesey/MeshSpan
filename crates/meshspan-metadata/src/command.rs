@@ -76,6 +76,14 @@ pub struct CommandContext {
 /// Closed authoritative command families implemented by the Stage 2 kernel.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AuthoritativeCommand {
+    /// Replaces one opted-in encrypted notification channel configuration.
+    ConfigureNotificationChannel(crate::ConfigureNotificationChannel),
+    /// Projects one existing committed audit event into a deduplicated delivery.
+    QueueNotification(crate::QueueNotification),
+    /// Claims one due notification attempt with a finite worker lease.
+    ClaimNotification(crate::ClaimNotification),
+    /// Completes or reschedules one exactly fenced notification attempt.
+    CompleteNotification(crate::CompleteNotification),
     /// Stages one exact finite same-key private-node certificate renewal.
     StageNodeCertificate(crate::StageNodeCertificate),
     /// Activates a staged renewal after the owning node's signed installation statement.
@@ -477,6 +485,10 @@ impl AuthoritativeCommand {
             Self::StageNodeCertificate(value) => value.update_digest(digest),
             Self::AcknowledgeNodeCertificateInstallation(value) => value.update_digest(digest),
             Self::RetireNodeCertificate(value) => value.update_digest(digest),
+            Self::ConfigureNotificationChannel(value) => value.update_digest(digest),
+            Self::QueueNotification(value) => value.update_digest(digest),
+            Self::ClaimNotification(value) => value.update_digest(digest),
+            Self::CompleteNotification(value) => value.update_digest(digest),
             Self::AcknowledgeMeshLocalCertificateInstallation(value) => {
                 value.update_digest(digest);
             }
@@ -2697,6 +2709,51 @@ digest_simple_record!(
         digest.identifier(value.node_id.as_bytes());
         digest.unsigned(value.incarnation);
         digest.unsigned(value.generation);
+    }
+);
+
+digest_simple_record!(
+    crate::ConfigureNotificationChannel,
+    b"configure-notification-v1",
+    |value, digest| {
+        digest.identifier(value.channel_id.as_bytes());
+        digest.unsigned(value.expected_sequence);
+        digest.name(&value.display_name);
+        digest.unsigned(value.kind as u64);
+        digest.identifier(value.settings.secret_id);
+        digest.unsigned(value.settings.generation);
+        digest.boolean(value.enabled);
+        digest.unsigned(u64::from(value.event_filter));
+    }
+);
+digest_simple_record!(
+    crate::QueueNotification,
+    b"queue-notification-v1",
+    |value, digest| {
+        digest.identifier(value.channel_id.as_bytes());
+        digest.identifier(value.event_id.as_bytes());
+        digest.unsigned(value.channel_sequence);
+    }
+);
+digest_simple_record!(
+    crate::ClaimNotification,
+    b"claim-notification-v1",
+    |value, digest| {
+        digest.identifier(value.delivery_id.as_bytes());
+        digest.unsigned(value.expected_attempt);
+        digest.identifier(value.worker_node_id.as_bytes());
+        digest.unsigned(value.worker_incarnation);
+    }
+);
+digest_simple_record!(
+    crate::CompleteNotification,
+    b"complete-notification-v1",
+    |value, digest| {
+        digest.identifier(value.delivery_id.as_bytes());
+        digest.unsigned(value.attempt);
+        digest.identifier(value.worker_node_id.as_bytes());
+        digest.unsigned(value.worker_incarnation);
+        digest.unsigned(value.outcome as u64);
     }
 );
 

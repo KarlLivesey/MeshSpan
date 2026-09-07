@@ -109,6 +109,11 @@ mod metrics_exporter;
 mod metrics_exporter_tests;
 mod namespace;
 mod node_certificate;
+mod notification;
+mod notification_delivery;
+
+pub use notification::{NotificationChannelRecord, notification_delivery_id};
+pub use notification_delivery::{NotificationDeliveryRecord, NotificationDeliveryState};
 #[cfg(test)]
 mod node_certificate_rotation_tests;
 #[cfg(test)]

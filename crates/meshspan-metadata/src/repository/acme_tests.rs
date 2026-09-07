@@ -35,6 +35,7 @@ use crate::{
 mod http01;
 mod manual_dns_handoff;
 mod manual_dns_transition;
+mod notifications;
 
 #[test]
 fn mesh_local_authority_is_atomic_immutable_and_bound_to_its_encrypted_key()

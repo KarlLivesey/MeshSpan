@@ -150,6 +150,10 @@ pub enum EntityKind {
     MetadataBackupSchedule = 57,
     /// One materialised automatic metadata-backup occurrence.
     MetadataBackupRun = 58,
+    /// Explicitly configured encrypted notification destination.
+    NotificationChannel = 59,
+    /// One deduplicated, finitely claimed notification delivery.
+    NotificationDelivery = 60,
 }
 
 impl EntityKind {
@@ -213,6 +217,8 @@ impl EntityKind {
             56 => Ok(Self::BackupCopy),
             57 => Ok(Self::MetadataBackupSchedule),
             58 => Ok(Self::MetadataBackupRun),
+            59 => Ok(Self::NotificationChannel),
+            60 => Ok(Self::NotificationDelivery),
             _ => Err(RepositoryError::CorruptState),
         }
     }
