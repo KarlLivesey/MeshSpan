@@ -335,12 +335,18 @@ the stage; publication-dependent acceptance remains held separately and visible.
     invent a compatibility promise. Published-artefact evidence remains held by
     the publication prohibition, even if local candidate tests pass.
 
-24. **Native and container packaging — Open.** **8 points remaining.**
+24. **Native and container packaging — Partial.** **8 points remaining.**
     REL-003/004, TST-009. Prepare self-contained Linux/macOS artefacts and the
     supported minimal container image, including built-in HTTPS/SMB and panels.
     Verify entry points, state/storage paths and dependency/licence inventory.
     The development daemon build and an SMB test-client image do not close this
     product packaging task. Local preparation only while publication is held.
+    [Local package assembly](stage-10-evidence.md#tasks-2427--local-native-package-and-packaged-process-execution)
+    now builds an inspected macOS ARM64 dev archive with embedded panels,
+    licence/inventory/provenance/checksums and passes a packaged setup/join/renewal/
+    restart proof. Static Linux packaging and a minimal container recipe are
+    implemented but not executed; musl tooling, other native targets and complete
+    candidate acceptance remain outstanding. No publication command was added.
 
 25. **Local signed release/update tooling — Open; publication held.** **5 points remaining.**
     REL-001/003/004; accepted decisions §7. Prepare complete local validation,
@@ -356,12 +362,17 @@ the stage; publication-dependent acceptance remains held separately and visible.
     candidate still needs fresh evidence; this is not perpetual advisory clearance
     or the independent security review required by Stage 11.
 
-27. **Packaged-platform HTTPS/SMB acceptance — Open.** **8 points remaining.**
+27. **Packaged-platform HTTPS/SMB acceptance — Partial; integration defects recorded.** **8 points remaining.**
     Stage 10 exit gate, TST-004/007/009, REL-003. Run complete real-client file
     cycles, backup/recovery and upgrade paths using the accepted native/container
     artefacts, including Linux-only, macOS-only and mixed-host meshes. Keep local
     candidate results separate from the still-held published-artefact gate.
     Ignored SMB-container tests and headless DOM checks are not this proof.
+    The [packaged macOS process proof](stage-10-evidence.md#tasks-2427--local-native-package-and-packaged-process-execution)
+    passes setup, embedded assets, join and private TLS renewal/restart. Broader
+    tests exposed an isolated-backup-restore `409` and a cross-gateway SMB file
+    remaining length zero rather than 47 bytes. Both defects remain open; neither
+    the complete HTTPS operator cycle nor SMB acceptance is claimed passing.
 
 ## Stage 11 — minimal useful product proof
 

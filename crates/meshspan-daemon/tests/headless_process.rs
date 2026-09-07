@@ -109,7 +109,7 @@ async fn real_smb311_clients_round_trip_one_volume_through_three_gateways()
     }
     .await;
     stop_processes(&mut processes);
-    proof
+    retain_failure_state(proof, [root.temporary, second.temporary, third.temporary])
 }
 
 async fn run_cross_gateway_smb_cycle(
@@ -229,7 +229,7 @@ async fn exercise_smb_process_failures(
             api_key,
             Some(&proof_directory),
             smb_resilience_client_script(),
-        )
+        )?
         .output()
     });
     wait_for_file(&exchange.path().join("ready-for-leader-loss")).await?;
@@ -1891,7 +1891,7 @@ async fn run_real_smb_command(
     let smb_command = smb_command.to_owned();
     let output = tokio::task::spawn_blocking(move || {
         let mut process =
-            smb_client_process(port, api_key, Some(&exchange), real_smb_command_script());
+            smb_client_process(port, api_key, Some(&exchange), real_smb_command_script())?;
         process.env("MESHSPAN_SMB_COMMAND", smb_command).output()
     })
     .await??;
@@ -1903,11 +1903,28 @@ fn smb_client_process(
     api_key: String,
     exchange: Option<&Path>,
     script: &str,
-) -> Command {
+) -> Result<Command, std::io::Error> {
+    let image = match std::env::var("MESHSPAN_SMB_PROOF_IMAGE") {
+        Ok(value)
+            if value.strip_prefix("sha256:").is_some_and(|digest| {
+                digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }) =>
+        {
+            value
+        }
+        Ok(_) | Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "SMB proof image override must be an immutable sha256 image ID",
+            ));
+        }
+        Err(std::env::VarError::NotPresent) => SMB_CLIENT_IMAGE.to_owned(),
+    };
     let mut process = Command::new("docker");
     process.args([
         "run",
         "--rm",
+        "--pull=never",
         "--entrypoint",
         "/bin/sh",
         "--env",
@@ -1921,11 +1938,11 @@ fn smb_client_process(
             .arg(format!("{}:/proof", exchange.as_os_str().to_string_lossy()));
     }
     process
-        .arg(SMB_CLIENT_IMAGE)
+        .arg(image)
         .args(["-ec", script, "smb-proof", &port.to_string()])
         .env("MESHSPAN_SMB_PASSWORD", api_key)
         .env("MESHSPAN_SMB_COMMAND", "");
-    process
+    Ok(process)
 }
 
 fn require_smb_client_success(output: &std::process::Output) -> Result<(), Box<dyn Error>> {
@@ -2544,6 +2561,7 @@ fn response_body(response: &str) -> Result<&str, Box<dyn Error>> {
 
 struct ProcessFixture {
     temporary: TempDir,
+    daemon_binary: PathBuf,
     address: SocketAddr,
     http01_address: SocketAddr,
     smb_address: SocketAddr,
@@ -2560,6 +2578,14 @@ struct ProcessFixture {
 
 impl ProcessFixture {
     fn new() -> Result<Self, Box<dyn Error>> {
+        let daemon_binary = std::env::var_os("MESHSPAN_DAEMON_PROOF_BINARY").map_or_else(
+            || PathBuf::from(env!("CARGO_BIN_EXE_meshspan-daemon")),
+            PathBuf::from,
+        );
+        if !daemon_binary.is_absolute() || !daemon_binary.is_file() {
+            return Err("daemon proof binary must be an absolute existing executable file".into());
+        }
+        let daemon_binary = daemon_binary.canonicalize()?;
         let temporary = TempDir::new()?;
         let state_path = temporary.path().join("state");
         let storage_path = temporary.path().join("storage");
@@ -2568,6 +2594,7 @@ impl ProcessFixture {
         fs::create_dir(&additional_storage_path)?;
         fs::write(storage_path.join("operator-file.txt"), b"untouched")?;
         Ok(Self {
+            daemon_binary,
             address: unused_address()?,
             http01_address: unused_address()?,
             smb_address: unused_address()?,
@@ -2597,7 +2624,7 @@ impl ProcessFixture {
     }
 
     fn command(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_meshspan-daemon"));
+        let mut command = Command::new(&self.daemon_binary);
         command
             .arg("--daemon-state-dir")
             .arg(&self.state_path)

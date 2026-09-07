@@ -10,6 +10,58 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Tasks 24/27 — local native package and packaged-process execution
+
+`pnpm package:local` now builds the embedded web bundle and daemon, runs both
+licence gates, checks architecture and linkage, and assembles a fresh local
+directory/archive with `GPL-2.0-only` text, operating instructions, conservative
+Rust/web dependency inventory, source/toolchain observations and SHA-256 checksums.
+It has no publish, release, tag or push command. `--plan` only reports build steps;
+`--profile dev` provides an explicitly labelled fast development artefact. Default
+release-profile builds are local builds, not signed releases or acceptance proof.
+
+macOS rejects non-system library dependencies. Linux packaging requires a static
+musl executable. The prepared `scratch` container recipe runs as an unprivileged
+user with explicit persistent state/storage mounts and an operator-supplied public
+CA bundle; it installs no packages or external services. Linux/container execution
+is not yet proved: the inspected local Linux builder has only
+`aarch64-unknown-linux-gnu` installed, not the required musl target.
+
+Three focused packaging tests passed in **73.34 milliseconds**, covering exact
+bytes/checksums, immutable output directories, inventory scope/path exclusion and
+rejected options. Tooling ESLint passed. The actual macOS ARM64 dev package passed
+both licence gates, rebuilt the embedded web bundle in **350 milliseconds** and
+the daemon in **7.21 seconds**. Linkage inspection found only Apple system libraries.
+This is a conservative package inventory, not yet the complete third-party
+notices, signed provenance or link-level SBOM required by task 25.
+
+The existing headless harness now accepts an absolute, existing
+`MESHSPAN_DAEMON_PROOF_BINARY`, allowing the same real tests to execute the packaged
+binary rather than silently testing the Cargo output. The package used here has
+binary SHA-256 `52e58e31fafeb429aa357753861fd36a5fb5a13d2e948373b11a41b33623ea5c`;
+its provenance records source `a47dce1`, a dirty working tree and `dev` profile.
+The packaged setup/panel/join/private-renewal/forced-restart proof passed in
+**12.70 seconds**, after a **3.81-second harness build**.
+
+Two broader packaged-process failures are open for the assembled-stage fixing pass:
+
+- The operator workflow failed in **10.60 seconds** with HTTP `409 state_conflict`
+  while verifying an isolated restore of an actual automatic backup. Both daemons
+  were still running. Private fixtures were retained locally; they must not be
+  uploaded as evidence. No cause or fix has been established.
+- The real three-gateway SMB test failed in **36.30 seconds**: the remote gateway
+  still listed `remote-only.bin` as length **0**, while the expected written length
+  was **47**. This is not an SMB interoperability pass. That run's fixture was not
+  retained by the older harness; failure retention is now added before further
+  investigation. No timeout was increased or assertion weakened.
+
+The SMB harness also accepts an explicit immutable `MESHSPAN_SMB_PROOF_IMAGE` and
+always uses `--pull=never`. This run used the existing local client image
+`sha256:9daac97f82472b031c7bc56e5cdd2446ab01ceafd6dc2a4705cdd20a8ae90d6d`, avoiding
+the broken tag lookup without downloading an image. Native/container acceptance,
+backup/recovery, signed update tooling and the above defects remain open. Tasks
+24 and 27 are partial; no stage completion or release is claimed.
+
 ## Task 3 — live internal TLS credential selection
 
 ### Automatic daemon renewal implementation

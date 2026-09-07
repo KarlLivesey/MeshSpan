@@ -19,6 +19,7 @@ async fn private_node_renewal_runs_automatically_and_survives_restart_and_join()
         let claim = wait_for_claim(&root.claim_path).await?;
         let client = wait_for_client(&root.identity_path).await?;
         wait_for_status(root.address, &client, "claim_required").await?;
+        web_panel::verify(root.address, &client).await?;
         let created = create_process_mesh(&root, &client, &claim).await?;
         let api_key = created["api_key"].as_str().ok_or("missing API key")?;
         save_and_verify_recovery_bundle(&root, &client, api_key, &created).await?;
@@ -40,6 +41,7 @@ async fn private_node_renewal_runs_automatically_and_survives_restart_and_join()
         processes.push(peer.start_join(&join)?);
         let peer_client = wait_for_client(&peer.identity_path).await?;
         wait_for_status(peer.address, &peer_client, "configured").await?;
+        web_panel::verify(peer.address, &peer_client).await?;
         prove_private_leaf(&root, &peer, partition, &installed).await?;
         processes[0].kill()?;
         processes[0].wait()?;
