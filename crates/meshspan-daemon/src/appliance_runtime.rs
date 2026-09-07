@@ -195,6 +195,7 @@ struct ApplianceServiceComposition {
     router: Router,
     smb_connections: SmbConnectionFactory,
     certificates: CertificateRuntime,
+    notifications: crate::notification_runtime::NotificationRuntime,
     private_certificates: crate::private_certificate_renewal::PrivateCertificateRenewal,
     https_identity: RotatingHttpsIdentity,
     gateway_observations: Arc<dyn meshspan_contracts::GatewayDispatchObserver>,
@@ -680,12 +681,15 @@ fn compose_appliance_services(
         &node.private_network,
         started_at,
     )?;
+    let (notifications, notification_service) =
+        compose_notifications(node, &private_authority.authority, gateway, started_at)?;
     let consensus_observations =
         crate::consensus_observation_worker::ConsensusObservationWorker::new(
             private_authority.authority.clone(),
             readiness.observations.clone(),
         );
     let router = Router::new()
+        .merge(crate::notification_api::router(notification_service)?)
         .merge(public_contract_api_router(readiness)?)
         .merge(join_grant_routes(
             &node.local_state,
@@ -727,10 +731,52 @@ fn compose_appliance_services(
         ),
         smb_connections,
         certificates,
+        notifications,
         private_certificates,
         https_identity,
         gateway_observations,
     })
+}
+
+fn compose_notifications(
+    node: &DaemonNodeRuntime,
+    authority: &MetadataAuthorityHandle,
+    gateway: GatewaySessionIdentity,
+    now: UnixMicros,
+) -> Result<
+    (
+        crate::notification_runtime::NotificationRuntime,
+        crate::notification_service::NotificationService,
+    ),
+    DaemonProcessError,
+> {
+    let open = || {
+        open_authentication_authority(
+            &node.local_state,
+            authority,
+            Arc::clone(&node.private_network),
+            now,
+        )
+    };
+    let tls = crate::certificate_runtime::acme_client_config(
+        crate::certificate_runtime::native_trust_roots()
+            .map_err(|_| DaemonProcessError::Certificate)?,
+    )
+    .map_err(|_| DaemonProcessError::Certificate)?;
+    let runtime = crate::notification_runtime::NotificationRuntime::new(
+        open()?,
+        node.local_state.open_wrapping_key()?,
+        crate::NotificationTransport::new(tls),
+        node.local_state.node_id(),
+        1,
+    );
+    let service = crate::notification_service::NotificationService::new(
+        open()?,
+        gateway,
+        node.local_state.open_wrapping_key()?,
+        runtime.health(),
+    );
+    Ok((runtime, service))
 }
 
 fn compose_smb_connections(
@@ -942,20 +988,7 @@ where
     .await?;
     let (stop, _) = tokio::sync::watch::channel(false);
     let mut tasks = tokio::task::JoinSet::new();
-    let https_stop = stop.subscribe();
-    tasks.spawn(async move {
-        https
-            .run_until(wait_for_shutdown(https_stop))
-            .await
-            .map_err(DaemonProcessError::from)
-    });
-    let http01_stop = stop.subscribe();
-    tasks.spawn(async move {
-        http01
-            .run_until(wait_for_shutdown(http01_stop))
-            .await
-            .map_err(DaemonProcessError::from)
-    });
+    spawn_web_listeners(&mut tasks, &stop, https, http01);
     let smb_stop = stop.subscribe();
     let connections = services.smb_connections;
     let observations = services.gateway_observations;
@@ -984,6 +1017,14 @@ where
         Ok(())
     });
     let private_certificate_stop = stop.subscribe();
+    let notification_stop = stop.subscribe();
+    tasks.spawn(async move {
+        services
+            .notifications
+            .run_until(wait_for_shutdown(notification_stop))
+            .await;
+        Ok(())
+    });
     tasks.spawn(async move {
         services
             .private_certificates
@@ -1022,6 +1063,28 @@ where
     } else {
         Ok(())
     }
+}
+
+fn spawn_web_listeners(
+    tasks: &mut tokio::task::JoinSet<Result<(), DaemonProcessError>>,
+    stop: &tokio::sync::watch::Sender<bool>,
+    https: HttpsServer,
+    http01: Http01Server,
+) {
+    let https_stop = stop.subscribe();
+    tasks.spawn(async move {
+        https
+            .run_until(wait_for_shutdown(https_stop))
+            .await
+            .map_err(DaemonProcessError::from)
+    });
+    let http01_stop = stop.subscribe();
+    tasks.spawn(async move {
+        http01
+            .run_until(wait_for_shutdown(http01_stop))
+            .await
+            .map_err(DaemonProcessError::from)
+    });
 }
 
 async fn wait_for_shutdown(mut receiver: tokio::sync::watch::Receiver<bool>) {

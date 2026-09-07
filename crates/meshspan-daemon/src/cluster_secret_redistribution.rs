@@ -7,8 +7,8 @@ use meshspan_domain::{AuditEventId, OperationId, PrincipalId, UnixMicros, uuid_v
 use meshspan_metadata::{
     AUTHENTICATION_ROOT_KEY_SECRET_KIND, AuthoritativeCommand, CommandContext,
     CommitSecretGeneration, EntityKind, MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND,
-    ONLINE_AUTHORITY_KEY_SECRET_KIND, PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
-    STORAGE_PERMIT_KEY_SECRET_KIND,
+    NOTIFICATION_SETTINGS_SECRET_KIND, ONLINE_AUTHORITY_KEY_SECRET_KIND,
+    PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND, STORAGE_PERMIT_KEY_SECRET_KIND,
 };
 use meshspan_secret_envelope::{SecretContext, SecretEnvelopeError, encrypt_secret};
 use sha2::{Digest, Sha256};
@@ -93,6 +93,21 @@ pub(crate) fn redistribute_cluster_secrets(
             PUBLIC_CERTIFICATE_BUNDLE_SECRET_KIND,
             certificate.certificate.secret_id,
             certificate.certificate.generation,
+            &recipients,
+        )?;
+    }
+    for channel in authority.reader().notification_channels()? {
+        let settings = authority
+            .reader()
+            .notification_settings_generation(channel.settings)?;
+        redistribute_generation(
+            authority,
+            decryptor,
+            actor_principal_id,
+            occurred_at,
+            NOTIFICATION_SETTINGS_SECRET_KIND,
+            settings.secret_id,
+            settings.generation,
             &recipients,
         )?;
     }

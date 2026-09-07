@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { OperationAdministrationPanel } from "../src/features/operation-administration/OperationAdministrationPanel";
 import type { OperationAdministrationClient } from "../src/features/operation-administration/model";
 import type { MetricsClient } from "../src/features/metrics-administration/model";
+import type { NotificationClient } from "../src/features/notification-administration/model";
 
 const operationId = "00000000-0000-4000-8000-000000000001";
 const disposals = new Set<() => void>();
@@ -23,7 +24,12 @@ describe("operation administration panel", () => {
     const listNextOperations = vi.fn<
       OperationAdministrationClient["listNextOperations"]
     >(async () => ({ next_page_url: null, operations: [] }));
-    const client: OperationAdministrationClient & MetricsClient = {
+    const client: OperationAdministrationClient &
+      MetricsClient &
+      NotificationClient = {
+      getNotifications: async () => ({ channels: [], worker: "running" }),
+      configureNotification:
+        vi.fn<NotificationClient["configureNotification"]>(),
       getMetricsExporter: async () => ({ configuration: null }),
       getMetricHistory: vi.fn<MetricsClient["getMetricHistory"]>(),
       getNextMetricHistory: vi.fn<MetricsClient["getNextMetricHistory"]>(),

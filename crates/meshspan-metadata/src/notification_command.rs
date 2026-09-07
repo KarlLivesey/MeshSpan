@@ -36,7 +36,7 @@ pub enum NotificationEventKind {
 impl NotificationEventKind {
     pub(crate) const fn from_audit_kind(kind: i64) -> Option<Self> {
         match kind {
-            115 => Some(Self::CertificateOrderQueued),
+            115 | 122 => Some(Self::CertificateOrderQueued),
             118 => Some(Self::CertificateOrderCompleted),
             121 => Some(Self::ManualDnsTaskChanged),
             136 => Some(Self::BackupRunCompleted),
@@ -64,6 +64,10 @@ pub struct ConfigureNotificationChannel {
     pub kind: NotificationChannelKind,
     /// Existing envelope-encrypted, immutable settings generation of kind 10.
     pub settings: SecretGenerationReference,
+    /// SHA-256 of the settings envelope, including its encrypted random binding nonce.
+    pub settings_commitment: [u8; 32],
+    /// Optional new ciphertext and recipients, committed atomically with this configuration.
+    pub new_settings: Option<Box<crate::CommitSecretGeneration>>,
     /// Explicit opt-in; disabling cancels outstanding deliveries.
     pub enabled: bool,
     /// Non-zero combination of `NotificationEventKind::filter_bit()` values.

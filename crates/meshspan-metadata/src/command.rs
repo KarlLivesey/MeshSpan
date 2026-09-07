@@ -2722,6 +2722,11 @@ digest_simple_record!(
         digest.unsigned(value.kind as u64);
         digest.identifier(value.settings.secret_id);
         digest.unsigned(value.settings.generation);
+        digest.bytes(&value.settings_commitment);
+        digest.boolean(value.new_settings.is_some());
+        if let Some(secret) = &value.new_settings {
+            secret.update_digest(digest);
+        }
         digest.boolean(value.enabled);
         digest.unsigned(u64::from(value.event_filter));
     }

@@ -56,9 +56,9 @@ impl AuthoritativeRepository {
         }
         let mut statement = connection.prepare(
             "SELECT a.event_id FROM audit_events a
-            JOIN operations o USING(operation_id) WHERE a.event_kind IN (115, 118, 121, 136)
+            JOIN operations o USING(operation_id) WHERE a.event_kind IN (115, 118, 121, 122, 136)
             AND o.committed_log_index IS NOT NULL AND o.completed_at IS NOT NULL
-            AND o.revision >= ?2 AND ((CASE a.event_kind WHEN 115 THEN 1 WHEN 118 THEN 2
+            AND o.revision >= ?2 AND ((CASE a.event_kind WHEN 115 THEN 1 WHEN 122 THEN 1 WHEN 118 THEN 2
                 WHEN 121 THEN 4 WHEN 136 THEN 8 END) & ?3) != 0
             AND NOT EXISTS (SELECT 1 FROM notification_deliveries d
                 WHERE d.channel_id = ?1 AND d.event_id = a.event_id)

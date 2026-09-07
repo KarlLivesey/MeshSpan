@@ -14,6 +14,8 @@ mod external_certificates;
 mod local_certificates;
 #[path = "headless_process/metrics.rs"]
 mod metrics;
+#[path = "headless_process/notifications.rs"]
+mod notifications;
 #[path = "support/passkey.rs"]
 mod passkey_support;
 #[path = "headless_process/private_certificates.rs"]

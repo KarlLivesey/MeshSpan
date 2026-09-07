@@ -34,7 +34,7 @@ export function renderMetricsClientMethods(routes) {
     async getMetricHistory(query = {}): Promise<MetricHistoryResponse> {
       const input = zGetMetricHistoryQuery.parse(query);
       const parameters = new URLSearchParams();
-      if (input.resolution !== undefined) parameters.set("resolution", input.resolution);
+      parameters.set("resolution", input.resolution);
       if (input.history_id !== undefined) parameters.set("history_id", input.history_id);
       if (input.before !== undefined) parameters.set("before", input.before);
       const suffix = parameters.toString();

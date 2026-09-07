@@ -3068,6 +3068,82 @@ metadata all-target/all-feature Clippy passed in **9.03 seconds**. These are
 scheduling projections, not an executing background worker. The complete
 outbox-to-transport integration and its restart proof remain required.
 
+### Notification administration and owned daemon delivery
+
+The native manager-only `GET/PUT /api/latest/admin/notifications` surface now
+configures channels and reports redacted configuration/local worker health.
+Authentication precedes body parsing and is rechecked for output; bounded owned
+blocking jobs keep SQL off executor threads. Rust validates requests and
+responses; OpenAPI generates Fetch, TypeScript and Zod boundaries used by the
+operations panel. The panel offers webhook/email configuration, event selection,
+explicit credential retention/replacement, disable and in-memory exact retries.
+No credentials are returned in status or persisted in browser storage.
+
+Migration 90 adds a settings commitment; migration 89's digest is unchanged.
+Kind-80 configuration commands now carry the commitment and optional encrypted
+secret generation, committed in the same transaction. This is an intentional
+pre-alpha private-wire change. Old unbound configurations cannot deliver until
+explicitly replaced. Settings plaintext is version byte 1, a private random
+32-byte nonce, and strict destination JSON. SHA-256 binds that complete envelope;
+rewrapping for new gateway recipients preserves the plaintext. Existing enrolment
+secret redistribution now includes configured notification secrets.
+
+The independently owned worker projects committed facts, claims due work,
+decrypts settings, uses the existing in-process transports and records a fenced
+outcome. Receiver/authority failure never stops file service or healing. A
+cancelled/ambiguous send keeps its durable attempt for expiry/retry. Shutdown
+observes its blocking worker; each network attempt remains bounded to 35 seconds.
+
+Focused metadata/API tests: **5 metadata cases in 2.76 seconds; 2 API cases in
+0.02 seconds**, after a 40.73-second dependency build. The new atomic-configuration
+case injects failures after command, after audit and before commit, checking that
+neither channel nor ciphertext survives the rolled-back transaction. Historical
+configuration remains readable after a newer disabled revision.
+
+Real local daemon proof:
+`cargo test -p meshspan-daemon --test headless_process notification_channel_delivers -- --test-threads=4`
+passed in **10.46 seconds**, after a **13.85-second build**. A real authenticated
+HTTPS receiver returns 503, the daemon records retry, is killed/restarted, and
+then sends the identical event/ID to a 204 response. The proof checks the durable
+accepted attempt, explicit disable without resubmitting credentials, exact retry
+after a newer configuration, redacted status and rejection of changed secret
+input under an old operation ID. It authenticates before rejecting malformed JSON.
+
+The first run failed after 19.51 seconds: retained metadata showed certificate
+provisioning audit kind 122 but no outbox entry. Initial provisioning queues the
+order atomically; the earlier projection included only standalone queue kind 115.
+Both now map to the same queued fact. The original expected delivery assertions
+are unchanged. The private failed fixture remains at
+`/var/folders/xk/vb061tws5wv3z_00cskjqtwr0000gn/T/.tmpvufyRN`; it is not published.
+Affected all-target/all-feature Rust Clippy passed in **24.20 seconds**.
+
+Web TypeScript and strict ESLint passed. Eight focused web cases passed across
+four files in **1.18 seconds**, including webhook creation, credential-free
+disable, email form input, exact ambiguous retry, generated request/response
+validation, and the affected operations/metrics clients. Initial fixture failures
+were corrected: fake HTTP responses must carry contract headers, JSON object key
+order is not a wire semantic, and a nested input is disabled by its ancestor
+fieldset even when its own `disabled` property is false. The assertions still
+require every field and the same exact retry payload. The panel work follows
+the frontend-design guidance through labelled controls, contextual method fields,
+explicit feedback and reuse of the existing layout; no visual redesign or live
+browser operation was performed.
+
+Full API regeneration and `pnpm check:generated` passed; the production web bundle
+built in **340 ms**. An earlier check caught an index-only drift after running
+just the Fetch sub-generator; rerunning the complete generator restored its
+deterministic index. No generated file was edited by hand.
+After embedding that rebuilt panel, the real daemon case passed again in
+**10.68 seconds** after a **10.07-second build**. Final TypeScript, strict ESLint,
+Rust formatting and affected document/web formatting passed; the eight focused
+web cases passed again in **945 ms**.
+
+Remaining task-21 proof and functionality: new-gateway delivery after recipient
+redistribution, daemon-level SMTP, manual-DNS task notifications, retained
+delivery/rejection visibility, and the assembled-stage checks. The existing wire
+tests prove SMTP transport only. No full-workspace acceptance, release, tag,
+image publication or GitHub Actions run is claimed by this slice.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in

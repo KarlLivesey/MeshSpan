@@ -12,10 +12,10 @@ mod http01;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 89;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 90;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 13;
 
-const PARTITION_MIGRATIONS: [Migration; 89] = [
+const PARTITION_MIGRATIONS: [Migration; 90] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -369,8 +369,12 @@ const PARTITION_MIGRATIONS: [Migration; 89] = [
         sql: include_str!("../schema/partition/088_node_certificate_rotations.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 89,
         sql: include_str!("../schema/partition/089_notifications.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/090_notification_settings_binding.sql"),
     },
 ];
 

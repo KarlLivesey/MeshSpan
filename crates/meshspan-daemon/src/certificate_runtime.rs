@@ -224,7 +224,7 @@ impl CertificateRuntime {
     }
 }
 
-fn native_trust_roots() -> Result<RootCertStore, CertificateRuntimeError> {
+pub(crate) fn native_trust_roots() -> Result<RootCertStore, CertificateRuntimeError> {
     let loaded = rustls_native_certs::load_native_certs();
     if !loaded.errors.is_empty() || loaded.certs.is_empty() {
         return Err(CertificateRuntimeError::NativeTrust);
@@ -238,7 +238,9 @@ fn native_trust_roots() -> Result<RootCertStore, CertificateRuntimeError> {
     Ok(roots)
 }
 
-fn acme_client_config(roots: RootCertStore) -> Result<Arc<ClientConfig>, CertificateRuntimeError> {
+pub(crate) fn acme_client_config(
+    roots: RootCertStore,
+) -> Result<Arc<ClientConfig>, CertificateRuntimeError> {
     let provider = Arc::new(meshspan_rustls_provider::provider());
     let config = ClientConfig::builder_with_provider(provider)
         .with_protocol_versions(&[&rustls::version::TLS13])
