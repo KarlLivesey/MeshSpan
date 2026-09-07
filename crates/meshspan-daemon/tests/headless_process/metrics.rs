@@ -31,6 +31,8 @@ async fn exporter_policy_survives_restart_and_reaches_another_gateway() -> Resul
             .ok_or("missing bootstrap API key")?;
         super::save_and_verify_recovery_bundle(&root, &client, api_key, &created).await?;
         super::wait_for_storage_folder_visibility(&root, &client, api_key).await?;
+        // Local panel history does not require enabling an external exporter.
+        let previous_history = verify_history(root.address, &client, api_key).await?;
         configure_and_verify(root.address, &client, api_key, &administrator).await?;
         verify_gateway_dispatches(&root, &client, api_key).await?;
         processes[0].kill()?;
@@ -38,6 +40,12 @@ async fn exporter_policy_survives_restart_and_reaches_another_gateway() -> Resul
         phase = "root restart";
         processes[0] = root.start()?;
         super::wait_for_status(root.address, &client, "configured").await?;
+        let restarted_history = verify_history(root.address, &client, api_key).await?;
+        assert_ne!(previous_history, restarted_history);
+        let stale = request_with_headers(root.address, &client, "GET",
+            &format!("/api/latest/admin/metrics/history?resolution=minute&history_id={previous_history}&before=0"),
+            None, &[("Authorization", &format!("Bearer {api_key}"))]).await?;
+        require_status(&stale, "409 Conflict", "refuse history from the previous process")?;
         verify(root.address, &client, api_key).await?;
         verify_storage_measurements(root.address, &client, api_key).await?;
         let join_code = super::issue_join_code(&root, &client, api_key).await?;
@@ -46,6 +54,7 @@ async fn exporter_policy_survives_restart_and_reaches_another_gateway() -> Resul
         let peer_client = super::wait_for_client(&peer.identity_path).await?;
         super::wait_for_status(peer.address, &peer_client, "configured").await?;
         super::wait_for_storage_folder_visibility(&peer, &peer_client, api_key).await?;
+        verify_history(peer.address, &peer_client, api_key).await?;
         verify(peer.address, &peer_client, api_key).await?;
         verify_gateway_dispatches(&peer, &peer_client, api_key).await?;
         phase = "peer service after root loss";
@@ -159,6 +168,46 @@ async fn configure_and_verify(
         3
     );
     verify(address, client, api_key).await
+}
+
+async fn verify_history(
+    address: SocketAddr,
+    client: &ClientConfig,
+    key: &str,
+) -> Result<String, Box<dyn Error>> {
+    let deadline = super::Instant::now() + super::WAIT_LIMIT;
+    loop {
+        let response = tokio::time::timeout_at(
+            deadline.into(),
+            request_with_headers(
+                address,
+                client,
+                "GET",
+                "/api/latest/admin/metrics/history",
+                None,
+                &[("Authorization", &format!("Bearer {key}"))],
+            ),
+        )
+        .await??;
+        require_status(&response, "200 OK", "read local metric history")?;
+        let page: meshspan_api_contract::MetricHistoryResponse =
+            serde_json::from_str(response_body(&response)?)?;
+        meshspan_api_contract::encode_metric_history_response(&page)?;
+        if page.points.iter().any(|point| {
+            point.metrics.as_ref().is_some_and(|metrics| {
+                metrics
+                    .iter()
+                    .any(|metric| metric.name == "meshspan_v1_https_dispatches")
+            })
+        }) {
+            assert_eq!(page.next_page_url, None);
+            return Ok(page.history_id);
+        }
+        if super::Instant::now() >= deadline {
+            return Err("daemon did not sample local metric history".into());
+        }
+        super::sleep(super::RETRY_INTERVAL).await;
+    }
 }
 
 async fn verify(

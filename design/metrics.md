@@ -160,8 +160,42 @@ has since superseded it. A scrape's unavailable source is not an empty success.
 
 The Operations panel provides the same policy API, optional paged user selection,
 enable/disable and exact retry. No user pages are loaded until requested. It never
-uses an exporter scrape to infer protection or health. Broader metric coverage,
-local history and whole-stage acceptance remain outstanding.
+uses an exporter scrape to infer protection or health. Broader metric coverage
+and whole-stage acceptance remain outstanding.
+
+## Local panel history
+
+`GET /api/latest/admin/metrics/history` serves one newest-first page of at most
+30 local observation buckets. It requires current system-manager access, checked
+before query handling and again before output. This local view does not require
+enabling the external exporter. Requests do not trigger collection, provider IO
+or network probes, and share the exporter's owned bounded admission/deadline.
+
+The background observation worker samples once per minute. The minute window
+retains 360 buckets (six hours); the hourly window retains the last minute sample
+in each of 168 hour buckets (seven days). At most 528 buckets are held in memory.
+This is last-observation downsampling, not averaging or integration. Values retain
+the existing fixed catalogue's exact counters, byte counts, nanosecond durations
+and cumulative histogram buckets. They are not per-bucket rates. Missing families
+remain absent, a failed sample has `metrics: null`, and unsampled time is not
+filled with zeros. All history clears when this daemon restarts.
+
+`resolution=minute` is the default; `resolution=hour` selects the longer window.
+The response includes an optional `next_page_url`; its `history_id` and exclusive
+`before` bucket must be preserved together. A fresh random 128-bit history ID is
+created for each observation store, independently of node identity/incarnation.
+It is not a credential. A previous process's continuation returns `409`; entropy
+failure makes history unavailable without preventing appliance service. Ordering
+uses monotonic uptime; host wall timestamps are display hints and may move
+backwards. Retention expiry is explicitly reported.
+
+The Operations panel loads history only on request and retains one page, with
+an optional older-page action and measurement selector. Failed reads clear the
+previous page. Unmounting discards late results. The generated client validates
+same-gateway continuation routes before attaching credentials and uses the
+Rust-authored one-MiB history response limit rather than raising every API limit.
+No telemetry leaves the appliance automatically and no time-series database or
+new dependency is required.
 
 ## Persisted and private-wire contract
 
@@ -193,5 +227,5 @@ HTTPS/SMB transfer throughput and operation outcomes beyond dispatch,
 remote catch-up and current quorum evidence, coding/degraded reads, packs/deduplication,
 federation backlog, authentication rejection, certificates, backups, updates,
 runtime resources and clock uncertainty still need their corresponding
-instrumentation. Bounded downsampled panel history and durable deduplicated
-notification delivery are separate from these process-lifetime counters.
+instrumentation. The local history above retains these observations only;
+durable deduplicated notification delivery remains separate and outstanding.

@@ -25,6 +25,8 @@ describe("operation administration panel", () => {
     >(async () => ({ next_page_url: null, operations: [] }));
     const client: OperationAdministrationClient & MetricsClient = {
       getMetricsExporter: async () => ({ configuration: null }),
+      getMetricHistory: vi.fn<MetricsClient["getMetricHistory"]>(),
+      getNextMetricHistory: vi.fn<MetricsClient["getNextMetricHistory"]>(),
       configureMetricsExporter:
         vi.fn<MetricsClient["configureMetricsExporter"]>(),
       listUsers: vi.fn<MetricsClient["listUsers"]>(),

@@ -71,6 +71,7 @@ mod metadata_diagnostics;
 mod metadata_diagnostics_api;
 #[cfg(test)]
 mod metadata_diagnostics_api_tests;
+mod metric_history;
 mod metrics_exporter_api;
 #[cfg(test)]
 mod metrics_exporter_api_tests;

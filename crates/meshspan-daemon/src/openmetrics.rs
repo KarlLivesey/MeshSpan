@@ -12,6 +12,9 @@ use meshspan_contracts::{
 #[path = "openmetrics_catalogue.rs"]
 mod catalogue;
 use catalogue::{Descriptor, Measurement, describe};
+#[path = "openmetrics_history.rs"]
+mod history;
+pub(crate) use history::historical_metrics;
 
 /// Exact negotiated media type of the built-in metrics exporter.
 pub const OPENMETRICS_CONTENT_TYPE: &str =

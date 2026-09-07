@@ -4842,6 +4842,120 @@ export type MetadataDiagnosticsResponse = {
 };
 
 /**
+ * MetricHistoryResponse
+ *
+ * Newest-first bounded page. History is local, best-effort and cleared on daemon restart.
+ */
+export type MetricHistoryResponse = {
+  /**
+   * Random process-local history identity; not a node identity or an access credential.
+   */
+  history_id: string;
+  /**
+   * Same-gateway continuation, or null when no older retained page exists.
+   */
+  next_page_url: string | null;
+  /**
+   * Whether earlier buckets have expired from the selected local window.
+   */
+  older_samples_expired: boolean;
+  /**
+   * At most 30 buckets; unavailable samples and time gaps remain explicit.
+   */
+  points: Array<{
+    /**
+     * Bucket start relative to the observation store, not wall-clock ordering.
+     */
+    bucket_start_seconds: string;
+    /**
+     * Null means the sampling attempt failed; an empty vector is a valid empty source.
+     */
+    metrics: Array<{
+      /**
+       * Exact observation, not authority or health certification.
+       */
+      measurement:
+        | {
+            kind: "counter";
+            /**
+             * Exact accumulated event count.
+             */
+            value: string;
+          }
+        | {
+            kind: "gauge";
+            /**
+             * Exact observed unitless quantity.
+             */
+            value: string;
+          }
+        | {
+            kind: "bytes";
+            /**
+             * Exact observed byte quantity.
+             */
+            value: string;
+          }
+        | {
+            kind: "seconds";
+            /**
+             * Exact non-negative duration in seconds.
+             */
+            value: string;
+          }
+        | {
+            /**
+             * Inclusive counts at 0.001, 0.005, 0.025, 0.1, 0.5, 1, 5 and 30 seconds.
+             */
+            bucket_counts: [
+              string,
+              string,
+              string,
+              string,
+              string,
+              string,
+              string,
+              string,
+            ];
+            /**
+             * Complete count, also the implicit positive-infinity bucket.
+             */
+            count: string;
+            kind: "histogram";
+            /**
+             * Exact total duration.
+             */
+            sum_seconds: string;
+          };
+      /**
+       * Versioned family name, excluding the counter sample's `_total` suffix.
+       */
+      name: string;
+    }> | null;
+    /**
+     * Host wall clock for display only; null if unavailable or outside representation.
+     */
+    observed_at_epoch_micros: number | null;
+    /**
+     * Actual observation time relative to the same store.
+     */
+    sampled_uptime_seconds: string;
+  }>;
+  /**
+   * Selected downsampling interval.
+   */
+  resolution: "minute" | "hour";
+  /**
+   * Maximum retained window for this resolution, not a promise of complete observations.
+   */
+  retention_seconds: string;
+  /**
+   * Monotonic age of this process's observation store at collection.
+   */
+  uptime_seconds: string;
+};
+
+/**
  * MetricsExporterResponse
  *
  * Current mesh policy; null explicitly means never configured and disabled.
@@ -7680,6 +7794,63 @@ export type ConfigureMetricsExporterResponses = {
 
 export type ConfigureMetricsExporterResponse2 =
   ConfigureMetricsExporterResponses[keyof ConfigureMetricsExporterResponses];
+
+export type GetMetricHistoryData = {
+  body?: never;
+  path?: never;
+  query?: {
+    resolution?: "minute" | "hour";
+    /**
+     * Returned process-local history identity; required together with before. Not a credential.
+     */
+    history_id?: string;
+    /**
+     * Exclusive monotonic bucket start from a continuation; required together with history_id.
+     */
+    before?: string;
+  };
+  url: "/admin/metrics/history";
+};
+
+export type GetMetricHistoryErrors = {
+  /**
+   * Invalid query or non-empty body
+   */
+  400: ApiError;
+  /**
+   * Authentication required
+   */
+  401: ApiError;
+  /**
+   * Manager authority required
+   */
+  403: ApiError;
+  /**
+   * History identity changed; restart from the first page
+   */
+  409: ApiError;
+  /**
+   * Invalid stored or outgoing observation
+   */
+  500: ApiError;
+  /**
+   * Authority or local history temporarily unavailable
+   */
+  503: ApiError;
+};
+
+export type GetMetricHistoryError =
+  GetMetricHistoryErrors[keyof GetMetricHistoryErrors];
+
+export type GetMetricHistoryResponses = {
+  /**
+   * Retained local observations with optional next page
+   */
+  200: MetricHistoryResponse;
+};
+
+export type GetMetricHistoryResponse =
+  GetMetricHistoryResponses[keyof GetMetricHistoryResponses];
 
 export type CreateNodeJoinGrantData = {
   /**

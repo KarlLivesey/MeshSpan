@@ -147,6 +147,7 @@ fn components() -> Value {
                 "ConfigureMetricsExporterResponse",
             ),
             schema_response::<crate::MetricsExporterResponse>("MetricsExporterResponse"),
+            schema_response::<crate::MetricHistoryResponse>("MetricHistoryResponse"),
             schema_request::<crate::ConfigureBackupDestinationRequest>(
                 "ConfigureBackupDestinationRequest",
             ),
@@ -566,6 +567,7 @@ fn administration_paths() -> Vec<(String, Value)> {
                 metrics::configuration_path(),
             ),
             ("/metrics".to_owned(), metrics::scrape_path()),
+            ("/admin/metrics/history".to_owned(), metrics::history_path()),
             ("/admin/backups/runs".to_owned(), backup_runs_path()),
             (
                 "/admin/diagnostics/metadata".to_owned(),

@@ -17,7 +17,7 @@ Update the relevant task when work changes its status. Report the current task,
 what behaviour changed, what remains and what was tested. Do not replace this
 with “nearly done”, a count of commits or an unweighted completion percentage.
 
-Remaining-effort estimate, 2026-09-07: **Stage 10: 132 points; Stage 11: 126
+Remaining-effort estimate, 2026-09-07: **Stage 10: 128 points; Stage 11: 126
 points; Stage 12: 55 points.** These are preliminary engineering judgements from
 the task scope and recorded gaps, not measured hours or completion guarantees.
 Uncertainty is high until the open integration/proof work is exercised.
@@ -326,11 +326,17 @@ the stage; publication-dependent acceptance remains held separately and visible.
     [catalogue](metrics.md#remaining-stage-10-measurements). Use existing owning
     components and fixed schemas; test exact outcomes, redaction and missing data.
 
-20. **Bounded local metric history — Open.** **5 points remaining.**
+20. **Bounded local metric history — Implemented; stage-wide verification pending.** **1 point remaining.**
     OPS-018; accepted decisions §8. Implement the selected downsampled local panel
     history with explicit retention/resource bounds and gaps, rather than a
     distributed time-series database. [Process counters are not this history](metrics.md#remaining-stage-10-measurements).
     Prove long-window boundedness and panel access without loading every sample.
+    [Local history implementation](stage-10-evidence.md#task-20--bounded-local-metric-history)
+    provides six-hour minute and seven-day hourly windows, 30-sample pages,
+    exact counter/histogram values, unknown samples and restart-bound cursors.
+    The panel loads only on request. Simulated 14-day retention, focused API/UI
+    checks and a real two-gateway restart proof pass. Remaining work is the
+    assembled-stage pass: **5 → 1 points**.
 
 21. **Durable notifications — Open.** **8 points remaining.**
     OPS-010/020. Implement/verify optional email and authenticated generic webhooks

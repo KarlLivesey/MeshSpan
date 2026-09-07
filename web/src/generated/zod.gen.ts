@@ -5248,6 +5248,172 @@ export const zMetadataDiagnosticsResponse = z
   .strict();
 
 /**
+ * MetricHistoryResponse
+ *
+ * Newest-first bounded page. History is local, best-effort and cleared on daemon restart.
+ */
+export const zMetricHistoryResponse = z
+  .strictObject({
+    history_id: z
+      .string()
+      .length(32)
+      .regex(/^[0-9a-f]{32}$/),
+    next_page_url: z
+      .string()
+      .max(180)
+      .regex(
+        /^\/api\/latest\/admin\/metrics\/history\?resolution=(minute|hour)&history_id=[0-9a-f]{32}&before=(0|[1-9][0-9]*)$/,
+      )
+      .nullable(),
+    older_samples_expired: z.boolean(),
+    points: z
+      .array(
+        z
+          .strictObject({
+            bucket_start_seconds: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+            metrics: z
+              .array(
+                z
+                  .strictObject({
+                    measurement: z.union([
+                      z
+                        .strictObject({
+                          kind: z.literal("counter"),
+                          value: z
+                            .string()
+                            .min(1)
+                            .max(20)
+                            .regex(/^(0|[1-9][0-9]*)$/),
+                        })
+                        .strict(),
+                      z
+                        .strictObject({
+                          kind: z.literal("gauge"),
+                          value: z
+                            .string()
+                            .min(1)
+                            .max(20)
+                            .regex(/^(0|[1-9][0-9]*)$/),
+                        })
+                        .strict(),
+                      z
+                        .strictObject({
+                          kind: z.literal("bytes"),
+                          value: z
+                            .string()
+                            .min(1)
+                            .max(20)
+                            .regex(/^(0|[1-9][0-9]*)$/),
+                        })
+                        .strict(),
+                      z
+                        .strictObject({
+                          kind: z.literal("seconds"),
+                          value: z
+                            .string()
+                            .max(30)
+                            .regex(/^(0|[1-9][0-9]{0,19})\.[0-9]{9}$/),
+                        })
+                        .strict(),
+                      z
+                        .strictObject({
+                          bucket_counts: z.tuple([
+                            z
+                              .string()
+                              .min(1)
+                              .max(20)
+                              .regex(/^(0|[1-9][0-9]*)$/),
+                            z
+                              .string()
+                              .min(1)
+                              .max(20)
+                              .regex(/^(0|[1-9][0-9]*)$/),
+                            z
+                              .string()
+                              .min(1)
+                              .max(20)
+                              .regex(/^(0|[1-9][0-9]*)$/),
+                            z
+                              .string()
+                              .min(1)
+                              .max(20)
+                              .regex(/^(0|[1-9][0-9]*)$/),
+                            z
+                              .string()
+                              .min(1)
+                              .max(20)
+                              .regex(/^(0|[1-9][0-9]*)$/),
+                            z
+                              .string()
+                              .min(1)
+                              .max(20)
+                              .regex(/^(0|[1-9][0-9]*)$/),
+                            z
+                              .string()
+                              .min(1)
+                              .max(20)
+                              .regex(/^(0|[1-9][0-9]*)$/),
+                            z
+                              .string()
+                              .min(1)
+                              .max(20)
+                              .regex(/^(0|[1-9][0-9]*)$/),
+                          ]),
+                          count: z
+                            .string()
+                            .min(1)
+                            .max(20)
+                            .regex(/^(0|[1-9][0-9]*)$/),
+                          kind: z.literal("histogram"),
+                          sum_seconds: z
+                            .string()
+                            .max(30)
+                            .regex(/^(0|[1-9][0-9]{0,19})\.[0-9]{9}$/),
+                        })
+                        .strict(),
+                    ]),
+                    name: z
+                      .string()
+                      .max(96)
+                      .regex(/^meshspan_v1_[a-z_]+$/),
+                  })
+                  .strict(),
+              )
+              .max(64)
+              .nullable(),
+            observed_at_epoch_micros: z
+              .int()
+              .gte(0)
+              .lte(9007199254740991)
+              .nullable(),
+            sampled_uptime_seconds: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+          })
+          .strict(),
+      )
+      .max(30),
+    resolution: z.union([z.literal("minute"), z.literal("hour")]),
+    retention_seconds: z
+      .string()
+      .min(1)
+      .max(20)
+      .regex(/^(0|[1-9][0-9]*)$/),
+    uptime_seconds: z
+      .string()
+      .min(1)
+      .max(20)
+      .regex(/^(0|[1-9][0-9]*)$/),
+  })
+  .strict();
+
+/**
  * MetricsExporterResponse
  *
  * Current mesh policy; null explicitly means never configured and disabled.
@@ -7252,6 +7418,27 @@ export const zConfigureMetricsExporterHeaders = z
  */
 export const zConfigureMetricsExporterResponse2 =
   zConfigureMetricsExporterResponse;
+
+export const zGetMetricHistoryQuery = z
+  .object({
+    resolution: z.enum(["minute", "hour"]).optional().default("minute"),
+    history_id: z
+      .string()
+      .length(32)
+      .regex(/^[0-9a-f]{32}$/)
+      .optional(),
+    before: z
+      .string()
+      .max(20)
+      .regex(/^(0|[1-9][0-9]*)$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Retained local observations with optional next page
+ */
+export const zGetMetricHistoryResponse = zMetricHistoryResponse;
 
 /**
  * Join invitation policy

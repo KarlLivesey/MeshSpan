@@ -13,6 +13,8 @@ import { MeshSpanApiError } from "../../generated/fetch.gen";
 export type MetricsClient = Pick<
   MeshSpanFetchClient,
   | "getMetricsExporter"
+  | "getMetricHistory"
+  | "getNextMetricHistory"
   | "configureMetricsExporter"
   | "listUsers"
   | "listNextPrincipals"

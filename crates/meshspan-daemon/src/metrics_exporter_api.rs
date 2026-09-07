@@ -49,6 +49,7 @@ pub(crate) fn router<C: MetricsExporterController>(
             get(read::<C, false>).put(configure::<C>),
         )
         .route("/api/latest/metrics", get(read::<C, true>))
+        .route("/api/latest/admin/metrics/history", get(history::<C>))
         .with_state(Arc::new(MetricsApi {
             controller: Arc::new(Mutex::new(controller)),
             // A single owned SQL reader/collector job, not a cap on ordinary connections.
@@ -103,6 +104,41 @@ impl<C: MetricsExporterController> MetricsApi<C> {
             .await
             .map_err(|_| Error::Unavailable)?
             .map_err(|_| Error::Failed)?
+    }
+}
+
+async fn history<C: MetricsExporterController>(
+    State(state): State<Arc<MetricsApi<C>>>,
+    request: Request,
+) -> Response<Body> {
+    let Ok(permit) = state.admit() else {
+        return failure(Error::Unavailable, &state.digest);
+    };
+    let result = state
+        .job(permit, move |controller, check| {
+            controller.authenticate(
+                request.headers(),
+                current_time().ok_or(Error::Unavailable)?,
+                MetricsAccess::ReadHistory,
+            )?;
+            require_empty_body(&request)?;
+            let query = crate::metric_history::MetricHistoryQuery::parse(request.uri().query())?;
+            check()?;
+            let response = controller.history(query)?;
+            let bytes = meshspan_api_contract::encode_metric_history_response(&response)
+                .map_err(|_| Error::Failed)?;
+            check()?;
+            controller.authenticate(
+                request.headers(),
+                current_time().ok_or(Error::Unavailable)?,
+                MetricsAccess::ReadHistory,
+            )?;
+            Ok(bytes)
+        })
+        .await;
+    match result {
+        Ok(bytes) => json_response(StatusCode::OK, bytes, state.digest.clone()),
+        Err(error) => failure(error, &state.digest),
     }
 }
 
@@ -224,8 +260,14 @@ async fn configure_request<C: MetricsExporterController>(
 }
 
 fn require_empty_read(request: &Request) -> Result<(), Error> {
-    if request.uri().query().is_some()
-        || !request.body().is_end_stream()
+    if request.uri().query().is_some() {
+        return Err(Error::InvalidInput);
+    }
+    require_empty_body(request)
+}
+
+fn require_empty_body(request: &Request) -> Result<(), Error> {
+    if !request.body().is_end_stream()
         || request.headers().contains_key("transfer-encoding")
         || request
             .headers()
@@ -258,7 +300,7 @@ fn failure(error: Error, digest: &HeaderValue) -> Response<Body> {
         Error::Conflict => (
             StatusCode::CONFLICT,
             ApiErrorCode::OperationConflict,
-            "Metrics configuration conflicts with committed state",
+            "Metrics request conflicts with current state; refresh before continuing",
         ),
         Error::Unavailable => (
             StatusCode::SERVICE_UNAVAILABLE,
