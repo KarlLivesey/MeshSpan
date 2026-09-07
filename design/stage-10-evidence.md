@@ -3274,6 +3274,65 @@ workload/delegated-group readiness and real interrupted rolling-update proof.
 The estimate remains **13 points**; Stage 10 remains **121 points**. No release,
 tag, publication, GitHub Actions or user-browser operation occurred.
 
+## Task 22 — native update administration
+
+The native `GET/PUT /api/latest/admin/updates` route now exposes publisher trust,
+signed candidate selection and pause/resume/cancel through the replicated journal.
+These are public specialised API operations, not panel-only handlers. Managers
+authenticate before the bounded body is read and again before output. Requests
+and responses are validated in Rust; the same source generates OpenAPI, TypeScript,
+Fetch and Zod. Unknown/duplicate fields, coercion and client installation claims
+are rejected. The route uses its own owned blocking-job admission and deadline.
+
+Signer keys are explicitly pinned public SEC1 material, immutable per identity;
+no private signing key is accepted. Selection verifies the exact signed canonical
+manifest through the metadata owner. An exact retry reconstructs its original
+actor/time-bound command and returns its original receipt even after subsequent
+controls or process restart. An unavailable/ambiguous commit stays unresolved,
+not a false definitive rejection. The response means the manager command was
+committed, **not that software was installed**.
+
+Status returns bounded signer configuration and indexed phase counts without
+materialising every member. Counts are exact decimal strings. `rollout_id` selects
+retained work after completion/cancellation; omission selects active work. The
+Operations panel offers trust, signed-file selection, progress and controls,
+retains an unchanged in-memory request for ambiguous retry, and disables
+cancellation while restart ownership is unresolved. It uses the existing panel
+layout with separate publisher-trust, candidate-input and rollout-control
+responsibilities. **Installation is explicitly unavailable in this build**;
+there is no public advance-node/probe-success endpoint.
+
+Local verification for this slice:
+
+- Rust boundary regression: **1 passed, 0.02 seconds**, build **8.94 seconds**.
+- Four file-backed rollout cases, including exact pending/staged/restarting/
+  verified counts across reopen: **4 passed, 2.79 seconds**, build **12.56 seconds**.
+- Native Fetch/Zod and headless DOM panel checks: **7 passed, 1.29 seconds**,
+  including bounded file selection, default interruption consent off, exact retry,
+  publisher disablement and unresolved-restart controls. DOM tests are not a real
+  browser or installation proof.
+- Real HTTPS child-daemon lifecycle: **1 passed, 6.81 seconds**, build **45.57 seconds**.
+  Creates the mesh and recovery bundle, pins a disposable publisher, admits its
+  signed manifest, checks exact pending counts, pauses, kills/restarts the daemon,
+  replays original trust/selection receipts, resumes, cancels, reads retained work
+  and rejects a changed retry. Anonymous malformed input returns 401 before decoding.
+- Affected all-target/all-feature Rust Clippy passed in **19.66 seconds**;
+  generated drift and web type-checking passed. The embedded web build took
+  **0.331 seconds**. Initial checks caught a composition-size limit and a Fetch
+  query-helper argument mismatch; neither limit nor generated validation was weakened.
+
+No dependency/version or persisted schema/wire version changed. No full-workspace
+gate was repeated per the current feature-first cadence. Remaining task-22 work:
+candidate-byte staging/distribution, owned replacement/restart, authenticated
+readiness collection and real rolling availability. Its **13-point** estimate and
+Stage 10's **121-point** total remain unchanged until there is an operating updater.
+No release, tag, publication, GitHub Actions or user-browser operation occurred.
+
+Final affected TypeScript/ESLint checks passed, including the generators and
+handwritten tests; seven web cases passed again in **1.39 seconds** after fixture
+lint corrections. Final affected Rust Clippy and formatting passed in
+**10.89 seconds** after the route's HTTP bound was aligned with the 24 KiB contract.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in

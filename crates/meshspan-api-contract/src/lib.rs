@@ -51,6 +51,10 @@ mod notification_destination;
 mod notification_tests;
 mod notification_validation;
 mod notifications;
+#[cfg(test)]
+mod update_tests;
+mod update_validation;
+mod updates;
 pub use metric_history::{
     HistoricalMetric, HistoricalMetricValue, MAX_METRIC_HISTORY_BYTES, MetricHistoryPoint,
     MetricHistoryResolution, MetricHistoryResponse, MetricSeconds,
@@ -76,6 +80,14 @@ pub use notifications::{
     ConfigureNotificationRequest, ConfigureNotificationResponse, NotificationChannelStatus,
     NotificationDeliveryCounts, NotificationKind, NotificationSettingsUpdate,
     NotificationWorkerStatus, NotificationsResponse,
+};
+pub use update_validation::{
+    MAX_MANAGE_UPDATE_BYTES, decode_manage_update_request, encode_manage_update_response,
+    encode_updates_response,
+};
+pub use updates::{
+    ManageUpdateRequest, ManageUpdateResponse, UpdateAction, UpdateControl, UpdateIdentifier,
+    UpdateProgress, UpdateRolloutStatus, UpdateSignerStatus, UpdateState, UpdatesResponse,
 };
 mod runtime_diagnostics;
 #[cfg(test)]

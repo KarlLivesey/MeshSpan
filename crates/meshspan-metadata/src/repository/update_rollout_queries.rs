@@ -82,7 +82,57 @@ pub struct UpdateNodeRecord {
     pub observed_at: Option<UnixMicros>,
 }
 
+/// Bounded aggregate projection over indexed rollout checkpoints, not live readiness.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct UpdateProgressCounts {
+    /// Nodes awaiting staging.
+    pub pending: u64,
+    /// Nodes with staged bytes.
+    pub staged: u64,
+    /// Nodes restarting.
+    pub restarting: u64,
+    /// Nodes with a verified replacement process.
+    pub verified: u64,
+    /// Nodes with a failed checkpoint.
+    pub failed: u64,
+    /// Restarts whose outcomes must still be reconciled.
+    pub unresolved_restarts: u64,
+}
+
 impl AuthoritativeRepository {
+    /// Count checkpoints without materialising every selected member.
+    ///
+    /// # Errors
+    /// Rejects unknown phases, invalid counts or unavailable storage.
+    pub fn update_progress_counts(
+        &self,
+        id: WorkId,
+    ) -> Result<UpdateProgressCounts, RepositoryError> {
+        let mut statement = self.database.connection().prepare(
+            "SELECT phase, COUNT(*), SUM(restart_pending) FROM update_rollout_nodes WHERE rollout_id=?1 GROUP BY phase",
+        )?;
+        let rows = statement.query_map([id.as_bytes()], |row| {
+            Ok((row.get::<_, u8>(0)?, unsigned(row, 1)?, unsigned(row, 2)?))
+        })?;
+        let mut counts = UpdateProgressCounts::default();
+        for row in rows {
+            let (phase, count, unresolved) = row?;
+            match phase {
+                1 => counts.pending = count,
+                2 => counts.staged = count,
+                3 => counts.restarting = count,
+                4 => counts.verified = count,
+                5 => counts.failed = count,
+                _ => return Err(RepositoryError::CorruptState),
+            }
+            counts.unresolved_restarts = counts
+                .unresolved_restarts
+                .checked_add(unresolved)
+                .ok_or(RepositoryError::CorruptState)?;
+        }
+        Ok(counts)
+    }
+
     /// Reads configured update signers, bounded to the 64-entry trust-policy limit.
     ///
     /// # Errors

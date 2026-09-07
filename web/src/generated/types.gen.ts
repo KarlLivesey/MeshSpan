@@ -4637,6 +4637,103 @@ export type ListVolumesResponse = {
 };
 
 /**
+ * ManageUpdateRequest
+ *
+ * Retain the complete request unchanged when a connection loses the outcome.
+ */
+export type ManageUpdateRequest = {
+  /**
+   * One explicit action, with no implicit defaults.
+   */
+  action:
+    | {
+        /**
+         * Explicit trust enablement. Disabling pauses an active rollout from this signer.
+         */
+        enabled: boolean;
+        /**
+         * Zero creates; otherwise an exact compare-and-swap sequence.
+         */
+        expected_sequence: number;
+        kind: "configure_signer";
+        /**
+         * Canonical standard-base64 uncompressed P-256 SEC1 public key, never a private key.
+         */
+        public_key: string;
+        /**
+         * Stable identity; the key cannot change under this identity.
+         */
+        signer_id: string;
+      }
+    | {
+        /**
+         * Explicit consent required when remaining members cannot preserve service.
+         */
+        allow_service_interruption: boolean;
+        kind: "select_candidate";
+        /**
+         * Standard-base64 canonical signed JSON, at most 16 KiB after decoding.
+         */
+        manifest: string;
+        /**
+         * New stable rollout identity.
+         */
+        rollout_id: string;
+        /**
+         * Standard-base64 detached DER ECDSA signature, at most 72 decoded bytes.
+         */
+        signature: string;
+        /**
+         * Previously pinned publisher identity.
+         */
+        signer_id: string;
+        /**
+         * Exact enabled trust revision seen by the manager.
+         */
+        signer_sequence: number;
+      }
+    | {
+        /**
+         * Cancellation does not undo already verified installations.
+         */
+        control: "pause" | "resume" | "cancel";
+        /**
+         * Last observed aggregate sequence.
+         */
+        expected_sequence: number;
+        kind: "control";
+        /**
+         * Exact selected rollout.
+         */
+        rollout_id: string;
+      };
+  /**
+   * Stable mutation identity.
+   */
+  operation_id: string;
+};
+
+/**
+ * ManageUpdateResponse
+ *
+ * Original durable manager-command receipt; not an installation result.
+ */
+export type ManageUpdateResponse = {
+  /**
+   * Original authoritative revision.
+   */
+  committed_revision: number;
+  /**
+   * Original mutation identity.
+   */
+  operation_id: string;
+  /**
+   * Affected signer or rollout identity.
+   */
+  resource_id: string;
+};
+
+/**
  * MetadataDiagnosticsResponse
  *
  * Metadata-only snapshot; sections are local observations, not one atomic swarm-wide read.
@@ -6067,6 +6164,101 @@ export type StorageDrainSummary = {
    * Ready-to-follow current-status URL.
    */
   status_url: string;
+};
+
+/**
+ * UpdatesResponse
+ *
+ * Bounded administration response; null is no selected/known rollout, never completion.
+ */
+export type UpdatesResponse = {
+  /**
+   * Whether this build has an operating installer, separate from candidate admission.
+   */
+  installation_available: boolean;
+  /**
+   * Active rollout, or the exact requested retained rollout.
+   */
+  rollout: {
+    /**
+     * Original explicit consent, never inferred from topology.
+     */
+    allow_service_interruption: boolean;
+    /**
+     * Indexed local checkpoint counts; concurrent progress may advance the aggregate.
+     */
+    progress: {
+      /**
+       * Failed checkpoints, not permission to retry replacement blindly.
+       */
+      failed: string;
+      /**
+       * Members awaiting staging.
+       */
+      pending: string;
+      /**
+       * Members with a restart in progress.
+       */
+      restarting: string;
+      /**
+       * Members with a staged candidate.
+       */
+      staged: string;
+      /**
+       * Ambiguous restarts which must be resolved before another restart or cancellation.
+       */
+      unresolved_restarts: string;
+      /**
+       * Members with a verified new process.
+       */
+      verified: string;
+    };
+    /**
+     * Exact work identity, usable to inspect a completed or cancelled rollout.
+     */
+    rollout_id: string;
+    /**
+     * Current aggregate sequence for manager controls.
+     */
+    sequence: number;
+    /**
+     * Publisher trust identity.
+     */
+    signer_id: string;
+    /**
+     * Signed source commit, not a claim that the running process matches it.
+     */
+    source_commit: string;
+    /**
+     * Committed desired progression.
+     */
+    state: "running" | "paused" | "completed" | "cancelled";
+    /**
+     * Signed package version.
+     */
+    version: string;
+  } | null;
+  /**
+   * At most 64 independently configured publisher identities.
+   */
+  signers: Array<{
+    /**
+     * Whether new candidate admission may use this pin.
+     */
+    enabled: boolean;
+    /**
+     * Canonical public SEC1 bytes in standard base64.
+     */
+    public_key: string;
+    /**
+     * Current trust sequence.
+     */
+    sequence: number;
+    /**
+     * Pinned identity.
+     */
+    signer_id: string;
+  }>;
 };
 
 /**
@@ -9291,6 +9483,112 @@ export type ListTopologyTargetsResponses = {
 
 export type ListTopologyTargetsResponse2 =
   ListTopologyTargetsResponses[keyof ListTopologyTargetsResponses];
+
+export type GetUpdatesData = {
+  body?: never;
+  path?: never;
+  query?: {
+    rollout_id?: string;
+  };
+  url: "/admin/updates";
+};
+
+export type GetUpdatesErrors = {
+  /**
+   * Invalid query or unexpected body
+   */
+  400: ApiError;
+  /**
+   * Authentication required
+   */
+  401: ApiError;
+  /**
+   * Manager authority required
+   */
+  403: ApiError;
+  /**
+   * Invalid stored or outgoing evidence
+   */
+  500: ApiError;
+  /**
+   * Authority unavailable
+   */
+  503: ApiError;
+};
+
+export type GetUpdatesError = GetUpdatesErrors[keyof GetUpdatesErrors];
+
+export type GetUpdatesResponses = {
+  /**
+   * Public trust and durable progress
+   */
+  200: UpdatesResponse;
+};
+
+export type GetUpdatesResponse = GetUpdatesResponses[keyof GetUpdatesResponses];
+
+export type ManageUpdateData = {
+  /**
+   * One explicit manager action
+   */
+  body: ManageUpdateRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/admin/updates";
+};
+
+export type ManageUpdateErrors = {
+  /**
+   * Invalid input
+   */
+  400: ApiError;
+  /**
+   * Authentication required
+   */
+  401: ApiError;
+  /**
+   * Manager authority required
+   */
+  403: ApiError;
+  /**
+   * Rejected command, stale sequence or changed retry
+   */
+  409: ApiError;
+  /**
+   * Body exceeds its bound
+   */
+  413: ApiError;
+  /**
+   * JSON required
+   */
+  415: ApiError;
+  /**
+   * Invalid outgoing evidence
+   */
+  500: ApiError;
+  /**
+   * Authority unavailable or outcome unresolved
+   */
+  503: ApiError;
+};
+
+export type ManageUpdateError = ManageUpdateErrors[keyof ManageUpdateErrors];
+
+export type ManageUpdateResponses = {
+  /**
+   * Original committed command receipt
+   */
+  200: ManageUpdateResponse;
+};
+
+export type ManageUpdateResponse2 =
+  ManageUpdateResponses[keyof ManageUpdateResponses];
 
 export type ListUsersData = {
   body?: never;

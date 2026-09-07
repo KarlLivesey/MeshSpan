@@ -104,6 +104,8 @@ function readObservabilityRoutes(operations) {
     ),
     getMetricsExporter: requireOperation(operations, "getMetricsExporter"),
     getNotifications: requireOperation(operations, "getNotifications"),
+    getUpdates: requireOperation(operations, "getUpdates"),
+    manageUpdate: requireOperation(operations, "manageUpdate"),
     configureNotification: requireOperation(
       operations,
       "configureNotification",

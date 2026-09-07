@@ -5027,6 +5027,110 @@ export const zListVolumesResponse = z
   .strict();
 
 /**
+ * ManageUpdateRequest
+ *
+ * Retain the complete request unchanged when a connection loses the outcome.
+ */
+export const zManageUpdateRequest = z
+  .strictObject({
+    action: z.union([
+      z
+        .strictObject({
+          enabled: z.boolean(),
+          expected_sequence: z.int().gte(0).lte(9007199254740990),
+          kind: z.literal("configure_signer"),
+          public_key: z
+            .string()
+            .length(88)
+            .regex(/^[A-Za-z0-9+\/]{87}=$/),
+          signer_id: z
+            .string()
+            .length(36)
+            .regex(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+            ),
+        })
+        .strict(),
+      z
+        .strictObject({
+          allow_service_interruption: z.boolean(),
+          kind: z.literal("select_candidate"),
+          manifest: z
+            .string()
+            .min(4)
+            .max(21848)
+            .regex(/^[A-Za-z0-9+\/]+={0,2}$/),
+          rollout_id: z
+            .string()
+            .length(36)
+            .regex(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+            ),
+          signature: z
+            .string()
+            .min(4)
+            .max(96)
+            .regex(/^[A-Za-z0-9+\/]+={0,2}$/),
+          signer_id: z
+            .string()
+            .length(36)
+            .regex(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+            ),
+          signer_sequence: z.int().gte(1).lte(9007199254740991),
+        })
+        .strict(),
+      z
+        .strictObject({
+          control: z.union([
+            z.literal("pause"),
+            z.literal("resume"),
+            z.literal("cancel"),
+          ]),
+          expected_sequence: z.int().gte(1).lte(9007199254740990),
+          kind: z.literal("control"),
+          rollout_id: z
+            .string()
+            .length(36)
+            .regex(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+            ),
+        })
+        .strict(),
+    ]),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * ManageUpdateResponse
+ *
+ * Original durable manager-command receipt; not an installation result.
+ */
+export const zManageUpdateResponse = z
+  .strictObject({
+    committed_revision: z.int().gte(1).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    resource_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * MetadataDiagnosticsResponse
  *
  * Metadata-only snapshot; sections are local observations, not one atomic swarm-wide read.
@@ -6573,6 +6677,107 @@ export const zStorageDrainSummary = z
   .strict();
 
 /**
+ * UpdatesResponse
+ *
+ * Bounded administration response; null is no selected/known rollout, never completion.
+ */
+export const zUpdatesResponse = z
+  .strictObject({
+    installation_available: z.boolean(),
+    rollout: z
+      .strictObject({
+        allow_service_interruption: z.boolean(),
+        progress: z
+          .strictObject({
+            failed: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+            pending: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+            restarting: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+            staged: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+            unresolved_restarts: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+            verified: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^(0|[1-9][0-9]*)$/),
+          })
+          .strict(),
+        rollout_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        sequence: z.int().gte(1).lte(9007199254740991),
+        signer_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        source_commit: z
+          .string()
+          .length(40)
+          .regex(/^[0-9a-f]{40}$/),
+        state: z.union([
+          z.literal("running"),
+          z.literal("paused"),
+          z.literal("completed"),
+          z.literal("cancelled"),
+        ]),
+        version: z
+          .string()
+          .min(5)
+          .max(29)
+          .regex(
+            /^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$/,
+          ),
+      })
+      .strict()
+      .nullable(),
+    signers: z
+      .array(
+        z
+          .strictObject({
+            enabled: z.boolean(),
+            public_key: z
+              .string()
+              .length(88)
+              .regex(/^[A-Za-z0-9+\/]{87}=$/),
+            sequence: z.int().gte(1).lte(9007199254740991),
+            signer_id: z
+              .string()
+              .length(36)
+              .regex(
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+              ),
+          })
+          .strict(),
+      )
+      .max(64),
+  })
+  .strict();
+
+/**
  * UploadStatusResponse
  *
  * Common exact upload state returned after every lifecycle operation.
@@ -8060,6 +8265,42 @@ export const zListTopologyTargetsQuery = z
  * One bounded topology page
  */
 export const zListTopologyTargetsResponse2 = zListTopologyTargetsResponse;
+
+export const zGetUpdatesQuery = z
+  .object({
+    rollout_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      )
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Public trust and durable progress
+ */
+export const zGetUpdatesResponse = zUpdatesResponse;
+
+/**
+ * One explicit manager action
+ */
+export const zManageUpdateBody = zManageUpdateRequest;
+
+export const zManageUpdateHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Original committed command receipt
+ */
+export const zManageUpdateResponse2 = zManageUpdateResponse;
 
 export const zListUsersQuery = z
   .object({

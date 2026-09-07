@@ -46,6 +46,9 @@ import type {
   BackupScheduleResponse,
   MetricsExporterResponse,
   NotificationsResponse,
+  UpdatesResponse,
+  ManageUpdateRequest,
+  ManageUpdateResponse,
   ConfigureNotificationRequest,
   ConfigureNotificationResponse,
   GetMetricHistoryData,
@@ -170,6 +173,10 @@ import {
   zGetBackupScheduleResponse,
   zGetMetricsExporterResponse,
   zGetNotificationsResponse,
+  zGetUpdatesQuery,
+  zGetUpdatesResponse,
+  zManageUpdateBody,
+  zManageUpdateResponse2,
   zConfigureNotificationBody,
   zConfigureNotificationResponse2,
   zGetMetricHistoryQuery,
@@ -486,6 +493,11 @@ export interface MeshSpanFetchClient {
     request: ConfigureNotificationRequest,
     csrfToken?: string,
   ): Promise<ConfigureNotificationResponse>;
+  getUpdates(rolloutId?: string): Promise<UpdatesResponse>;
+  manageUpdate(
+    request: ManageUpdateRequest,
+    csrfToken?: string,
+  ): Promise<ManageUpdateResponse>;
   listBackupDestinations(
     query?: ListBackupDestinationsQuery,
   ): Promise<ListBackupDestinationsResponse>;
@@ -1075,6 +1087,30 @@ export function createMeshSpanFetchClient(
           method: "PUT",
         },
         zConfigureNotificationResponse2,
+      );
+    },
+    async getUpdates(rolloutId): Promise<UpdatesResponse> {
+      const query = zGetUpdatesQuery.parse(
+        rolloutId === undefined ? {} : { rollout_id: rolloutId },
+      );
+      return requestJson(
+        context,
+        appendQuery("/admin/updates", query ?? {}),
+        { method: "GET" },
+        zGetUpdatesResponse,
+      );
+    },
+    async manageUpdate(request, csrfToken): Promise<ManageUpdateResponse> {
+      const body = zManageUpdateBody.parse(request);
+      return requestJson(
+        context,
+        "/admin/updates",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "PUT",
+        },
+        zManageUpdateResponse2,
       );
     },
     async listBackupDestinations(

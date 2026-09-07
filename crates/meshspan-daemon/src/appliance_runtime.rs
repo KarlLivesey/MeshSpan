@@ -695,15 +695,15 @@ fn compose_appliance_services(
         &node.private_network,
         started_at,
     )?;
-    let (notifications, notification_service) =
-        compose_notifications(node, &private_authority.authority, gateway, started_at)?;
+    let (notifications, operations_routes) =
+        compose_operation_administration(node, &private_authority.authority, gateway, started_at)?;
     let consensus_observations =
         crate::consensus_observation_worker::ConsensusObservationWorker::new(
             private_authority.authority.clone(),
             readiness.observations.clone(),
         );
     let router = Router::new()
-        .merge(crate::notification_api::router(notification_service)?)
+        .merge(operations_routes)
         .merge(public_contract_api_router(readiness)?)
         .merge(join_grant_routes(
             &node.local_state,
@@ -752,18 +752,12 @@ fn compose_appliance_services(
     })
 }
 
-fn compose_notifications(
+fn compose_operation_administration(
     node: &DaemonNodeRuntime,
     authority: &MetadataAuthorityHandle,
     gateway: GatewaySessionIdentity,
     now: UnixMicros,
-) -> Result<
-    (
-        crate::notification_runtime::NotificationRuntime,
-        crate::notification_service::NotificationService,
-    ),
-    DaemonProcessError,
-> {
+) -> Result<(crate::notification_runtime::NotificationRuntime, Router), DaemonProcessError> {
     let open = || {
         open_authentication_authority(
             &node.local_state,
@@ -790,7 +784,10 @@ fn compose_notifications(
         node.local_state.open_wrapping_key()?,
         runtime.health(),
     );
-    Ok((runtime, service))
+    let routes = crate::notification_api::router(service)?.merge(crate::update_api::router(
+        crate::update_service::UpdateService::new(open()?, gateway),
+    )?);
+    Ok((runtime, routes))
 }
 
 fn compose_smb_connections(
