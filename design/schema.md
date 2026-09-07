@@ -1541,3 +1541,33 @@ The command layer and database constraints jointly enforce:
 Implementation must provide an offline invariant checker used by tests, backup
 verification and recovery tooling. It reports contradictions without attempting
 an unauthorised automatic rewrite.
+
+## Implemented software-update journal
+
+Partition migration `091_update_rollouts.sql` stores the update control plane in
+authoritative metadata, not daemon-local configuration:
+
+| Record | Role |
+| --- | --- |
+| `update_signers` | Immutable public key per signer identity, explicit enablement and trust sequence. New keys require new identities. |
+| `update_rollouts` | Exact signed candidate, original interruption consent, selecting principal, aggregate state and sequence. |
+| `update_rollout_nodes` | Snapshotted active node/incarnation, monotonic checkpoint sequence, selected target, evidence digest and unresolved-restart ownership. |
+
+One partial unique index permits only one running/paused rollout. Another permits
+only one unresolved restart in that rollout, including a failed attempt that may
+still have side effects. Pausing and signer revocation retain that ownership.
+Resume returns such an attempt to probing; it does not mark it pending for blind
+reinstallation. Cancellation does not roll back already verified nodes.
+
+The canonical private metadata command codec remains version 4. After its normal
+command context, the update body begins with a big-endian `u16` kind: 84 signer
+configuration, 85 candidate selection, 86 node checkpoint, 87 rollout control.
+Exact field order is defined in
+[`command_codec/update.rs`](../crates/meshspan-metadata/src/command_codec/update.rs)
+and documented typed records in
+[`update_command.rs`](../crates/meshspan-metadata/src/update_command.rs).
+IDs and digests are fixed-width; variable bytes/text have a big-endian `u32`
+length; presence and Boolean fields are one canonical byte. Manifest/signature
+bounds are 16 KiB/72 bytes. Restart witnesses bind the active root quorum proof
+and at most 19 distinct ready identities, enough for joint voters and a gateway.
+The wire representation itself never grants permission to install software.

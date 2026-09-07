@@ -20,7 +20,7 @@ use super::{
     namespace, node_certificate, node_wrapping_key, notification, notification_delivery,
     protection_policy, recovery_authority, retention, root_delegation, routing, secret_generation,
     session, smb_export_configuration, snapshot_schedule, storage_target, tags, topology,
-    user_snapshot, version_cleanup, volume_head,
+    update_rollout, user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -624,6 +624,10 @@ fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
         || matches!(
             command,
             AuthoritativeCommand::CreateComponent(_)
+                | AuthoritativeCommand::ConfigureUpdateSigner(_)
+                | AuthoritativeCommand::StartUpdateRollout(_)
+                | AuthoritativeCommand::AdvanceUpdateNode(_)
+                | AuthoritativeCommand::ControlUpdateRollout(_)
                 | AuthoritativeCommand::ConfigureMetricsExporter(_)
                 | AuthoritativeCommand::ConfigureNotificationChannel(_)
                 | AuthoritativeCommand::QueueNotification(_)
@@ -707,6 +711,9 @@ fn execute_infrastructure_command(
     }
     if is_backup_command(command) {
         return execute_backup_command(transaction, partition_id, context, command, revision);
+    }
+    if let Some(result) = update_rollout::execute(transaction, context, command, revision) {
+        return result;
     }
     match command {
         AuthoritativeCommand::CreateComponent(value) => {
@@ -1475,6 +1482,10 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::QueueNotification(_) => 145,
         AuthoritativeCommand::ClaimNotification(_) => 146,
         AuthoritativeCommand::CompleteNotification(_) => 147,
+        AuthoritativeCommand::ConfigureUpdateSigner(_) => 148,
+        AuthoritativeCommand::StartUpdateRollout(_) => 149,
+        AuthoritativeCommand::AdvanceUpdateNode(_) => 150,
+        AuthoritativeCommand::ControlUpdateRollout(_) => 151,
     }
 }
 

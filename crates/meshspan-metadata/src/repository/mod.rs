@@ -49,6 +49,14 @@ mod cleanup_permit;
 mod cleanup_reclamation;
 mod cluster;
 mod component;
+mod update_restart;
+mod update_rollout;
+mod update_rollout_queries;
+#[cfg(test)]
+mod update_rollout_tests;
+pub use update_rollout_queries::{
+    UpdateNodeRecord, UpdateRolloutRecord, UpdateRolloutState, UpdateSignerRecord,
+};
 mod consensus;
 mod external_certificate;
 mod federation_actor_attestation;
