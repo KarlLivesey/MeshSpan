@@ -467,6 +467,15 @@ where
     let mut arguments = arguments.into_iter().peekable();
     if arguments
         .peek()
+        .is_some_and(|value| value == "update-runtime-info")
+    {
+        if arguments.count() != 1 {
+            return Err(crate::UpdateCandidateError::Arguments.into());
+        }
+        return crate::update_runtime_info::print_report().map_err(Into::into);
+    }
+    if arguments
+        .peek()
         .is_some_and(|value| value == "verify-update")
     {
         arguments.next();

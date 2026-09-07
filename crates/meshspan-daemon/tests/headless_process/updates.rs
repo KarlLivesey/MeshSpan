@@ -37,16 +37,17 @@ async fn update_administration_preserves_trust_selection_and_exact_retry_after_r
         let candidate = candidate(&root, &signer)?;
         let selected = api.manage(&candidate, "200 OK").await?;
         assert_eq!(selected["resource_id"], ROLLOUT);
+        let sequence = api.status(false).await?["rollout"]["sequence"].as_u64().ok_or("sequence absent")?;
+        // This test isolates upload/retry semantics; dummy bytes must not be probed.
+        api.manage(&control("pause", sequence, 405), "200 OK").await?;
         let staged = api.stage(b"abc", "200 OK").await?;
         assert_eq!(staged["sha256"], ARTIFACT_DIGEST);
         assert_eq!(staged["byte_length"], "3");
         assert_eq!(std::fs::read(root.state_path.join("update-artifacts").join(ARTIFACT_DIGEST))?, b"abc");
         let status = api.status(false).await?;
         assert_eq!(status["installation_available"], false);
-        assert_eq!(status["rollout"]["state"], "running");
+        assert_eq!(status["rollout"]["state"], "paused");
         assert_eq!(status["rollout"]["progress"], json!({"pending":"1", "staged":"0", "restarting":"0", "verified":"0", "failed":"0", "unresolved_restarts":"0"}));
-        let sequence = status["rollout"]["sequence"].as_u64().ok_or("sequence absent")?;
-        api.manage(&control("pause", sequence, 405), "200 OK").await?;
         processes[0].kill()?;
         processes[0].wait()?;
         processes[0] = root.command().spawn()?;
@@ -111,10 +112,9 @@ async fn signed_candidate_automatically_reaches_three_daemons_and_survives_peer_
         .await?;
         api.stage(&executable, "200 OK").await?;
         wait_for_sources([&root, &second, &third], &executable, digest).await?;
-        assert_eq!(
-            api.status(false).await?["rollout"]["progress"]["pending"],
-            "3"
-        );
+        let status = api.wait_for("paused", "failed", None).await?;
+        assert_eq!(status["rollout"]["progress"]["staged"], "0");
+        assert_eq!(status["rollout"]["progress"]["restarting"], "0");
         processes[1].kill()?;
         processes[1].wait()?;
         processes[1] = second.command().spawn()?;
@@ -169,6 +169,56 @@ async fn wait_for_sources(
     }
 }
 
+#[tokio::test]
+async fn real_signed_executable_passes_runtime_probe_and_retains_staging_after_restart()
+-> Result<(), Box<dyn Error>> {
+    use sha2::{Digest as _, Sha256};
+    use std::fmt::Write as _;
+    let root = ProcessFixture::new()?;
+    let executable = std::fs::read(root.command().get_program())?;
+    let mut digest = String::new();
+    for byte in Sha256::digest(&executable) {
+        write!(&mut digest, "{byte:02x}")?;
+    }
+    let mut processes = vec![root.start()?];
+    let proof = async {
+        let claim = super::wait_for_claim(&root.claim_path).await?;
+        let client = super::wait_for_client(&root.identity_path).await?;
+        super::wait_for_status(root.address, &client, "claim_required").await?;
+        let created = super::create_process_mesh(&root, &client, &claim).await?;
+        let key = created["api_key"].as_str().ok_or("bootstrap key absent")?;
+        super::save_and_verify_recovery_bundle(&root, &client, key, &created).await?;
+        let api = UpdateApi { root: &root, client: &client, key };
+        let signer = NodeIdentityKey::generate()?;
+        api.manage(&pin(&signer), "200 OK").await?;
+        api.manage(&candidate_artifact(&root, &signer, executable.len(), &digest)?, "200 OK").await?;
+        api.stage(&executable, "200 OK").await?;
+        // GNU development binaries are not the signed static-musl distribution target.
+        if cfg!(all(target_os = "linux", not(target_env = "musl"))) {
+            let refused = api.wait_for("paused", "failed", Some("1")).await?;
+            assert_eq!(refused["rollout"]["progress"]["staged"], "0");
+            return Ok(());
+        }
+        let staged = api.wait_for("running", "staged", Some("1")).await?;
+        assert_eq!(staged["rollout"]["progress"], json!({"pending":"0", "staged":"1", "restarting":"0", "verified":"0", "failed":"0", "unresolved_restarts":"0"}));
+        let evidence = std::fs::read_dir(root.state_path.join("update-evidence"))?.collect::<Result<Vec<_>,_>>()?;
+        assert_eq!(evidence.len(), 1);
+        let report: Value = serde_json::from_slice(&std::fs::read(evidence[0].path())?)?;
+        assert_eq!(report["accepted"], true);
+        assert_eq!(report["runtime"]["licence"], "GPL-2.0-only");
+        assert_eq!(report["runtime"]["version"], "0.1.0");
+        assert_eq!(report["runtime"]["target"], target());
+        processes[0].kill()?;
+        processes[0].wait()?;
+        processes[0] = root.start()?;
+        super::wait_for_status(root.address, &client, "configured").await?;
+        assert_eq!(api.status(false).await?["rollout"], staged["rollout"]);
+        Ok::<_, Box<dyn Error>>(())
+    }.await;
+    super::stop_processes(&mut processes);
+    super::retain_failure_state(proof, [root.temporary])
+}
+
 fn pin(signer: &NodeIdentityKey) -> Value {
     json!({"operation_id":"00000000-0000-4000-8000-000000000403", "action": {
         "kind":"configure_signer", "signer_id":SIGNER, "expected_sequence":0,
@@ -201,7 +251,7 @@ fn candidate_artifact(
     .schema_version();
     let manifest = serde_json::to_vec(
         &json!({"format":1, "licence":"GPL-2.0-only", "version":"0.1.0",
-        "source_commit":"a".repeat(40), "api_sha256":"b".repeat(64),
+        "source_commit":"a".repeat(40), "api_sha256":meshspan_api_contract::generate_openapi()?.digest().strip_prefix("sha256:").ok_or("missing API digest prefix")?,
         "compatibility":{"private_protocol_major":1, "partition_schema_min":schema, "partition_schema_max":schema,
             "partition_schema_target":schema, "rollback_supported":false},
         "artifacts":[{"target":target(), "size":length.to_string(), "sha256":digest}]}),
@@ -228,24 +278,52 @@ struct UpdateApi<'a> {
 }
 
 impl UpdateApi<'_> {
+    async fn wait_for(
+        &self,
+        state: &str,
+        phase: &str,
+        count: Option<&str>,
+    ) -> Result<Value, Box<dyn Error>> {
+        let deadline = tokio::time::Instant::now() + super::WAIT_LIMIT;
+        loop {
+            let status = self.status(false).await?;
+            let observed = status["rollout"]["progress"][phase]
+                .as_str()
+                .ok_or("progress absent")?;
+            if status["rollout"]["state"] == state
+                && count.map_or(observed != "0", |count| observed == count)
+            {
+                return Ok(status);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!("update did not reach {state}/{phase}: {status}").into());
+            }
+            tokio::time::sleep(super::RETRY_INTERVAL).await;
+        }
+    }
+
     async fn stage(&self, bytes: &[u8], expected: &str) -> Result<Value, Box<dyn Error>> {
         let endpoint = format!("{API}/{ROLLOUT}/artifacts/{}", target());
-        let response = super::request_with_content_type(
-            self.root.address,
-            self.client,
-            "PUT",
-            &endpoint,
-            Some(bytes),
-            "application/octet-stream",
-            &[
-                ("Authorization", &format!("Bearer {}", self.key)),
-                (
-                    "MeshSpan-Operation-Id",
-                    "00000000-0000-4000-8000-000000000408",
-                ),
-            ],
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            super::request_with_content_type(
+                self.root.address,
+                self.client,
+                "PUT",
+                &endpoint,
+                Some(bytes),
+                "application/octet-stream",
+                &[
+                    ("Authorization", &format!("Bearer {}", self.key)),
+                    (
+                        "MeshSpan-Operation-Id",
+                        "00000000-0000-4000-8000-000000000408",
+                    ),
+                ],
+            ),
         )
-        .await?;
+        .await
+        .map_err(|_| "signed executable upload timed out")??;
         require_status(&response, expected, "stage exact signed executable")?;
         Ok(serde_json::from_str(response_body(&response)?)?)
     }

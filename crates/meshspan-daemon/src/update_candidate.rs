@@ -70,6 +70,16 @@ pub(crate) fn verify_command(arguments: &[std::ffi::OsString]) -> Result<(), Upd
         .map_err(|_| UpdateCandidateError::Worker)
 }
 
+pub(crate) fn local_target() -> Result<&'static str, UpdateCandidateError> {
+    match (std::env::consts::ARCH, std::env::consts::OS) {
+        ("aarch64", "macos") => Ok("aarch64-apple-darwin"),
+        ("x86_64", "macos") => Ok("x86_64-apple-darwin"),
+        ("aarch64", "linux") => Ok("aarch64-unknown-linux-musl"),
+        ("x86_64", "linux") => Ok("x86_64-unknown-linux-musl"),
+        _ => Err(UpdateCandidateError::Artifact),
+    }
+}
+
 fn verify_executable(
     file_path: &Path,
     artifact: &meshspan_metadata::UpdateArtifact,
@@ -118,7 +128,7 @@ fn read_bounded(file_path: &Path, maximum: u64) -> Result<Vec<u8>, UpdateCandida
     Ok(bytes)
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     bytes
         .iter()

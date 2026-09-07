@@ -144,6 +144,21 @@ impl UpdateArtifactStore {
         std::io::Seek::rewind(&mut file)?;
         Ok(file)
     }
+
+    /// Verify signed bytes before enabling owner-only execution. Never enables sibling access.
+    pub(crate) fn executable(
+        &self,
+        manifest: &UpdateManifest,
+        target: &str,
+    ) -> Result<PathBuf, ArtifactStoreError> {
+        let file = self.open_verified(manifest, target)?;
+        file.set_permissions(fs::Permissions::from_mode(0o700))?;
+        file.sync_all()?;
+        let artifact = manifest
+            .artifact(target)
+            .map_err(|_| ArtifactStoreError::Invalid)?;
+        Ok(self.directory.join(artifact.sha256))
+    }
 }
 
 fn transfer(

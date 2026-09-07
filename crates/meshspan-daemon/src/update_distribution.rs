@@ -80,13 +80,17 @@ impl UpdateDistribution {
             return Ok(());
         };
         let record = update_peer::candidate(self.service.authority.reader(), active.rollout_id)?;
-        let target = local_target()?;
+        let target = crate::update_candidate::local_target()
+            .map_err(|_| update_peer::UpdatePeerError::Rejected)?;
         if self
             .verified
             .as_ref()
             .is_some_and(|(id, platform)| *id == record.rollout_id && platform == target)
         {
-            return Ok(());
+            return self
+                .service
+                .stage_pending(&record, &self.directory)
+                .map_err(|_| update_peer::UpdatePeerError::Unavailable);
         }
         let expected = update_peer::identity(record.rollout_id, &record.manifest, target)?;
         let store = UpdateArtifactStore::open(&self.directory)?;
@@ -103,7 +107,9 @@ impl UpdateDistribution {
             .map_err(|_| update_peer::UpdatePeerError::Unavailable)?;
         self.verified = Some((record.rollout_id, target.to_owned()));
         self.source_cursor = None;
-        Ok(())
+        self.service
+            .stage_pending(&record, &self.directory)
+            .map_err(|_| update_peer::UpdatePeerError::Unavailable)
     }
 
     async fn fetch(
@@ -217,14 +223,4 @@ fn operation(
             .map_err(|_| update_peer::UpdatePeerError::Rejected)?,
     ))
     .map_err(|_| update_peer::UpdatePeerError::Rejected)
-}
-
-fn local_target() -> Result<&'static str, update_peer::UpdatePeerError> {
-    match (std::env::consts::ARCH, std::env::consts::OS) {
-        ("aarch64", "macos") => Ok("aarch64-apple-darwin"),
-        ("x86_64", "macos") => Ok("x86_64-apple-darwin"),
-        ("aarch64", "linux") => Ok("aarch64-unknown-linux-musl"),
-        ("x86_64", "linux") => Ok("x86_64-unknown-linux-musl"),
-        _ => Err(update_peer::UpdatePeerError::Rejected),
-    }
 }

@@ -3447,6 +3447,73 @@ peer-delivery evidence, not installation, hardware failure or release evidence.
 No release, tag, image/package publication, GitHub Actions or user-browser
 operation occurred.
 
+## Task 22 — executable compatibility and durable staging
+
+After verified distribution, the owning daemon now probes the signed executable
+and commits a real node checkpoint. The candidate's `update-runtime-info` mode
+opens no daemon state or listeners and emits one canonical bounded report:
+format, exact `GPL-2.0-only` identifier, package version, compiled Cargo target,
+generated API digest, private protocol major, metadata-command version and
+partition/local schema targets. The compiled target prevents a GNU development
+binary being misrepresented as a static-musl distribution artefact.
+
+The updater freshly verifies the executable, enables owner-only execution and
+runs this command in its owned blocking worker with an empty environment,
+discarded stderr and an 8 KiB report bound. A single ten-second monotonic deadline
+covers the report and child exit. Invalid/noncanonical reports, unsuccessful
+exit or a failed probe do not produce a staged checkpoint. This is execution of
+administrator-trusted signed code, not an OS sandbox for untrusted programs.
+
+The report must match the signed version/API and selected platform. Command and
+persistence formats must remain unchanged; schema-changing candidates currently
+fail admission until a tested migration path exists. A signed compatibility
+range alone is not evidence of a safe migration. These checks are executable
+capability admission, not service readiness or completed installation.
+
+Probe evidence binds the manifest digest, rollout, node/incarnation and expected
+checkpoint sequence. It is fsynced in owner-only `update-evidence` before the
+typed authoritative transition. Successful probes commit staged; failed probes
+commit failed and pause the rollout. Exact operation/receipt retry is shared with
+the existing update service. Pausing prevents new probes while still allowing
+verified byte distribution; resumed failed nodes are eligible for a new probe.
+The worker uses a keyed node lookup, not a whole-mesh membership scan.
+
+Final focused local run under the active NVM toolchain and Rust 1.98.0:
+
+- Three real daemon/HTTPS update cases passed in **34.72 seconds**, build
+  **15.72**: exact administration/upload retry after restart, three-node signed
+  multi-frame distribution plus failed executable admission, and actual signed
+  daemon staging/evidence retained across restart. The last uploads the real
+  approximately 152 MiB debug executable, not a reporting stub.
+- Two runtime-report contract/IO cases passed in **0.10 seconds**, build **9.41**.
+  They cover the exact accepted report, altered identity/API/platform/format,
+  persistence/command mismatch, unknown fields, excessive output and expiry.
+- Affected all-target/all-feature Clippy passed in **13.78 seconds**. Formatting
+  and diff checks passed; no lint was disabled. No whole-workspace gate was
+  repeated during feature construction.
+
+No dependency, persisted schema or public API changed. No releases, tags,
+package/image publication, GitHub Actions or user-browser operations were
+performed. The current host proves macOS ARM64 staging, not Linux/macOS mixed
+rolling installation or hardware availability.
+
+The first real-binary upload stalled with exactly **27,684 bytes** absent from
+the server's temporary file. Process samples showed the cache waiting for input,
+not hashing. The shared test client had not flushed its final TLS records before
+waiting for a response. Adding the required flush made the complete real-binary
+path pass; the update upload test also now has a sixty-second deadline. The
+interrupted failing fixture remains at `/var/folders/xk/vb061tws5wv3z_00cskjqtwr0000gn/T/.tmpo8fIef`.
+A new socket-bound unit fixture initially filled its socket before starting the
+reader; its writer and reader now run together in an owned scoped thread.
+Neither interrupted run is passing evidence.
+
+Task 22 remains incomplete: peer/service/catch-up observations, all-scope
+availability admission, durable executable handoff, new-process verification
+and the rolling availability proof are still required. The **13-point** task
+estimate and **121-point** Stage 10 estimate remain unchanged. Migration
+admission/refusal acceptance also remains in task 23. `installation_available`
+remains false; staged is not installed.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in

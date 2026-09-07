@@ -35,6 +35,24 @@ pub struct UpdateManifest {
 }
 
 impl UpdateManifest {
+    /// Exact public API digest declared by the signed candidate.
+    ///
+    /// # Errors
+    /// Rejects a malformed internal representation.
+    pub fn api_sha256(&self) -> Result<&str, UpdateManifestError> {
+        text(&self.value, "api_sha256")
+    }
+
+    /// Partition schema this signed candidate promises to produce.
+    ///
+    /// # Errors
+    /// Rejects a malformed internal representation.
+    pub fn target_partition_schema(&self) -> Result<u32, UpdateManifestError> {
+        self.value["compatibility"]["partition_schema_target"]
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or(UpdateManifestError::Manifest)
+    }
     /// Signed platform entries in manifest order, bounded to four by admission.
     ///
     /// # Errors

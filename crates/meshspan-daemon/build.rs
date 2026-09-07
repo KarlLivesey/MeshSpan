@@ -15,6 +15,10 @@ const MAX_ASSET_BYTES: u64 = 16 * 1024 * 1024;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let crate_root = env::var("CARGO_MANIFEST_DIR")?;
     let output = env::var("OUT_DIR")?;
+    println!(
+        "cargo::rustc-env=MESHSPAN_BUILD_TARGET={}",
+        env::var("TARGET")?
+    );
     let bundle = Path::new(&crate_root).join("../../web/dist");
     // Cargo must notice both replacements and additions to the compiled bundle.
     println!("cargo::rerun-if-changed=../../web/dist");
