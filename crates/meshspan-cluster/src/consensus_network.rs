@@ -355,7 +355,9 @@ impl ConsensusNetwork {
     /// Adds or atomically replaces one current enrolled peer route and certificate binding.
     ///
     /// Existing queued traffic is retained for an unchanged identity and replaced for a new
-    /// incarnation or certificate. The authoritative caller remains responsible for fencing.
+    /// incarnation or certificate. Subsequent ingress admission rechecks the new binding even
+    /// on an already negotiated connection. Work admitted before replacement is not rolled back.
+    /// The authoritative caller remains responsible for operation-specific fencing.
     ///
     /// # Errors
     ///
@@ -631,6 +633,7 @@ impl ConsensusNetwork {
         else {
             return Err(ConsensusNetworkError::InvalidTraffic);
         };
+        self.verify_current_peer(peer)?;
         let welcome = peer.negotiate(self.mesh_id, hello, &self.negotiation_config())?;
         let capability_digest = node_capability_digest(hello);
         send_control(
@@ -675,24 +678,22 @@ impl ConsensusNetwork {
         mut accepted: meshspan_transport::AcceptedStream,
         ingress: AuthenticatedStreamIngress,
     ) -> Result<(), ConsensusNetworkError> {
+        self.verify_current_peer(ingress.peer)?;
         match accepted.kind {
             StreamKind::Consensus => {
                 let envelope = receive_control(&mut accepted.receive, self.wire_limits).await?;
-                self.verify_header(
-                    &envelope,
-                    ingress.peer.node_id(),
-                    ingress.peer.incarnation(),
-                )?;
+                self.verify_peer_header(&envelope, ingress.peer)?;
                 let message = decode_consensus_message(&envelope)?;
-                ingress
-                    .messages
-                    .send(PeerConsensusMessage {
+                self.admit_peer_message(
+                    ingress.peer,
+                    &ingress.messages,
+                    PeerConsensusMessage {
                         from: ingress.peer.node_id(),
                         sender_incarnation: ingress.peer.incarnation(),
                         message,
-                    })
-                    .await
-                    .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
+                    },
+                )
+                .await?;
                 send_receipt(&mut accepted.send, self.wire_limits).await
             }
             StreamKind::Metadata => {
@@ -700,23 +701,21 @@ impl ConsensusNetwork {
                     .controls
                     .ok_or(ConsensusNetworkError::InvalidTraffic)?;
                 let envelope = receive_control(&mut accepted.receive, self.wire_limits).await?;
-                self.verify_header(
-                    &envelope,
-                    ingress.peer.node_id(),
-                    ingress.peer.incarnation(),
-                )?;
+                self.verify_peer_header(&envelope, ingress.peer)?;
                 let (respond, response) = oneshot::channel();
-                controls
-                    .send(PeerControlRequest {
+                self.admit_peer_message(
+                    ingress.peer,
+                    &controls,
+                    PeerControlRequest {
                         from: ingress.peer.node_id(),
                         sender_incarnation: ingress.peer.incarnation(),
                         envelope,
                         certificate_fingerprint: ingress.peer.certificate_fingerprint(),
                         capability_digest: ingress.capability_digest,
                         respond,
-                    })
-                    .await
-                    .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
+                    },
+                )
+                .await?;
                 let response = tokio::time::timeout(CONTROL_RESPONSE_TIMEOUT, response)
                     .await
                     .map_err(|_| ConsensusNetworkError::AuthorityStopped)?
@@ -733,26 +732,65 @@ impl ConsensusNetwork {
                     .snapshot_staging_path
                     .as_ref()
                     .ok_or(ConsensusNetworkError::InvalidTraffic)?;
-                self.receive_snapshot(
-                    ingress.peer.node_id(),
-                    staging_path,
-                    &mut accepted,
-                    &snapshots,
+                self.receive_snapshot(ingress.peer, staging_path, &mut accepted, &snapshots)
+                    .await
+            }
+            StreamKind::Data => {
+                self.admit_peer_message(
+                    ingress.peer,
+                    &ingress.data.ok_or(ConsensusNetworkError::InvalidTraffic)?,
+                    PeerDataStream {
+                        peer: ingress.peer,
+                        stream: accepted,
+                        limits: self.wire_limits,
+                    },
                 )
                 .await
             }
-            StreamKind::Data => ingress
-                .data
-                .ok_or(ConsensusNetworkError::InvalidTraffic)?
-                .send(PeerDataStream {
-                    peer: ingress.peer,
-                    stream: accepted,
-                    limits: self.wire_limits,
-                })
-                .await
-                .map_err(|_| ConsensusNetworkError::AuthorityStopped),
             StreamKind::Federation => Err(ConsensusNetworkError::InvalidTraffic),
         }
+    }
+
+    fn verify_current_peer(
+        &self,
+        peer: meshspan_transport::AuthenticatedPeer,
+    ) -> Result<(), ConsensusNetworkError> {
+        self.peers
+            .read()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
+            .registry
+            .revalidate(peer)?;
+        Ok(())
+    }
+
+    fn verify_peer_header(
+        &self,
+        envelope: &meshspan_protocol::ValidatedControlEnvelope,
+        peer: meshspan_transport::AuthenticatedPeer,
+    ) -> Result<(), ConsensusNetworkError> {
+        self.verify_current_peer(peer)?;
+        self.verify_header(envelope, peer.node_id(), peer.incarnation())
+    }
+
+    async fn admit_peer_message<T>(
+        &self,
+        peer: meshspan_transport::AuthenticatedPeer,
+        sender: &mpsc::Sender<T>,
+        message: T,
+    ) -> Result<(), ConsensusNetworkError> {
+        // Wait for capacity without a registry lock, then linearise admission with peer updates.
+        // A request blocked on backpressure must not keep authority withdrawn while it waited.
+        let permit = sender
+            .reserve()
+            .await
+            .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
+        let peers = self
+            .peers
+            .read()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?;
+        peers.registry.revalidate(peer)?;
+        permit.send(message);
+        Ok(())
     }
 
     async fn send_with_connection(

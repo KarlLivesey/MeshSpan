@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 use super::*;
 
 mod cancellation;
+mod rotation;
 
 #[tokio::test]
 async fn real_quinn_mtls_delivers_one_exact_authenticated_consensus_message()

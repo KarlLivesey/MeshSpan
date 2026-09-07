@@ -10,6 +10,61 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 3 — retire private peer admission on reused connections
+
+The internal rotation review found that replacing a committed peer route updated
+new-connection checks but left existing QUIC connections carrying their original
+admission indefinitely. Two real-QUIC regressions reproduced subsequent control
+requests reaching authority after certificate or incarnation replacement. The
+three-case red run finished in **0.17 seconds** after a **16.20-second build**:
+both retirement cases failed, while unchanged-binding reuse passed.
+
+The current peer registry now revalidates previously authenticated bindings.
+Consensus, control, snapshot and data ingress recheck admission; decoded control
+headers and each snapshot frame retain the connection's exact identity rather
+than substituting the latest incarnation. Queue admission reserves capacity
+without a lock, then verifies and enqueues under the peer-registry read lock,
+linearising it against route replacement. Work already admitted is not claimed
+rolled back, and operation-specific authority remains required downstream. There
+is no automatic retry of an unknown mutation or new dependency/schema/wire format.
+
+The final focused network run passed **9 tests in 0.43 seconds** after an
+**8.84-second build**, including exact Pong responses, unchanged connection reuse,
+retirement rejection and a deterministically blocked queue. All **9 transport
+tests passed in 0.38 seconds** after a **6.52-second build**, including exact-binding
+replacement/removal, real mTLS and control/data isolation. Affected all-target,
+all-feature Clippy passed in **43.11 seconds**. Full integration is pending.
+
+Task 3 remains **5 points**: this is the retirement-admission correction, not
+automatic internal renewal. Remaining scope includes explicit node-certificate
+lifetimes, staged trust/installation generations, live local QUIC replacement,
+offline catch-up and federation identity rollover independent of public ACME.
+The existing HTTPS live resolver and public per-recipient envelope acknowledgements
+are not evidence that those internal lifecycle steps exist. Stage 10 remains
+**140 points**, Stage 11 **126**; publication stays prohibited.
+
+### Private-peer retirement integration
+
+Signed, pushed and GitHub-verified source
+`209f373369159cc5d661e453d6e5b7f3193cb784`
+(tree `c55c52a8c1e02354090ac1a463ed97f9a97c931a`) passed the complete local
+gate in **710.14 seconds**: Rust workspace tests **628.33 seconds**, web tests
+**7.53 seconds**, and every static, generated-contract, licence and tooling lane.
+The command used NVM Node **26.8.1**, pnpm **11.19.0**, Rust **1.98.0**,
+`CARGO_BUILD_JOBS=4`, `MESHSPAN_CHECK_WORKERS=4` and `pnpm check`.
+
+The isolated Linux provider suite passed on the same source after a **50.18-second
+build**: manual DNS **15.50 seconds**, Cloudflare **21.30 seconds** and webhook
+**21.32 seconds**, running concurrently. Both opt-in real-time ACME recovery cases
+passed together in **337.29 seconds** on the final rebuilt macOS headless binary.
+The exact lease-loss and rejected-order filters excluded the Linux-only provider
+cases. The tested source remained unchanged throughout these runs.
+
+This closes the reproduced stale-connection admission defect. Automatic internal
+certificate rotation remains open, and the older independent cluster-startup
+timeout is not claimed resolved. No release, tag, publication or GitHub Actions
+run occurred.
+
 ## Task 2 — isolated DNS-provider process lifecycles
 
 The candidate adds real-daemon Cloudflare, authenticated webhook and manual-DNS

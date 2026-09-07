@@ -79,6 +79,22 @@ impl PeerRegistry {
             .ok_or(TransportError::UntrustedPeer)?;
         Ok(AuthenticatedPeer(binding))
     }
+
+    /// Revalidates a previously admitted peer against this current committed registry.
+    ///
+    /// Callers use this before admitting another request on a reused connection. An earlier
+    /// successful handshake does not preserve a retired certificate or process incarnation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a removed or replaced certificate, node binding or incarnation.
+    pub fn revalidate(&self, peer: AuthenticatedPeer) -> Result<(), TransportError> {
+        if self.by_fingerprint.get(&peer.0.certificate_fingerprint) == Some(&peer.0) {
+            Ok(())
+        } else {
+            Err(TransportError::UntrustedPeer)
+        }
+    }
 }
 
 pub(crate) fn connection_certificate_fingerprint(
@@ -225,4 +241,45 @@ impl NegotiationConfig {
 #[must_use]
 pub fn certificate_fingerprint(certificate: &CertificateDer<'_>) -> [u8; 32] {
     Sha256::digest(certificate.as_ref()).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prior_admission_requires_the_exact_current_binding() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let original = PeerBinding {
+            node_id: NodeId::from_bytes([1; 16])?,
+            incarnation: 1,
+            certificate_fingerprint: [2; 32],
+        };
+        let admitted = AuthenticatedPeer(original);
+        PeerRegistry::new([original])?.revalidate(admitted)?;
+        for replacement in [
+            PeerBinding {
+                node_id: NodeId::from_bytes([3; 16])?,
+                ..original
+            },
+            PeerBinding {
+                incarnation: 2,
+                ..original
+            },
+            PeerBinding {
+                certificate_fingerprint: [4; 32],
+                ..original
+            },
+        ] {
+            assert!(matches!(
+                PeerRegistry::new([replacement])?.revalidate(admitted),
+                Err(TransportError::UntrustedPeer)
+            ));
+        }
+        assert!(matches!(
+            PeerRegistry::empty().revalidate(admitted),
+            Err(TransportError::UntrustedPeer)
+        ));
+        Ok(())
+    }
 }
