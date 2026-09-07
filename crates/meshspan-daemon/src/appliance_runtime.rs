@@ -194,6 +194,7 @@ struct ApplianceServiceComposition {
     router: Router,
     smb_connections: SmbConnectionFactory,
     certificates: CertificateRuntime,
+    private_certificates: crate::private_certificate_renewal::PrivateCertificateRenewal,
     https_identity: RotatingHttpsIdentity,
     gateway_observations: Arc<dyn meshspan_contracts::GatewayDispatchObserver>,
 }
@@ -681,6 +682,12 @@ fn compose_appliance_services(
         https_identity.clone(),
         started_at,
     )?;
+    let private_certificates = compose_private_certificate_runtime(
+        &node.local_state,
+        &private_authority.authority,
+        &node.private_network,
+        started_at,
+    )?;
     let router = Router::new()
         .merge(public_contract_api_router(readiness)?)
         .merge(join_grant_routes(
@@ -722,6 +729,7 @@ fn compose_appliance_services(
         ),
         smb_connections,
         certificates,
+        private_certificates,
         https_identity,
         gateway_observations,
     })
@@ -756,6 +764,30 @@ fn compose_certificate_runtime(
         1,
     )
     .map_err(|_| DaemonProcessError::Certificate)
+}
+
+fn compose_private_certificate_runtime(
+    local_state: &DaemonLocalState,
+    authority: &MetadataAuthorityHandle,
+    private_network: &Arc<PrivateConsensusRuntime>,
+    now: UnixMicros,
+) -> Result<crate::private_certificate_renewal::PrivateCertificateRenewal, DaemonProcessError> {
+    let open_authority =
+        || open_authentication_authority(local_state, authority, Arc::clone(private_network), now);
+    Ok(
+        crate::private_certificate_renewal::PrivateCertificateRenewal::new(
+            open_authority()?,
+            crate::OnlineAuthorityLoadingService::new(
+                open_authority()?,
+                local_state.open_wrapping_key()?,
+            ),
+            meshspan_certificates::NodeIdentityKey::from_pkcs8(
+                local_state.node_identity_private_key_pkcs8(),
+            )
+            .map_err(|_| DaemonProcessError::Certificate)?,
+            Arc::clone(private_network),
+        ),
+    )
 }
 
 fn setup_and_enrolment_routes(
@@ -922,6 +954,14 @@ where
         .map_err(DaemonProcessError::from)
     });
     let certificate_stop = stop.subscribe();
+    let private_certificate_stop = stop.subscribe();
+    tasks.spawn(async move {
+        services
+            .private_certificates
+            .run_until(wait_for_shutdown(private_certificate_stop))
+            .await
+            .map_err(|_| DaemonProcessError::Certificate)
+    });
     tasks.spawn(async move {
         services
             .certificates

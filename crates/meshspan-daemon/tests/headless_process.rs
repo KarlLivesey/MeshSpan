@@ -14,6 +14,8 @@ mod local_certificates;
 mod metrics;
 #[path = "support/passkey.rs"]
 mod passkey_support;
+#[path = "headless_process/private_certificates.rs"]
+mod private_certificates;
 #[path = "headless_process/stage10.rs"]
 mod stage10;
 #[path = "headless_process/stage8.rs"]

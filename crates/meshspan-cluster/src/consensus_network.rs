@@ -620,6 +620,12 @@ impl ConsensusNetwork {
         self.local_node_id
     }
 
+    /// Returns the exact local incarnation carried by this process's private handshakes.
+    #[must_use]
+    pub const fn local_incarnation(&self) -> u64 {
+        self.local_incarnation
+    }
+
     /// Returns a consistent snapshot of every currently enrolled peer route.
     ///
     /// # Errors

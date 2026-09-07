@@ -52,6 +52,8 @@ pub struct NodeCertificateRotation {
     pub state: NodeCertificateRotationState,
     /// Earliest prior-certificate retirement instant after installation acknowledgement.
     pub retire_after: Option<UnixMicros>,
+    /// Exact exclusive candidate expiry, also used to abandon uninstalled work.
+    pub valid_until: UnixMicros,
 }
 
 pub(super) fn stage(
@@ -269,7 +271,7 @@ impl AuthoritativeRepository {
             .query_row(
                 "SELECT rotation.incarnation, rotation.generation, certificate.certificate_der,
                     previous.certificate_der, rotation.issuer_certificate_der,
-                    rotation.staged_revision, rotation.state, rotation.retire_after
+                    rotation.staged_revision, rotation.state, rotation.retire_after, certificate.valid_until
              FROM node_certificate_rotations rotation
              JOIN node_certificates certificate USING (node_id, generation)
              JOIN node_certificates previous ON previous.node_id = rotation.node_id
@@ -292,7 +294,8 @@ impl AuthoritativeRepository {
                             4 => NodeCertificateRotationState::Abandoned,
                             _ => return Err(rusqlite::Error::InvalidQuery),
                         },
-                        retire_after: row.get::<_, Option<i64>>(7)?.map(UnixMicros::new),
+                    retire_after: row.get::<_, Option<i64>>(7)?.map(UnixMicros::new),
+                    valid_until: UnixMicros::new(row.get(8)?),
                     })
                 },
             )

@@ -283,6 +283,7 @@ mod pending_recovery_bundle_tests;
 mod periodic_scrub_scheduler;
 mod permission_administration;
 mod pinned_https_client;
+mod private_certificate_renewal;
 mod private_consensus_runtime;
 mod protected_api_key_issuance;
 mod protected_file;

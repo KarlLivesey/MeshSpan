@@ -12,6 +12,30 @@ not close an unexplained failure.
 
 ## Task 3 — live internal TLS credential selection
 
+### Automatic daemon renewal implementation
+
+The daemon now owns a private-certificate worker independently of public ACME.
+It scans bounded topology pages, stages due same-key renewals through the
+authoritative command path, installs its own staged credentials without rebinding,
+signs installation acknowledgements and retires completed overlaps. Unknown
+commit outcomes retain the exact operation for retry. Private keys stay local.
+
+The real two-process test
+`private_node_renewal_runs_automatically_and_survives_restart_and_join` passed in
+**14.91 seconds**, after a **5.72-second build**. It shortens only the initial
+single-node fixture's scheduling deadline, then exercises the normal worker:
+generation 2 activation, unchanged node key, continued public HTTPS, joining a
+second daemon, exact renewed private TLS fingerprint, forced process loss and
+fresh-handshake selection after restart. It does not simulate a month passing or
+prove expired-credential recovery. The fixture reuses the workspace's existing
+SQLite dependency; no dependency version or external package was added.
+
+Affected daemon/cluster/metadata all-target/all-feature Clippy passed in
+**12.94 seconds**. A private-database test access mistake and collapsible conditions
+were corrected before this evidence. Offline/expired-credential readmission,
+issuer/federation rollover and the assembled-stage integration pass remain open.
+Task 3 is still partial; this checkpoint does not claim those missing behaviours.
+
 ### Stage-first renewal implementation checkpoint
 
 Explicit same-key renewal now binds its exact generation, DNS name and at-most

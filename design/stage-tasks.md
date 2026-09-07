@@ -188,6 +188,12 @@ the stage; publication-dependent acceptance remains held separately and visible.
    12 transport, 10 network and 10 enabled headless tests pass, as does affected
    Clippy. Full integration remains pending; durable automatic lifecycle work is
    still required and the estimate remains unchanged.
+   The [automatic daemon renewal implementation](stage-10-evidence.md#automatic-daemon-renewal-implementation)
+   now passes a real two-process renewal/join/forced-restart proof in **14.91 seconds**,
+   with exact private TLS selection and unchanged identity key. Scheduling,
+   installation acknowledgement and overlap retirement are wired into the daemon.
+   Expired/offline readmission, issuer/federation rollover and stage-wide integration
+   remain open; task 3 remains partial, not a blocker on implementing other Stage 10 tasks.
 
 4. **External automated certificate publisher — Partial.** **5 points remaining.**
    PKI-009. [API tests](../crates/meshspan-daemon/src/external_certificate_publisher_api_tests.rs)
