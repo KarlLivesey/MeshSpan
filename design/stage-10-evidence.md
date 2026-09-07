@@ -43,6 +43,28 @@ The existing HTTPS live resolver and public per-recipient envelope acknowledgeme
 are not evidence that those internal lifecycle steps exist. Stage 10 remains
 **140 points**, Stage 11 **126**; publication stays prohibited.
 
+### Private-peer retirement integration
+
+Signed, pushed and GitHub-verified source
+`209f373369159cc5d661e453d6e5b7f3193cb784`
+(tree `c55c52a8c1e02354090ac1a463ed97f9a97c931a`) passed the complete local
+gate in **710.14 seconds**: Rust workspace tests **628.33 seconds**, web tests
+**7.53 seconds**, and every static, generated-contract, licence and tooling lane.
+The command used NVM Node **26.8.1**, pnpm **11.19.0**, Rust **1.98.0**,
+`CARGO_BUILD_JOBS=4`, `MESHSPAN_CHECK_WORKERS=4` and `pnpm check`.
+
+The isolated Linux provider suite passed on the same source after a **50.18-second
+build**: manual DNS **15.50 seconds**, Cloudflare **21.30 seconds** and webhook
+**21.32 seconds**, running concurrently. Both opt-in real-time ACME recovery cases
+passed together in **337.29 seconds** on the final rebuilt macOS headless binary.
+The exact lease-loss and rejected-order filters excluded the Linux-only provider
+cases. The tested source remained unchanged throughout these runs.
+
+This closes the reproduced stale-connection admission defect. Automatic internal
+certificate rotation remains open, and the older independent cluster-startup
+timeout is not claimed resolved. No release, tag, publication or GitHub Actions
+run occurred.
+
 ## Task 2 — isolated DNS-provider process lifecycles
 
 The candidate adds real-daemon Cloudflare, authenticated webhook and manual-DNS

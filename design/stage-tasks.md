@@ -178,7 +178,9 @@ the stage; publication-dependent acceptance remains held separately and visible.
    The [private-peer retirement correction](stage-10-evidence.md#task-3--retire-private-peer-admission-on-reused-connections)
    reproduces and corrects stale admission on reused QUIC connections, including
    requests waiting on backpressure. Nine focused network tests and nine transport
-   tests pass; affected Clippy passes. Full integration is pending. This does not
+   tests pass; affected Clippy passes. [Full integration](stage-10-evidence.md#private-peer-retirement-integration)
+   on `209f373` passed in **710.14 seconds**, all three isolated provider proofs
+   passed, and both real-time recovery cases passed in **337.29 seconds**. This does not
    complete automatic internal issuance, staged installation or federation rollover.
 
 4. **External automated certificate publisher — Partial.** **5 points remaining.**
