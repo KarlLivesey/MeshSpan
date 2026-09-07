@@ -108,6 +108,8 @@ mod metrics_exporter;
 #[cfg(test)]
 mod metrics_exporter_tests;
 mod namespace;
+#[cfg(test)]
+mod node_certificate_tests;
 mod node_wrapping_key;
 #[cfg(test)]
 mod node_wrapping_key_tests;

@@ -285,6 +285,8 @@ async fn prepare_join_network(
                 decode_hex_vec(&admission.node_certificate_der_hex)?,
                 decode_hex_vec(&admission.online_authority_certificate_der_hex)?,
             ],
+            certificate_generation: 1,
+            certificate_name: certificate_name(local_state.node_id()),
             private_key_pkcs8: zeroize::Zeroizing::new(
                 local_state.node_identity_private_key_pkcs8().to_vec(),
             ),

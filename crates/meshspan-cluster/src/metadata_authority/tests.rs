@@ -747,6 +747,8 @@ fn network_config(
         listen_address: addresses[local_index],
         client_address: SocketAddr::from(([127, 0, 0, 1], 0)),
         certificate_chain_der: vec![identities[local_index].certificate_der().to_vec()],
+        certificate_generation: 1,
+        certificate_name: "meshspan.internal".to_owned(),
         private_key_pkcs8: Zeroizing::new(identities[local_index].private_key().to_vec()),
         trust_anchors: vec![trust_anchor.to_vec()],
         peers,

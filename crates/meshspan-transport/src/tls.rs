@@ -21,8 +21,8 @@ const ALPN: &[u8] = b"meshspan-private/1";
 
 /// One node's certificate chain and private identity key.
 pub struct NodeCredentials {
-    certificate_chain: Vec<CertificateDer<'static>>,
-    private_key: PrivateKeyDer<'static>,
+    pub(crate) certificate_chain: Vec<CertificateDer<'static>>,
+    pub(crate) private_key: PrivateKeyDer<'static>,
 }
 
 impl NodeCredentials {
@@ -30,12 +30,18 @@ impl NodeCredentials {
     ///
     /// # Errors
     ///
-    /// Rejects an empty or excessively deep chain before TLS construction.
+    /// Rejects an empty chain, more than eight certificates, or any empty/over-64-KiB
+    /// certificate before TLS construction or duplication.
     pub fn new(
         certificate_chain: Vec<CertificateDer<'static>>,
         private_key: PrivateKeyDer<'static>,
     ) -> Result<Self, TransportError> {
-        if certificate_chain.is_empty() || certificate_chain.len() > 8 {
+        if certificate_chain.is_empty()
+            || certificate_chain.len() > 8
+            || certificate_chain
+                .iter()
+                .any(|certificate| certificate.is_empty() || certificate.len() > 64 * 1_024)
+        {
             return Err(TransportError::InvalidConfiguration);
         }
         Ok(Self {
@@ -97,6 +103,17 @@ pub fn server_endpoint(
     client_roots: RootCertStore,
     limits: TransportLimits,
 ) -> Result<Endpoint, TransportError> {
+    endpoint(
+        bind_address,
+        Some(prepare_server_config(credentials, client_roots, limits)?),
+    )
+}
+
+pub(crate) fn prepare_server_config(
+    credentials: NodeCredentials,
+    client_roots: RootCertStore,
+    limits: TransportLimits,
+) -> Result<ServerConfig, TransportError> {
     let provider = Arc::new(meshspan_rustls_provider::provider());
     let verifier =
         WebPkiClientVerifier::builder_with_provider(Arc::new(client_roots), provider.clone())
@@ -113,7 +130,7 @@ pub fn server_endpoint(
         QuicServerConfig::try_from(tls).map_err(|_| TransportError::InvalidConfiguration)?;
     let mut server = server_config(Arc::new(crypto))?;
     server.transport_config(transport_config(limits)?);
-    endpoint(bind_address, Some(server))
+    Ok(server)
 }
 
 /// Creates a client endpoint presenting its node certificate and trusting `server_roots`.
@@ -127,6 +144,17 @@ pub fn client_endpoint(
     server_roots: RootCertStore,
     limits: TransportLimits,
 ) -> Result<Endpoint, TransportError> {
+    let client = prepare_client_config(credentials, server_roots, limits)?;
+    let mut endpoint = endpoint(bind_address, None)?;
+    endpoint.set_default_client_config(client);
+    Ok(endpoint)
+}
+
+pub(crate) fn prepare_client_config(
+    credentials: NodeCredentials,
+    server_roots: RootCertStore,
+    limits: TransportLimits,
+) -> Result<ClientConfig, TransportError> {
     let provider = Arc::new(meshspan_rustls_provider::provider());
     let mut tls = RustlsClientConfig::builder_with_provider(provider)
         .with_protocol_versions(&[&rustls::version::TLS13])
@@ -139,9 +167,7 @@ pub fn client_endpoint(
         QuicClientConfig::try_from(tls).map_err(|_| TransportError::InvalidConfiguration)?;
     let mut client = ClientConfig::new(Arc::new(crypto));
     client.transport_config(transport_config(limits)?);
-    let mut endpoint = endpoint(bind_address, None)?;
-    endpoint.set_default_client_config(client);
-    Ok(endpoint)
+    Ok(client)
 }
 
 /// Connects to one peer using the certificate DNS name fixed by enrolment.
@@ -175,7 +201,7 @@ fn transport_config(limits: TransportLimits) -> Result<Arc<TransportConfig>, Tra
     Ok(Arc::new(transport))
 }
 
-fn endpoint(
+pub(crate) fn endpoint(
     bind_address: SocketAddr,
     server: Option<ServerConfig>,
 ) -> Result<Endpoint, TransportError> {

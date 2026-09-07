@@ -182,6 +182,12 @@ the stage; publication-dependent acceptance remains held separately and visible.
    on `209f373` passed in **710.14 seconds**, all three isolated provider proofs
    passed, and both real-time recovery cases passed in **337.29 seconds**. This does not
    complete automatic internal issuance, staged installation or federation rollover.
+   The [live internal TLS candidate](stage-10-evidence.md#task-3--live-internal-tls-credential-selection)
+   now selects newer local credentials in both directions without rebinding sockets
+   or breaking existing connections. Exact generations survive metadata reopen;
+   12 transport, 10 network and 10 enabled headless tests pass, as does affected
+   Clippy. Full integration remains pending; durable automatic lifecycle work is
+   still required and the estimate remains unchanged.
 
 4. **External automated certificate publisher — Partial.** **5 points remaining.**
    PKI-009. [API tests](../crates/meshspan-daemon/src/external_certificate_publisher_api_tests.rs)

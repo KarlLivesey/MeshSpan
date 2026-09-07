@@ -10,6 +10,87 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 3 — live internal TLS credential selection
+
+The private transport can now replace its client and server TLS configurations
+without restarting or rebinding either socket. Preparation validates the complete
+chain against the configured mesh roots, exact local DNS name, current TLS time,
+both client/server uses and matching private key. Credentials are bounded to eight
+non-empty certificates of at most 64 KiB each before duplication. Installation
+retains the original node identity key, accepts exact replay and rejects stale or
+conflicting generations without changing either direction.
+
+Every accepted replacement creates fresh TLS configurations and resumption caches.
+New outbound setup snapshots the selected configuration under the selection lock;
+there is no lock across network IO. Existing handshakes/connections may complete
+with their original identity until authority retires it separately. The returned
+generation, leaf fingerprint and length-bound chain digest are public installation
+evidence, not a metadata acknowledgement or permission to change trust.
+
+`ConsensusNetwork` now uses this transport and exposes local selection/installation
+to its daemon owner. Startup restores the exact selected certificate generation
+from the existing metadata row; initial join still explicitly begins at generation
+
+one. No migration, wire format, dependency or trust-root change is introduced. The
+test-facing certificate crate re-exports the existing node-key types so fixtures
+use the same implementation as production, not another signing library.
+
+The real-QUIC proof selects a new leaf for the **same node-owned key**, signed by
+a root-authorised online intermediate. It checks fresh handshakes in both
+directions, repeat connections, exact bytes over old connections, unchanged
+socket addresses and idempotent installation. Negative cases check generation
+rollback/conflict, identity-key substitution, mismatched key material, wrong
+names, untrusted issuers and credential-size bounds. This is not evidence of
+automatic intermediate-CA rotation or a complete daemon renewal state machine.
+
+Local evidence before full integration:
+
+- **12 transport tests passed in 0.66 seconds**, after a **2.78-second build**.
+- **10 network tests passed in 0.51 seconds**, after an **8.10-second build**,
+  including an exact control round trip under the new local certificate.
+- The metadata generation-selection/reopen test passed in **0.31 seconds**,
+  after a **15.04-second build**, retaining generation 2 while ignoring a higher
+  retired row. This tests the projection, not authorisation of an issuance.
+- **10 enabled headless tests passed in 39.13 seconds**, after a **48.54-second
+  build**. Seven cases were ignored by that command: three isolated DNS-provider
+  proofs, two real-time ACME recovery proofs and two external SMB-client proofs.
+- Affected all-target/all-feature Clippy passed in **24.37 seconds**.
+
+The first focused compile found test-helper visibility and error-conversion
+mistakes; both were corrected before these runs. Task 3 remains **5 points**, Stage 10
+**140**, Stage 11 **126**. Remaining automatic lifecycle work includes finite
+node-certificate issuance, staged peer trust and durable installation receipts,
+renewal scheduling, offline catch-up and federation rollover. Releases and all
+other publication remain prohibited.
+
+### Live private TLS integration
+
+Signed, pushed and GitHub-verified source
+`c6a5d40c5ccb1cdd12b4a58efaf61091ade8a2f7`
+(tree `0afd9f16d65ced5264f7ebb545d05b63f7b55278`) passed the complete local
+gate in **691.46 seconds**: Rust workspace tests **623.96 seconds**, web tests
+**8.03 seconds**, and all static, generated-contract, licence and tooling lanes.
+The run used NVM Node **26.8.1**, pnpm **11.19.0**, Rust **1.98.0** and four
+build/check workers. Both opt-in real-time ACME recovery tests passed together in
+**339.39 seconds** on the final rebuilt binary.
+
+The isolated Linux provider suite passed on the same source after a **56.49-second
+build**: manual DNS **16.06 seconds**, webhook **20.91 seconds** and Cloudflare
+**21.14 seconds**, concurrently. Source remained unchanged during these runs.
+This verifies live credential selection, not the remaining automatic lifecycle.
+
+### Stage completion cadence — owner direction, 2026-09-07
+
+Implement the remaining Stage 10 behaviour before a stage-wide adversarial and
+refactoring pass. During implementation, use focused local tests and affected
+lint/contract checks; commit and integrate coherent progress without repeating
+the entire workspace suite or unrelated slow acceptance cases for every slice.
+Run the complete integration and required failure suites against the assembled
+stage, and fix known defects when found. Do not pre-optimise, speculate about
+unimplemented edge cases, weaken safety requirements or label partial tasks
+complete. Report task numbers and observable delivered behaviour, not branch
+names or "nearly done". The publication hold remains unchanged.
+
 ## Task 3 — retire private peer admission on reused connections
 
 The internal rotation review found that replacing a committed peer route updated

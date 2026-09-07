@@ -20,9 +20,9 @@ use meshspan_protocol::v1::{
 };
 use meshspan_protocol::{WireLimits, node_capability_digest};
 use meshspan_transport::{
-    NegotiationConfig, NodeCredentials, PeerBinding, PeerRegistry, StreamKind, TransportLimits,
-    accept_stream, certificate_fingerprint, client_endpoint, connect, open_stream, receive_control,
-    send_control, server_endpoint,
+    InstalledNodeCertificate, NegotiationConfig, NodeCredentials, NodeTransportConfig, PeerBinding,
+    PeerRegistry, RotatingNodeTransport, StreamKind, TransportLimits, accept_stream,
+    certificate_fingerprint, open_stream, receive_control, send_control,
 };
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
@@ -84,6 +84,10 @@ pub struct ConsensusNetworkConfig {
     pub client_address: SocketAddr,
     /// Local enrolled leaf followed by any required intermediate certificate DER.
     pub certificate_chain_der: Vec<Vec<u8>>,
+    /// Exact committed local certificate generation, restored with the selected leaf.
+    pub certificate_generation: u64,
+    /// Exact enrolled local DNS identity certified by every replacement.
+    pub certificate_name: String,
     /// Local canonical PKCS#8 identity key, cleared when construction completes.
     pub private_key_pkcs8: Zeroizing<Vec<u8>>,
     /// Current CA roots accepted for both peer client and server certificates.
@@ -124,7 +128,7 @@ pub struct PeerDataStream {
 #[derive(Clone)]
 pub struct ConsensusNetwork {
     runtime: tokio::runtime::Handle,
-    client: quinn::Endpoint,
+    transport: RotatingNodeTransport,
     peers: Arc<RwLock<ConsensusPeers>>,
     control_connections: Arc<Mutex<BTreeMap<NodeId, quinn::Connection>>>,
     local_node_id: NodeId,
@@ -292,18 +296,23 @@ impl ConsensusNetwork {
             CONNECTION_WINDOW,
         )?;
         let roots = roots(&config.trust_anchors)?;
-        let server = server_endpoint(
-            config.listen_address,
+        let transport = RotatingNodeTransport::new(
+            NodeTransportConfig {
+                server_address: config.listen_address,
+                client_address: config.client_address,
+                certificate_name: config.certificate_name.clone(),
+                certificate_generation: config.certificate_generation,
+                peer_roots: roots,
+                limits,
+            },
             credentials(&config)?,
-            roots.clone(),
-            limits,
         )?;
-        let client = client_endpoint(config.client_address, credentials(&config)?, roots, limits)?;
+        let server = transport.server_endpoint();
         let peers = peer_map(config.peers)?;
         let registry = peer_registry(&peers)?;
         let network = Self {
             runtime: tokio::runtime::Handle::current(),
-            client,
+            transport,
             peers: Arc::new(RwLock::new(ConsensusPeers {
                 routes: peers,
                 registry,
@@ -389,6 +398,35 @@ impl ConsensusNetwork {
             .remove(&peer.node_id);
         self.spawn_outbound_worker(peer.node_id, receiver);
         Ok(())
+    }
+
+    /// Returns the exact local certificate generation selected for fresh private handshakes.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when the live identity state cannot be read safely.
+    pub fn local_certificate(&self) -> Result<InstalledNodeCertificate, ConsensusNetworkError> {
+        self.transport.current().map_err(Into::into)
+    }
+
+    /// Installs a committed newer certificate for the same local node-owned key without restart.
+    ///
+    /// The caller must first stage required peer trust and durably acknowledge the returned
+    /// exact selection afterwards. Existing connections keep their old identity until retired;
+    /// selecting credentials does not retry unknown operations or change peer authority.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid chains/keys/names/lifetimes, identity substitution, stale or conflicting
+    /// generations and poisoned state. Rejected replacements leave live configurations intact.
+    pub fn install_local_certificate(
+        &self,
+        generation: u64,
+        credentials: NodeCredentials,
+    ) -> Result<InstalledNodeCertificate, ConsensusNetworkError> {
+        self.transport
+            .install(generation, credentials)
+            .map_err(Into::into)
     }
 
     /// Sends one validated metadata-control request to an exact enrolled peer.
@@ -829,7 +867,10 @@ impl ConsensusNetwork {
             .get(&to)
             .cloned()
             .ok_or(ConsensusNetworkError::InvalidConfiguration)?;
-        let connection = connect(&self.client, peer.address, &peer.certificate_name).await?;
+        let connection = self
+            .transport
+            .connect(peer.address, &peer.certificate_name)
+            .await?;
         let authenticated = self
             .peers
             .read()
