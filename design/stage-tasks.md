@@ -17,7 +17,7 @@ Update the relevant task when work changes its status. Report the current task,
 what behaviour changed, what remains and what was tested. Do not replace this
 with “nearly done”, a count of commits or an unweighted completion percentage.
 
-Remaining-effort estimate, 2026-09-07: **Stage 10: 136 points; Stage 11: 126
+Remaining-effort estimate, 2026-09-07: **Stage 10: 132 points; Stage 11: 126
 points; Stage 12: 55 points.** These are preliminary engineering judgements from
 the task scope and recorded gaps, not measured hours or completion guarantees.
 Uncertainty is high until the open integration/proof work is exercised.
@@ -195,12 +195,18 @@ the stage; publication-dependent acceptance remains held separately and visible.
    Expired/offline readmission, issuer/federation rollover and stage-wide integration
    remain open; task 3 remains partial, not a blocker on implementing other Stage 10 tasks.
 
-4. **External automated certificate publisher — Partial.** **5 points remaining.**
+4. **External automated certificate publisher — Implemented; stage-wide verification pending.** **1 point remaining.**
    PKI-009. [API tests](../crates/meshspan-daemon/src/external_certificate_publisher_api_tests.rs)
    and [request contracts](../crates/meshspan-certificates/src/external_request.rs)
    exist. Close with a scoped external caller's complete publish/install/activate
    cycle, rejected names/chains/keys/lifetimes/generations and interrupted rollover.
    No manual-upload UI or private-key disclosure.
+   The [real external-publisher cycle](stage-10-evidence.md#task-4--external-publisher-gateway-lifecycle)
+   now verifies publication, joining-gateway delivery, exact retries, refused
+   names/chains/keys/lifetimes/generations and interrupted rollover against two
+   actual daemons. Full TLS handshakes verify exact replacement leaf bytes.
+   Focused proof passes in **19.55 seconds**; remaining work is assembled-stage
+   acceptance, reducing this task **5 → 1 points**.
 
 5. **Live ACME acceptance — Open; external prerequisites required.** **3 points remaining.**
    Stage 10 exit gate, PKI-003–007/010. Run and retain real staging-CA evidence for
