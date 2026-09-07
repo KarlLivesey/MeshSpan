@@ -15,6 +15,9 @@ const SIGNER: &str = "00000000-0000-4000-8000-000000000401";
 const ROLLOUT: &str = "00000000-0000-4000-8000-000000000402";
 const ARTIFACT_DIGEST: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
+#[path = "update_readiness.rs"]
+mod readiness;
+
 #[tokio::test]
 async fn update_administration_preserves_trust_selection_and_exact_retry_after_restart()
 -> Result<(), Box<dyn Error>> {

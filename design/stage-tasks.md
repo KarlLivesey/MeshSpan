@@ -386,7 +386,11 @@ the stage; publication-dependent acceptance remains held separately and visible.
     retains evidence and commits staged or failed/paused. Real daemon bytes pass
     on the current macOS target; dummy executable bytes pause without restarting.
     GNU development builds are not accepted as static-musl distribution binaries.
-    Peer probe collection, all-scope workload readiness, node installation
+    The [private process probe](stage-10-evidence.md#task-22--authenticated-process-readiness-observations)
+    now returns real reactor/format/listener observations with exact rollout,
+    identity, quorum-plan and catch-up binding. A real enrolled peer exercises it
+    across daemon restart and rejected stale barriers. This is not a restart grant.
+    Coordinator probe collection, all-scope workload readiness, node installation
     and real rolling availability remain unimplemented. The
     estimate stays unchanged until these pieces form an operating updater.
 

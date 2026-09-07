@@ -29,7 +29,7 @@ pub(crate) fn print_report() -> Result<(), UpdateCandidateError> {
         .map_err(|_| UpdateCandidateError::Worker)
 }
 
-fn report() -> Result<Value, UpdateCandidateError> {
+pub(crate) fn report() -> Result<Value, UpdateCandidateError> {
     let api =
         meshspan_api_contract::generate_openapi().map_err(|_| UpdateCandidateError::Worker)?;
     Ok(json!({

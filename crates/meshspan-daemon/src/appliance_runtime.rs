@@ -191,6 +191,7 @@ struct StorageRuntimeComposition {
 }
 
 struct ApplianceServiceComposition {
+    update_readiness: crate::update_readiness::UpdateReadiness,
     data_plane: RuntimeDataPlane,
     updates: crate::update_service::distribution::UpdateDistribution,
     consensus_observations: crate::consensus_observation_worker::ConsensusObservationWorker,
@@ -229,6 +230,7 @@ struct PrivateAuthorityRuntime {
 
 #[derive(Clone)]
 struct PrivateNetworkStarter {
+    update_readiness: crate::update_readiness::UpdateReadiness,
     runtime: tokio::runtime::Handle,
     network: Arc<PrivateConsensusRuntime>,
     authority: MetadataAuthorityHandle,
@@ -362,6 +364,7 @@ impl PrivateNetworkStarter {
         let permits = Arc::new(tokio::sync::Semaphore::new(PRIVATE_CONTROL_CONCURRENCY));
         let mutations = Arc::new(tokio::sync::Semaphore::new(1));
         let http01 = crate::http01_gateway::Http01PeerReader::new(&state_directory);
+        let update_readiness = self.update_readiness.clone();
         self.runtime.spawn(async move {
             while let Some(request) = requests.recv().await {
                 let Ok(permit) = Arc::clone(&permits).acquire_owned().await else {
@@ -372,6 +375,7 @@ impl PrivateNetworkStarter {
                 let state_directory = state_directory.clone();
                 let runtime = runtime.clone();
                 let http01 = http01.clone();
+                let update_readiness = update_readiness.clone();
                 let mutation_permit = (!private_control_is_fetch(&request))
                     .then(|| Arc::clone(&mutations).acquire_owned())
                     .map(|permit| async move { permit.await.ok() });
@@ -389,6 +393,14 @@ impl PrivateNetworkStarter {
                         Some(Message::FetchHttp01Challenge(_))
                     ) {
                         http01
+                            .handle(&network, &request)
+                            .await
+                            .map_err(|()| DaemonProcessError::PrivateNetworkState)
+                    } else if matches!(
+                        request.envelope.as_inner().message,
+                        Some(Message::ProbeUpdateReadiness(_))
+                    ) {
+                        update_readiness
                             .handle(&network, &request)
                             .await
                             .map_err(|()| DaemonProcessError::PrivateNetworkState)
@@ -419,6 +431,7 @@ fn private_control_is_fetch(request: &PeerControlRequest) -> bool {
                 | Message::FetchNamespaceHistoryObject(_)
                 | Message::FetchNativeContentLayout(_)
                 | Message::FetchHttp01Challenge(_)
+                | Message::ProbeUpdateReadiness(_)
         )
     )
 }
@@ -631,6 +644,11 @@ async fn start_private_authority(
         authority.begin_election().await?;
     }
     let private_network_starter = PrivateNetworkStarter {
+        update_readiness: crate::update_readiness::UpdateReadiness::new(
+            node.local_state.state_directory(),
+            authority.clone(),
+        )
+        .map_err(|()| DaemonProcessError::PrivateNetworkState)?,
         runtime: tokio::runtime::Handle::current(),
         network: Arc::clone(&node.private_network),
         authority: authority.clone(),
@@ -754,6 +772,7 @@ fn compose_appliance_services(
         )?)
         .fallback(crate::web_assets::serve);
     Ok(ApplianceServiceComposition {
+        update_readiness: private_authority.network_starter.update_readiness.clone(),
         data_plane,
         updates: operations.updates,
         consensus_observations,
@@ -1026,6 +1045,7 @@ where
     )
     .await?;
     let (stop, _) = tokio::sync::watch::channel(false);
+    let serving = services.update_readiness.serving();
     let mut tasks = tokio::task::JoinSet::new();
     let data_stop = stop.subscribe();
     let update_stop = stop.subscribe();
@@ -1093,7 +1113,7 @@ where
                 _ => DaemonProcessError::Certificate,
             })
     });
-    supervise_services(tasks, stop, lifecycle).await
+    supervise_services(tasks, stop, lifecycle, serving).await
 }
 
 /// Own shutdown ordering and result collection independently of listener/worker construction.
@@ -1101,6 +1121,7 @@ async fn supervise_services<F>(
     mut tasks: tokio::task::JoinSet<Result<(), DaemonProcessError>>,
     stop: tokio::sync::watch::Sender<bool>,
     lifecycle: F,
+    serving: crate::update_readiness::ServingGuard,
 ) -> Result<(), DaemonProcessError>
 where
     F: Future<Output = ()> + Send,
@@ -1111,6 +1132,8 @@ where
         () = &mut lifecycle => None,
         result = tasks.join_next() => result,
     };
+    // Withdraw readiness before telling any listener or worker to stop.
+    drop(serving);
     let _ = stop.send(true);
     let ended_early = first.is_some();
     if let Some(result) = first {

@@ -18,6 +18,9 @@ use serde::Deserialize;
 
 const FIXTURE: &str = include_str!("../../../contracts/protobuf/v1/node-hello.json");
 
+#[path = "compatibility/updates.rs"]
+mod updates;
+
 #[test]
 fn update_artifact_wire_binds_platform_length_digest_and_rejects_malformed_identity()
 -> Result<(), Box<dyn std::error::Error>> {

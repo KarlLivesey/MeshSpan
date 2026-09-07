@@ -442,6 +442,33 @@ receipts. Session handling additionally checks that every response receipt and
 finish message matches its initiating request; structural wire validation does
 not substitute for that conversation-state check.
 
+### Update readiness observations
+
+`ProbeUpdateReadiness` and `UpdateReadinessResult` use control envelope tags
+**118–119**. Requests name an active signed rollout, the exact root quorum-plan
+digest and a minimum applied log index. The normal header binds mesh, root
+partition, current mTLS sender/incarnation and the operation. Request lifetime
+is at most five seconds; responders do not forward requests or append to Raft.
+
+The response echoes the rollout and reports the current node/incarnation, active
+plan, applied/committed positions, persistence-blocked state, listener-bound
+state, observation time and the canonical executable runtime report (at most
+8 KiB). Applied position cannot exceed committed position. The runtime report
+contains public build/format information, never private keys or configuration.
+The sender's current certificate/incarnation and active publisher trust are
+checked before a fresh observation is obtained from the actual reactor.
+The responder rejects a changed plan or an unmet minimum applied index.
+
+These are **observations, not restart authorisation**. Listener-bound state
+means the current service cycle bound HTTPS, HTTP-01 and SMB; it is withdrawn
+before normal shutdown and on exceptional exit. It does not prove that every
+volume remains decodable, that a remote gateway is reachable by a particular
+client, that the caller has a quorum, or that the selected new executable is
+running. Coordinators must bind response identity and operation, apply a local
+request deadline and independently enforce the restart/data-availability gates.
+Remote wall-clock timestamps alone do not establish freshness. A response timeout
+is absent evidence, never a successful probe.
+
 ### Signed executable distribution
 
 Software-update bytes use the same private data stream, not consensus payloads
