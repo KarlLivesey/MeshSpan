@@ -10445,6 +10445,213 @@
         "title": "ListVolumesResponse",
         "type": "object"
       },
+      "ManageUpdateRequest": {
+        "additionalProperties": false,
+        "description": "Retain the complete request unchanged when a connection loses the outcome.",
+        "properties": {
+          "action": {
+            "description": "One explicit action, with no implicit defaults.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "Pin an independently obtained publisher verification key, or disable an existing pin.",
+                "properties": {
+                  "enabled": {
+                    "description": "Explicit trust enablement. Disabling pauses an active rollout from this signer.",
+                    "type": "boolean"
+                  },
+                  "expected_sequence": {
+                    "description": "Zero creates; otherwise an exact compare-and-swap sequence.",
+                    "maximum": 9007199254740990,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "const": "configure_signer",
+                    "type": "string"
+                  },
+                  "public_key": {
+                    "description": "Canonical standard-base64 uncompressed P-256 SEC1 public key, never a private key.",
+                    "maxLength": 88,
+                    "minLength": 88,
+                    "pattern": "^[A-Za-z0-9+/]{87}=$",
+                    "type": "string"
+                  },
+                  "signer_id": {
+                    "description": "Stable identity; the key cannot change under this identity.",
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "signer_id",
+                  "expected_sequence",
+                  "public_key",
+                  "enabled"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Admit the exact signed manifest; this does not upload or install executable bytes.",
+                "properties": {
+                  "allow_service_interruption": {
+                    "description": "Explicit consent required when remaining members cannot preserve service.",
+                    "type": "boolean"
+                  },
+                  "kind": {
+                    "const": "select_candidate",
+                    "type": "string"
+                  },
+                  "manifest": {
+                    "description": "Standard-base64 canonical signed JSON, at most 16 KiB after decoding.",
+                    "maxLength": 21848,
+                    "minLength": 4,
+                    "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+                    "type": "string"
+                  },
+                  "rollout_id": {
+                    "description": "New stable rollout identity.",
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  },
+                  "signature": {
+                    "description": "Standard-base64 detached DER ECDSA signature, at most 72 decoded bytes.",
+                    "maxLength": 96,
+                    "minLength": 4,
+                    "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+                    "type": "string"
+                  },
+                  "signer_id": {
+                    "description": "Previously pinned publisher identity.",
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  },
+                  "signer_sequence": {
+                    "description": "Exact enabled trust revision seen by the manager.",
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "rollout_id",
+                  "signer_id",
+                  "signer_sequence",
+                  "manifest",
+                  "signature",
+                  "allow_service_interruption"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Change desired progression without asserting a successful restart or rollback.",
+                "properties": {
+                  "control": {
+                    "description": "Cancellation does not undo already verified installations.",
+                    "oneOf": [
+                      {
+                        "const": "pause",
+                        "description": "Stop admitting new restarts.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "resume",
+                        "description": "Continue a paused rollout under current trust and safety checks.",
+                        "type": "string"
+                      },
+                      {
+                        "const": "cancel",
+                        "description": "Stop selected work once no restart outcome is unresolved.",
+                        "type": "string"
+                      }
+                    ]
+                  },
+                  "expected_sequence": {
+                    "description": "Last observed aggregate sequence.",
+                    "maximum": 9007199254740990,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "const": "control",
+                    "type": "string"
+                  },
+                  "rollout_id": {
+                    "description": "Exact selected rollout.",
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "rollout_id",
+                  "expected_sequence",
+                  "control"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "operation_id": {
+            "description": "Stable mutation identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "action"
+        ],
+        "title": "ManageUpdateRequest",
+        "type": "object"
+      },
+      "ManageUpdateResponse": {
+        "additionalProperties": false,
+        "description": "Original durable manager-command receipt; not an installation result.",
+        "properties": {
+          "committed_revision": {
+            "description": "Original authoritative revision.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "operation_id": {
+            "description": "Original mutation identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "resource_id": {
+            "description": "Affected signer or rollout identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "resource_id",
+          "committed_revision"
+        ],
+        "title": "ManageUpdateResponse",
+        "type": "object"
+      },
       "MetadataDiagnosticsResponse": {
         "additionalProperties": false,
         "description": "Metadata-only snapshot; sections are local observations, not one atomic swarm-wide read.",
@@ -13589,6 +13796,205 @@
           "status_url"
         ],
         "title": "StorageDrainSummary",
+        "type": "object"
+      },
+      "UpdatesResponse": {
+        "additionalProperties": false,
+        "description": "Bounded administration response; null is no selected/known rollout, never completion.",
+        "properties": {
+          "installation_available": {
+            "description": "Whether this build has an operating installer, separate from candidate admission.",
+            "type": "boolean"
+          },
+          "rollout": {
+            "additionalProperties": false,
+            "description": "Active rollout, or the exact requested retained rollout.",
+            "properties": {
+              "allow_service_interruption": {
+                "description": "Original explicit consent, never inferred from topology.",
+                "type": "boolean"
+              },
+              "progress": {
+                "additionalProperties": false,
+                "description": "Indexed local checkpoint counts; concurrent progress may advance the aggregate.",
+                "properties": {
+                  "failed": {
+                    "description": "Failed checkpoints, not permission to retry replacement blindly.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": "string"
+                  },
+                  "pending": {
+                    "description": "Members awaiting staging.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": "string"
+                  },
+                  "restarting": {
+                    "description": "Members with a restart in progress.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": "string"
+                  },
+                  "staged": {
+                    "description": "Members with a staged candidate.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": "string"
+                  },
+                  "unresolved_restarts": {
+                    "description": "Ambiguous restarts which must be resolved before another restart or cancellation.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": "string"
+                  },
+                  "verified": {
+                    "description": "Members with a verified new process.",
+                    "maxLength": 20,
+                    "minLength": 1,
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "pending",
+                  "staged",
+                  "restarting",
+                  "verified",
+                  "failed",
+                  "unresolved_restarts"
+                ],
+                "type": "object"
+              },
+              "rollout_id": {
+                "description": "Exact work identity, usable to inspect a completed or cancelled rollout.",
+                "maxLength": 36,
+                "minLength": 36,
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              "sequence": {
+                "description": "Current aggregate sequence for manager controls.",
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "signer_id": {
+                "description": "Publisher trust identity.",
+                "maxLength": 36,
+                "minLength": 36,
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              "source_commit": {
+                "description": "Signed source commit, not a claim that the running process matches it.",
+                "maxLength": 40,
+                "minLength": 40,
+                "pattern": "^[0-9a-f]{40}$",
+                "type": "string"
+              },
+              "state": {
+                "description": "Committed desired progression.",
+                "oneOf": [
+                  {
+                    "const": "running",
+                    "description": "Eligible for staging and restart admission.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "paused",
+                    "description": "New restarts paused; outstanding outcomes still need reconciliation.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "completed",
+                    "description": "Every selected member has a verified new process.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "cancelled",
+                    "description": "Cancelled without rolling back installed members.",
+                    "type": "string"
+                  }
+                ]
+              },
+              "version": {
+                "description": "Signed package version.",
+                "maxLength": 29,
+                "minLength": 5,
+                "pattern": "^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "rollout_id",
+              "signer_id",
+              "version",
+              "source_commit",
+              "sequence",
+              "state",
+              "allow_service_interruption",
+              "progress"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "signers": {
+            "description": "At most 64 independently configured publisher identities.",
+            "items": {
+              "additionalProperties": false,
+              "description": "Public trust material. No signing secret is accepted or returned.",
+              "properties": {
+                "enabled": {
+                  "description": "Whether new candidate admission may use this pin.",
+                  "type": "boolean"
+                },
+                "public_key": {
+                  "description": "Canonical public SEC1 bytes in standard base64.",
+                  "maxLength": 88,
+                  "minLength": 88,
+                  "pattern": "^[A-Za-z0-9+/]{87}=$",
+                  "type": "string"
+                },
+                "sequence": {
+                  "description": "Current trust sequence.",
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "signer_id": {
+                  "description": "Pinned identity.",
+                  "maxLength": 36,
+                  "minLength": 36,
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "signer_id",
+                "sequence",
+                "public_key",
+                "enabled"
+              ],
+              "type": "object"
+            },
+            "maxItems": 64,
+            "type": "array"
+          }
+        },
+        "required": [
+          "signers",
+          "rollout",
+          "installation_available"
+        ],
+        "title": "UpdatesResponse",
         "type": "object"
       },
       "UploadStatusResponse": {
@@ -24744,6 +25150,452 @@
         },
         "summary": "List mesh-wide storage targets",
         "x-meshspan-access": "system-manager"
+      }
+    },
+    "/admin/updates": {
+      "get": {
+        "description": "No body. Omit rollout_id for active work, or supply one canonical UUID to inspect retained work. Unknown identities return rollout null. Progress is a local metadata observation; current authority is checked before collection and output. installation_available is independent of candidate admission.",
+        "operationId": "getUpdates",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "rollout_id",
+            "required": false,
+            "schema": {
+              "maxLength": 36,
+              "minLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatesResponse"
+                }
+              }
+            },
+            "description": "Public trust and durable progress",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid query or unexpected body",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid stored or outgoing evidence",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authority unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read publisher trust and rollout progress",
+        "x-meshspan-access": "system-manager"
+      },
+      "put": {
+        "description": "Authenticates before reading the bounded JSON body. Public keys must be obtained independently of the candidate. Exact retries return the original command receipt, not current rollout progress or installation success. Selecting a manifest does not transfer binaries. Cancellation never rolls back installed nodes and is rejected while a restart outcome is unresolved. A lost response or 503 means outcome unknown: retry the unchanged operation. Clients cannot submit readiness or installation claims through this endpoint.",
+        "operationId": "manageUpdate",
+        "parameters": [
+          {
+            "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+            "in": "header",
+            "name": "MeshSpan-CSRF-Token",
+            "required": false,
+            "schema": {
+              "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "x-meshspan-sensitive": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManageUpdateRequest"
+              }
+            }
+          },
+          "description": "One explicit manager action",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManageUpdateResponse"
+                }
+              }
+            },
+            "description": "Original committed command receipt",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid input",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Rejected command, stale sequence or changed retry",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Body exceeds its bound",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "JSON required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid outgoing evidence",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authority unavailable or outcome unresolved",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Configure publisher trust, select a candidate or control a rollout",
+        "x-meshspan-access": "system-manager",
+        "x-meshspan-max-request-bytes": 24576
       }
     },
     "/admin/users": {

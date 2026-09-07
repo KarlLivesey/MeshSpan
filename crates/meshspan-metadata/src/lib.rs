@@ -50,7 +50,8 @@ mod notification_command;
 mod update_command;
 mod update_manifest;
 pub use repository::{
-    UpdateNodeRecord, UpdateRolloutRecord, UpdateRolloutState, UpdateSignerRecord,
+    UpdateNodeRecord, UpdateProgressCounts, UpdateRolloutRecord, UpdateRolloutState,
+    UpdateSignerRecord,
 };
 pub use update_command::{
     AdvanceUpdateNode, ConfigureUpdateSigner, ControlUpdateRollout, StartUpdateRollout,

@@ -55,7 +55,8 @@ mod update_rollout_queries;
 #[cfg(test)]
 mod update_rollout_tests;
 pub use update_rollout_queries::{
-    UpdateNodeRecord, UpdateRolloutRecord, UpdateRolloutState, UpdateSignerRecord,
+    UpdateNodeRecord, UpdateProgressCounts, UpdateRolloutRecord, UpdateRolloutState,
+    UpdateSignerRecord,
 };
 mod consensus;
 mod external_certificate;

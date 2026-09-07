@@ -9,6 +9,7 @@ import { OperationAdministrationPanel } from "../src/features/operation-administ
 import type { OperationAdministrationClient } from "../src/features/operation-administration/model";
 import type { MetricsClient } from "../src/features/metrics-administration/model";
 import type { NotificationClient } from "../src/features/notification-administration/model";
+import type { UpdateClient } from "../src/features/update-administration/model";
 
 const operationId = "00000000-0000-4000-8000-000000000001";
 const disposals = new Set<() => void>();
@@ -26,7 +27,14 @@ describe("operation administration panel", () => {
     >(async () => ({ next_page_url: null, operations: [] }));
     const client: OperationAdministrationClient &
       MetricsClient &
-      NotificationClient = {
+      NotificationClient &
+      UpdateClient = {
+      getUpdates: async () => ({
+        signers: [],
+        rollout: null,
+        installation_available: false,
+      }),
+      manageUpdate: vi.fn<UpdateClient["manageUpdate"]>(),
       getNotifications: async () => ({ channels: [], worker: "running" }),
       configureNotification:
         vi.fn<NotificationClient["configureNotification"]>(),

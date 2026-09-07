@@ -23,6 +23,13 @@ fn rollout_requires_all_staged_and_resumes_exact_progress_after_database_restart
     fixture.start()?;
     let pending = fixture.nodes()?;
     assert_eq!(pending.len(), 2);
+    assert_eq!(
+        fixture.repository.update_progress_counts(fixture.rollout)?,
+        crate::UpdateProgressCounts {
+            pending: 2,
+            ..crate::UpdateProgressCounts::default()
+        }
+    );
     assert!(
         pending
             .iter()
@@ -37,6 +44,15 @@ fn rollout_requires_all_staged_and_resumes_exact_progress_after_database_restart
     fixture.reopen()?;
     assert_eq!(fixture.nodes()?[0].phase, UpdateNodePhase::Restarting);
     assert!(fixture.nodes()?[0].restart_pending);
+    assert_eq!(
+        fixture.repository.update_progress_counts(fixture.rollout)?,
+        crate::UpdateProgressCounts {
+            staged: 1,
+            restarting: 1,
+            unresolved_restarts: 1,
+            ..crate::UpdateProgressCounts::default()
+        }
+    );
     fixture.advance(6, UpdateNodePhase::Verified)?;
     fixture.advance(7, UpdateNodePhase::Restarting)?;
     fixture.advance(7, UpdateNodePhase::Verified)?;
@@ -45,6 +61,13 @@ fn rollout_requires_all_staged_and_resumes_exact_progress_after_database_restart
         .update_rollout(fixture.rollout)?
         .ok_or("rollout absent")?;
     assert_eq!(complete.state, UpdateRolloutState::Completed);
+    assert_eq!(
+        fixture.repository.update_progress_counts(fixture.rollout)?,
+        crate::UpdateProgressCounts {
+            verified: 2,
+            ..crate::UpdateProgressCounts::default()
+        }
+    );
     assert!(fixture.repository.active_update_rollout()?.is_none());
     assert!(
         fixture

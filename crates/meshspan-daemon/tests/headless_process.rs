@@ -24,6 +24,8 @@ mod private_certificates;
 mod stage10;
 #[path = "headless_process/stage8.rs"]
 mod stage8;
+#[path = "headless_process/updates.rs"]
+mod updates;
 #[path = "headless_process/web_panel.rs"]
 mod web_panel;
 

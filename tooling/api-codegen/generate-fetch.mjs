@@ -13,6 +13,7 @@ import {
 import { renderUploadClientMethods } from "./render-upload-client.mjs";
 import { renderBackupScheduleClientMethods } from "./render-backup-schedule-client.mjs";
 import { renderNotificationClientMethods } from "./render-notification-client.mjs";
+import { renderUpdateClientMethods } from "./render-update-client.mjs";
 import {
   renderMetricsClientMethods,
   renderMetricHistoryRuntime,
@@ -154,6 +155,7 @@ export function createMeshSpanFetchClient(
     ${renderBackupScheduleClientMethods(routes)}
     ${renderMetricsClientMethods(routes)}
     ${renderNotificationClientMethods(routes)}
+    ${renderUpdateClientMethods(routes)}
     ${renderBackupDestinationClientMethods(routes)}
     ${renderBackupHistoryClientMethods(routes)}
     ${renderDiagnosticsClientMethods(routes)}

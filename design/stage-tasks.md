@@ -358,7 +358,7 @@ the stage; publication-dependent acceptance remains held separately and visible.
     This integrated slice reduces the estimate **8 → 3 points**; it does not
     close the task or the assembled-stage acceptance pass.
 
-22. **Mesh-wide rolling updates — Partial; candidate admission and durable journal implemented.** **13 points remaining.**
+22. **Mesh-wide rolling updates — Partial; candidate admission, journal and administration implemented.** **13 points remaining.**
     Accepted decisions §7, PER-003/006, TST-007. Provide one administrator-selected
     signed candidate, compatibility checks, availability-aware node ordering,
     durable progress and stop-on-failed-probe behaviour. Prove interrupted update
@@ -369,9 +369,12 @@ the stage; publication-dependent acceptance remains held separately and visible.
     without opening mesh state. The [replicated journal](stage-10-evidence.md#task-22--replicated-rollout-journal-and-restart-admission)
     now stores independent signer trust, exact candidate selection, per-node
     progress, pause/resume/cancel and ambiguous restart ownership. Fresh root
-    quorum/gateway admission uses the real stable/joint predicates. Automated
-    peer probe collection, all-scope workload readiness, node installation,
-    manager API/panel and real rolling availability remain unimplemented. The
+    quorum/gateway admission uses the real stable/joint predicates.
+    [Manager API and panel](stage-10-evidence.md#task-22--native-update-administration)
+    now pin/revoke publisher trust, select signed manifests, show checkpoint counts
+    and pause/resume/cancel with exact retries across daemon restart. Automated
+    peer probe collection, all-scope workload readiness, node installation
+    and real rolling availability remain unimplemented. The
     estimate stays unchanged until these pieces form an operating updater.
 
 23. **Migration and supported recovery acceptance — Open.** **8 points remaining.**
