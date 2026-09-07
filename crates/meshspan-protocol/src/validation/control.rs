@@ -4,6 +4,7 @@
 
 mod http01;
 mod routing;
+mod updates;
 
 use crate::framing::{WireContractError, WireLimits};
 use crate::v1::control_envelope::Message;
@@ -29,6 +30,8 @@ use super::{
 
 pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireContractError> {
     match value {
+        Message::ProbeUpdateReadiness(value) => updates::request(value),
+        Message::UpdateReadinessResult(value) => updates::response(value),
         Message::FetchHttp01Challenge(value) => http01::token(&value.token),
         Message::Http01ChallengeResult(value) => http01::result(value),
         Message::MetadataCommand(_)

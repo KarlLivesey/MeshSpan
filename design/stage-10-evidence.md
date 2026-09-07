@@ -3514,6 +3514,51 @@ estimate and **121-point** Stage 10 estimate remain unchanged. Migration
 admission/refusal acceptance also remains in task 23. `installation_available`
 remains false; staged is not installed.
 
+## Task 22 — authenticated process readiness observations
+
+The daemon now serves `ProbeUpdateReadiness`/`UpdateReadinessResult` on its
+existing same-swarm Quinn/mTLS control channel. An indexed authority read checks
+the current requester incarnation/certificate and retained candidate/publisher
+trust. Only then does the endpoint request a fresh observation from the live
+consensus reactor. The reply binds the rollout, identity, exact quorum plan,
+applied/committed indices and public executable report. A changed plan or an
+unmet applied-index barrier is refused, not reported ready.
+
+The service-cycle owner sets listener-bound state only after HTTPS, HTTP-01 and
+SMB have bound. It withdraws the state before sending normal shutdown to any
+service; a guard also withdraws on cancellation/unwind. Persistence-blocked and
+listener-bound fields remain separate. No inference of complete data availability
+or a valid write quorum is made from them. No update phase is advanced by a probe.
+
+The endpoint has two admitted probes, a maximum five-second request lifetime,
+an 8 KiB report bound and a lazily reused repository reader. Blocking IO keeps
+its permit and has an observed completion; it is not performed on the async
+executor. Private read probes do not queue behind the private mutation lane.
+Messages and their limits are recorded in the existing protocol catalogue.
+
+Final focused local evidence under NVM and Rust 1.98.0:
+
+- The real-process test passed in **12.41 seconds**, build **27.09**.
+- The wire round-trip/bounds test passed in **0.00 seconds**, build **6.83**.
+- Affected all-target/all-feature Clippy passed in **17.87 seconds**; formatting
+  and diff checks passed. No lint was weakened and no full-workspace gate was
+  repeated during feature construction.
+
+The real-process test uses a second enrolled node's actual private certificate and Quinn negotiation
+to query a live daemon, assert node/operation/plan/position/format bindings,
+reject mismatched plans and impossible catch-up barriers, kill/restart the
+responder, and obtain fresh observations without advancing any restart phase.
+Its TLS identity stays inside the disposable fixture; no credentials are logged.
+
+This closes the private responder, not the whole updater. The coordinator still
+needs to collect/use these observations, prove all-scope workload availability,
+admit and perform the durable executable handoff and verify the new process.
+The existing applied-index admission also needs its final barrier/handoff
+integration under concurrent writes; a moving local log head must not become
+an endless retry loop. Task 22 remains **13 points**, Stage 10 **121**.
+No dependency, persisted schema or public API changed. No release, tag,
+publication, GitHub Actions or user-browser operation occurred.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in

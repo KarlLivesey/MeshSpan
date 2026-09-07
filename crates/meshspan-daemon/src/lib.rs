@@ -4,6 +4,7 @@
 
 mod api_http;
 mod update_candidate;
+mod update_readiness;
 mod update_runtime_info;
 pub use update_candidate::UpdateCandidateError;
 mod notification_api;
