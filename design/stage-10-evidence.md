@@ -10,6 +10,29 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 18 — local consensus measurements
+
+The daemon now samples its existing local consensus reactor independently of
+scrapes. Ten fixed, identity-free metric families expose role, term, committed
+and applied positions, pending/queued operations, persistence blocking, known
+leader presence, sample age and failed observations. A failed source preserves
+the last good sample and its increasing age. No synthetic quorum-health claim is
+made. Collection uses neither peer probes nor consensus writes, and its owned
+worker stops with the appliance. See the [catalogue](metrics.md#local-consensus-observations).
+
+Six contract tests and eleven daemon metric tests passed in **0.00** and **0.11
+seconds**, after a **39.32-second build**. The actual HTTPS exporter enable/disable,
+join, gateway-loss and restart proof passed in **10.00 seconds**, after a
+**31.26-second build**. Affected all-target/all-feature Clippy passed in the same
+successful command chain. Earlier Clippy failures led to a responsibility-based
+consensus metric family and separate SMB connection composition; no blanket lint
+exception or weakened assertion was added.
+
+Task 18 falls **5 → 3 points**, Stage 10 **138 → 136 points**. Remote catch-up,
+current quorum evidence and federation progress still need instrumentation.
+This is focused implementation evidence, not a full-stage gate or a resolution
+of the recorded backup-restore/SMB integration failures.
+
 ## Task 13 — complete diagnostic projection implementation
 
 The existing diagnostic download now includes explicitly allow-listed operational

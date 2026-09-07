@@ -191,6 +191,7 @@ struct StorageRuntimeComposition {
 }
 
 struct ApplianceServiceComposition {
+    consensus_observations: crate::consensus_observation_worker::ConsensusObservationWorker,
     router: Router,
     smb_connections: SmbConnectionFactory,
     certificates: CertificateRuntime,
@@ -657,21 +658,12 @@ fn compose_appliance_services(
     let gateway_observations: Arc<dyn meshspan_contracts::GatewayDispatchObserver> =
         Arc::new(readiness.observations.clone());
     let gateway = GatewaySessionIdentity::new(node.local_state.node_id(), 1)?;
-    let smb_connections = SmbConnectionFactory::new(
-        SmbConnectionFactoryConfiguration {
-            authority_database: node
-                .local_state
-                .state_directory()
-                .join(ROOT_AUTHORITY_DATABASE),
-            wrapping_key_path: node.local_state.wrapping_key_path(),
-            partition_id: open_root_repository(&node.local_state, started_at)?.partition_id(),
-            node_id: node.local_state.node_id(),
-        },
-        private_authority.authority.clone(),
-        Arc::clone(&node.private_network),
-        tokio::runtime::Handle::current(),
+    let smb_connections = compose_smb_connections(
+        node,
+        &private_authority.authority,
         native_filesystem.clone(),
-    );
+        started_at,
+    )?;
     let https_identity =
         RotatingHttpsIdentity::new_bootstrap(node.local_state.bootstrap_certified_key()?)
             .map_err(|_| DaemonProcessError::Certificate)?;
@@ -688,6 +680,11 @@ fn compose_appliance_services(
         &node.private_network,
         started_at,
     )?;
+    let consensus_observations =
+        crate::consensus_observation_worker::ConsensusObservationWorker::new(
+            private_authority.authority.clone(),
+            readiness.observations.clone(),
+        );
     let router = Router::new()
         .merge(public_contract_api_router(readiness)?)
         .merge(join_grant_routes(
@@ -723,6 +720,7 @@ fn compose_appliance_services(
         )?)
         .fallback(crate::web_assets::serve);
     Ok(ApplianceServiceComposition {
+        consensus_observations,
         router: crate::gateway_measurements::observe_https(
             router,
             Arc::clone(&gateway_observations),
@@ -733,6 +731,29 @@ fn compose_appliance_services(
         https_identity,
         gateway_observations,
     })
+}
+
+fn compose_smb_connections(
+    node: &DaemonNodeRuntime,
+    authority: &MetadataAuthorityHandle,
+    filesystem: NativeFilesystemRuntime,
+    now: UnixMicros,
+) -> Result<SmbConnectionFactory, DaemonProcessError> {
+    Ok(SmbConnectionFactory::new(
+        SmbConnectionFactoryConfiguration {
+            authority_database: node
+                .local_state
+                .state_directory()
+                .join(ROOT_AUTHORITY_DATABASE),
+            wrapping_key_path: node.local_state.wrapping_key_path(),
+            partition_id: open_root_repository(&node.local_state, now)?.partition_id(),
+            node_id: node.local_state.node_id(),
+        },
+        authority.clone(),
+        Arc::clone(&node.private_network),
+        tokio::runtime::Handle::current(),
+        filesystem,
+    ))
 }
 
 fn compose_certificate_runtime(
@@ -954,6 +975,14 @@ where
         .map_err(DaemonProcessError::from)
     });
     let certificate_stop = stop.subscribe();
+    let observation_stop = stop.subscribe();
+    tasks.spawn(async move {
+        services
+            .consensus_observations
+            .run_until(wait_for_shutdown(observation_stop))
+            .await;
+        Ok(())
+    });
     let private_certificate_stop = stop.subscribe();
     tasks.spawn(async move {
         services

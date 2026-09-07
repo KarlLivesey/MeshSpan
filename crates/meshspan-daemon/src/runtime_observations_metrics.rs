@@ -20,6 +20,9 @@ impl RuntimeSnapshot {
         let mut samples = vec![
             RuntimeMetric::Uptime(self.uptime),
             RuntimeMetric::DroppedObservations(self.dropped),
+            RuntimeMetric::Consensus(meshspan_contracts::ConsensusMetric::ObservationFailures(
+                state.consensus_failures,
+            )),
             RuntimeMetric::TargetCheckEvictions(state.target_evictions),
             RuntimeMetric::EventEvictions(state.event_evictions),
             RuntimeMetric::ReconciliationCycles(state.cycles),
@@ -51,6 +54,9 @@ impl RuntimeSnapshot {
             ]);
         }
         state.storage.append_metrics(self.captured, &mut samples);
+        if let Some(consensus) = &state.consensus {
+            consensus.append_metrics(self.captured, &mut samples);
+        }
         RuntimeMetricSnapshot::new(samples)
     }
 }

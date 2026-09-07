@@ -5,6 +5,8 @@
 use meshspan_contracts::{LatencyHistogram, RuntimeMetric};
 use std::time::Duration;
 
+#[path = "openmetrics_consensus.rs"]
+mod consensus;
 #[path = "openmetrics_operational.rs"]
 mod operational;
 
@@ -34,6 +36,7 @@ pub(super) fn describe(sample: &RuntimeMetric) -> Descriptor<'_> {
 // Keep the versioned public vocabulary separate from typed numeric representation.
 fn name_and_help(sample: &RuntimeMetric) -> (&'static str, &'static str) {
     match sample {
+        RuntimeMetric::Consensus(value) => consensus::name_and_help(value),
         RuntimeMetric::Maintenance(kind, value) => operational::maintenance(*kind, value),
         RuntimeMetric::StorageUsage(value) => operational::usage(value),
         RuntimeMetric::Uptime(_) => ("uptime_seconds", "Monotonic process lifetime."),
@@ -130,6 +133,7 @@ fn name_and_help(sample: &RuntimeMetric) -> (&'static str, &'static str) {
 
 fn measurement(sample: &RuntimeMetric) -> Measurement<'_> {
     match sample {
+        RuntimeMetric::Consensus(value) => consensus::measurement(value),
         RuntimeMetric::Maintenance(_, value) => match value {
             meshspan_contracts::MaintenanceMetric::Attempts(value)
             | meshspan_contracts::MaintenanceMetric::Failures(value) => {

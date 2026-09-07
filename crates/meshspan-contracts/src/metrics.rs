@@ -14,7 +14,19 @@ pub const METRIC_LATENCY_BOUNDARIES_MICROS: [u64; 8] = [
 ];
 
 /// Maximum distinct families in a version-one runtime snapshot.
-pub const MAX_RUNTIME_METRIC_FAMILIES: usize = 45;
+pub const MAX_RUNTIME_METRIC_FAMILIES: usize = 55;
+
+/// Observed local reactor role. None of these states proves a current write quorum.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum ConsensusObservedRole {
+    /// Follower role, with or without a known leader.
+    Follower = 1,
+    /// Election candidate; no authority is implied.
+    Candidate = 2,
+    /// Leader role; quorum and persistence checks still govern every write.
+    Leader = 3,
+}
 
 /// Closed access-protocol identity; request paths and client identities are never labels.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -111,7 +123,34 @@ impl LatencyHistogram {
 
 /// Closed version-one measurement vocabulary; identities and free-text labels are absent.
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConsensusMetric {
+    /// Monotonic age of the last successful local reactor observation.
+    ObservationAge(Duration),
+    /// Reactor reads that failed or exceeded the observation budget in this process.
+    ObservationFailures(u64),
+    /// Observed local role, never a current quorum or availability assertion.
+    Role(ConsensusObservedRole),
+    /// Observed election term.
+    Term(u64),
+    /// Last observed committed log index, not the number of bytes or files.
+    CommittedIndex(u64),
+    /// Last observed locally applied log index.
+    AppliedIndex(u64),
+    /// Pending authoritative operations in the local reactor.
+    PendingOperations(u64),
+    /// Queued authoritative operations in the local reactor.
+    QueuedOperations(u64),
+    /// Whether local persistence was blocked at observation time.
+    PersistenceBlocked(bool),
+    /// Whether a leader identity is known; never a reachability assertion.
+    LeaderKnown(bool),
+}
+
+/// Closed version-one measurement vocabulary; identities and free-text labels are absent.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RuntimeMetric {
+    /// Local reactor observations, never a fresh quorum or write-admission decision.
+    Consensus(ConsensusMetric),
     /// Selected maintenance-attempt observations by fixed kind and measurement.
     Maintenance(MaintenanceMetricKind, MaintenanceMetric),
     /// Last-pass target usage, explicitly separate from physical available space.
@@ -213,12 +252,28 @@ impl RuntimeMetricSnapshot {
                 histogram.validate()?;
             }
         }
+        let committed = self.samples().iter().find_map(|sample| match sample {
+            RuntimeMetric::Consensus(ConsensusMetric::CommittedIndex(value)) => Some(*value),
+            _ => None,
+        });
+        let applied = self.samples().iter().find_map(|sample| match sample {
+            RuntimeMetric::Consensus(ConsensusMetric::AppliedIndex(value)) => Some(*value),
+            _ => None,
+        });
+        if let (Some(committed), Some(applied)) = (committed, applied)
+            && applied > committed
+        {
+            return Err(ContractError::InvalidInput);
+        }
         Ok(())
     }
 }
 
 fn same_family(left: &RuntimeMetric, right: &RuntimeMetric) -> bool {
     match (left, right) {
+        (RuntimeMetric::Consensus(left), RuntimeMetric::Consensus(right)) => {
+            std::mem::discriminant(left) == std::mem::discriminant(right)
+        }
         (
             RuntimeMetric::Maintenance(left_kind, left),
             RuntimeMetric::Maintenance(right_kind, right),

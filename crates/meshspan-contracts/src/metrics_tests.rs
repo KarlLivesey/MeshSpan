@@ -3,6 +3,22 @@
 use super::*;
 
 #[test]
+fn consensus_metrics_reject_contradictory_indices() -> Result<(), ContractError> {
+    RuntimeMetricSnapshot::new(vec![
+        RuntimeMetric::Consensus(ConsensusMetric::CommittedIndex(7)),
+        RuntimeMetric::Consensus(ConsensusMetric::AppliedIndex(6)),
+    ])?;
+    assert!(
+        RuntimeMetricSnapshot::new(vec![
+            RuntimeMetric::Consensus(ConsensusMetric::CommittedIndex(7)),
+            RuntimeMetric::Consensus(ConsensusMetric::AppliedIndex(8))
+        ])
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
 fn histogram_preserves_exact_inclusive_boundaries_and_nanosecond_sums() -> Result<(), ContractError>
 {
     let mut histogram = LatencyHistogram::default();
