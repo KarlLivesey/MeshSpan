@@ -3383,6 +3383,70 @@ dependency, release, tag, package/image publication, GitHub Actions or browser
 operation occurred. Stage 10 remains **121 points**, including task 22's **13**,
 until these pieces form an operating updater.
 
+## Task 22 — automatic private executable distribution
+
+Every daemon now runs one owned candidate-distribution worker. Once a manager
+selects a trusted signed candidate and uploads an executable to one node, other
+nodes select their own platform entry, page currently active source identities
+and fetch the bytes over the existing Quinn/mTLS data channel. Control/consensus
+traffic never carries executable bodies. A failed or absent source advances the
+bounded source cursor; a later pass tries the other advertised nodes.
+
+The source binds the request to current same-swarm node/incarnation/certificate,
+root partition, deadline and the exact currently trusted signed candidate. It
+returns a freshly verified file, not an arbitrary path from the request. Both
+ends count and hash the stream. Headers and terminal results repeat the exact
+candidate/platform/length/digest; frames must be contiguous and the receiver
+requires terminal EOF. Only then may the shared cache verifier publish/fsync
+the file. Peer transfer and HTTPS now share one bounded reader with explicit
+finish versus disconnected-input semantics.
+
+The receiving node publishes its own source advertisement through the existing
+typed authoritative command, with a deterministic operation ID and original
+receipt retry. It does not mark its update checkpoint staged or installed.
+Cached bytes are reverified after process restart; an in-process successful
+source publication avoids repeatedly hashing the same candidate on every tick.
+Actual source reads still reverify the file, and later restart admission must
+independently verify executable/compatibility/readiness evidence.
+
+The daemon now owns data-stream tasks within its service cycle. Executable
+sources have two transfer slots; each node has one outbound fetch job. Shutdown
+interrupts transport and observes owned cache work. The assembly separates
+operational composition from service supervision/result collection, rather than
+extracting arbitrary lines to satisfy size limits. A failed updater does not
+terminate otherwise healthy file services.
+
+Focused local evidence on the current macOS host:
+
+- Two real HTTPS/child-daemon cases passed in **21.37 seconds**, build **4.13**.
+  The new case joins three real voters, admits a disposable signed candidate,
+  uploads **196,725 bytes** once, waits for exact bytes and three committed source
+  records on every node, kills/restarts a peer and confirms retained bytes/state.
+  This spans multiple transfer frames; its fixed SHA-256 was calculated
+  independently using Node crypto. All three checkpoints remain pending and
+  `installation_available` remains false. The original upload/control restart
+  and changed-body rejection case also passes.
+- The private wire identity/malformed-shape case passed in **0.00 seconds**,
+  build **5.91**; the shared real-file cache cases passed in **0.05 seconds**,
+  build **27.23**.
+- Existing real mTLS shard and backup lifecycle tests each passed in
+  **0.32 seconds**, shared build **19.74**. These exercise the dispatcher retained
+  beneath the appliance's new executable route.
+- Affected all-target/all-feature Clippy passed in **15.20 seconds**. Rust
+  formatting and diff checks passed. Initial local checks caught type/fixture
+  mistakes and composition-size violations; no lint was disabled or weakened.
+
+Private data envelope tags **80–82** are documented in the protocol catalogue.
+No dependency, persisted schema, public API or released version changed in this
+slice. No full-workspace test gate was repeated during feature construction.
+Task 22 still needs owned executable replacement, authenticated current readiness
+and the rolling availability proof; its **13 points** and Stage 10's **121 points**
+remain. The assembled-stage pass also retains cancellation/revocation, corrupt
+cache reclamation, mid-transfer loss and lifecycle stress coverage. This is real
+peer-delivery evidence, not installation, hardware failure or release evidence.
+No release, tag, image/package publication, GitHub Actions or user-browser
+operation occurred.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in

@@ -442,6 +442,33 @@ receipts. Session handling additionally checks that every response receipt and
 finish message matches its initiating request; structural wire validation does
 not substitute for that conversation-state check.
 
+### Signed executable distribution
+
+Software-update bytes use the same private data stream, not consensus payloads
+or shard capabilities. `GetUpdateArtifactRequest` (envelope tag 80) carries a
+normal request header and `UpdateArtifactIdentity`: rollout UUID bytes (16),
+signed platform (one of the four supported Linux/macOS architecture targets),
+positive byte length (at most 8 GiB) and SHA-256 digest bytes (32).
+
+The source validates the current same-swarm node/incarnation and leaf certificate,
+root partition, deadline, selected candidate signature and current publisher
+enablement before opening a cached executable. The request identity must equal
+the signed manifest's platform entry; an advertised location/hash alone is not
+authority. No host path or executable URL is accepted from the requester.
+
+`GetUpdateArtifactHeader` (81) repeats that exact identity. Contiguous bounded
+`DataFrame` records carry the bytes. `GetUpdateArtifactResult` (82) repeats the
+identity after the sender has independently counted/hashed the stream. The
+receiver requires exact header/result bindings, length, offsets, hash and EOF
+before publishing its local fsynced cache entry. Transport loss/reset means no
+complete transfer, not successful installation. A new attempt starts the bounded
+immutable transfer again; partial-range resume is not claimed by this version.
+
+Only a subsequent authoritative source-publication command advertises the new
+cache. Neither the transfer result nor that source receipt marks a node ready to
+restart or proves software installation. A cancelled rollout or disabled signer
+cannot authorise new transfer preparation/publication.
+
 ## 12. Repair and drain coordination
 
 - `ClaimWork` returns a leased, fenced repair/scrub/drain task.

@@ -202,6 +202,28 @@ message DeleteBackupResult {
   optional BackupDeleteReceipt receipt = 2;
 }
 
+// Update executables are signed public software, not filesystem shards. Retrieval
+// still requires current same-swarm membership and a trusted selected candidate.
+message UpdateArtifactIdentity {
+  bytes rollout_id = 1;
+  string target = 2;
+  uint64 byte_length = 3;
+  bytes digest = 4;
+}
+
+message GetUpdateArtifactRequest {
+  RequestHeader header = 1;
+  UpdateArtifactIdentity artifact = 2;
+}
+
+message GetUpdateArtifactHeader {
+  UpdateArtifactIdentity artifact = 1;
+}
+
+message GetUpdateArtifactResult {
+  UpdateArtifactIdentity artifact = 1;
+}
+
 message DataControlEnvelope {
   oneof message {
     PutShardBegin put_shard_begin = 10;
@@ -229,5 +251,8 @@ message DataControlEnvelope {
     VerifyBackupResult verify_backup_result = 61;
     DeleteBackupRequest delete_backup_request = 70;
     DeleteBackupResult delete_backup_result = 71;
+    GetUpdateArtifactRequest get_update_artifact_request = 80;
+    GetUpdateArtifactHeader get_update_artifact_header = 81;
+    GetUpdateArtifactResult get_update_artifact_result = 82;
   }
 }

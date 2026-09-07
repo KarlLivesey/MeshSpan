@@ -63,6 +63,25 @@ where
         let message = envelope
             .message
             .ok_or(RemoteDataRouterError::InvalidMessage)?;
+        self.serve_message(stream, peer, limits, observed_at, message)
+            .await
+    }
+
+    /// Dispatches an already decoded first request when the appliance composes other data families.
+    ///
+    /// # Errors
+    /// Rejects a non-data stream, malformed request, unavailable family or provider failure.
+    pub async fn serve_message(
+        &mut self,
+        stream: AcceptedStream,
+        peer: AuthenticatedPeer,
+        limits: WireLimits,
+        observed_at: UnixMicros,
+        message: Message,
+    ) -> Result<(), RemoteDataRouterError> {
+        if stream.kind != StreamKind::Data {
+            return Err(RemoteDataRouterError::InvalidMessage);
+        }
         match family(&message)? {
             DataFamily::Shard => self
                 .shards

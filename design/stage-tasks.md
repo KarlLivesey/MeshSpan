@@ -358,7 +358,7 @@ the stage; publication-dependent acceptance remains held separately and visible.
     This integrated slice reduces the estimate **8 → 3 points**; it does not
     close the task or the assembled-stage acceptance pass.
 
-22. **Mesh-wide rolling updates — Partial; admission, journal, administration and executable upload implemented.** **13 points remaining.**
+22. **Mesh-wide rolling updates — Partial; admission, journal, administration and executable distribution implemented.** **13 points remaining.**
     Accepted decisions §7, PER-003/006, TST-007. Provide one administrator-selected
     signed candidate, compatibility checks, availability-aware node ordering,
     durable progress and stop-on-failed-probe behaviour. Prove interrupted update
@@ -376,8 +376,11 @@ the stage; publication-dependent acceptance remains held separately and visible.
     [Executable upload](stage-10-evidence.md#task-22--verified-executable-upload)
     now streams signed bytes to a private fsynced cache and commits an exact
     node/incarnation source advertisement, through HTTPS, the SDK and panel.
-    Automatic peer distribution, peer probe collection, all-scope workload
-    readiness, node installation
+    [Automatic peer distribution](stage-10-evidence.md#task-22--automatic-private-executable-distribution)
+    now fetches each node's signed platform over authenticated QUIC, verifies the
+    streamed bytes locally and publishes that node as a source. A real three-node
+    lifecycle proves one upload fans out without per-node administration.
+    Peer probe collection, all-scope workload readiness, node installation
     and real rolling availability remain unimplemented. The
     estimate stays unchanged until these pieces form an operating updater.
 
