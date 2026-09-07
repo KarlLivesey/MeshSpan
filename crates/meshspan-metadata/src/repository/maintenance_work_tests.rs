@@ -646,6 +646,56 @@ struct Fixture {
     volume: VolumeId,
 }
 
+#[test]
+fn pending_diagnostics_are_bounded_indexed_and_do_not_claim_work()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = Fixture::new()?;
+    for index in 2_u8..=3 {
+        let mut queued = fixture.queue(WorkId::from_bytes([index; 16])?, 1, false);
+        queued.deduplication_key = [index; 32];
+        queued.subject = WorkSubject::Rebalance {
+            volume_id: fixture.volume,
+            topology_revision: Revision::new(u64::from(index)),
+        };
+        fixture.apply(
+            u64::from(index),
+            10,
+            &AuthoritativeCommand::QueueMaintenanceWork(queued),
+        )?;
+    }
+    let before = fixture.repository.current_revision()?;
+    let window = fixture
+        .repository
+        .pending_maintenance_diagnostics(super::PageLimit::new(1)?)?;
+    assert_eq!(window.items.len(), 1);
+    assert!(window.truncated);
+    assert_eq!(window.items[0].work_id, WorkId::from_bytes([2; 16])?);
+    assert_eq!(window.items[0].state, MaintenanceWorkState::Queued);
+    assert!(window.items[0].claim.is_none());
+    let window = fixture
+        .repository
+        .pending_maintenance_diagnostics(super::PageLimit::new(2)?)?;
+    assert_eq!(window.items.len(), 2);
+    assert!(!window.truncated);
+    assert_eq!(fixture.repository.current_revision()?, before);
+    let plan = fixture
+        .repository
+        .database
+        .connection()
+        .prepare(
+            "EXPLAIN QUERY PLAN SELECT work_id FROM maintenance_work_jobs WHERE state < 3
+         ORDER BY state, next_attempt_at, priority DESC, created_at, work_id LIMIT 101",
+        )?
+        .query_map([], |row| row.get::<_, String>(3))?
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(
+        plan.iter()
+            .any(|line| line.contains("maintenance_work_jobs_ready"))
+    );
+    assert!(!plan.iter().any(|line| line.contains("TEMP B-TREE")));
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 struct RebalancePageSpec {
     claim_generation: u64,

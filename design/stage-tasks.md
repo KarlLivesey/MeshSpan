@@ -17,7 +17,7 @@ Update the relevant task when work changes its status. Report the current task,
 what behaviour changed, what remains and what was tested. Do not replace this
 with “nearly done”, a count of commits or an unweighted completion percentage.
 
-Remaining-effort estimate, 2026-09-07: **Stage 10: 140 points; Stage 11: 126
+Remaining-effort estimate, 2026-09-07: **Stage 10: 138 points; Stage 11: 126
 points; Stage 12: 55 points.** These are preliminary engineering judgements from
 the task scope and recorded gaps, not measured hours or completion guarantees.
 Uncertainty is high until the open integration/proof work is exercised.
@@ -261,13 +261,19 @@ the stage; publication-dependent acceptance remains held separately and visible.
     incremental updates. Verify accessible, responsive, non-blocking behaviour
     through equivalent APIs and panels, including degraded/unknown states.
 
-13. **Complete redacted diagnostic bundle — Partial.** **3 points remaining.**
+13. **Complete redacted diagnostic bundle — Implemented; stage-wide verification pending.** **1 point remaining.**
     OPS-011/020. [Metadata diagnostics](stage-10-evidence.md#native-metadata-diagnostics)
     and [runtime bundle/download](stage-10-evidence.md#runtime-diagnostic-bundle-and-download-control)
     have passing evidence. Reconcile all required versions, configuration,
     logs/events, topology, target health, quorum and work sections; close missing
     coverage and prove bounded collection, absent/stale evidence and secret/content
     exclusion. Collection must not start repair or depend on remote telemetry.
+    The [completed projection implementation](stage-10-evidence.md#task-13--complete-diagnostic-projection-implementation)
+    adds allow-listed operational configuration and bounded indexed pending work
+    to the existing version/topology/health/quorum/event bundle. Focused Rust,
+    SQLite, generated-client/download and actual two-daemon HTTPS checks pass;
+    no source subjects, keys or raw configurations are serialised. Remaining
+    effort is the assembled-stage acceptance pass, not further feature scaffolding.
 
 14. **Bounded metrics foundation and authenticated exporter — Recorded complete.** **0 points remaining.**
     OPS-012/017/018/020. [Exporter integration](stage-10-evidence.md#replicated-opt-in-and-authenticated-exporter-integration)

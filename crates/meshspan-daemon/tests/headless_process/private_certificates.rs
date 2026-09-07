@@ -43,6 +43,8 @@ async fn private_node_renewal_runs_automatically_and_survives_restart_and_join()
         wait_for_status(peer.address, &peer_client, "configured").await?;
         web_panel::verify(peer.address, &peer_client).await?;
         prove_private_leaf(&root, &peer, partition, &installed).await?;
+        diagnostics::verify(root.address, &client, api_key).await?;
+        diagnostics::verify(peer.address, &peer_client, api_key).await?;
         processes[0].kill()?;
         processes[0].wait()?;
         processes[0] = root.start()?;

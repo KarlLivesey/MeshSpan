@@ -260,10 +260,10 @@ pub use locality_policy::{
 pub use maintenance_work::{
     DueStorageScrub, DueStorageScrubCursor, DueStorageScrubPage, MaintenanceEffectReference,
     MaintenanceWorkClaim, MaintenanceWorkCursor, MaintenanceWorkRecord, MaintenanceWorkState,
-    ReadyMaintenanceWork, ReadyMaintenanceWorkPage, RebalanceScanProgress, ShardRepairEffectRecord,
-    StorageDrainCursor, StorageDrainRecord, StorageDrainState, StorageDrainStatusPage,
-    StorageScopeDrainAction, StorageScopeDrainCursor, StorageScopeDrainRecord,
-    StorageScopeDrainState, empty_target_drain_catalogue_digest,
+    MaintenanceWorkWindow, ReadyMaintenanceWork, ReadyMaintenanceWorkPage, RebalanceScanProgress,
+    ShardRepairEffectRecord, StorageDrainCursor, StorageDrainRecord, StorageDrainState,
+    StorageDrainStatusPage, StorageScopeDrainAction, StorageScopeDrainCursor,
+    StorageScopeDrainRecord, StorageScopeDrainState, empty_target_drain_catalogue_digest,
 };
 pub use manual_dns_task::{ManualDnsTaskCursor, ManualDnsTaskRecord, ManualDnsTaskState};
 pub use membership::AuthoritativeMembership;

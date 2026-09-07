@@ -126,6 +126,14 @@ pub struct MaintenanceWorkRecord {
     pub claim: Option<MaintenanceWorkClaim>,
 }
 
+/// Bounded observation of unfinished maintenance, not a complete queue or an admission permit.
+pub struct MaintenanceWorkWindow {
+    /// Jobs selected from the ready index; a concurrent transition may have completed one.
+    pub items: Vec<MaintenanceWorkRecord>,
+    /// Additional unfinished jobs existed at selection time.
+    pub truncated: bool,
+}
+
 /// Minimal immutable effect reference needed to recover after a lost completion response.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MaintenanceEffectReference {
@@ -214,6 +222,43 @@ impl AuthoritativeRepository {
         work_id: WorkId,
     ) -> Result<Option<MaintenanceWorkRecord>, RepositoryError> {
         load_record(self.database.connection(), work_id)
+    }
+
+    /// Reads a bounded unfinished-work window without claiming, retrying or scanning subjects.
+    ///
+    /// The existing ready index supplies order and limit. Records are individually validated;
+    /// this is not an atomic whole-queue snapshot and may observe concurrent completion.
+    ///
+    /// # Errors
+    /// Fails for malformed persisted jobs, invalid bounds or unavailable local metadata.
+    pub fn pending_maintenance_diagnostics(
+        &self,
+        limit: super::PageLimit,
+    ) -> Result<MaintenanceWorkWindow, RepositoryError> {
+        let connection = self.database.connection();
+        let mut statement = connection.prepare(
+            "SELECT work_id FROM maintenance_work_jobs WHERE state < 3
+             ORDER BY state, next_attempt_at, priority DESC, created_at, work_id LIMIT ?1",
+        )?;
+        let identifiers =
+            statement
+                .query_map(
+                    [i64::try_from(limit.get() + 1)
+                        .map_err(|_| RepositoryError::InvalidPageLimit)?],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )?
+                .collect::<Result<Vec<_>, _>>()?;
+        let truncated = identifiers.len() > limit.get();
+        let items = identifiers
+            .into_iter()
+            .take(limit.get())
+            .map(|bytes| {
+                let work_id =
+                    WorkId::from_bytes(exact(bytes)?).map_err(|_| RepositoryError::CorruptState)?;
+                load_record(connection, work_id)?.ok_or(RepositoryError::CorruptState)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(MaintenanceWorkWindow { items, truncated })
     }
 
     /// Returns the highest-priority ready work that fits the caller's remaining local budget.

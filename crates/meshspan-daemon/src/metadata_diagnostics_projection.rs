@@ -3,7 +3,9 @@
 //! Allow-listed projections only. Never serialise raw records and redact afterwards.
 
 use meshspan_api_contract::{
+    DiagnosticBackupPolicy, DiagnosticCertificateSource, DiagnosticConfiguration,
     DiagnosticConsensus, DiagnosticConsensusRole, DiagnosticCounter, DiagnosticIdentifier,
+    DiagnosticMaintenanceKind, DiagnosticMaintenanceState, DiagnosticMaintenanceWork,
     DiagnosticNode, DiagnosticOperation, DiagnosticSection, DiagnosticTarget, OperationState,
     StorageFolderUsageLimit, TopologyNodeRoles, TopologyNodeState, TopologyTargetState,
 };
@@ -152,9 +154,92 @@ pub(super) fn operations(
     })
 }
 
+pub(super) fn configuration(
+    repository: &AuthoritativeRepository,
+    node: meshspan_domain::NodeId,
+) -> Result<DiagnosticConfiguration, Error> {
+    let backup = repository
+        .metadata_backup_schedule()
+        .map_err(|_| Error::Failed)?;
+    let metrics = repository
+        .metrics_exporter_configuration()
+        .map_err(|_| Error::Failed)?;
+    let certificate = repository
+        .latest_public_certificate()
+        .map_err(|_| Error::Failed)?;
+    let node_certificate = repository
+        .active_node_certificate(node)
+        .map_err(|_| Error::Failed)?;
+    Ok(DiagnosticConfiguration {
+        operating_system: std::env::consts::OS.to_owned(),
+        architecture: std::env::consts::ARCH.to_owned(),
+        metrics_exporter_enabled: metrics.map(|value| value.policy.enabled),
+        backup: backup.map(|value| DiagnosticBackupPolicy {
+            enabled: value.enabled,
+            interval_micros: DiagnosticCounter(value.interval.get().to_string()),
+            retained_generations: value.retained_generations,
+            minimum_verified_copies: value.minimum_verified_copies,
+            minimum_independent_copies: value.minimum_independent_copies,
+        }),
+        public_certificate_source: certificate.map(|value| match value.source {
+            meshspan_metadata::PublicCertificateSource::AcmeOrder(_) => {
+                DiagnosticCertificateSource::Acme
+            }
+            meshspan_metadata::PublicCertificateSource::ExternalPublication(_) => {
+                DiagnosticCertificateSource::External
+            }
+            meshspan_metadata::PublicCertificateSource::MeshLocalIssuance(_) => {
+                DiagnosticCertificateSource::MeshLocal
+            }
+        }),
+        node_certificate_generation: node_certificate
+            .map(|value| DiagnosticCounter(value.generation.to_string())),
+    })
+}
+
+pub(super) fn pending_work(
+    repository: &AuthoritativeRepository,
+) -> Result<DiagnosticSection<DiagnosticMaintenanceWork>, Error> {
+    let window = repository
+        .pending_maintenance_diagnostics(limit()?)
+        .map_err(|_| Error::Failed)?;
+    let items = window
+        .items
+        .into_iter()
+        .map(|record| DiagnosticMaintenanceWork {
+            work_id: identifier(record.work_id.as_bytes()),
+            kind: match record.subject.kind() {
+                meshspan_work::WorkKind::Repair => DiagnosticMaintenanceKind::Repair,
+                meshspan_work::WorkKind::Scrub => DiagnosticMaintenanceKind::Scrub,
+                meshspan_work::WorkKind::Drain => DiagnosticMaintenanceKind::Drain,
+                meshspan_work::WorkKind::Rebalance => DiagnosticMaintenanceKind::Rebalance,
+                meshspan_work::WorkKind::Reconcile => DiagnosticMaintenanceKind::Reconcile,
+            },
+            state: match record.state {
+                meshspan_metadata::MaintenanceWorkState::Queued => {
+                    DiagnosticMaintenanceState::Queued
+                }
+                meshspan_metadata::MaintenanceWorkState::Claimed => {
+                    DiagnosticMaintenanceState::Claimed
+                }
+                meshspan_metadata::MaintenanceWorkState::Complete => {
+                    DiagnosticMaintenanceState::Complete
+                }
+            },
+            attempt_count: DiagnosticCounter(record.attempt_count.to_string()),
+            revision: DiagnosticCounter(record.revision.get().to_string()),
+            next_attempt_at_epoch_micros: record.next_attempt_at.get(),
+        })
+        .collect();
+    Ok(DiagnosticSection {
+        items,
+        truncated: window.truncated,
+    })
+}
 fn identifier(bytes: [u8; 16]) -> DiagnosticIdentifier {
     DiagnosticIdentifier(format_uuid(bytes))
 }
+
 fn limit() -> Result<PageLimit, Error> {
     PageLimit::new(100).map_err(|_| Error::Failed)
 }

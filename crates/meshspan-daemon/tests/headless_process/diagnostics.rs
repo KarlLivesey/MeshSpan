@@ -41,6 +41,13 @@ pub(super) async fn verify(
     let snapshot: MetadataDiagnosticsResponse = serde_json::from_str(body)?;
     encode_metadata_diagnostics_response(&snapshot)?;
     assert_eq!(snapshot.daemon_version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        snapshot.configuration.operating_system,
+        std::env::consts::OS
+    );
+    assert_eq!(snapshot.configuration.architecture, std::env::consts::ARCH);
+    assert!(snapshot.configuration.node_certificate_generation.is_some());
+    assert!(snapshot.pending_work.items.len() <= 100);
     let consensus = snapshot
         .consensus
         .ok_or("live reactor observation absent")?;

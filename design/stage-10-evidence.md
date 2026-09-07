@@ -10,6 +10,47 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 13 — complete diagnostic projection implementation
+
+The existing diagnostic download now includes explicitly allow-listed operational
+configuration and a bounded unfinished-work window. Configuration exposes only
+compiled OS/architecture, exporter enabled state, backup interval/retention/copy
+policy, public certificate source category and observed private generation.
+Destination paths, host/domain names, recipient identities, raw component payloads
+and all key material are omitted by construction.
+
+Pending work includes only opaque work identity, closed kind/state, attempt count,
+revision and retry instant. It never serialises subjects, file/shard identities,
+claims, fences or result payloads. Selection uses the existing maintenance-ready
+index with a limit-plus-one truncation probe. It does not claim work, retry it,
+perform provider IO or scan the complete queue. Concurrent completion remains
+explicitly representable; metadata revision-before/after still exposes collection
+across concurrent changes. Existing bounded events, target probes, topology,
+reactor observations and command outcomes remain part of the bundle.
+
+Focused implementation verification:
+
+- Five Rust response/diagnostic tests passed in **0.04 seconds**, including nested
+  secret-field rejection and contradictory configuration/counter rejection.
+- Four HTTP diagnostic tests passed in **0.11 seconds**, covering pre-collection
+  authentication, revocation, cancelled-job ownership and invalid output.
+- The SQLite bounded-window/read-only/index-plan test passed in **0.28 seconds**.
+  It verifies truncation and unchanged revision/unclaimed jobs, plus indexed
+  ordering without a temporary sort. A `usize` SQL-binding compile mistake was
+  corrected before these tests. Combined affected-crate build: **33.25 seconds**.
+- Rust-generated OpenAPI/TypeScript/Zod artefacts were regenerated. Eleven web
+  diagnostic/client/download tests passed in **1.48 seconds**; web typecheck and
+  affected ESLint passed.
+- The real two-daemon setup/join/renewal/restart test now verifies the complete
+  diagnostic download through both gateways. It passed in **15.46 seconds**, after
+  a **35.14-second build**, with rebuilt embedded web assets.
+- Affected API/metadata/daemon all-target/all-feature Clippy passed in **31.40 seconds**.
+
+Task 13 implementation is ready for the assembled-stage verification pass;
+remaining estimate **3 → 1 points**, Stage 10 **140 → 138 points**. This is not
+stage completion. The packaged backup-restore and cross-gateway SMB failures below
+remain open and are not erased by this independent successful diagnostic proof.
+
 ## Tasks 24/27 — local native package and packaged-process execution
 
 `pnpm package:local` now builds the embedded web bundle and daemon, runs both
