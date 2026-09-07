@@ -28,6 +28,8 @@ struct ObservationOwner {
 
 #[derive(Clone, Default)]
 struct ObservationState {
+    consensus: Option<consensus::ObservedConsensus>,
+    consensus_failures: u64,
     storage: storage::StorageMeasurements,
     https: gateway::GatewayMeasurements,
     smb: gateway::GatewayMeasurements,
@@ -45,6 +47,8 @@ struct ObservationState {
     events: VecDeque<RuntimeEvent>,
 }
 
+#[path = "runtime_observations_consensus.rs"]
+mod consensus;
 #[path = "runtime_observations_storage.rs"]
 mod storage;
 pub(crate) use storage::StorageUsagePass;

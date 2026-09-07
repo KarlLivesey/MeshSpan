@@ -208,7 +208,66 @@ async fn verify(
     let policy = policy.configuration.ok_or("exporter policy missing")?;
     assert!(policy.policy.enabled);
     assert_eq!(policy.policy.allowed_principals.len(), 1);
-    Ok(())
+    verify_consensus_measurements(address, client, &authorization).await
+}
+
+async fn verify_consensus_measurements(
+    address: SocketAddr,
+    client: &ClientConfig,
+    authorization: &str,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = tokio::time::Instant::now() + super::WAIT_LIMIT;
+    loop {
+        let response = request_with_headers(
+            address,
+            client,
+            "GET",
+            SCRAPE,
+            None,
+            &[("Authorization", authorization)],
+        )
+        .await?;
+        require_status(&response, "200 OK", "scrape local consensus observations")?;
+        let body = response_body(&response)?;
+        let value = |name: &str| -> Result<Option<u64>, Box<dyn Error>> {
+            body.lines()
+                .find_map(|line| line.strip_prefix(name))
+                .map(str::parse::<u64>)
+                .transpose()
+                .map_err(Into::into)
+        };
+        if let (Some(term), Some(committed), Some(applied)) = (
+            value("meshspan_v1_consensus_term ")?,
+            value("meshspan_v1_consensus_committed_index ")?,
+            value("meshspan_v1_consensus_applied_index ")?,
+        ) && term > 0
+            && committed > 0
+        {
+            assert!(applied <= committed);
+            assert!(matches!(value("meshspan_v1_consensus_role ")?, Some(1..=3)));
+            assert!(matches!(
+                value("meshspan_v1_consensus_persistence_blocked ")?,
+                Some(0..=1)
+            ));
+            assert!(matches!(
+                value("meshspan_v1_consensus_leader_known ")?,
+                Some(0..=1)
+            ));
+            assert!(value("meshspan_v1_consensus_pending_operations ")?.is_some());
+            assert!(value("meshspan_v1_consensus_queued_operations ")?.is_some());
+            assert!(value("meshspan_v1_consensus_observation_failures_total ")?.is_some());
+            assert!(
+                body.lines()
+                    .any(|line| line.starts_with("meshspan_v1_consensus_observation_age_seconds "))
+            );
+            assert!(!body.contains("quorum_available"));
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("committed local consensus observations did not appear".into());
+        }
+        tokio::time::sleep(super::RETRY_INTERVAL).await;
+    }
 }
 
 async fn configure(

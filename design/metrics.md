@@ -11,39 +11,39 @@ The current source reads the existing process-local observation store without
 provider IO, network requests or waiting for the storage worker. Contention
 returns unavailable evidence, not a synthetic empty/healthy snapshot.
 
-The current catalogue has 45 distinct families. Names carry `meshspan_v1_`;
+The current catalogue has 55 distinct families. Names carry `meshspan_v1_`;
 counter samples additionally carry `_total`.
 
-| Family suffix                             | Type      | Meaning                                                   |
-| ----------------------------------------- | --------- | --------------------------------------------------------- |
-| `uptime_seconds`                          | Gauge     | Monotonic process lifetime                                |
-| `observation_drops`                       | Counter   | Updates not recorded                                      |
-| `target_check_evictions`                  | Counter   | Target samples evicted from the diagnostic window         |
-| `event_evictions`                         | Counter   | Transitions evicted from the diagnostic window            |
-| `storage_reconciliation_cycles`           | Counter   | Observed completed cycles                                 |
-| `storage_reconciliation_failures`         | Counter   | Observed cycles containing failed steps                   |
-| `target_probe_passes`                     | Counter   | Observed passing provider checks, not full scrubs         |
-| `target_probe_failures`                   | Counter   | Observed failed provider checks                           |
-| `storage_reconciliation_duration_seconds` | Histogram | Observed cycle durations                                  |
-| `target_probe_duration_seconds`           | Histogram | Observed provider-check durations, across all targets     |
-| `storage_reconciliation_age_seconds`      | Gauge     | Age of the cycle supplying the following gauges           |
-| `storage_configured_folders`              | Gauge     | Last-cycle configured folders, not measured capacity      |
-| `storage_open_targets`                    | Gauge     | Last-cycle open handles, not guaranteed read availability |
-| `storage_pending_return_scans`            | Gauge     | Last-cycle return-scan admission backlog                  |
-| `storage_reconciliation_failed_steps`     | Gauge     | Last-cycle failed steps                                   |
+| Family suffix                             | Type      | Meaning                                                    |
+| ----------------------------------------- | --------- | ---------------------------------------------------------- |
+| `uptime_seconds`                          | Gauge     | Monotonic process lifetime                                 |
+| `observation_drops`                       | Counter   | Updates not recorded                                       |
+| `target_check_evictions`                  | Counter   | Target samples evicted from the diagnostic window          |
+| `event_evictions`                         | Counter   | Transitions evicted from the diagnostic window             |
+| `storage_reconciliation_cycles`           | Counter   | Observed completed cycles                                  |
+| `storage_reconciliation_failures`         | Counter   | Observed cycles containing failed steps                    |
+| `target_probe_passes`                     | Counter   | Observed passing provider checks, not full scrubs          |
+| `target_probe_failures`                   | Counter   | Observed failed provider checks                            |
+| `storage_reconciliation_duration_seconds` | Histogram | Observed cycle durations                                   |
+| `target_probe_duration_seconds`           | Histogram | Observed provider-check durations, across all targets      |
+| `storage_reconciliation_age_seconds`      | Gauge     | Age of the cycle supplying the following gauges            |
+| `storage_configured_folders`              | Gauge     | Last-cycle configured folders, not measured capacity       |
+| `storage_open_targets`                    | Gauge     | Last-cycle open handles, not guaranteed read availability  |
+| `storage_pending_return_scans`            | Gauge     | Last-cycle return-scan admission backlog                   |
+| `storage_reconciliation_failed_steps`     | Gauge     | Last-cycle failed steps                                    |
 | `https_dispatches`                        | Counter   | Ended HTTPS handler dispatches, including cancellations    |
 | `https_server_error_responses`            | Counter   | Dispatches returning a 5xx response                        |
-| `https_cancelled_dispatches`              | Counter   | Dispatch futures dropped before returning a response      |
+| `https_cancelled_dispatches`              | Counter   | Dispatch futures dropped before returning a response       |
 | `https_dispatch_duration_seconds`         | Histogram | HTTPS handler lifetime, not response-body streaming        |
 | `smb_dispatches`                          | Counter   | Ended complete-payload dispatches, including cancellations |
 | `smb_dispatch_errors`                     | Counter   | Handler errors, not ordinary SMB error-status responses    |
-| `smb_cancelled_dispatches`                | Counter   | Dispatch futures dropped before returning                 |
+| `smb_cancelled_dispatches`                | Counter   | Dispatch futures dropped before returning                  |
 | `smb_dispatch_duration_seconds`           | Histogram | SMB payload handler lifetime, not socket writes            |
 | `storage_usage_age_seconds`               | Gauge     | Age since the most recent target-usage sampling pass began |
-| `storage_usage_sampled_targets`           | Gauge     | Open targets included in that pass                        |
+| `storage_usage_sampled_targets`           | Gauge     | Open targets included in that pass                         |
 | `storage_usage_unavailable_targets`       | Gauge     | Open targets whose usage could not be included             |
 | `storage_accounted_committed_bytes`       | Gauge     | Accounted committed shard and backup payload bytes         |
-| `storage_accounted_reserved_bytes`        | Gauge     | Active shard and backup holds                             |
+| `storage_accounted_reserved_bytes`        | Gauge     | Active shard and backup holds                              |
 | `storage_configured_limit_bytes`          | Gauge     | Summed configured ceilings, not physically available space |
 | `storage_repair_reserve_bytes`            | Gauge     | Configured repair headroom, not occupied bytes             |
 
@@ -56,6 +56,28 @@ attestation or completion recovery). Failed/interrupted attempts are included;
 an empty scheduler tick is not an attempt. A successful page or step can still
 leave a job unfinished. These measurements never replace durable job outcomes,
 and their timing excludes queue residence and selection.
+
+## Local consensus observations
+
+Ten fixed families describe the local reactor: `consensus_observation_age_seconds`,
+`consensus_observation_failures` (counter), `consensus_role`, `consensus_term`,
+`consensus_committed_index`, `consensus_applied_index`,
+`consensus_pending_operations`, `consensus_queued_operations`,
+`consensus_persistence_blocked` and `consensus_leader_known`. Except for failures,
+these are gauges absent until the first coherent observation. Role values are
+follower **1**, candidate **2** and leader **3**; boolean gauges use **0**/**1**.
+
+An owned worker reads the existing local reactor once per second, with a
+500-millisecond observation deadline and skipped missed ticks. It performs no
+peer probes or consensus writes. Scrapes only read the cached observation. A
+failed sample increments the failure counter and retains the older sample with
+its increasing monotonic age; contradictory applied/committed indices are
+rejected. Shutdown interrupts both scheduling and an outstanding observation.
+
+Role is not current quorum or write authority. Knowing a leader identity is not
+evidence that it is reachable. Position differences describe local application
+lag, not remote catch-up debt. Node identities, plan digests and partition labels
+are never exported. Federation progress and fresh authority evidence remain open.
 
 ## Target accounting scope
 
@@ -168,7 +190,7 @@ This catalogue is not completion of OPS-019. Protection/locality debt,
 physical-space attribution, queue/debt/completion state beyond selected maintenance
 attempts, target IO/integrity beyond health probes,
 HTTPS/SMB transfer throughput and operation outcomes beyond dispatch,
-consensus/catch-up, coding/degraded reads, packs/deduplication,
+remote catch-up and current quorum evidence, coding/degraded reads, packs/deduplication,
 federation backlog, authentication rejection, certificates, backups, updates,
 runtime resources and clock uncertainty still need their corresponding
 instrumentation. Bounded downsampled panel history and durable deduplicated

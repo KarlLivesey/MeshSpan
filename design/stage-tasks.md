@@ -17,7 +17,7 @@ Update the relevant task when work changes its status. Report the current task,
 what behaviour changed, what remains and what was tested. Do not replace this
 with “nearly done”, a count of commits or an unweighted completion percentage.
 
-Remaining-effort estimate, 2026-09-07: **Stage 10: 138 points; Stage 11: 126
+Remaining-effort estimate, 2026-09-07: **Stage 10: 136 points; Stage 11: 126
 points; Stage 12: 55 points.** These are preliminary engineering judgements from
 the task scope and recorded gaps, not measured hours or completion guarantees.
 Uncertainty is high until the open integration/proof work is exercised.
@@ -303,11 +303,16 @@ the stage; publication-dependent acceptance remains held separately and visible.
     Verify exact units and interrupted/degraded cases; dispatch completion is
     not delivery or durable file completion.
 
-18. **Consensus and federation measurements — Open.** **5 points remaining.**
+18. **Consensus and federation measurements — Partial.** **3 points remaining.**
     OPS-019. Close the [consensus/catch-up and federation backlog gaps](metrics.md#remaining-stage-10-measurements).
     Cover quorum/authority observations, catch-up and federation progress with
     bounded cardinality, age and unknown states. Collection must not add consensus
     writes, scan remote providers on scrape or become an admission authority.
+    [Local reactor measurements](stage-10-evidence.md#task-18--local-consensus-measurements)
+    now expose coherent role/term/positions, queue counts, persistence blocking,
+    observation age and failures. Focused tests and a real two-gateway restart
+    proof pass. This closes local instrumentation **5 → 3 points**; remote
+    catch-up, current authority and federation progress remain open.
 
 19. **Security, operational lifecycle, resource and clock measurements — Open.** **8 points remaining.**
     OPS-019/020. Close remaining authentication-rejection, certificate, backup,

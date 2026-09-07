@@ -3,7 +3,7 @@
 use super::*;
 use meshspan_api_contract::DiagnosticRuntimeEventCode as Code;
 use meshspan_contracts::{
-    ContractError, MAX_RUNTIME_METRIC_FAMILIES, RuntimeMetric, RuntimeMetricSource,
+    ConsensusMetric, ContractError, MAX_RUNTIME_METRIC_FAMILIES, RuntimeMetric, RuntimeMetricSource,
 };
 
 fn target(seed: u8) -> Result<TargetId, meshspan_domain::IdentifierError> {
@@ -11,6 +11,92 @@ fn target(seed: u8) -> Result<TargetId, meshspan_domain::IdentifierError> {
     bytes[6] = 0x40;
     bytes[8] = 0x80;
     TargetId::from_bytes(bytes)
+}
+
+fn consensus_observation()
+-> Result<meshspan_cluster::MetadataAuthorityObservation, meshspan_domain::IdentifierError> {
+    Ok(meshspan_cluster::MetadataAuthorityObservation {
+        partition_id: meshspan_domain::PartitionId::from_bytes([1; 16])?,
+        node_id: meshspan_domain::NodeId::from_bytes([2; 16])?,
+        role: meshspan_consensus::Role::Candidate,
+        known_leader: None,
+        term: 7,
+        commit_index: 10,
+        applied_index: 9,
+        membership_epoch: 1,
+        plan_digest: [3; 32],
+        persistence_blocked: true,
+        pending_operations: 2,
+        queued_operations: 3,
+    })
+}
+
+#[test]
+fn consensus_metrics_preserve_exact_observations_without_authority_claims()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = RuntimeObservations::default();
+    let empty = store.collect_metrics()?;
+    assert!(
+        !empty
+            .samples()
+            .iter()
+            .any(|sample| matches!(sample, RuntimeMetric::Consensus(ConsensusMetric::Role(_))))
+    );
+    store.record_consensus(consensus_observation()?, UnixMicros::new(100));
+    store.record_consensus_unavailable(UnixMicros::new(90));
+    let mut invalid = consensus_observation()?;
+    invalid.applied_index = 11;
+    store.record_consensus(invalid, UnixMicros::new(80));
+    let metrics = store.collect_metrics()?;
+    for expected in [
+        ConsensusMetric::Role(meshspan_contracts::ConsensusObservedRole::Candidate),
+        ConsensusMetric::Term(7),
+        ConsensusMetric::CommittedIndex(10),
+        ConsensusMetric::AppliedIndex(9),
+        ConsensusMetric::PendingOperations(2),
+        ConsensusMetric::QueuedOperations(3),
+        ConsensusMetric::PersistenceBlocked(true),
+        ConsensusMetric::LeaderKnown(false),
+        ConsensusMetric::ObservationFailures(1),
+    ] {
+        assert!(
+            metrics
+                .samples()
+                .contains(&RuntimeMetric::Consensus(expected))
+        );
+    }
+    assert!(
+        metrics
+            .samples()
+            .contains(&RuntimeMetric::DroppedObservations(1))
+    );
+    let snapshot = store.snapshot().ok_or("missing snapshot")?;
+    let mut aged = Vec::new();
+    snapshot
+        .state
+        .consensus
+        .as_ref()
+        .ok_or("missing consensus")?
+        .append_metrics(snapshot.captured + Duration::from_secs(2), &mut aged);
+    assert!(aged.iter().any(|sample| matches!(sample,
+        RuntimeMetric::Consensus(ConsensusMetric::ObservationAge(age)) if *age >= Duration::from_secs(2))));
+    let text = String::from_utf8(crate::encode_openmetrics(&metrics)?)?;
+    for line in [
+        "meshspan_v1_consensus_role 2",
+        "meshspan_v1_consensus_term 7",
+        "meshspan_v1_consensus_committed_index 10",
+        "meshspan_v1_consensus_applied_index 9",
+        "meshspan_v1_consensus_pending_operations 2",
+        "meshspan_v1_consensus_queued_operations 3",
+        "meshspan_v1_consensus_persistence_blocked 1",
+        "meshspan_v1_consensus_leader_known 0",
+        "meshspan_v1_consensus_observation_failures_total 1",
+    ] {
+        assert!(text.lines().any(|actual| actual == line), "{line}");
+    }
+    assert!(!text.contains("quorum_available"));
+    assert!(!text.contains("node_id"));
+    Ok(())
 }
 
 fn cycle(failed_steps: usize) -> StorageCycleSummary {
@@ -172,7 +258,8 @@ fn runtime_metrics_omit_unobserved_gauges_and_include_all_recorded_families()
 -> Result<(), Box<dyn std::error::Error>> {
     let store = RuntimeObservations::default();
     // Last-cycle and usage gauges are absent until sampled; lifetime counters start at zero.
-    assert_eq!(store.collect_metrics()?.samples().len(), 33);
+    assert_eq!(store.collect_metrics()?.samples().len(), 34);
+    store.record_consensus(consensus_observation()?, UnixMicros::new(100));
     store.record_storage_usage(super::StorageUsagePass::default());
     store.record_cycle(
         cycle(2),
