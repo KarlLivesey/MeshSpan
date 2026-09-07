@@ -3,6 +3,8 @@
 //! Daemon process composition, configuration and local secret presentation.
 
 mod api_http;
+mod update_candidate;
+pub use update_candidate::UpdateCandidateError;
 mod notification_api;
 mod notification_runtime;
 mod notification_service;

@@ -77,3 +77,39 @@ state or infer upgrade safety from successful packaging. Keep verified encrypted
 backups; supported rolling updates and disaster recovery require their separate
 acceptance. Release signatures, complete notices/SBOM, platform proofs and
 publication approval remain separate Stage 10 requirements.
+
+### Read-only local update verification
+
+The daemon can authenticate a local update manifest and the selected executable
+without opening state, starting listeners, installing anything or contacting a
+service:
+
+```sh
+./bin/meshspan-daemon verify-update \
+  /candidate/manifest.json /candidate/manifest.sig \
+  /trusted/update-signer.sec1 /candidate/artifacts/aarch64-apple-darwin \
+  aarch64-apple-darwin
+```
+
+The trust file is a separately pinned, uncompressed P-256 SEC1 public key.
+**Never automatically trust a key supplied by the candidate.** Success means
+only the domain-separated signature and exact executable size/hash passed. It
+does not establish runtime compatibility, migration safety, stage acceptance or
+permission to install. The command returns a redacted JSON report and fails
+closed on unknown fields, duplicate/non-canonical JSON, mismatched targets,
+altered bytes or a different signer.
+
+Maintainer preparation is available through `pnpm update:prepare-local` under
+NVM. It takes one or more `--package DIR` inputs, `--compatibility FILE`, an
+explicit dedicated `--key PKCS8_PEM` signing key and `--output DIR`. Existing
+packages must record a clean source commit, API digest and `GPL-2.0-only`; every
+target in one candidate must agree on source/version/API. It copies exact
+executables into a fresh directory and signs a canonical manifest. The signing
+key is never copied into the candidate. This is local tooling only, not a release
+command, and has no tag, upload, image-push or publication operation.
+
+The compatibility file explicitly records `private_protocol_major`,
+`partition_schema_min`, `partition_schema_max`, `partition_schema_target`, and
+`rollback_supported: false`. These are authenticated maintainer claims, not a
+substitute for actual migration and mixed-version tests. Additional database
+families and runtime admission are still part of the rolling-update work.

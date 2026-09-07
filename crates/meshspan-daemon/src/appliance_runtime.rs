@@ -456,6 +456,20 @@ pub async fn run_headless_daemon<F>(
 where
     F: Future<Output = ()> + Send,
 {
+    let mut arguments = arguments.into_iter().peekable();
+    if arguments
+        .peek()
+        .is_some_and(|value| value == "verify-update")
+    {
+        arguments.next();
+        let values: Vec<_> = arguments.take(6).collect();
+        return tokio::task::spawn_blocking(move || {
+            crate::update_candidate::verify_command(&values)
+        })
+        .await
+        .map_err(|_| crate::UpdateCandidateError::Worker)?
+        .map_err(Into::into);
+    }
     let config = HeadlessDaemonConfig::parse(arguments)?;
     tokio::pin!(shutdown);
     loop {
@@ -3860,6 +3874,9 @@ fn spawn_data_plane_runtime(
 /// Closed headless-process failures which never expose claim, key or request material.
 #[derive(Debug, Error)]
 pub enum DaemonProcessError {
+    /// Read-only local update candidate verification failed.
+    #[error(transparent)]
+    UpdateCandidate(#[from] crate::UpdateCandidateError),
     /// Process arguments were invalid.
     #[error("daemon configuration failed")]
     Configuration(#[from] HeadlessDaemonConfigError),

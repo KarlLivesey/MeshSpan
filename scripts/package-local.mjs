@@ -76,6 +76,9 @@ async function packageLocal() {
       target: options.target,
       profile: options.profile,
       sourceCommit: commit,
+      apiSha256: await sha256(
+        join(repository, "contracts", "openapi", "latest.json"),
+      ),
       workingTreeDirty: dirty,
       rustc,
       node: process.version,
