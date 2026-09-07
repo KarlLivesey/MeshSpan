@@ -3,14 +3,69 @@
 //! Owner-only executable cache. Byte transfer is separate from consensus and never proves installation.
 
 use crate::protected_file::{self, ProtectedFileError, PublishMode};
+use axum::body::Bytes;
 use meshspan_metadata::{UpdateArtifact, UpdateManifest};
 use sha2::{Digest as _, Sha256};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
+use tokio::sync::mpsc;
 
 pub(crate) const TRANSFER_FRAME_BYTES: usize = 64 * 1024;
+
+/// Explicit finish is required: a dropped transport never masquerades as a complete stream.
+pub(crate) enum ArtifactChunk {
+    Bytes(Bytes),
+    Finish,
+}
+
+pub(crate) struct ArtifactReader {
+    chunks: mpsc::Receiver<ArtifactChunk>,
+    current: Bytes,
+    finished: bool,
+    deadline: Instant,
+}
+
+impl ArtifactReader {
+    pub(crate) fn channel(deadline: Instant) -> (mpsc::Sender<ArtifactChunk>, Self) {
+        let (chunks, receiver) = mpsc::channel(2);
+        (
+            chunks,
+            Self {
+                chunks: receiver,
+                current: Bytes::new(),
+                finished: false,
+                deadline,
+            },
+        )
+    }
+}
+
+impl Read for ArtifactReader {
+    fn read(&mut self, destination: &mut [u8]) -> std::io::Result<usize> {
+        if Instant::now() >= self.deadline {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+        if destination.is_empty() || self.finished {
+            return Ok(0);
+        }
+        while self.current.is_empty() {
+            match self.chunks.blocking_recv() {
+                Some(ArtifactChunk::Bytes(bytes)) => self.current = bytes,
+                Some(ArtifactChunk::Finish) => {
+                    self.finished = true;
+                    return Ok(0);
+                }
+                None => return Err(std::io::ErrorKind::ConnectionAborted.into()),
+            }
+        }
+        let length = destination.len().min(self.current.len());
+        destination[..length].copy_from_slice(&self.current.split_to(length));
+        Ok(length)
+    }
+}
 
 /// File IO must be called from an owned blocking worker, never an async executor.
 pub(crate) struct UpdateArtifactStore {

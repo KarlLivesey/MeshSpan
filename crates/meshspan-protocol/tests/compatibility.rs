@@ -18,6 +18,61 @@ use serde::Deserialize;
 
 const FIXTURE: &str = include_str!("../../../contracts/protobuf/v1/node-hello.json");
 
+#[test]
+fn update_artifact_wire_binds_platform_length_digest_and_rejects_malformed_identity()
+-> Result<(), Box<dyn std::error::Error>> {
+    use meshspan_protocol::v1::{
+        GetUpdateArtifactHeader, GetUpdateArtifactRequest, GetUpdateArtifactResult,
+        UpdateArtifactIdentity,
+    };
+    let limits = WireLimits::new(4096, 65536, 32, 1024)?;
+    let artifact = UpdateArtifactIdentity {
+        rollout_id: vec![1; 16],
+        target: "aarch64-apple-darwin".into(),
+        byte_length: 3,
+        digest: vec![2; 32],
+    };
+    let messages = [
+        DataMessage::GetUpdateArtifactRequest(GetUpdateArtifactRequest {
+            header: Some(valid_header()),
+            artifact: Some(artifact.clone()),
+        }),
+        DataMessage::GetUpdateArtifactHeader(GetUpdateArtifactHeader {
+            artifact: Some(artifact.clone()),
+        }),
+        DataMessage::GetUpdateArtifactResult(GetUpdateArtifactResult {
+            artifact: Some(artifact.clone()),
+        }),
+    ];
+    for message in messages {
+        let envelope = DataControlEnvelope {
+            message: Some(message),
+        };
+        assert_eq!(
+            decode_data_control_frame(&encode_data_control_frame(&envelope, limits)?, limits)?
+                .into_inner(),
+            envelope
+        );
+    }
+    let mut invalid = vec![artifact.clone(); 5];
+    invalid[0].target = "../untrusted".into();
+    invalid[1].byte_length = 0;
+    invalid[2].byte_length = 8_589_934_593;
+    invalid[3].digest.pop();
+    invalid[4].rollout_id.pop();
+    for artifact in invalid {
+        let envelope = DataControlEnvelope {
+            message: Some(DataMessage::GetUpdateArtifactHeader(
+                GetUpdateArtifactHeader {
+                    artifact: Some(artifact),
+                },
+            )),
+        };
+        assert!(encode_data_control_frame(&envelope, limits).is_err());
+    }
+    Ok(())
+}
+
 #[path = "compatibility/http01.rs"]
 mod http01;
 

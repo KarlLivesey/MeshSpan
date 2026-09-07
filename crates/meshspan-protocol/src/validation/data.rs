@@ -44,6 +44,12 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
             validate_mutation_receipt(value.result.as_ref(), value.receipt.as_ref(), limits)
         }
         Message::ValidateRemoval(value) => validate_removal(value),
+        Message::GetUpdateArtifactRequest(value) => {
+            validate_required_header(value.header.as_ref())?;
+            update_artifact(value.artifact.as_ref())
+        }
+        Message::GetUpdateArtifactHeader(value) => update_artifact(value.artifact.as_ref()),
+        Message::GetUpdateArtifactResult(value) => update_artifact(value.artifact.as_ref()),
         Message::StoreBackupBegin(_)
         | Message::StoreBackupReady(_)
         | Message::StoreBackupFinish(_)
@@ -56,6 +62,27 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
         | Message::DeleteBackupRequest(_)
         | Message::DeleteBackupResult(_) => backup::message(value, limits),
     }
+}
+
+fn update_artifact(
+    value: Option<&crate::v1::UpdateArtifactIdentity>,
+) -> Result<(), WireContractError> {
+    let value = value.ok_or(WireContractError::InvalidMessage)?;
+    valid_identifier(&value.rollout_id)?;
+    valid_digest(&value.digest)?;
+    if value.byte_length == 0
+        || value.byte_length > 8 * 1024 * 1024 * 1024
+        || !matches!(
+            value.target.as_str(),
+            "aarch64-apple-darwin"
+                | "x86_64-apple-darwin"
+                | "aarch64-unknown-linux-musl"
+                | "x86_64-unknown-linux-musl"
+        )
+    {
+        return Err(WireContractError::InvalidMessage);
+    }
+    Ok(())
 }
 
 fn put_begin(

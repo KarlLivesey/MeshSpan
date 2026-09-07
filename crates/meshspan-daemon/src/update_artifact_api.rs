@@ -3,16 +3,18 @@
 //! Raw executable upload: bounded asynchronous transport feeds one owned blocking verifier.
 
 use super::{Error, UpdateApi, now, respond};
-use crate::update_artifact_store::{ArtifactStoreError, TRANSFER_FRAME_BYTES, UpdateArtifactStore};
+use crate::update_artifact_store::{
+    ArtifactChunk as UploadChunk, ArtifactReader, ArtifactStoreError, TRANSFER_FRAME_BYTES,
+    UpdateArtifactStore,
+};
 use axum::{
-    body::{Body, Bytes, HttpBody},
+    body::{Body, HttpBody},
     extract::{Path, Request, State},
     http::{HeaderMap, Response},
 };
 use meshspan_api_contract::{OperationId, encode_stage_update_artifact_response};
 use meshspan_domain::WorkId;
 use std::{
-    io::{self, Read},
     pin::Pin,
     sync::Arc,
     time::{Duration, Instant},
@@ -65,9 +67,9 @@ async fn upload_request(
     }
     let directory = state.state_directory.clone();
     let platform = target.clone();
-    let (chunks, receive_chunks) = mpsc::channel(2);
     let (completed, completion) = oneshot::channel();
     let deadline = Instant::now() + TRANSFER_DEADLINE;
+    let (chunks, mut reader) = ArtifactReader::channel(deadline);
     {
         let mut jobs = state.jobs.lock().map_err(|_| Error::Failed)?;
         while let Some(result) = jobs.try_join_next() {
@@ -77,12 +79,6 @@ async fn upload_request(
             let _permit = transfer_permit;
             let result = (|| {
                 let store = UpdateArtifactStore::open(&directory)?;
-                let mut reader = UploadReader {
-                    chunks: receive_chunks,
-                    current: Bytes::new(),
-                    finished: false,
-                    deadline,
-                };
                 store.stage(&record.manifest, &platform, &mut reader)
             })()
             .map_err(|error| store_error(&error));
@@ -134,11 +130,6 @@ fn one_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, Error> 
     Ok(value)
 }
 
-enum UploadChunk {
-    Bytes(Bytes),
-    Finish,
-}
-
 async fn forward(mut body: Body, chunks: mpsc::Sender<UploadChunk>) -> Result<(), Error> {
     while let Some(frame) =
         std::future::poll_fn(|context| Pin::new(&mut body).poll_frame(context)).await
@@ -161,37 +152,6 @@ async fn forward(mut body: Body, chunks: mpsc::Sender<UploadChunk>) -> Result<()
         .send(UploadChunk::Finish)
         .await
         .map_err(|_| Error::Unavailable)
-}
-
-struct UploadReader {
-    chunks: mpsc::Receiver<UploadChunk>,
-    current: Bytes,
-    finished: bool,
-    deadline: Instant,
-}
-
-impl Read for UploadReader {
-    fn read(&mut self, destination: &mut [u8]) -> io::Result<usize> {
-        if Instant::now() >= self.deadline {
-            return Err(io::ErrorKind::TimedOut.into());
-        }
-        if destination.is_empty() || self.finished {
-            return Ok(0);
-        }
-        while self.current.is_empty() {
-            match self.chunks.blocking_recv() {
-                Some(UploadChunk::Bytes(bytes)) => self.current = bytes,
-                Some(UploadChunk::Finish) => {
-                    self.finished = true;
-                    return Ok(0);
-                }
-                None => return Err(io::ErrorKind::ConnectionAborted.into()),
-            }
-        }
-        let length = destination.len().min(self.current.len());
-        destination[..length].copy_from_slice(&self.current.split_to(length));
-        Ok(length)
-    }
 }
 
 fn store_error(error: &ArtifactStoreError) -> Error {

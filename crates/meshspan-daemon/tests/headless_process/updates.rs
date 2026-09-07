@@ -30,9 +30,7 @@ async fn update_administration_preserves_trust_selection_and_exact_retry_after_r
         super::wait_for_storage_folder_visibility(&root, &client, key).await?;
         let api = UpdateApi { root: &root, client: &client, key };
         let signer = NodeIdentityKey::generate()?;
-        let pin = json!({"operation_id":"00000000-0000-4000-8000-000000000403", "action": {
-            "kind":"configure_signer", "signer_id":SIGNER, "expected_sequence":0,
-            "public_key":STANDARD.encode(signer.public_key_sec1()), "enabled":true }});
+        let pin = pin(&signer);
         let pin_receipt = api.manage(&pin, "200 OK").await?;
         let anonymous = request_with_headers(root.address, &client, "PUT", API, Some(b"not JSON"), &[]).await?;
         require_status(&anonymous, "401 Unauthorized", "authenticate before update JSON")?;
@@ -74,7 +72,128 @@ async fn update_administration_preserves_trust_selection_and_exact_retry_after_r
     super::retain_failure_state(proof, [root.temporary])
 }
 
+#[tokio::test]
+async fn signed_candidate_automatically_reaches_three_daemons_and_survives_peer_restart()
+-> Result<(), Box<dyn Error>> {
+    let executable = vec![0x5a; 3 * 65_536 + 117];
+    // Independently calculated with Node's crypto SHA-256, not the transfer implementation.
+    let digest = "28e79bfe7296805d79e3b71103b2e1ed68ae85d65fe520a07de2368623434ce9";
+    let root = ProcessFixture::new()?;
+    let second = ProcessFixture::new()?;
+    let third = ProcessFixture::new()?;
+    let mut processes = vec![root.start()?];
+    let proof = async {
+        let claim = super::wait_for_claim(&root.claim_path).await?;
+        let client = super::wait_for_client(&root.identity_path).await?;
+        super::wait_for_status(root.address, &client, "claim_required").await?;
+        let created = super::create_process_mesh(&root, &client, &claim).await?;
+        let key = created["api_key"].as_str().ok_or("bootstrap key absent")?;
+        super::save_and_verify_recovery_bundle(&root, &client, key, &created).await?;
+        let join = super::issue_join_code(&root, &client, key).await?;
+        processes.push(second.start_join(&join)?);
+        let second_client = super::wait_for_client(&second.identity_path).await?;
+        super::wait_for_status(second.address, &second_client, "configured").await?;
+        processes.push(third.start_join(&join)?);
+        let third_client = super::wait_for_client(&third.identity_path).await?;
+        super::wait_for_status(third.address, &third_client, "configured").await?;
+        super::wait_for_three_voters([&root, &second, &third], &root.identity_path).await?;
+        let api = UpdateApi {
+            root: &root,
+            client: &client,
+            key,
+        };
+        let signer = NodeIdentityKey::generate()?;
+        api.manage(&pin(&signer), "200 OK").await?;
+        api.manage(
+            &candidate_artifact(&root, &signer, executable.len(), digest)?,
+            "200 OK",
+        )
+        .await?;
+        api.stage(&executable, "200 OK").await?;
+        wait_for_sources([&root, &second, &third], &executable, digest).await?;
+        assert_eq!(
+            api.status(false).await?["rollout"]["progress"]["pending"],
+            "3"
+        );
+        processes[1].kill()?;
+        processes[1].wait()?;
+        processes[1] = second.command().spawn()?;
+        super::wait_for_status(second.address, &second_client, "configured").await?;
+        wait_for_sources([&root, &second, &third], &executable, digest).await?;
+        assert_eq!(api.status(false).await?["installation_available"], false);
+        Ok::<_, Box<dyn Error>>(())
+    }
+    .await;
+    super::stop_processes(&mut processes);
+    super::retain_failure_state(proof, [root.temporary, second.temporary, third.temporary])
+}
+
+async fn wait_for_sources(
+    fixtures: [&ProcessFixture; 3],
+    expected: &[u8],
+    digest: &str,
+) -> Result<(), Box<dyn Error>> {
+    use meshspan_metadata::{AuthoritativeRepository, PageLimit};
+    let rollout = meshspan_domain::WorkId::from_bytes(
+        0x0000_0000_0000_4000_8000_0000_0000_0402_u128.to_be_bytes(),
+    )?;
+    let deadline = tokio::time::Instant::now() + super::WAIT_LIMIT;
+    loop {
+        let mut ready = true;
+        for fixture in fixtures {
+            let database = PartitionDatabase::open_existing(
+                &fixture.state_path.join("root-authority.sqlite3"),
+                UnixMicros::new(1),
+            )?;
+            let repository = AuthoritativeRepository::new(database);
+            if repository.update_rollout(rollout)?.is_none() {
+                ready = false;
+                continue;
+            }
+            let sources =
+                repository.update_artifact_sources(rollout, &target(), None, PageLimit::new(3)?)?;
+            ready &= sources.len() == 3;
+            match std::fs::read(fixture.state_path.join("update-artifacts").join(digest)) {
+                Ok(bytes) => assert_eq!(bytes, expected),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => ready = false,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        if ready {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("verified candidate sources did not reach all three nodes".into());
+        }
+        tokio::time::sleep(super::RETRY_INTERVAL).await;
+    }
+}
+
+fn pin(signer: &NodeIdentityKey) -> Value {
+    json!({"operation_id":"00000000-0000-4000-8000-000000000403", "action": {
+        "kind":"configure_signer", "signer_id":SIGNER, "expected_sequence":0,
+        "public_key":STANDARD.encode(signer.public_key_sec1()), "enabled":true }})
+}
+
+fn target() -> String {
+    let operating_system = if std::env::consts::OS == "macos" {
+        "apple-darwin"
+    } else {
+        "unknown-linux-musl"
+    };
+    format!("{}-{operating_system}", std::env::consts::ARCH)
+}
+
 fn candidate(root: &ProcessFixture, signer: &NodeIdentityKey) -> Result<Value, Box<dyn Error>> {
+    candidate_artifact(root, signer, 3, ARTIFACT_DIGEST)
+}
+
+fn candidate_artifact(
+    root: &ProcessFixture,
+    signer: &NodeIdentityKey,
+    length: usize,
+    digest: &str,
+) -> Result<Value, Box<dyn Error>> {
     let schema = PartitionDatabase::open_existing(
         &root.state_path.join("root-authority.sqlite3"),
         UnixMicros::new(1),
@@ -85,7 +204,7 @@ fn candidate(root: &ProcessFixture, signer: &NodeIdentityKey) -> Result<Value, B
         "source_commit":"a".repeat(40), "api_sha256":"b".repeat(64),
         "compatibility":{"private_protocol_major":1, "partition_schema_min":schema, "partition_schema_max":schema,
             "partition_schema_target":schema, "rollback_supported":false},
-        "artifacts":[{"target":"aarch64-apple-darwin", "size":"3", "sha256":ARTIFACT_DIGEST}]}),
+        "artifacts":[{"target":target(), "size":length.to_string(), "sha256":digest}]}),
     )?;
     let mut transcript = UPDATE_SIGNATURE_DOMAIN.to_vec();
     transcript.extend_from_slice(&manifest);
@@ -110,7 +229,7 @@ struct UpdateApi<'a> {
 
 impl UpdateApi<'_> {
     async fn stage(&self, bytes: &[u8], expected: &str) -> Result<Value, Box<dyn Error>> {
-        let endpoint = format!("{API}/{ROLLOUT}/artifacts/aarch64-apple-darwin");
+        let endpoint = format!("{API}/{ROLLOUT}/artifacts/{}", target());
         let response = super::request_with_content_type(
             self.root.address,
             self.client,

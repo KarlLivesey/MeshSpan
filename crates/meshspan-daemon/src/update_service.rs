@@ -2,6 +2,9 @@
 
 //! Manager commands use the same replicated trust and rollout owner as installation workers.
 
+#[path = "update_distribution.rs"]
+pub(crate) mod distribution;
+
 use crate::{
     ConsensusAuthenticationAuthority, GatewaySessionIdentity, IdentityAdministrator,
     SystemManagerAuthenticationError, authenticate_system_manager,

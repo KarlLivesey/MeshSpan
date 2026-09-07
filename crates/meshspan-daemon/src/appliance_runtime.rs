@@ -191,6 +191,8 @@ struct StorageRuntimeComposition {
 }
 
 struct ApplianceServiceComposition {
+    data_plane: RuntimeDataPlane,
+    updates: crate::update_service::distribution::UpdateDistribution,
     consensus_observations: crate::consensus_observation_worker::ConsensusObservationWorker,
     router: Router,
     smb_connections: SmbConnectionFactory,
@@ -199,6 +201,12 @@ struct ApplianceServiceComposition {
     private_certificates: crate::private_certificate_renewal::PrivateCertificateRenewal,
     https_identity: RotatingHttpsIdentity,
     gateway_observations: Arc<dyn meshspan_contracts::GatewayDispatchObserver>,
+}
+
+struct OperationAdministration {
+    notifications: crate::notification_runtime::NotificationRuntime,
+    updates: crate::update_service::distribution::UpdateDistribution,
+    routes: Router,
 }
 
 struct DaemonNodeRuntime {
@@ -664,11 +672,10 @@ fn compose_appliance_services(
         config.storage().storage_paths().to_vec(),
         started_at,
     )?;
-    let received_data_streams = node
-        .received_data_streams
-        .take()
-        .ok_or(DaemonProcessError::PrivateNetworkState)?;
-    spawn_data_plane_runtime(Arc::clone(&storage_targets), received_data_streams);
+    let data_plane = RuntimeDataPlane::take_receiver(
+        Arc::clone(&storage_targets),
+        &mut node.received_data_streams,
+    )?;
     spawn_storage_target_reconciler(Arc::clone(&storage_targets));
     let gateway_observations: Arc<dyn meshspan_contracts::GatewayDispatchObserver> =
         Arc::new(readiness.observations.clone());
@@ -695,7 +702,7 @@ fn compose_appliance_services(
         &node.private_network,
         started_at,
     )?;
-    let (notifications, operations_routes) =
+    let operations =
         compose_operation_administration(node, &private_authority.authority, gateway, started_at)?;
     let consensus_observations =
         crate::consensus_observation_worker::ConsensusObservationWorker::new(
@@ -703,7 +710,7 @@ fn compose_appliance_services(
             readiness.observations.clone(),
         );
     let router = Router::new()
-        .merge(operations_routes)
+        .merge(operations.routes)
         .merge(public_contract_api_router(readiness)?)
         .merge(join_grant_routes(
             &node.local_state,
@@ -738,6 +745,8 @@ fn compose_appliance_services(
         )?)
         .fallback(crate::web_assets::serve);
     Ok(ApplianceServiceComposition {
+        data_plane,
+        updates: operations.updates,
         consensus_observations,
         router: crate::gateway_measurements::observe_https(
             router,
@@ -745,7 +754,7 @@ fn compose_appliance_services(
         ),
         smb_connections,
         certificates,
-        notifications,
+        notifications: operations.notifications,
         private_certificates,
         https_identity,
         gateway_observations,
@@ -757,7 +766,7 @@ fn compose_operation_administration(
     authority: &MetadataAuthorityHandle,
     gateway: GatewaySessionIdentity,
     now: UnixMicros,
-) -> Result<(crate::notification_runtime::NotificationRuntime, Router), DaemonProcessError> {
+) -> Result<OperationAdministration, DaemonProcessError> {
     let open = || {
         open_authentication_authority(
             &node.local_state,
@@ -788,7 +797,16 @@ fn compose_operation_administration(
         crate::update_service::UpdateService::new(open()?, gateway),
         node.local_state.state_directory(),
     )?);
-    Ok((runtime, routes))
+    Ok(OperationAdministration {
+        notifications: runtime,
+        updates: crate::update_service::distribution::UpdateDistribution::new(
+            open()?,
+            gateway,
+            Arc::clone(&node.private_network),
+            node.local_state.state_directory().to_path_buf(),
+        ),
+        routes,
+    })
 }
 
 fn compose_smb_connections(
@@ -1000,6 +1018,16 @@ where
     .await?;
     let (stop, _) = tokio::sync::watch::channel(false);
     let mut tasks = tokio::task::JoinSet::new();
+    let data_stop = stop.subscribe();
+    let update_stop = stop.subscribe();
+    tasks.spawn(async move {
+        services.data_plane.run_until(data_stop).await;
+        Ok(())
+    });
+    tasks.spawn(async move {
+        services.updates.run_until(update_stop).await;
+        Ok(())
+    });
     spawn_web_listeners(&mut tasks, &stop, https, http01);
     let smb_stop = stop.subscribe();
     let connections = services.smb_connections;
@@ -1056,6 +1084,18 @@ where
                 _ => DaemonProcessError::Certificate,
             })
     });
+    supervise_services(tasks, stop, lifecycle).await
+}
+
+/// Own shutdown ordering and result collection independently of listener/worker construction.
+async fn supervise_services<F>(
+    mut tasks: tokio::task::JoinSet<Result<(), DaemonProcessError>>,
+    stop: tokio::sync::watch::Sender<bool>,
+    lifecycle: F,
+) -> Result<(), DaemonProcessError>
+where
+    F: Future<Output = ()> + Send,
+{
     tokio::pin!(lifecycle);
     let first = tokio::select! {
         biased;
@@ -3839,35 +3879,9 @@ fn spawn_storage_target_reconciler(storage_targets: Arc<Mutex<StorageTargetRunti
     });
 }
 
-fn spawn_data_plane_runtime(
-    storage_targets: Arc<Mutex<StorageTargetRuntime>>,
-    mut streams: tokio::sync::mpsc::Receiver<PeerDataStream>,
-) {
-    tokio::spawn(async move {
-        while let Some(stream) = streams.recv().await {
-            let targets = Arc::clone(&storage_targets);
-            tokio::spawn(async move {
-                let Ok(observed_at) = current_time() else {
-                    return;
-                };
-                let router = tokio::task::spawn_blocking(move || match targets.lock() {
-                    Ok(mut targets) => targets.data_router(observed_at),
-                    Err(poisoned) => {
-                        poisoned.into_inner().readiness.store_degraded(true);
-                        Err(())
-                    }
-                })
-                .await;
-                let Ok(Ok(mut router)) = router else {
-                    return;
-                };
-                let _result = router
-                    .serve_stream(stream.stream, stream.peer, stream.limits, observed_at)
-                    .await;
-            });
-        }
-    });
-}
+#[path = "appliance_data_runtime.rs"]
+mod data_runtime;
+use data_runtime::RuntimeDataPlane;
 
 /// Closed headless-process failures which never expose claim, key or request material.
 #[derive(Debug, Error)]
