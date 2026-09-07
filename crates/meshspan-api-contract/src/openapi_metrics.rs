@@ -57,3 +57,26 @@ pub(super) fn scrape_path() -> Value {
         }
     } })
 }
+
+pub(super) fn history_path() -> Value {
+    json!({ "get": {
+        "operationId": "getMetricHistory", "summary": "Read one bounded page of local metric history",
+        "description": "Manager-only, independent of exporter opt-in. Newest-first, at most 30 buckets. Minute history retains six hours; hourly history seven days. Each bucket retains the last observed sample, not an average. Missing samples remain gaps; null metrics means collection failed. Counter and histogram values are cumulative within this process. Host timestamps are display hints, not ordering authority. History resets on restart; a different history identity is a conflict. Follow next_page_url without changing its parameters. Queries never perform provider IO or collect new measurements.",
+        "x-meshspan-access": "system-manager",
+        "x-meshspan-response-max-bytes": crate::MAX_METRIC_HISTORY_BYTES,
+        "parameters": [
+            {"in": "query", "name": "resolution", "schema": {"type": "string", "enum": ["minute", "hour"], "default": "minute"}},
+            {"in": "query", "name": "history_id", "schema": {"type": "string", "pattern": "^[0-9a-f]{32}$", "minLength": 32, "maxLength": 32}, "description": "Returned process-local history identity; required together with before. Not a credential."},
+            {"in": "query", "name": "before", "schema": {"type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20}, "description": "Exclusive monotonic bucket start from a continuation; required together with history_id."}
+        ],
+        "responses": {
+            "200": json_response("Retained local observations with optional next page", "#/components/schemas/MetricHistoryResponse"),
+            "400": json_response("Invalid query or non-empty body", "#/components/schemas/ApiError"),
+            "401": json_response("Authentication required", "#/components/schemas/ApiError"),
+            "403": json_response("Manager authority required", "#/components/schemas/ApiError"),
+            "409": json_response("History identity changed; restart from the first page", "#/components/schemas/ApiError"),
+            "500": json_response("Invalid stored or outgoing observation", "#/components/schemas/ApiError"),
+            "503": json_response("Authority or local history temporarily unavailable", "#/components/schemas/ApiError")
+        }
+    } })
+}

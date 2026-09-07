@@ -169,6 +169,8 @@ function fixture(): MetricsClient {
   let configuration: MetricsExporterResponse = { configuration: null };
   return {
     getMetricsExporter: async () => configuration,
+    getMetricHistory: vi.fn<MetricsClient["getMetricHistory"]>(),
+    getNextMetricHistory: vi.fn<MetricsClient["getNextMetricHistory"]>(),
     configureMetricsExporter: async (request) => {
       configuration = {
         configuration: {

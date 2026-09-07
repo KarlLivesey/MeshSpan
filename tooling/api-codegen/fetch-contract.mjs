@@ -103,6 +103,7 @@ function readObservabilityRoutes(operations) {
       "readDiagnosticsBundle",
     ),
     getMetricsExporter: requireOperation(operations, "getMetricsExporter"),
+    getMetricHistory: requireOperation(operations, "getMetricHistory"),
     configureMetricsExporter: requireOperation(
       operations,
       "configureMetricsExporter",

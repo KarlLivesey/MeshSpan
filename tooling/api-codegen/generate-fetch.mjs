@@ -12,7 +12,10 @@ import {
 } from "./fetch-contract.mjs";
 import { renderUploadClientMethods } from "./render-upload-client.mjs";
 import { renderBackupScheduleClientMethods } from "./render-backup-schedule-client.mjs";
-import { renderMetricsClientMethods } from "./render-metrics-client.mjs";
+import {
+  renderMetricsClientMethods,
+  renderMetricHistoryRuntime,
+} from "./render-metrics-client.mjs";
 import { renderBackupExportClientMethods } from "./render-backup-export-client.mjs";
 import { renderDiagnosticsClientMethods } from "./render-diagnostics-client.mjs";
 import {
@@ -300,6 +303,7 @@ ${renderStorageDrainRuntime(routes)}
 ${renderStorageFolderRuntime(routes)}
 ${renderBackupDestinationRuntime(routes)}
 ${renderBackupHistoryRuntime(routes)}
+${renderMetricHistoryRuntime(routes)}
 
 ${renderTopologyRuntime(routes)}
 

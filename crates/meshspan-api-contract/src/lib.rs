@@ -40,10 +40,17 @@ mod identity_administration_validation;
 mod manual_dns_task;
 mod manual_dns_task_validation;
 mod metadata_diagnostics;
+mod metric_history;
+mod metric_history_validation;
 mod metrics_exporter;
 #[cfg(test)]
 mod metrics_exporter_tests;
 mod metrics_exporter_validation;
+pub use metric_history::{
+    HistoricalMetric, HistoricalMetricValue, MAX_METRIC_HISTORY_BYTES, MetricHistoryPoint,
+    MetricHistoryResolution, MetricHistoryResponse, MetricSeconds,
+};
+pub use metric_history_validation::encode_metric_history_response;
 pub use metrics_exporter::{
     ConfigureMetricsExporterRequest, ConfigureMetricsExporterResponse, MAX_METRICS_EXPORT_BYTES,
     MetricsExporterPolicy, MetricsExporterResponse, MetricsExporterStatus,

@@ -18,10 +18,11 @@ pub(crate) trait RuntimeObservationSource: Send + Sync {
 }
 
 #[derive(Clone)]
-pub(crate) struct RuntimeObservations(Arc<ObservationOwner>);
+pub(crate) struct RuntimeObservations(pub(crate) Arc<ObservationOwner>);
 
-struct ObservationOwner {
-    started: Instant,
+pub(crate) struct ObservationOwner {
+    pub(crate) started: Instant,
+    pub(crate) history: Mutex<crate::metric_history::MetricHistory>,
     state: Mutex<ObservationState>,
     dropped: AtomicU64,
 }
@@ -110,6 +111,7 @@ impl Default for RuntimeObservations {
     fn default() -> Self {
         Self(Arc::new(ObservationOwner {
             started: Instant::now(),
+            history: Mutex::new(crate::metric_history::MetricHistory::default()),
             state: Mutex::new(ObservationState::default()),
             dropped: AtomicU64::new(0),
         }))

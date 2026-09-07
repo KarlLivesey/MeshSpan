@@ -46,6 +46,7 @@ impl ConsensusObservationWorker {
                 Ok(Ok(value)) => self.observations.record_consensus(value, now),
                 Ok(Err(_)) | Err(_) => self.observations.record_consensus_unavailable(now),
             }
+            self.observations.sample_history(now);
         }
     }
 }

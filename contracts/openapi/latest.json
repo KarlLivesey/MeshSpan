@@ -10969,6 +10969,273 @@
         "title": "MetadataDiagnosticsResponse",
         "type": "object"
       },
+      "MetricHistoryResponse": {
+        "additionalProperties": false,
+        "description": "Newest-first bounded page. History is local, best-effort and cleared on daemon restart.",
+        "properties": {
+          "history_id": {
+            "description": "Random process-local history identity; not a node identity or an access credential.",
+            "maxLength": 32,
+            "minLength": 32,
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "next_page_url": {
+            "description": "Same-gateway continuation, or null when no older retained page exists.",
+            "maxLength": 180,
+            "pattern": "^/api/latest/admin/metrics/history\\?resolution=(minute|hour)&history_id=[0-9a-f]{32}&before=(0|[1-9][0-9]*)$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "older_samples_expired": {
+            "description": "Whether earlier buckets have expired from the selected local window.",
+            "type": "boolean"
+          },
+          "points": {
+            "description": "At most 30 buckets; unavailable samples and time gaps remain explicit.",
+            "items": {
+              "additionalProperties": false,
+              "description": "Latest sampled observation in one monotonic bucket; gaps are not filled with zeros.",
+              "properties": {
+                "bucket_start_seconds": {
+                  "description": "Bucket start relative to the observation store, not wall-clock ordering.",
+                  "maxLength": 20,
+                  "minLength": 1,
+                  "pattern": "^(0|[1-9][0-9]*)$",
+                  "type": "string"
+                },
+                "metrics": {
+                  "description": "Null means the sampling attempt failed; an empty vector is a valid empty source.",
+                  "items": {
+                    "additionalProperties": false,
+                    "description": "One existing exporter family, with no user-derived labels or identities.",
+                    "properties": {
+                      "measurement": {
+                        "description": "Exact observation, not authority or health certification.",
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "description": "Process-lifetime count; consumers must not bridge different history identities.",
+                            "properties": {
+                              "kind": {
+                                "const": "counter",
+                                "type": "string"
+                              },
+                              "value": {
+                                "description": "Exact accumulated event count.",
+                                "maxLength": 20,
+                                "minLength": 1,
+                                "pattern": "^(0|[1-9][0-9]*)$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "value"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Unitless observed quantity.",
+                            "properties": {
+                              "kind": {
+                                "const": "gauge",
+                                "type": "string"
+                              },
+                              "value": {
+                                "description": "Exact observed unitless quantity.",
+                                "maxLength": 20,
+                                "minLength": 1,
+                                "pattern": "^(0|[1-9][0-9]*)$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "value"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Byte count, not implicitly filesystem free space.",
+                            "properties": {
+                              "kind": {
+                                "const": "bytes",
+                                "type": "string"
+                              },
+                              "value": {
+                                "description": "Exact observed byte quantity.",
+                                "maxLength": 20,
+                                "minLength": 1,
+                                "pattern": "^(0|[1-9][0-9]*)$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "value"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Observed duration in seconds.",
+                            "properties": {
+                              "kind": {
+                                "const": "seconds",
+                                "type": "string"
+                              },
+                              "value": {
+                                "description": "Exact non-negative duration in seconds.",
+                                "maxLength": 30,
+                                "pattern": "^(0|[1-9][0-9]{0,19})\\.[0-9]{9}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "value"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "Process-lifetime cumulative latency histogram using the exporter bucket schema.",
+                            "properties": {
+                              "bucket_counts": {
+                                "description": "Inclusive counts at 0.001, 0.005, 0.025, 0.1, 0.5, 1, 5 and 30 seconds.",
+                                "items": {
+                                  "description": "Lossless unsigned counter, including zero, on the JSON boundary.",
+                                  "maxLength": 20,
+                                  "minLength": 1,
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "type": "string"
+                                },
+                                "maxItems": 8,
+                                "minItems": 8,
+                                "type": "array"
+                              },
+                              "count": {
+                                "description": "Complete count, also the implicit positive-infinity bucket.",
+                                "maxLength": 20,
+                                "minLength": 1,
+                                "pattern": "^(0|[1-9][0-9]*)$",
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "histogram",
+                                "type": "string"
+                              },
+                              "sum_seconds": {
+                                "description": "Exact total duration.",
+                                "maxLength": 30,
+                                "pattern": "^(0|[1-9][0-9]{0,19})\\.[0-9]{9}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "count",
+                              "sum_seconds",
+                              "bucket_counts"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "name": {
+                        "description": "Versioned family name, excluding the counter sample's `_total` suffix.",
+                        "maxLength": 96,
+                        "pattern": "^meshspan_v1_[a-z_]+$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "measurement"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 64,
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "observed_at_epoch_micros": {
+                  "description": "Host wall clock for display only; null if unavailable or outside representation.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "sampled_uptime_seconds": {
+                  "description": "Actual observation time relative to the same store.",
+                  "maxLength": 20,
+                  "minLength": 1,
+                  "pattern": "^(0|[1-9][0-9]*)$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "bucket_start_seconds",
+                "sampled_uptime_seconds",
+                "observed_at_epoch_micros",
+                "metrics"
+              ],
+              "type": "object"
+            },
+            "maxItems": 30,
+            "type": "array"
+          },
+          "resolution": {
+            "description": "Selected downsampling interval.",
+            "oneOf": [
+              {
+                "const": "minute",
+                "description": "One sample per minute, retaining six hours.",
+                "type": "string"
+              },
+              {
+                "const": "hour",
+                "description": "Last minute sample in each hour, retaining seven days.",
+                "type": "string"
+              }
+            ]
+          },
+          "retention_seconds": {
+            "description": "Maximum retained window for this resolution, not a promise of complete observations.",
+            "maxLength": 20,
+            "minLength": 1,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "uptime_seconds": {
+            "description": "Monotonic age of this process's observation store at collection.",
+            "maxLength": 20,
+            "minLength": 1,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "history_id",
+          "resolution",
+          "retention_seconds",
+          "uptime_seconds",
+          "older_samples_expired",
+          "points",
+          "next_page_url"
+        ],
+        "title": "MetricHistoryResponse",
+        "type": "object"
+      },
       "MetricsExporterResponse": {
         "additionalProperties": false,
         "description": "Current mesh policy; null explicitly means never configured and disabled.",
@@ -18703,6 +18970,234 @@
         "summary": "Replace the exporter opt-in and exact user allow-list",
         "x-meshspan-access": "system-manager",
         "x-meshspan-max-request-bytes": 8192
+      }
+    },
+    "/admin/metrics/history": {
+      "get": {
+        "description": "Manager-only, independent of exporter opt-in. Newest-first, at most 30 buckets. Minute history retains six hours; hourly history seven days. Each bucket retains the last observed sample, not an average. Missing samples remain gaps; null metrics means collection failed. Counter and histogram values are cumulative within this process. Host timestamps are display hints, not ordering authority. History resets on restart; a different history identity is a conflict. Follow next_page_url without changing its parameters. Queries never perform provider IO or collect new measurements.",
+        "operationId": "getMetricHistory",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "resolution",
+            "schema": {
+              "default": "minute",
+              "enum": [
+                "minute",
+                "hour"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Returned process-local history identity; required together with before. Not a credential.",
+            "in": "query",
+            "name": "history_id",
+            "schema": {
+              "maxLength": 32,
+              "minLength": 32,
+              "pattern": "^[0-9a-f]{32}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exclusive monotonic bucket start from a continuation; required together with history_id.",
+            "in": "query",
+            "name": "before",
+            "schema": {
+              "maxLength": 20,
+              "pattern": "^(0|[1-9][0-9]*)$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricHistoryResponse"
+                }
+              }
+            },
+            "description": "Retained local observations with optional next page",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid query or non-empty body",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "History identity changed; restart from the first page",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid stored or outgoing observation",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authority or local history temporarily unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read one bounded page of local metric history",
+        "x-meshspan-access": "system-manager",
+        "x-meshspan-response-max-bytes": 1048576
       }
     },
     "/admin/node-join-grants": {

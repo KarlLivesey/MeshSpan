@@ -4,6 +4,7 @@ import { For, Show, createSignal, createEffect } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import type { MetricsExporterResponse } from "../../generated";
 import { MetricsUserPicker } from "./MetricsUserPicker";
+import { MetricHistory } from "./MetricHistory";
 import {
   createMetricsAdministration,
   type MetricsAdministration as Model,
@@ -33,6 +34,7 @@ export function MetricsAdministration(
         Measurements are process-local observations, not proof that files are
         protected. Counters reset when the node restarts.
       </p>
+      <MetricHistory client={props.client} />
       <button
         type="button"
         class="quiet-action"

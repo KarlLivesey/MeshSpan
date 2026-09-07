@@ -45,6 +45,8 @@ import type {
   CertificateStatusResponse,
   BackupScheduleResponse,
   MetricsExporterResponse,
+  GetMetricHistoryData,
+  MetricHistoryResponse,
   ConfigureMetricsExporterRequest,
   ConfigureMetricsExporterResponse,
   ListBackupDestinationsQuery,
@@ -164,6 +166,8 @@ import {
   zGetCertificateStatusResponse,
   zGetBackupScheduleResponse,
   zGetMetricsExporterResponse,
+  zGetMetricHistoryQuery,
+  zGetMetricHistoryResponse,
   zConfigureMetricsExporterBody,
   zConfigureMetricsExporterResponse2,
   zListBackupDestinationsQuery,
@@ -467,6 +471,10 @@ export interface MeshSpanFetchClient {
     request: ConfigureMetricsExporterRequest,
     csrfToken?: string,
   ): Promise<ConfigureMetricsExporterResponse>;
+  getMetricHistory(
+    query?: GetMetricHistoryData["query"],
+  ): Promise<MetricHistoryResponse>;
+  getNextMetricHistory(nextPageUrl: string): Promise<MetricHistoryResponse>;
   listBackupDestinations(
     query?: ListBackupDestinationsQuery,
   ): Promise<ListBackupDestinationsResponse>;
@@ -1007,6 +1015,32 @@ export function createMeshSpanFetchClient(
           method: "PUT",
         },
         zConfigureMetricsExporterResponse2,
+      );
+    },
+    async getMetricHistory(query = {}): Promise<MetricHistoryResponse> {
+      const input = zGetMetricHistoryQuery.parse(query);
+      const parameters = new URLSearchParams();
+      if (input.resolution !== undefined)
+        parameters.set("resolution", input.resolution);
+      if (input.history_id !== undefined)
+        parameters.set("history_id", input.history_id);
+      if (input.before !== undefined) parameters.set("before", input.before);
+      const suffix = parameters.toString();
+      return requestJson(
+        context,
+        "/admin/metrics/history" + (suffix ? "?" + suffix : ""),
+        { method: "GET" },
+        zGetMetricHistoryResponse,
+        1048576,
+      );
+    },
+    async getNextMetricHistory(nextPageUrl): Promise<MetricHistoryResponse> {
+      return requestJson(
+        context,
+        validateMetricHistoryPageUrl(context.apiRoot, nextPageUrl),
+        { method: "GET" },
+        zGetMetricHistoryResponse,
+        1048576,
       );
     },
     async listBackupDestinations(
@@ -2760,6 +2794,37 @@ function validateBackupHistoryPageUrl(apiRoot: URL, value: string): string {
   zListBackupRunsQuery.parse({
     cursor: route.searchParams.get("cursor"),
     limit: rawLimit === null ? undefined : parseSafeDecimalHeader(rawLimit),
+  });
+  return route.pathname + route.search;
+}
+function validateMetricHistoryPageUrl(apiRoot: URL, value: string): string {
+  if (!value.startsWith("/") || value.startsWith("//") || value.length > 180)
+    throw new TypeError("metric history page URL is invalid");
+  const route = new URL(value, apiRoot.origin);
+  if (
+    route.origin !== apiRoot.origin ||
+    route.username !== "" ||
+    route.password !== "" ||
+    route.hash !== "" ||
+    route.pathname !== "/api/latest/admin/metrics/history"
+  ) {
+    throw new TypeError(
+      "metric history page URL is outside the administration API",
+    );
+  }
+  const names = [...route.searchParams.keys()];
+  if (
+    names.length !== 3 ||
+    !names.includes("resolution") ||
+    !names.includes("history_id") ||
+    !names.includes("before")
+  ) {
+    throw new TypeError("metric history page URL has invalid query fields");
+  }
+  zGetMetricHistoryQuery.parse({
+    resolution: route.searchParams.get("resolution"),
+    history_id: route.searchParams.get("history_id"),
+    before: route.searchParams.get("before"),
   });
   return route.pathname + route.search;
 }

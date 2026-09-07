@@ -10,6 +10,56 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Task 20 — bounded local metric history
+
+The [local history API and panel](metrics.md#local-panel-history) now retain at
+most 360 minute buckets and 168 hour buckets in memory. The local observation
+worker samples outside the request path; no history request starts collection,
+provider IO or peer traffic. Last-observation downsampling preserves cumulative
+counts, durations and histogram buckets, not invented per-bucket averages. Missing
+families, failed samples, time gaps and retention expiry remain distinguishable.
+
+The manager-only endpoint rechecks access after collection, has owned bounded
+admission and serves at most 30 newest-first buckets with an optional next URL.
+Continuations bind a fresh random 128-bit history identity, not the durable node
+incarnation. The first real restart test exposed that mistaken distinction; its
+failed equality assertion is resolved by the separate history-store identity.
+Entropy failure makes optional history unavailable, not appliance startup fatal.
+
+The generated Rust/OpenAPI/TypeScript/Zod surface shares the existing typed metric
+catalogue. The client rejects substituted continuation hosts/routes/query fields
+before credentials are attached and derives its one-MiB response allowance from
+Rust. A full-page regression exceeds the generic 64-KiB JSON allowance and proves
+that this endpoint works without raising unrelated API limits. The panel's
+on-demand controls, one-page ownership, unknown states and no-late-results
+behaviour follow the existing interface; no browser session was opened.
+
+Focused verification:
+
+- Six local-history and HTTP tests passed in **0.09 seconds**, after the final
+  core correction's **20.83-second build**. They cover deterministic 14-day
+  retention/downsampling without sleeps, page boundaries, restart identity,
+  backward wall time, gaps, exact `u64` counters, malformed output and authentication
+  before query work and after collection.
+- Fifteen affected web tests passed in **1.79 seconds**; web typecheck and affected
+  ESLint passed. The embedded panel build completed in **393 milliseconds**.
+  The final generated-client rerun passed all fifteen in **2.13 seconds**;
+  generated artefact drift verification also passed.
+- Affected API/daemon all-target/all-feature Clippy passed in **17.41 seconds**.
+- Real HTTPS exporter/history enablement, restart, stale-cursor refusal, peer
+  join and gateway-loss proof passed in **10.93 seconds**, after a **39.64-second
+  build**. History works before opting in to external metrics.
+
+Earlier local checks caught fixture type imports, missing field documentation and
+lint issues; these were corrected without exceptions. One Rust check was wrongly
+run alongside a web bundle replacement and lost an embedded asset input. Running
+generation, bundle build and Rust checks in dependency order resolves that
+execution error; those steps must not overlap. It was not a daemon runtime fault.
+
+Task 20 falls **5 → 1 points**, Stage 10 **132 → 128 points**. No full-stage gate
+or publication is claimed. The backup-restore and SMB integration findings remain
+open for the assembled-stage fixing pass.
+
 ## Task 4 — external publisher gateway lifecycle
 
 The implemented external-publisher API now has a real two-daemon HTTPS proof.

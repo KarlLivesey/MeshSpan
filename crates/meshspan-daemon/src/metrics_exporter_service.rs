@@ -2,12 +2,14 @@
 
 //! Current identity and immutable configuration authority, independent of measurement collection.
 
+use crate::metric_history::{MetricHistoryQuery, MetricHistorySource};
 use axum::http::HeaderMap;
+use meshspan_api_contract::MetricHistoryResponse;
 use meshspan_api_contract::{
     ConfigureMetricsExporterRequest, ConfigureMetricsExporterResponse, MetricsExporterResponse,
     MetricsExporterStatus,
 };
-use meshspan_contracts::{RuntimeMetricSnapshot, RuntimeMetricSource};
+use meshspan_contracts::RuntimeMetricSnapshot;
 use meshspan_domain::{AuditEventId, OperationId, PrincipalId, UnixMicros, uuid_v8};
 use meshspan_metadata::{
     AuthoritativeCommand, CommandContext, CommandReceipt, ConfigureMetricsExporter, EntityKind,
@@ -25,6 +27,7 @@ use crate::{
 #[derive(Clone, Copy)]
 pub(crate) enum MetricsAccess {
     ReadConfiguration,
+    ReadHistory,
     Configure,
     Scrape,
 }
@@ -41,7 +44,7 @@ pub(crate) enum MetricsError {
     Unauthenticated,
     #[error("metrics access is not granted")]
     Forbidden,
-    #[error("metrics configuration conflicts")]
+    #[error("metrics request conflicts with current state")]
     Conflict,
     #[error("metrics authority or observation source is unavailable")]
     Unavailable,
@@ -64,19 +67,20 @@ pub(crate) trait MetricsExporterController: Send + 'static {
         request: ConfigureMetricsExporterRequest,
     ) -> Result<ConfigureMetricsExporterResponse, MetricsError>;
     fn collect(&self) -> Result<RuntimeMetricSnapshot, MetricsError>;
+    fn history(&self, query: MetricHistoryQuery) -> Result<MetricHistoryResponse, MetricsError>;
 }
 
 pub(crate) struct MetricsExporterService {
     authority: ConsensusAuthenticationAuthority,
     gateway: GatewaySessionIdentity,
-    source: Arc<dyn RuntimeMetricSource>,
+    source: Arc<dyn MetricHistorySource>,
 }
 
 impl MetricsExporterService {
     pub(crate) fn new(
         authority: ConsensusAuthenticationAuthority,
         gateway: GatewaySessionIdentity,
-        source: Arc<dyn RuntimeMetricSource>,
+        source: Arc<dyn MetricHistorySource>,
     ) -> Self {
         Self {
             authority,
@@ -222,7 +226,7 @@ impl MetricsExporterController for MetricsExporterService {
         access: MetricsAccess,
     ) -> Result<(), MetricsError> {
         match access {
-            MetricsAccess::ReadConfiguration => {
+            MetricsAccess::ReadConfiguration | MetricsAccess::ReadHistory => {
                 authenticate_system_manager_read(&self.authority, self.gateway, headers, now)
                     .map(|_| ())
                     .map_err(map_authentication)
@@ -283,6 +287,10 @@ impl MetricsExporterController for MetricsExporterService {
             | meshspan_contracts::ContractError::ResourceExhausted => MetricsError::Unavailable,
             _ => MetricsError::Failed,
         })
+    }
+
+    fn history(&self, query: MetricHistoryQuery) -> Result<MetricHistoryResponse, MetricsError> {
+        self.source.history(query)
     }
 }
 

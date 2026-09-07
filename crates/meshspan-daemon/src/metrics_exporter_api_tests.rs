@@ -39,8 +39,18 @@ impl MetricsExporterController for Arc<Controller> {
             .get("x-test-auth")
             .and_then(|value| value.to_str().ok())
             .ok_or(Error::Unauthenticated)?;
+        if matches!(access, MetricsAccess::ReadHistory)
+            && self.revoke_on_collect
+            && self.collections.load(Ordering::Relaxed) > 0
+        {
+            return Err(Error::Forbidden);
+        }
         match access {
-            MetricsAccess::ReadConfiguration | MetricsAccess::Configure if role == "manager" => {
+            MetricsAccess::ReadConfiguration
+            | MetricsAccess::ReadHistory
+            | MetricsAccess::Configure
+                if role == "manager" =>
+            {
                 Ok(())
             }
             MetricsAccess::Scrape if role == "reader" && self.enabled.load(Ordering::Acquire) => {
@@ -60,6 +70,14 @@ impl MetricsExporterController for Arc<Controller> {
         Ok(MetricsExporterResponse {
             configuration: None,
         })
+    }
+    fn history(
+        &self,
+        query: crate::metric_history::MetricHistoryQuery,
+    ) -> Result<meshspan_api_contract::MetricHistoryResponse, Error> {
+        use crate::metric_history::MetricHistorySource as _;
+        self.collect()?;
+        crate::runtime_observations::RuntimeObservations::default().history(query)
     }
     fn configure(
         &self,
@@ -104,6 +122,56 @@ fn request(
         request = request.header("x-test-auth", role);
     }
     request.body(Body::from(body))
+}
+
+#[tokio::test]
+async fn metric_history_authenticates_before_queries_and_rechecks_after_collection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let controller = Arc::new(Controller::default());
+    let router = crate::metrics_exporter_api::router(Arc::clone(&controller))?;
+    for (suffix, role, expected) in [
+        ("?unknown=attack", None, StatusCode::UNAUTHORIZED),
+        ("", Some("reader"), StatusCode::FORBIDDEN),
+        ("?before=60", Some("manager"), StatusCode::BAD_REQUEST),
+        (
+            "?resolution=hour&resolution=minute",
+            Some("manager"),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let endpoint = format!("/api/latest/admin/metrics/history{suffix}");
+        let response = router
+            .clone()
+            .oneshot(request("GET", &endpoint, role, Vec::new())?)
+            .await?;
+        assert_eq!(response.status(), expected);
+    }
+    assert_eq!(controller.collections.load(Ordering::Relaxed), 0);
+    let response = router
+        .oneshot(request(
+            "GET",
+            "/api/latest/admin/metrics/history",
+            Some("manager"),
+            Vec::new(),
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(controller.collections.load(Ordering::Relaxed), 1);
+    let revoked = Arc::new(Controller {
+        revoke_on_collect: true,
+        ..Controller::default()
+    });
+    let router = crate::metrics_exporter_api::router(revoked)?;
+    let response = router
+        .oneshot(request(
+            "GET",
+            "/api/latest/admin/metrics/history",
+            Some("manager"),
+            Vec::new(),
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    Ok(())
 }
 
 #[tokio::test]
