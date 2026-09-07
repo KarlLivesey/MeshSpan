@@ -31,9 +31,9 @@ evidence, not a metadata acknowledgement or permission to change trust.
 to its daemon owner. Startup restores the exact selected certificate generation
 from the existing metadata row; initial join still explicitly begins at generation
 
-1. No migration, wire format, dependency or trust-root change is introduced. The
-   test-facing certificate crate re-exports the existing node-key types so fixtures
-   use the same implementation as production, not another signing library.
+one. No migration, wire format, dependency or trust-root change is introduced. The
+test-facing certificate crate re-exports the existing node-key types so fixtures
+use the same implementation as production, not another signing library.
 
 The real-QUIC proof selects a new leaf for the **same node-owned key**, signed by
 a root-authorised online intermediate. It checks fresh handshakes in both
@@ -57,12 +57,39 @@ Local evidence before full integration:
 - Affected all-target/all-feature Clippy passed in **24.37 seconds**.
 
 The first focused compile found test-helper visibility and error-conversion
-mistakes; both were corrected before these runs. Full integration and the affected
-opt-in certificate proofs are pending. Task 3 remains **5 points**, Stage 10
+mistakes; both were corrected before these runs. Task 3 remains **5 points**, Stage 10
 **140**, Stage 11 **126**. Remaining automatic lifecycle work includes finite
 node-certificate issuance, staged peer trust and durable installation receipts,
 renewal scheduling, offline catch-up and federation rollover. Releases and all
 other publication remain prohibited.
+
+### Live private TLS integration
+
+Signed, pushed and GitHub-verified source
+`c6a5d40c5ccb1cdd12b4a58efaf61091ade8a2f7`
+(tree `0afd9f16d65ced5264f7ebb545d05b63f7b55278`) passed the complete local
+gate in **691.46 seconds**: Rust workspace tests **623.96 seconds**, web tests
+**8.03 seconds**, and all static, generated-contract, licence and tooling lanes.
+The run used NVM Node **26.8.1**, pnpm **11.19.0**, Rust **1.98.0** and four
+build/check workers. Both opt-in real-time ACME recovery tests passed together in
+**339.39 seconds** on the final rebuilt binary.
+
+The isolated Linux provider suite passed on the same source after a **56.49-second
+build**: manual DNS **16.06 seconds**, webhook **20.91 seconds** and Cloudflare
+**21.14 seconds**, concurrently. Source remained unchanged during these runs.
+This verifies live credential selection, not the remaining automatic lifecycle.
+
+### Stage completion cadence — owner direction, 2026-09-07
+
+Implement the remaining Stage 10 behaviour before a stage-wide adversarial and
+refactoring pass. During implementation, use focused local tests and affected
+lint/contract checks; commit and integrate coherent progress without repeating
+the entire workspace suite or unrelated slow acceptance cases for every slice.
+Run the complete integration and required failure suites against the assembled
+stage, and fix known defects when found. Do not pre-optimise, speculate about
+unimplemented edge cases, weaken safety requirements or label partial tasks
+complete. Report task numbers and observable delivered behaviour, not branch
+names or "nearly done". The publication hold remains unchanged.
 
 ## Task 3 — retire private peer admission on reused connections
 
