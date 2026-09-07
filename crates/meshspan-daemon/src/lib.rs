@@ -3,6 +3,11 @@
 //! Daemon process composition, configuration and local secret presentation.
 
 mod api_http;
+mod notification_smtp;
+mod notification_transport;
+#[cfg(test)]
+mod notification_transport_tests;
+pub use notification_transport::NotificationTransport;
 mod api_key_issuance;
 mod api_key_issuance_api;
 #[cfg(test)]

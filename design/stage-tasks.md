@@ -338,11 +338,17 @@ the stage; publication-dependent acceptance remains held separately and visible.
     checks and a real two-gateway restart proof pass. Remaining work is the
     assembled-stage pass: **5 → 1 points**.
 
-21. **Durable notifications — Open.** **8 points remaining.**
+21. **Durable notifications — Partial; outbox and transports implemented.** **8 points remaining.**
     OPS-010/020. Implement/verify optional email and authenticated generic webhooks
     from durable deduplicated events, with explicit configuration, allow-listing,
     redaction, retry and restart behaviour. Include manual-DNS renewal tasks from
     task 2. Delivery failure must not stop local healing or status reporting.
+    [Replicated outbox evidence](stage-10-evidence.md#task-21--durable-notification-outbox)
+    covers encrypted configuration references, real committed ACME source events,
+    deduplication, fenced claims, retries, cancellation and file-backed restart.
+    Bounded scheduling reads and real local authenticated HTTPS/SMTP transport
+    tests also pass. API/panel, daemon delivery and gateway enrolment integration
+    remain; the estimate stays unchanged until the complete delivery path runs.
 
 22. **Mesh-wide rolling updates — Open.** **13 points remaining.**
     Accepted decisions §7, PER-003/006, TST-007. Provide one administrator-selected
