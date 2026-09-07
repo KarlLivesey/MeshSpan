@@ -17,7 +17,7 @@ Update the relevant task when work changes its status. Report the current task,
 what behaviour changed, what remains and what was tested. Do not replace this
 with “nearly done”, a count of commits or an unweighted completion percentage.
 
-Remaining-effort estimate, 2026-09-07: **Stage 10: 123 points; Stage 11: 126
+Remaining-effort estimate, 2026-09-07: **Stage 10: 121 points; Stage 11: 126
 points; Stage 12: 55 points.** These are preliminary engineering judgements from
 the task scope and recorded gaps, not measured hours or completion guarantees.
 Uncertainty is high until the open integration/proof work is exercised.
@@ -358,12 +358,16 @@ the stage; publication-dependent acceptance remains held separately and visible.
     This integrated slice reduces the estimate **8 → 3 points**; it does not
     close the task or the assembled-stage acceptance pass.
 
-22. **Mesh-wide rolling updates — Open.** **13 points remaining.**
+22. **Mesh-wide rolling updates — Partial; candidate authenticity implemented.** **13 points remaining.**
     Accepted decisions §7, PER-003/006, TST-007. Provide one administrator-selected
     signed candidate, compatibility checks, availability-aware node ordering,
     durable progress and stop-on-failed-probe behaviour. Prove interrupted update
     recovery and voter/gateway availability; manual per-node replacement is not
     the normal path. Do not publish a candidate to test this without approval.
+    [Local candidate admission](stage-10-evidence.md#tasks-2225--signed-local-candidate-admission)
+    now verifies a separately pinned signature and exact executable in the daemon
+    without opening mesh state. Coordination, installation and availability
+    remain unimplemented; authenticity alone does not close this task.
 
 23. **Migration and supported recovery acceptance — Open.** **8 points remaining.**
     PER-003–007, TST-007. Verify real artefact transitions, transactional/restartable
@@ -385,12 +389,16 @@ the stage; publication-dependent acceptance remains held separately and visible.
     implemented but not executed; musl tooling, other native targets and complete
     candidate acceptance remain outstanding. No publication command was added.
 
-25. **Local signed release/update tooling — Open; publication held.** **5 points remaining.**
+25. **Local signed release/update tooling — Partial; publication held.** **3 points remaining.**
     REL-001/003/004; accepted decisions §7. Prepare complete local validation,
     packaging and update/release scripts, checksum/provenance/SBOM generation and
     clear one-way-migration notes. Keep publication explicitly gated and GitHub
     Actions absent. Review and safely test non-publishing paths; do not run the
     release/tag/publication path while the owner's hold remains.
+    [Signed local candidate preparation](stage-10-evidence.md#tasks-2225--signed-local-candidate-admission)
+    binds clean source/API provenance and exact native executables, with real
+    Node-to-daemon verification. Complete notices/SBOM, candidate acceptance and
+    remaining update workflow preparation are outstanding: **5 → 3 points**.
 
 26. **Dependency/toolchain admission — Recorded complete.** **0 points remaining.**
     Accepted decisions §7, REL-004. [Admission evidence](stage-10-evidence.md#dependency-update-admission)

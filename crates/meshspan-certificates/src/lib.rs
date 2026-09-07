@@ -11,6 +11,7 @@ mod external_response;
 mod mesh_local_ca;
 mod node_renewal;
 mod public_bundle;
+mod update_signature;
 
 use p256::ecdsa::signature::{SignatureEncoding as _, Signer as _, Verifier as _};
 use p256::pkcs8::{DecodePrivateKey as _, EncodePrivateKey as _};
@@ -30,6 +31,7 @@ pub use external_response::{
 pub use mesh_local_ca::{MeshLocalCertificateAuthority, MeshLocalCertificateAuthorityError};
 pub use node_renewal::{NodeCertificateRequest, validate_node_certificate_renewal};
 pub use public_bundle::{PublicCertificateBundle, PublicCertificateBundleError};
+pub use update_signature::{UPDATE_SIGNATURE_DOMAIN, verify_update_signature};
 
 const KEY_BYTES: usize = 32;
 const KEY_GENERATION_ATTEMPTS: usize = 16;

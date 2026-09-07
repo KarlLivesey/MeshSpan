@@ -3173,6 +3173,47 @@ The real daemon restart/delivery case also passed with the exact persisted
 outcome totals in **10.76 seconds** (incremental build **0.14 seconds**). Rust
 formatting passed. No publication or GitHub Actions were run.
 
+## Tasks 22/25 — signed local candidate admission
+
+The existing local package provenance now binds its generated API digest. The
+local candidate preparer accepts one to four clean-source native packages,
+requires matching source/version/API identity, copies exact executable bytes
+into a fresh owned directory and signs their bounded canonical manifest with a
+dedicated P-256 key. It never creates a tag, release or publication. The manifest
+binds `GPL-2.0-only`, source commit, API digest, target, exact decimal byte length,
+SHA-256 and explicit partition-schema/private-protocol compatibility claims.
+Pre-1.0 rollback remains unsupported.
+
+`meshspan-daemon verify-update` uses the existing in-process Rust cryptography to
+verify a separately pinned public key and domain-separated signature, then
+streams the selected executable through SHA-256. It opens no mesh database or
+listener and does not execute the candidate. The report explicitly distinguishes
+authenticity from compatibility, installation authority and acceptance. No new
+dependency or system cryptographic service was introduced.
+
+Focused static checks caught a tooling complexity violation and three Rust lint
+issues before integration. Manifest identity, compatibility and artifact-set
+validation now have separate responsibilities; the verifier borrows its command
+arguments, uses a bounded heap IO buffer and formats hex without per-byte string
+allocations. Affected all-target/all-feature Clippy passed in **13.87 seconds**;
+the actual daemon executable built in **36.27 seconds**. Strict tooling ESLint
+passed. The first tooling run passed six cases in **76.79 ms**, with the explicit
+Node-to-daemon process case skipped until the updated binary had built.
+
+With that binary explicitly selected, all **seven** packaging/candidate cases
+passed in **2.50 seconds**, with **no skips**. The real daemon accepted the
+Node-signed fixture with the independently pinned key and exact expected digest;
+it rejected a same-length altered executable and an unrelated trusted key.
+This closes task 25's initial signing/verification path (**5 → 3 points**), not
+task 22's still-required rolling runtime. Stage 10 remains **121 points**.
+
+This implements local authenticity tooling, not the mesh-wide update feature.
+Remaining: trusted-signer configuration/admission, all database-family and
+mixed-version compatibility, replicated rollout state, node staging/replacement,
+quorum/gateway-aware order, failed-probe interruption/recovery, manager API/panel,
+complete notices/SBOM and the assembled-stage proof. No user signing key, real
+release or publication command has been used; tests sign disposable fixtures.
+
 ## Remaining backup integration
 
 For this retention slice, the complete NVM-default `pnpm check` passed in

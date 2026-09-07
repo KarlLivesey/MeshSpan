@@ -116,6 +116,7 @@ if (!generation.passed) {
             "scripts/javascript-licence-policy.test.mjs",
             "scripts/scheduler.test.mjs",
             "scripts/local-package.test.mjs",
+            "scripts/update-candidate.test.mjs",
             "tooling/eslint/compatibility.test.mjs",
             "tooling/api-codegen/fetch-contract.test.mjs",
           ],
