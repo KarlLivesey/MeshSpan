@@ -10,6 +10,31 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Integration gate — unresolved three-voter maximum-command failure
+
+The full NVM dependency-update gate on signed/pushed `198e7251` failed after
+**334.17 s**. Advisory scans, generated drift, embedded web build, workspace
+Rust/Web formatting and lint, TypeScript, both licence checks, tooling tests and
+web tests passed. The Rust lane stopped in `meshspan-cluster`: **128 passed,
+1 failed, 65.03 s**, with `Unavailable` from
+`three_real_voters_commit_and_reopen_maximum_provider_configuration`. Later Rust
+targets were not reached. Log: `/tmp/meshspan-dependency-update-198e7251.log`.
+
+An isolated retry passed (**5.83 s**, build **23.34 s**); that does not resolve
+the gate failure. The bulk harness could previously stop at a failed shutdown
+request without joining the failed authority or preserving its underlying
+runtime error. Diagnostic cleanup now observes all owners, aggregates bounded
+errors and retains failed fixtures. All **23** focused authority tests passed
+(**20.26 s**), followed by **129** affected cluster tests (**53.91 s**), still
+without reproducing the original failure. Cargo artifact fingerprints show the
+focused package and canonical workspace use different dependency graphs. The
+workspace test artifacts were rebuilt with the exact gate settings (**3.68 s**,
+no tests run). That canonical cluster binary also passed all **129** tests
+(**50.37 s**) with four workers and the gate's quiet harness setting. The original
+failure remains open; further repetition is deferred until the next required
+integration run. Affected cluster Clippy passes (**11.75 s**), as do workspace
+Rustfmt and diff checks. No full-gate or integration pass is claimed.
+
 ## Integration gate — generated barrel drift after the native checkpoint
 
 On signed/pushed `f4cd8c82`, the NVM dependency-update gate passed both advisory

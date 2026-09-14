@@ -23,7 +23,9 @@ async fn three_real_voters_commit_and_reopen_maximum_provider_configuration()
 async fn prove_committed_bytes(
     configuration_bytes: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let cluster = RealAuthorityCluster::start().await?;
+    let cluster = RealAuthorityCluster::start()
+        .await
+        .map_err(|error| format!("real Quinn cluster startup: {error:?}"))?;
     let (mut context, command) = large_target_command(cluster.nodes[0], configuration_bytes)?;
     context.expected_revision = Some(Revision::new(8));
     let encoded = encode_authoritative_command(context, &command)?;
@@ -31,7 +33,11 @@ async fn prove_committed_bytes(
     assert!(encoded.len() <= 1024 * 1024);
     let mut phase = "small bootstrap command";
     let proof = tokio::time::timeout(Duration::from_secs(15), async {
-        cluster.authorities[0].0.begin_election().await?;
+        cluster.authorities[0]
+            .0
+            .begin_election()
+            .await
+            .map_err(|error| format!("initial election: {error:?}"))?;
         prepare_admitted_bulk_members(&cluster).await?;
         phase = "legal >64KiB command replication";
         let receipt = commit_on_survivor(&cluster.authorities, context, &command)
@@ -49,8 +55,16 @@ async fn prove_committed_bytes(
     })
     .await;
     // Stop every authority even when the regression reproduces a replication timeout.
-    let directory = stop_preserving_storage(cluster).await?;
-    let receipt = proof.map_err(|_| format!("real Quinn {phase} timed out"))??;
+    let directory = stop_preserving_storage(cluster)
+        .await
+        .map_err(|error| format!("real Quinn {phase}; shutdown: {error}"))?;
+    let receipt = match proof {
+        Ok(Ok(receipt)) => receipt,
+        failure => {
+            let path = directory.keep();
+            return Err(format!("real Quinn {phase}: {failure:?}; retained {path:?}").into());
+        }
+    };
     for index in 0..3 {
         let file = directory.path().join(format!("quinn-node-{index}.sqlite3"));
         let repository =
@@ -112,21 +126,33 @@ fn large_target_command(
 async fn stop_preserving_storage(
     cluster: RealAuthorityCluster,
 ) -> Result<tempfile::TempDir, Box<dyn std::error::Error>> {
-    for (authority, _) in &cluster.authorities {
-        authority.shutdown().await?;
+    let mut failures = Vec::new();
+    for (index, (authority, _)) in cluster.authorities.iter().enumerate() {
+        if let Err(error) = authority.shutdown().await {
+            failures.push(format!("authority {index} shutdown: {error:?}"));
+        }
     }
-    for (_, runtime) in cluster.authorities {
-        runtime.await??;
+    for (index, (_, runtime)) in cluster.authorities.into_iter().enumerate() {
+        match runtime.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => failures.push(format!("authority {index} runtime: {error:?}")),
+            Err(error) => failures.push(format!("authority {index} join: {error}")),
+        }
     }
     for forwarder in cluster.forwarders {
         forwarder.abort();
         match forwarder.await {
             Err(error) if error.is_cancelled() => {}
-            Err(error) => return Err(error.into()),
+            Err(error) => failures.push(format!("forwarder join: {error}")),
             Ok(()) => {}
         }
     }
-    Ok(cluster.directory)
+    if failures.is_empty() {
+        Ok(cluster.directory)
+    } else {
+        let path = cluster.directory.keep();
+        Err(format!("{}; retained {path:?}", failures.join("; ")).into())
+    }
 }
 
 async fn prepare_admitted_bulk_members(
