@@ -35,7 +35,7 @@ struct LeaderState {
 
 struct ReadBarrierState {
     acknowledgements: BTreeSet<NodeId>,
-    required_applied_index: u64,
+    required_applied_index: Option<u64>,
     quorum_confirmed: bool,
 }
 
@@ -287,6 +287,24 @@ impl ConsensusCore {
             CoreInput::BeginReadBarrier(read_barrier_id) => {
                 self.begin_read_barrier(read_barrier_id)
             }
+            CoreInput::CancelReadBarrier(id) => {
+                if id.0 == 0 {
+                    return Err(CoreError::InvalidInput);
+                }
+                if let RoleState::Leader(leader) = &mut self.role {
+                    leader.read_barriers.remove(&id);
+                }
+                Ok(Vec::new())
+            }
+            CoreInput::ConfirmTerm {
+                proposal_id,
+                operation_id,
+            } => self.propose(
+                proposal_id,
+                operation_id,
+                super::types::TERM_CONFIRMATION_VERSION,
+                super::types::TERM_CONFIRMATION_BYTES.to_vec(),
+            ),
             CoreInput::ActivateJointPlan {
                 joint_plan,
                 member_incarnations,
@@ -638,7 +656,10 @@ impl ConsensusCore {
         if read_barrier_id.0 == 0 {
             return Err(CoreError::InvalidInput);
         }
-        let required_applied_index = self.commit_index;
+        let required_applied_index = self
+            .entry(self.commit_index)
+            .filter(|entry| entry.position.term == self.current_term)
+            .map(|entry| entry.position.index);
         let local_node_id = self.config.local_node_id;
         let quorum_confirmed =
             self.active_satisfies(QuorumFamily::Read, &BTreeSet::from([local_node_id]));
@@ -787,15 +808,26 @@ impl ConsensusCore {
     }
 
     fn complete_read_barriers(&mut self) -> Vec<CoreEffect> {
+        // Election proves possession of committed history, not knowledge of its frontier.
+        // Until this term commits an entry, even a fresh read quorum cannot identify it.
+        if self
+            .entry(self.commit_index)
+            .is_none_or(|entry| entry.position.term != self.current_term)
+        {
+            return Vec::new();
+        }
         let RoleState::Leader(leader) = &mut self.role else {
             return Vec::new();
         };
         let completed: Vec<(ReadBarrierId, u64)> = leader
             .read_barriers
-            .iter()
+            .iter_mut()
             .filter_map(|(id, barrier)| {
-                (barrier.quorum_confirmed && barrier.required_applied_index <= self.applied_index)
-                    .then_some((*id, barrier.required_applied_index))
+                let required = *barrier
+                    .required_applied_index
+                    .get_or_insert(self.commit_index);
+                (barrier.quorum_confirmed && required <= self.applied_index)
+                    .then_some((*id, required))
             })
             .collect();
         for (id, _) in &completed {

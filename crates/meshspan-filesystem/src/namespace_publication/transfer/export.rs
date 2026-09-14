@@ -8,7 +8,7 @@ use meshspan_domain::{NamespaceCommitId, PrincipalId, UnixMicros, VolumeId};
 use rusqlite::Connection;
 
 use super::super::repository::{load_branch_intent, load_reconciliation_commit};
-use super::{TransferredMutationCommit, export_graph};
+use super::{CommitEvidence, TransferredNamespaceCommit, export_graph};
 use crate::publication::{copy_array, decode_identifier};
 use crate::{
     NamespaceHistoryBundle, NamespaceHistoryLimits, PublicationError, ReconciliationCommitPayload,
@@ -70,7 +70,7 @@ fn collect_commits(
     heads: &[NamespaceCommitId],
     known: &BTreeSet<NamespaceCommitId>,
     limits: NamespaceHistoryLimits,
-) -> Result<Vec<TransferredMutationCommit>, PublicationError> {
+) -> Result<Vec<TransferredNamespaceCommit>, PublicationError> {
     let mut pending = heads.to_vec();
     let mut visited = BTreeSet::new();
     let mut commits = BTreeMap::new();
@@ -82,7 +82,7 @@ fn collect_commits(
             return Err(PublicationError::InvalidInput);
         }
         let record = load_commit_record(connection, volume_id, commit_id)?;
-        pending.extend(record.commit.parents.iter().copied());
+        pending.extend(record.dependencies());
         commits.insert(commit_id, record);
     }
     Ok(commits.into_values().collect())
@@ -92,9 +92,15 @@ pub(in crate::publication) fn load_commit_record(
     connection: &Connection,
     volume_id: VolumeId,
     commit_id: NamespaceCommitId,
-) -> Result<TransferredMutationCommit, PublicationError> {
+) -> Result<TransferredNamespaceCommit, PublicationError> {
     let mut record = load_bare_commit_record(connection, volume_id, commit_id)?;
-    record.acknowledgement = super::super::federated_mutation::load(connection, commit_id)?;
+    if let CommitEvidence::Mutation {
+        acknowledgement, ..
+    } = &mut record.evidence
+    {
+        *acknowledgement =
+            super::super::federated_mutation::load(connection, commit_id)?.map(Box::new);
+    }
     Ok(record)
 }
 
@@ -102,27 +108,55 @@ pub(in crate::publication) fn load_bare_commit_record(
     connection: &Connection,
     volume_id: VolumeId,
     commit_id: NamespaceCommitId,
-) -> Result<TransferredMutationCommit, PublicationError> {
+) -> Result<TransferredNamespaceCommit, PublicationError> {
     let commit =
         load_reconciliation_commit(connection, commit_id)?.ok_or(PublicationError::InvalidInput)?;
-    let ReconciliationCommitPayload::Mutation { intent_digest } = commit.payload else {
+    if commit.volume_id != volume_id {
         return Err(PublicationError::InvalidInput);
+    }
+    let evidence = match commit.payload {
+        ReconciliationCommitPayload::Mutation { intent_digest } => {
+            let intent =
+                load_branch_intent(connection, commit_id)?.ok_or(PublicationError::Corrupt)?;
+            if intent.digest() != intent_digest || commit.parents.len() > 1 {
+                return Err(PublicationError::Corrupt);
+            }
+            CommitEvidence::Mutation {
+                intent,
+                acknowledgement: None,
+            }
+        }
+        ReconciliationCommitPayload::Merge { .. } => {
+            let receipt = super::super::reconciliation_apply::load_receipt(
+                connection,
+                commit.operation_id,
+                crate::PublicationDisposition::Replayed,
+            )?
+            .ok_or(PublicationError::Corrupt)?;
+            CommitEvidence::Merge {
+                causal_plan_digest: receipt.causal_plan_digest,
+                result_digest: receipt.result_digest,
+            }
+        }
+        ReconciliationCommitPayload::Restore { .. } => {
+            let receipt = super::super::snapshot_restore::load_receipt(
+                connection,
+                commit.operation_id,
+                crate::PublicationDisposition::Replayed,
+            )?
+            .ok_or(PublicationError::Corrupt)?;
+            CommitEvidence::Restore {
+                result_digest: receipt.result_digest,
+            }
+        }
     };
-    if commit.volume_id != volume_id || commit.parents.len() > 1 {
-        return Err(PublicationError::InvalidInput);
-    }
-    let intent = load_branch_intent(connection, commit_id)?.ok_or(PublicationError::Corrupt)?;
-    if intent.digest() != intent_digest {
-        return Err(PublicationError::Corrupt);
-    }
     let (created_by, created_at, commit_digest) = load_commit_origin(connection, commit_id)?;
-    Ok(TransferredMutationCommit {
+    Ok(TransferredNamespaceCommit {
         commit,
         created_by,
         created_at,
         commit_digest,
-        intent,
-        acknowledgement: None,
+        evidence,
     })
 }
 

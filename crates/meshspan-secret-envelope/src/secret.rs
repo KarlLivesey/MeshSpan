@@ -212,7 +212,9 @@ fn encrypt_plaintext(
     EncryptedSecret::from_parts(parts)
 }
 
-fn validate_recipients(recipients: &[WrappingPublicKey]) -> Result<(), SecretEnvelopeError> {
+pub(crate) fn validate_recipients(
+    recipients: &[WrappingPublicKey],
+) -> Result<(), SecretEnvelopeError> {
     if recipients.is_empty() || recipients.len() > MAXIMUM_SECRET_RECIPIENTS {
         return Err(SecretEnvelopeError::InvalidInput);
     }

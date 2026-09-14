@@ -101,7 +101,7 @@ fn identity_fingerprint(fixture: &ProcessFixture) -> Result<[u8; 32], Box<dyn Er
     Ok(LocalNodeIdentity::open(&fixture.identity_path, CERTIFICATE_NAME)?.public_key_fingerprint())
 }
 
-async fn provision(
+pub(super) async fn provision(
     address: SocketAddr,
     client: &ClientConfig,
     api_key: &str,
@@ -128,7 +128,7 @@ async fn provision(
     Ok(serde_json::from_str(response_body(&response)?)?)
 }
 
-async fn wait_for_installation(
+pub(super) async fn wait_for_installation(
     address: SocketAddr,
     client: &ClientConfig,
     api_key: &str,

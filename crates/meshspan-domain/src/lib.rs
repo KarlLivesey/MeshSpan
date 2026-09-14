@@ -11,6 +11,7 @@ mod federation;
 mod federation_access;
 mod federation_graph;
 mod federation_mutation;
+mod federation_pairing;
 mod federation_route;
 mod federation_storage;
 mod join_grant;
@@ -54,6 +55,11 @@ pub use federation_access::{
 };
 pub use federation_graph::{FederationGraph, FederationGraphError, FederationRelationshipKind};
 pub use federation_mutation::FederatedMutationAcknowledgement;
+pub use federation_pairing::{
+    FederationPairingInvitation, FederationPairingInvitationError, FederationPairingIssuance,
+    FederationPairingIssuanceKey, MAXIMUM_FEDERATION_PAIRING_CODE_BYTES,
+    MAXIMUM_FEDERATION_PAIRING_LIFETIME_MICROS, is_valid_federation_endpoint,
+};
 pub use federation_route::{
     FederationGrantRoute, FederationGrantRouteError, MAXIMUM_FEDERATION_ROUTE_MESHES,
 };

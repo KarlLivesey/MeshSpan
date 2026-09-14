@@ -30,6 +30,7 @@ tokio.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+meshspan-backup = { path = "../meshspan-backup" }
 meshspan-storage = { path = "../meshspan-storage" }
 meshspan-test-certificates = { path = "../meshspan-test-certificates" }
 tempfile = "3.27.0"

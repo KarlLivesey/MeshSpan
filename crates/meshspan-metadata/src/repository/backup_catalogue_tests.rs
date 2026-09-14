@@ -14,8 +14,12 @@ mod copy_inventory;
 mod defaults;
 #[path = "backup_destination_tests.rs"]
 mod destination_administration;
+#[path = "backup_orphan_tests.rs"]
+mod orphan;
 #[path = "backup_retention_tests.rs"]
 mod retention;
+#[path = "backup_root_tests.rs"]
+mod roots;
 use tempfile::{TempDir, tempdir};
 
 use super::tests::{mark_test_recovery_verified, protected_bootstrap};
@@ -230,6 +234,24 @@ fn replace_expired_placement_claim(
     fixture: &mut Fixture,
     backup: BackupId,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let expired = fixture
+        .repository
+        .metadata_backup_run_claim(backup)?
+        .ok_or("recorded claim")?;
+    assert!(matches!(
+        fixture.repository.apply_committed(
+            LogPosition { index: 8, term: 1 },
+            context(90, fixture.administrator, 91, 100, 7)?,
+            &AuthoritativeCommand::AbandonUnrecordedMetadataBackupRun(
+                crate::AbandonUnrecordedMetadataBackupRun {
+                    backup_id: backup,
+                    expected_claim: expired.claim,
+                }
+            ),
+        ),
+        Err(crate::RepositoryError::InvalidCommand)
+    ));
+    assert_eq!(fixture.repository.current_revision()?, Revision::new(7));
     let replacement_claim = MetadataBackupRunClaim {
         claim_generation: 2,
         worker_node_id: fixture.node,

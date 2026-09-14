@@ -2,21 +2,29 @@
 
 //! Bounded retirement witnesses and exact provider-reclamation receipts.
 
-use meshspan_contracts::{BackupDeleteReceipt, BackupObjectIdentity};
+use meshspan_contracts::{
+    BackupDeleteReceipt, BackupObjectIdentity, BackupObjectReceipt, BackupObjectReference,
+};
 use meshspan_domain::{BackupDestinationId, BackupId, OperationId, Revision};
 
 use super::{Decoder, Encoder, MetadataCommandCodecError};
-use crate::{AuthoritativeCommand, RecordBackupReclamation, RetireMetadataBackup};
+use crate::{
+    AuthoritativeCommand, RecordBackupReclamation, RetireAbandonedBackupCopy, RetireMetadataBackup,
+};
 
 const RETIRE_BACKUP: u16 = 73;
 const RECORD_RECLAMATION: u16 = 74;
+const RETIRE_ABANDONED_COPY: u16 = 124;
 
 #[cfg(test)]
 #[path = "backup_retention_tests.rs"]
 mod tests;
 
 pub(super) fn is_command_kind(kind: u16) -> bool {
-    matches!(kind, RETIRE_BACKUP | RECORD_RECLAMATION)
+    matches!(
+        kind,
+        RETIRE_BACKUP | RECORD_RECLAMATION | RETIRE_ABANDONED_COPY
+    )
 }
 
 pub(super) fn encode_command(
@@ -24,6 +32,22 @@ pub(super) fn encode_command(
     command: &AuthoritativeCommand,
 ) -> Result<bool, MetadataCommandCodecError> {
     match command {
+        AuthoritativeCommand::RetireAbandonedBackupCopy(value) => {
+            validate_abandoned(value)?;
+            encoder.u16(RETIRE_ABANDONED_COPY)?;
+            encoder.u64(value.expected_run_revision.get())?;
+            let receipt = &value.receipt;
+            encoder.identifier(receipt.operation_id.as_bytes())?;
+            encoder.identifier(receipt.object.backup_id.as_bytes())?;
+            encoder.identifier(receipt.object.destination_id.as_bytes())?;
+            encoder.u64(receipt.object.provider_generation)?;
+            encoder.u64(receipt.object.byte_length)?;
+            encoder.fixed(&receipt.object.digest)?;
+            encoder.text(
+                receipt.object_reference.as_str(),
+                crate::MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES,
+            )?;
+        }
         AuthoritativeCommand::RetireMetadataBackup(value) => {
             validate_retirement(value)?;
             encoder.u16(RETIRE_BACKUP)?;
@@ -60,6 +84,27 @@ pub(super) fn decode_command(
     decoder: &mut Decoder<'_>,
 ) -> Result<AuthoritativeCommand, MetadataCommandCodecError> {
     match kind {
+        RETIRE_ABANDONED_COPY => {
+            let value = RetireAbandonedBackupCopy {
+                expected_run_revision: Revision::new(decoder.u64()?),
+                receipt: BackupObjectReceipt {
+                    operation_id: OperationId::from_bytes(decoder.identifier()?)?,
+                    object: BackupObjectIdentity {
+                        backup_id: BackupId::from_bytes(decoder.identifier()?)?,
+                        destination_id: BackupDestinationId::from_bytes(decoder.identifier()?)?,
+                        provider_generation: decoder.u64()?,
+                        byte_length: decoder.u64()?,
+                        digest: decoder.fixed()?,
+                    },
+                    object_reference: BackupObjectReference::new(
+                        decoder.text(crate::MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES)?,
+                    )
+                    .map_err(|_| MetadataCommandCodecError::Invalid)?,
+                },
+            };
+            validate_abandoned(&value)?;
+            Ok(AuthoritativeCommand::RetireAbandonedBackupCopy(value))
+        }
         RETIRE_BACKUP => {
             let backup_id = BackupId::from_bytes(decoder.identifier()?)?;
             let expected_backup_revision = Revision::new(decoder.u64()?);
@@ -126,4 +171,16 @@ fn validate_receipt(receipt: BackupDeleteReceipt) -> Result<(), MetadataCommandC
         return Err(MetadataCommandCodecError::Invalid);
     }
     Ok(())
+}
+
+fn validate_abandoned(value: &RetireAbandonedBackupCopy) -> Result<(), MetadataCommandCodecError> {
+    if value.expected_run_revision.get() == 0
+        || value.receipt.object.provider_generation == 0
+        || value.receipt.object.byte_length == 0
+        || value.receipt.object.digest == [0; 32]
+    {
+        Err(MetadataCommandCodecError::Invalid)
+    } else {
+        Ok(())
+    }
 }

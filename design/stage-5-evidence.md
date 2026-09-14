@@ -1,7 +1,8 @@
 # Stage 5 implementation evidence
 
-Status: executable Stage 5 evidence and the D-075 downstream-delegation retrofit
-are complete on 2026-08-30. See
+Status: the recorded core/federation evidence and D-075 retrofit passed on
+2026-08-30; D-058 §5 compatible-content deduplication reopened on 2026-09-07.
+Remaining implementation is tracked under [Stage 10 task 17](stage-tasks.md). See
 [`pre-stage-6-retrofit-evidence.md`](pre-stage-6-retrofit-evidence.md).
 
 Stage 5 turns authoritative identity/metadata foundations into one protocol-neutral,
@@ -602,4 +603,78 @@ proofs concurrently in 13.25 seconds. The repository-wide local gate then passed
 all 15 lanes in 83.42 seconds with four workers: generated-contract drift, Rust
 format/lint, domain/capability, public API, metadata, consensus, private protocol,
 authenticated QUIC, storage/data-plane/filesystem, cluster/wire, workspace format,
-web lint/typecheck/tests and scheduler tests. Stage 5 is complete.
+web lint/typecheck/tests and scheduler tests. These checks do not prove the
+reopened compatible-content reuse requirement below.
+
+## Reopened compatible-content reuse requirement
+
+The initial protected publication path resolved by publication operation,
+`finish` invokes `prepare_layout`, and preparation generates a new content key
+and encrypted layout. The catalogue lookup/reseal paths bind the same operation;
+the pack's `install_or_reuse_shard` resolves the same shard identity. Neither
+implemented the accepted mesh-wide compatible-layout lookup for independently
+uploaded identical content. Existing CoW/history sharing and exact replay proofs
+remain valid, but are not that missing capability.
+
+Finish global plaintext content identity with compatible encrypted-layout
+selection, independent logical file permissions/owners/quota and retention-safe
+references. Prove identical independent uploads through different gateways
+reuse a compatible physical layout, incompatible encryption/protection contexts
+remain separate, and no presence oracle or premature cleanup is introduced.
+Only then derive physical deduplication savings from actual retained references
+and layouts; replayed request bytes must not be reported as those savings.
+
+### Independent same-volume uploads now reuse compatible layouts
+
+The shared filesystem save path now performs bounded, indexed plaintext-identity
+lookup before making a new protected layout. It considers retained manifests in
+the destination volume, including already installed mesh history. The publisher
+checks the current volume encryption context, verifies every recorded shard and
+the complete reconstructed plaintext, and assesses current failure, cell and
+minimum-target/machine requirements. Missing or incompatible candidates fall
+back to fresh publication. This initial path selects only fully present layouts,
+without carrying another publication's pending repair debt.
+
+The branch database owns operation-bound retention reservations. Cleanup cannot
+admit removal of a reserved manifest; attaching its new version consumes the
+reservation in the same transaction as the version and namespace head. Exact
+intent retries, cancellation fencing and transaction rollback are tested across
+reopening the database. A separate content-catalogue record binds the new upload
+to its original encrypted layout and its newly collected acknowledgement
+evidence. Reads, layout export, shard inventory and repair retain the original
+layout identity rather than changing encryption-associated data. No file names,
+creators, access grants or logical byte charges are merged.
+
+Local verification on the working tree:
+
+- Five reservation/discovery regressions pass, including indexed keyset lookup,
+  schema-41 migration, cleanup exclusion and injected version-insert rollback.
+- The real-folder independent-upload proof creates two separately identified
+  300,000-byte files with different creators. Provider payload remains exactly
+  unchanged after the second upload, logical file bytes total 600,000, and both
+  files read back exactly after restart. Lost-result replay does not add shards.
+- The additional real-folder proof migrates an existing schema-11 content
+  catalogue, reads its original content, and rejects reuse across a different
+  volume, unavailable shard or substituted complete upload body.
+- All seven `protected_content` tests pass in **6.11 seconds** after a
+  **10.58-second build**. All **207** filesystem library tests pass in
+  **58.88 seconds** after a **7.14-second build**. Filesystem all-target,
+  all-feature Clippy passes with warnings denied in **32.67 seconds**.
+
+The first integrated regression reached successful reuse but failed reading the
+second file: the read path presented the new publication identity to the original
+stripe owner. Resolving that durable binding once before paging fixes it; the
+corrected focused proof passes in **1.38 seconds**. Earlier Clippy findings were
+resolved with explicit imports and borrowed verification records, not exceptions.
+
+Branch schema **42** and content schema **12** are included in the executable's
+strict updater compatibility report. No dependency, public API or private-wire
+format was added for this slice. No daemon-process, full-stage or publication
+proof is claimed by these filesystem tests.
+
+Remaining D-058 work: discover/import compatible layouts that exist only at
+other gateways; finish automatic terminal-operation reservation cancellation;
+prove rights, quota and cleanup through assembled gateway/federation flows; and
+expose physical savings from retained logical references and physical layouts.
+The current bounded foreground search and complete-layout policy do not establish
+exhaustive mesh-wide deduplication. These gaps remain in Stage 10 task 17.

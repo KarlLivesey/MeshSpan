@@ -122,6 +122,8 @@ pub struct PeerDataStream {
     pub stream: meshspan_transport::AcceptedStream,
     /// Exact framing bounds negotiated for this private endpoint.
     pub limits: WireLimits,
+    /// Locally configured routing epoch, never copied from the incoming request.
+    pub routing_epoch: u64,
 }
 
 /// Cloneable non-blocking consensus message network.
@@ -477,9 +479,18 @@ impl ConsensusNetwork {
         generation: u64,
         credentials: NodeCredentials,
     ) -> Result<InstalledNodeCertificate, ConsensusNetworkError> {
-        self.transport
-            .install(generation, credentials)
-            .map_err(Into::into)
+        // Lock order is control cache then transport selection, also used when caching a
+        // completed handshake. Eviction leaves existing callers' connection clones alive.
+        let mut cache = self
+            .control_connections
+            .lock()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?;
+        let previous = self.transport.current()?;
+        let installed = self.transport.install(generation, credentials)?;
+        if installed != previous {
+            cache.clear();
+        }
+        Ok(installed)
     }
 
     /// Sends one validated metadata-control request to an exact enrolled peer.
@@ -514,12 +525,17 @@ impl ConsensusNetwork {
         request: &ControlEnvelope,
         connection: &quinn::Connection,
     ) -> Result<meshspan_protocol::ValidatedControlEnvelope, ConsensusNetworkError> {
-        let (mut send, mut receive) = open_stream(connection, StreamKind::Metadata).await?;
-        send_control(&mut send, request, self.wire_limits).await?;
-        send.finish()?;
+        let (send, mut receive) = tokio::time::timeout(PEER_OPERATION_TIMEOUT, async {
+            let (mut send, receive) = open_stream(connection, StreamKind::Metadata).await?;
+            send_control(&mut send, request, self.wire_limits).await?;
+            send.finish()?;
+            Ok::<_, ConsensusNetworkError>((send, receive))
+        })
+        .await
+        .map_err(|_| ConsensusNetworkError::ControlDeliveryUnconfirmed)??;
         let response = tokio::time::timeout(
             CONTROL_RESPONSE_TIMEOUT,
-            receive_control(&mut receive, self.wire_limits),
+            self.receive_control_response(&send, &mut receive),
         )
         .await
         .map_err(|_| ConsensusNetworkError::AuthorityStopped)??;
@@ -533,6 +549,28 @@ impl ConsensusNetwork {
             .ok_or(ConsensusNetworkError::InvalidConfiguration)?;
         self.verify_header(&response, to, incarnation)?;
         Ok(response)
+    }
+
+    async fn receive_control_response(
+        &self,
+        send: &quinn::SendStream,
+        receive: &mut quinn::RecvStream,
+    ) -> Result<meshspan_protocol::ValidatedControlEnvelope, ConsensusNetworkError> {
+        let response = receive_control(receive, self.wire_limits);
+        tokio::pin!(response);
+        // finish() queues bytes; it does not prove that a cached connection still
+        // reaches the peer. ACK loss leaves the operation unknown, never undone.
+        // Race the actual response so successful operations need not wait for a
+        // delayed transport ACK. Delivery alone still permits slow authority work.
+        tokio::select! {
+            response = &mut response => Ok(response?),
+            delivery = tokio::time::timeout(PEER_OPERATION_TIMEOUT, send.stopped()) => {
+                if !matches!(delivery, Ok(Ok(None))) {
+                    return Err(ConsensusNetworkError::ControlDeliveryUnconfirmed);
+                }
+                Ok(response.await?)
+            }
+        }
     }
 
     async fn control_connection(
@@ -549,13 +587,19 @@ impl ConsensusNetwork {
         {
             return Ok(connection);
         }
+        let selected = self.local_certificate()?;
         let connection = tokio::time::timeout(PEER_OPERATION_TIMEOUT, self.connect_peer(to))
             .await
             .map_err(|_| ConsensusNetworkError::AuthorityStopped)??;
-        self.control_connections
+        let mut cache = self
+            .control_connections
             .lock()
-            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
-            .insert(to, connection.clone());
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?;
+        // Rotation during an in-flight handshake must not repopulate the cache with the
+        // retired selection. This request retains its connection; later requests reconnect.
+        if self.local_certificate()? == selected {
+            cache.insert(to, connection.clone());
+        }
         Ok(connection)
     }
 
@@ -584,6 +628,22 @@ impl ConsensusNetwork {
         tokio::time::timeout(PEER_OPERATION_TIMEOUT, self.connect_peer(to))
             .await
             .map_err(|_| ConsensusNetworkError::AuthorityStopped)?
+    }
+
+    pub(crate) fn authenticate_data_peer(
+        &self,
+        connection: &quinn::Connection,
+        expected_node: NodeId,
+    ) -> Result<meshspan_transport::AuthenticatedPeer, ConsensusNetworkError> {
+        let peers = self
+            .peers
+            .read()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?;
+        let peer = peers.registry.authenticate_connection(connection)?;
+        if peer.node_id() != expected_node {
+            return Err(ConsensusNetworkError::InvalidTraffic);
+        }
+        Ok(peer)
     }
 
     /// Returns the exact framing bounds negotiated by every private stream on this endpoint.
@@ -618,6 +678,26 @@ impl ConsensusNetwork {
     #[must_use]
     pub const fn local_node_id(&self) -> NodeId {
         self.local_node_id
+    }
+
+    /// Returns the partition bound to this transport's control messages.
+    #[must_use]
+    pub const fn partition_id(&self) -> PartitionId {
+        self.partition_id
+    }
+
+    /// Stops listeners, connections and outbound queues shared by all clones of this network.
+    ///
+    /// # Errors
+    /// Reports a poisoned queue registry after closing the transport.
+    pub fn close(&self) -> Result<(), ConsensusNetworkError> {
+        self.transport.close();
+        self.peers
+            .write()
+            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
+            .outbound
+            .clear();
+        Ok(())
     }
 
     /// Returns the exact local incarnation carried by this process's private handshakes.
@@ -759,10 +839,10 @@ impl ConsensusNetwork {
             let stream_connection = connection.clone();
             let stream_ingress = ingress.clone();
             self.runtime.spawn(async move {
-                if stream_network
+                if let Err(error) = stream_network
                     .receive_authenticated_stream(accepted, stream_ingress)
                     .await
-                    .is_err()
+                    && !error.is_stream_cancellation()
                 {
                     stream_connection.close(2_u32.into(), b"invalid peer traffic");
                 }
@@ -793,34 +873,7 @@ impl ConsensusNetwork {
                 .await?;
                 send_receipt(&mut accepted.send, self.wire_limits).await
             }
-            StreamKind::Metadata => {
-                let controls = ingress
-                    .controls
-                    .ok_or(ConsensusNetworkError::InvalidTraffic)?;
-                let envelope = receive_control(&mut accepted.receive, self.wire_limits).await?;
-                self.verify_peer_header(&envelope, ingress.peer)?;
-                let (respond, response) = oneshot::channel();
-                self.admit_peer_message(
-                    ingress.peer,
-                    &controls,
-                    PeerControlRequest {
-                        from: ingress.peer.node_id(),
-                        sender_incarnation: ingress.peer.incarnation(),
-                        envelope,
-                        certificate_fingerprint: ingress.peer.certificate_fingerprint(),
-                        capability_digest: ingress.capability_digest,
-                        respond,
-                    },
-                )
-                .await?;
-                let response = tokio::time::timeout(CONTROL_RESPONSE_TIMEOUT, response)
-                    .await
-                    .map_err(|_| ConsensusNetworkError::AuthorityStopped)?
-                    .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
-                send_control(&mut accepted.send, &response, self.wire_limits).await?;
-                accepted.send.finish()?;
-                Ok(())
-            }
+            StreamKind::Metadata => self.receive_metadata_control(accepted, ingress).await,
             StreamKind::Snapshot => {
                 let snapshots = ingress
                     .snapshots
@@ -840,12 +893,69 @@ impl ConsensusNetwork {
                         peer: ingress.peer,
                         stream: accepted,
                         limits: self.wire_limits,
+                        routing_epoch: self.routing_epoch,
                     },
                 )
                 .await
             }
             StreamKind::Federation => Err(ConsensusNetworkError::InvalidTraffic),
         }
+    }
+
+    async fn receive_metadata_control(
+        &self,
+        mut accepted: meshspan_transport::AcceptedStream,
+        ingress: AuthenticatedStreamIngress,
+    ) -> Result<(), ConsensusNetworkError> {
+        let controls = ingress
+            .controls
+            .ok_or(ConsensusNetworkError::InvalidTraffic)?;
+        let envelope = receive_control(&mut accepted.receive, self.wire_limits).await?;
+        self.verify_peer_header(&envelope, ingress.peer)?;
+        // One control stream carries one complete request. Consume FIN before
+        // admission, rejecting trailing bytes and avoiding a spurious STOP_SENDING
+        // when a normally completed receive stream is dropped after the response.
+        let mut trailing = [0_u8; 1];
+        match tokio::time::timeout(PEER_OPERATION_TIMEOUT, accepted.receive.read(&mut trailing))
+            .await
+        {
+            Ok(Ok(None)) => {}
+            Ok(Ok(Some(_))) => return Err(ConsensusNetworkError::InvalidTraffic),
+            Ok(Err(error)) => {
+                return Err(meshspan_transport::TransportError::Read(
+                    quinn::ReadExactError::ReadError(error),
+                )
+                .into());
+            }
+            Err(_) => {
+                accepted.send.reset(3_u32.into())?;
+                return Ok(());
+            }
+        }
+        let (respond, response) = oneshot::channel();
+        self.admit_peer_message(
+            ingress.peer,
+            &controls,
+            PeerControlRequest {
+                from: ingress.peer.node_id(),
+                sender_incarnation: ingress.peer.incarnation(),
+                envelope,
+                certificate_fingerprint: ingress.peer.certificate_fingerprint(),
+                capability_digest: ingress.capability_digest,
+                respond,
+            },
+        )
+        .await?;
+        let Ok(Ok(response)) = tokio::time::timeout(CONTROL_RESPONSE_TIMEOUT, response).await
+        else {
+            // An unavailable handler is not evidence against the peer's
+            // other authenticated requests on this connection.
+            accepted.send.reset(3_u32.into())?;
+            return Ok(());
+        };
+        send_control(&mut accepted.send, &response, self.wire_limits).await?;
+        accepted.send.finish()?;
+        Ok(())
     }
 
     fn verify_current_peer(
@@ -1196,6 +1306,9 @@ fn request_identifier(value: u64) -> [u8; 16] {
 /// Closed private-network failures without certificate, key or command contents.
 #[derive(Debug, Error)]
 pub enum ConsensusNetworkError {
+    /// Bounded control delivery was not acknowledged; the operation's outcome is unknown.
+    #[error("consensus control delivery is unconfirmed")]
+    ControlDeliveryUnconfirmed,
     /// Identities, routes, trust, bounds or socket configuration are unusable.
     #[error("consensus network configuration is invalid")]
     InvalidConfiguration,
@@ -1223,6 +1336,30 @@ pub enum ConsensusNetworkError {
     /// Snapshot staging or streaming filesystem IO failed.
     #[error("consensus snapshot IO failed")]
     Io(#[from] std::io::Error),
+}
+
+impl ConsensusNetworkError {
+    // QUIC permits each stream to be cancelled independently. Neither a peer's
+    // STOP_SENDING/RESET_STREAM nor a late write to that closed stream invalidates
+    // the connection's other authenticated requests. Malformed frames and stale
+    // identities are deliberately not included in this classification.
+    fn is_stream_cancellation(&self) -> bool {
+        matches!(
+            self,
+            Self::Quinn(_)
+                | Self::Transport(
+                    meshspan_transport::TransportError::Finish(_)
+                        | meshspan_transport::TransportError::Write(
+                            quinn::WriteError::Stopped(_) | quinn::WriteError::ClosedStream
+                        )
+                        | meshspan_transport::TransportError::Read(
+                            quinn::ReadExactError::ReadError(
+                                quinn::ReadError::Reset(_) | quinn::ReadError::ClosedStream
+                            )
+                        )
+                )
+        )
+    }
 }
 
 #[cfg(test)]

@@ -10,6 +10,15 @@ pub(super) async fn automatic_backup_history(
     client: &ClientConfig,
     authorization: &str,
 ) -> Result<String, Box<dyn Error>> {
+    automatic_backup_history_for_schedule(address, client, authorization, 0).await
+}
+
+pub(super) async fn automatic_backup_history_for_schedule(
+    address: SocketAddr,
+    client: &ClientConfig,
+    authorization: &str,
+    minimum_schedule_sequence: u64,
+) -> Result<String, Box<dyn Error>> {
     let rejected = request_with_headers(
         address,
         client,
@@ -43,7 +52,9 @@ pub(super) async fn automatic_backup_history(
             assert!(run.run_sequence.parse::<u64>()? > 0);
             assert!(run.scheduled_for_epoch_micros > 0);
             assert!(run.minimum_verified_copies > 0);
-            if run.state == meshspan_api_contract::BackupRunStatus::Protected {
+            if run.state == meshspan_api_contract::BackupRunStatus::Protected
+                && run.schedule_sequence.parse::<u64>()? >= minimum_schedule_sequence
+            {
                 encrypted_export(address, client, authorization, &run.backup_id).await?;
                 restore_check(address, client, authorization, &run.backup_id).await?;
                 return Ok(run.backup_id.clone());
@@ -60,6 +71,40 @@ pub(super) async fn automatic_backup_history(
         }
         sleep(RETRY_INTERVAL).await;
     }
+}
+
+pub(super) async fn assert_missing_gateway_key(
+    address: SocketAddr,
+    client: &ClientConfig,
+    authorization: &str,
+    backup_id: &str,
+) -> Result<(), Box<dyn Error>> {
+    // Export remains available; it must not imply that a later node owns an older key.
+    encrypted_export(address, client, authorization, backup_id).await?;
+    let response = request_with_headers(
+        address,
+        client,
+        "GET",
+        &format!("/api/latest/admin/backups/{backup_id}/restore-readiness"),
+        None,
+        &[("Authorization", authorization)],
+    )
+    .await?;
+    require_status(
+        &response,
+        "409 Conflict",
+        "reject gateway check without a captured recipient envelope",
+    )?;
+    let body: serde_json::Value = serde_json::from_str(response_body(&response)?)?;
+    assert_eq!(body["code"], "state_conflict");
+    assert!(
+        body["message"]
+            .as_str()
+            .ok_or("missing rejection message")?
+            .contains("no recovery envelope for this gateway")
+    );
+    assert!(body.get("verification").is_none());
+    Ok(())
 }
 
 async fn restore_check(
@@ -97,12 +142,12 @@ async fn restore_check(
     Ok(())
 }
 
-async fn encrypted_export(
+pub(super) async fn encrypted_export(
     address: SocketAddr,
     client: &ClientConfig,
     authorization: &str,
     backup_id: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(Vec<u8>, String), Box<dyn Error>> {
     use super::{Arc, CERTIFICATE_NAME, ServerName, TcpStream, TlsConnector};
     use sha2::{Digest, Sha256};
     use std::fmt::Write;
@@ -169,5 +214,5 @@ async fn encrypted_export(
             .windows(16)
             .any(|window| window == b"SQLite format 3\0")
     );
-    Ok(())
+    Ok((bytes.to_vec(), digest))
 }

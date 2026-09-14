@@ -455,6 +455,108 @@ mod tests {
     }
 
     #[test]
+    fn federated_routes_migrate_from_actual_schema_96() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let file_path = directory
+            .path()
+            .join("federated-backup-route-migration.sqlite3");
+        let mut connection = open_connection(&file_path)?;
+        migrate_partition_through(&mut connection, 96, 10)?;
+        let existing: i64 = connection.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name = 'federated_backup_routes'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(existing, 0);
+        connection.execute(
+            "INSERT INTO principals(principal_id, principal_kind, display_name, canonical_name,
+             state, created_at, retired_at, revision)
+             VALUES (?1, 1, 'Preserved user', 'preserved user', 1, 20, NULL, 7)",
+            [[44_u8; 16].as_slice()],
+        )?;
+        migrate_partition(&mut connection, 30)?;
+        migrate_partition(&mut connection, 40)?;
+        let principal: (String, i64) = connection.query_row(
+            "SELECT display_name, revision FROM principals WHERE principal_id = ?1",
+            [[44_u8; 16].as_slice()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(principal, ("Preserved user".to_owned(), 7));
+        let routes: i64 =
+            connection.query_row("SELECT count(*) FROM federated_backup_routes", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(routes, 0);
+        let violations: i64 =
+            connection.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(violations, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn abandoned_retirements_migrate_from_schema_100_without_inventing_deletion_authority()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let mut connection = open_connection(&directory.path().join("orphan-migration.sqlite3"))?;
+        migrate_partition_through(&mut connection, 100, 10)?;
+        let before: i64 = connection.query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE name = 'abandoned_backup_retirements'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(before, 0);
+        migrate_partition(&mut connection, 20)?;
+        migrate_partition(&mut connection, 30)?;
+        let after: i64 = connection.query_row(
+            "SELECT count(*) FROM abandoned_backup_retirements",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(after, 0);
+        let violations: i64 =
+            connection.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(violations, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn abandoned_reclamations_migrate_from_schema_101_without_inventing_completion()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let mut connection =
+            open_connection(&directory.path().join("orphan-completion-migration.sqlite3"))?;
+        migrate_partition_through(&mut connection, 101, 10)?;
+        let before: i64 = connection.query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE name = 'abandoned_backup_reclamations'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(before, 0);
+        migrate_partition(&mut connection, 20)?;
+        migrate_partition(&mut connection, 30)?;
+        let after: i64 = connection.query_row(
+            "SELECT count(*) FROM abandoned_backup_reclamations",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(after, 0);
+        let violations: i64 =
+            connection.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(violations, 0);
+        assert_eq!(
+            connection.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
+            PARTITION_SCHEMA_VERSION
+        );
+        Ok(())
+    }
+
+    #[test]
     fn principal_lifecycle_migration_backfills_existing_principals()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempdir()?;

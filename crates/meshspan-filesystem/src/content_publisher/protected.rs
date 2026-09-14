@@ -39,6 +39,8 @@ use crate::{
 const MAXIMUM_CANDIDATES: usize = 256;
 const MAXIMUM_SCENARIOS: usize = 16;
 
+mod reuse;
+
 /// Narrow target-aware byte path used by protected publication and reads.
 pub trait ContentShardRouter {
     /// Returns a stable relative read cost; lower-cost routes are attempted first.
@@ -124,6 +126,82 @@ pub struct ProtectionConfiguration {
 }
 
 impl ProtectionConfiguration {
+    /// Resolves survivor targets and complete-local cells required before commit.
+    /// This is a policy selection, not provider reachability or read evidence.
+    #[must_use]
+    pub fn read_availability_scopes(
+        &self,
+        excluded: &BTreeSet<TargetId>,
+    ) -> crate::ReadAvailabilityScopes {
+        let targets = self
+            .candidates
+            .iter()
+            .filter(|target| !excluded.contains(&target.target_id))
+            .map(|target| target.target_id)
+            .collect();
+        let required_cells = self
+            .cells
+            .iter()
+            .filter(|cell| {
+                cell.complete_local
+                    && cell.role == meshspan_contracts::PlacementCellRole::RequiredBeforeCommit
+            })
+            .map(|cell| {
+                (
+                    cell.cell_id,
+                    self.candidates
+                        .iter()
+                        .filter(|target| {
+                            !excluded.contains(&target.target_id)
+                                && target.availability_cells.as_slice().contains(&cell.cell_id)
+                        })
+                        .map(|target| target.target_id)
+                        .collect(),
+                )
+            })
+            .collect();
+        crate::ReadAvailabilityScopes {
+            targets,
+            required_cells,
+        }
+    }
+
+    /// Assesses exact current-generation recorded slices against this policy snapshot.
+    ///
+    /// Missing receipts are omitted, never replaced by planned destinations. This does not
+    /// probe bytes or establish current read availability.
+    ///
+    /// # Errors
+    /// Rejects duplicate slices, stale generations, unknown routes or malformed policy evidence.
+    pub fn assess_recorded<Placement: PlacementPolicy>(
+        &self,
+        placement: &Placement,
+        stripe: &crate::CommittedProtectedStripe,
+    ) -> Result<meshspan_contracts::PlacementAssessment, ContractError> {
+        let mut indices = BTreeSet::new();
+        let mut targets = Vec::with_capacity(stripe.receipts.len());
+        for receipt in stripe.receipts.as_slice() {
+            if !indices.insert(receipt.shard.shard_index)
+                || receipt.shard.shard_index >= stripe.stripe.coding_layout().total_slices()
+                || !self.candidates.iter().any(|candidate| {
+                    candidate.target_id == receipt.target_id
+                        && candidate.target_generation == receipt.target_generation
+                })
+            {
+                return Err(ContractError::InvalidInput);
+            }
+            targets.push(receipt.target_id);
+        }
+        placement.assess_recorded(meshspan_contracts::PlacementAssessmentRequest {
+            coding_layout: stripe.stripe.coding_layout(),
+            recorded_targets: &targets,
+            scenarios: &self.scenarios,
+            topology: &self.topology,
+            candidates: &self.candidates,
+            cells: &self.cells,
+        })
+    }
+
     /// Returns the exact topology/policy revision bound into every decision from this snapshot.
     #[must_use]
     pub const fn topology_revision(&self) -> Revision {
@@ -780,10 +858,47 @@ where
 {
     type Sink = DurableContentSink;
 
+    fn verify_reuse(
+        &mut self,
+        request: ContentPublicationRequest,
+        candidate: ManifestPublication,
+        completed: CompletedStage,
+    ) -> Result<Option<crate::VerifiedContentReuse>, ContentPublicationError> {
+        self.verify_existing_layout(request, candidate, completed)
+    }
+
+    fn finish_reuse(
+        &mut self,
+        request: ContentPublicationRequest,
+        mut sink: Self::Sink,
+        reuse: crate::VerifiedContentReuse,
+    ) -> Result<ManifestPublication, ContentPublicationError> {
+        if !request.same_intent(reuse.request) || sink.operation_id != request.operation_id {
+            return Err(ContentPublicationError::Conflict);
+        }
+        sink.file.sync_all()?;
+        verify_spool(
+            &mut sink.file,
+            CompletedStage {
+                logical_length: reuse.content.manifest.logical_length,
+                content_digest: reuse.content.manifest.content_digest,
+            },
+        )?;
+        self.catalog
+            .record_content_reuse(&reuse)
+            .map_err(map_catalog)?;
+        drop(sink);
+        let _cleanup_result = cleanup_spool(&self.spools, request.operation_id);
+        Ok(reuse.content.manifest)
+    }
+
     fn acknowledgement_evidence(
         &self,
         request: ContentPublicationRequest,
     ) -> Result<ContentAcknowledgementEvidence, ContentPublicationError> {
+        if let Some(reuse) = self.catalog.content_reuse(request).map_err(map_catalog)? {
+            return Ok(reuse.evidence);
+        }
         self.catalog
             .protected_acknowledgement_evidence(request)
             .map_err(map_catalog)
@@ -887,6 +1002,15 @@ where
             .catalog
             .committed_layout(request.content)
             .map_err(map_catalog_read)?;
+        // A reused file has its own publication operation, while immutable stripes retain
+        // their original catalogue owner. Resolve that binding once before paging the layout.
+        let request = ContentReadRequest {
+            content: crate::PublishedContentReference {
+                publication_operation_id: committed.request.operation_id,
+                manifest: request.content.manifest,
+            },
+            ..request
+        };
         if request.length == 0 {
             return Ok(());
         }

@@ -2,6 +2,13 @@
 
 //! Crash-safe preparation of one exact encrypted metadata-backup container.
 
+mod filesystem;
+mod recovery;
+mod retirement;
+pub use recovery::{
+    MetadataBackupRecoveryAuthority, MetadataBackupRecoveryInput, MetadataBackupRecoveryOutcome,
+};
+
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -20,6 +27,15 @@ use crate::ConsensusAuthenticationAuthority;
 const STAGING_DIRECTORY: &str = "metadata-backup-staging";
 const HASH_BUFFER_BYTES: usize = 64 * 1_024;
 
+/// Explicit control-capture destinations and surviving local filesystem source.
+#[derive(Clone, Copy, Debug)]
+pub struct MetadataBackupCapturePaths<'a> {
+    /// New plaintext control snapshot and encrypted archive destination.
+    pub metadata: EncryptedBackupPaths<'a>,
+    /// Existing gateway filesystem journals; never created implicitly for a non-empty volume.
+    pub filesystem_directory: &'a Path,
+}
+
 /// Exact-state snapshot and encryption boundary required by backup preparation.
 pub trait MetadataBackupPreparationAuthority {
     /// Produces a new encrypted container for all current recovery recipients.
@@ -29,7 +45,7 @@ pub trait MetadataBackupPreparationAuthority {
     /// Fails closed for unavailable authority, invalid recovery state, snapshot or encryption.
     fn create_encrypted_metadata_backup<Random: RandomSource>(
         &self,
-        paths: EncryptedBackupPaths<'_>,
+        paths: MetadataBackupCapturePaths<'_>,
         backup_id: BackupId,
         created_at: UnixMicros,
         random: &mut Random,
@@ -39,14 +55,12 @@ pub trait MetadataBackupPreparationAuthority {
 impl MetadataBackupPreparationAuthority for ConsensusAuthenticationAuthority {
     fn create_encrypted_metadata_backup<Random: RandomSource>(
         &self,
-        paths: EncryptedBackupPaths<'_>,
+        paths: MetadataBackupCapturePaths<'_>,
         backup_id: BackupId,
         created_at: UnixMicros,
         random: &mut Random,
     ) -> Result<EncryptedPartitionBackupManifest, RepositoryError> {
-        let recipients = self.reader().volume_key_recipients()?;
-        self.reader()
-            .create_encrypted_backup(paths, backup_id, created_at, &recipients, random)
+        filesystem::capture(self.reader(), paths, backup_id, created_at, random)
     }
 }
 
@@ -65,6 +79,7 @@ pub struct MetadataBackupPreparationService<'a, Authority, Random> {
     local: &'a mut LocalDatabase,
     random: &'a mut Random,
     directory: PathBuf,
+    filesystem_directory: PathBuf,
 }
 
 impl<'a, Authority, Random> MetadataBackupPreparationService<'a, Authority, Random> {
@@ -86,10 +101,11 @@ impl<'a, Authority, Random> MetadataBackupPreparationService<'a, Authority, Rand
             local,
             random,
             directory,
+            filesystem_directory: state_directory.join("filesystem"),
         })
     }
 
-    /// Deletes one exact protected staging file, then forgets its durable local evidence.
+    /// Deletes exact protected or authoritatively abandoned staging, then its local evidence.
     ///
     /// File removal precedes journal removal so a crash cannot leave an untracked encrypted
     /// orphan. A missing file is accepted only when the unchanged journal proves prior ownership.
@@ -144,7 +160,21 @@ where
         let relative_file_name = encrypted_file_name(run.backup_id);
         let encrypted_path = self.directory.join(&relative_file_name);
         if let Some(staging) = self.local.metadata_backup_staging(run.backup_id)? {
-            validate_staging(run, &relative_file_name, &staging, &encrypted_path)?;
+            if let Err(error) =
+                validate_staging(run, &relative_file_name, &staging, &encrypted_path)
+            {
+                let recoverable =
+                    matches!(&error, MetadataBackupPreparationError::ChangedStagingFile)
+                        || matches!(&error, MetadataBackupPreparationError::Io(io)
+                        if io.kind() == std::io::ErrorKind::NotFound);
+                return Err(
+                    if run.state == MetadataBackupRunState::Recorded && recoverable {
+                        MetadataBackupPreparationError::MissingRecordedStaging
+                    } else {
+                        error
+                    },
+                );
+            }
             return Ok(PreparedMetadataBackup {
                 encrypted_path,
                 staging,
@@ -158,9 +188,12 @@ where
         remove_orphan(&encrypted_path)?;
         sync_directory(&self.directory)?;
         let manifest = self.authority.create_encrypted_metadata_backup(
-            EncryptedBackupPaths {
-                plaintext_staging: &plaintext_path,
-                encrypted_destination: &encrypted_path,
+            MetadataBackupCapturePaths {
+                metadata: EncryptedBackupPaths {
+                    plaintext_staging: &plaintext_path,
+                    encrypted_destination: &encrypted_path,
+                },
+                filesystem_directory: &self.filesystem_directory,
             },
             run.backup_id,
             now,
@@ -335,9 +368,12 @@ pub enum MetadataBackupPreparationError {
     /// Snapshot output contradicted its claimed authoritative run.
     #[error("metadata backup preparation projection was invalid")]
     InvalidProjection,
-    /// A recorded generation lost its only known local source and must be recovered from a copy.
+    /// A recorded generation lost its usable local source and must be recovered from a copy.
     #[error("recorded metadata backup staging is missing and requires provider recovery")]
     MissingRecordedStaging,
+    /// A provider failed or rejected its exact read contract.
+    #[error("metadata backup recovery provider failed")]
+    Provider(#[from] meshspan_contracts::ContractError),
     /// The staging directory was replaced, permissive or not a directory.
     #[error("metadata backup staging directory is unsafe")]
     UnsafeStagingDirectory,

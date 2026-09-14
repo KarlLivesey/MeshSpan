@@ -26,6 +26,7 @@ pub(super) const QUEUE_METADATA_BACKUP_RUN: u16 = 68;
 pub(super) const CLAIM_METADATA_BACKUP_RUN: u16 = 69;
 pub(super) const RENEW_METADATA_BACKUP_RUN: u16 = 70;
 pub(super) const COMPLETE_METADATA_BACKUP_RUN: u16 = 71;
+const ABANDON_UNRECORDED_BACKUP_RUN: u16 = 90;
 const MAXIMUM_NAME_BYTES: usize = 128;
 const RECONCILE_BACKUP_DEFAULTS: u16 = 75;
 
@@ -41,7 +42,11 @@ pub(super) const fn is_command_kind(kind: u16) -> bool {
             | CLAIM_METADATA_BACKUP_RUN
             | RENEW_METADATA_BACKUP_RUN
             | COMPLETE_METADATA_BACKUP_RUN
+            | ABANDON_UNRECORDED_BACKUP_RUN
             | RECONCILE_BACKUP_DEFAULTS
+            | super::backup_route::KIND
+            | super::backup_route::LEGACY_KIND
+            | super::backup_intent::KIND
     )
 }
 
@@ -50,6 +55,14 @@ pub(super) fn encode_command(
     command: &crate::AuthoritativeCommand,
 ) -> Result<bool, MetadataCommandCodecError> {
     match command {
+        crate::AuthoritativeCommand::BindBackupPublicationIntent(value) => {
+            encoder.u16(super::backup_intent::KIND)?;
+            super::backup_intent::encode(encoder, value)?;
+        }
+        crate::AuthoritativeCommand::BindFederatedBackupRoute(value) => {
+            encoder.u16(super::backup_route::KIND)?;
+            super::backup_route::encode(encoder, value)?;
+        }
         crate::AuthoritativeCommand::ReconcileMetadataBackupDefaults(value) => {
             if value.expected_topology_revision.get() == 0 {
                 return Err(MetadataCommandCodecError::Invalid);
@@ -77,6 +90,12 @@ pub(super) fn encode_command(
         crate::AuthoritativeCommand::CompleteMetadataBackupRun(value) => {
             encode_completion(encoder, *value)?;
         }
+        crate::AuthoritativeCommand::AbandonUnrecordedMetadataBackupRun(value) => {
+            validate_claim(value.expected_claim)?;
+            encoder.u16(ABANDON_UNRECORDED_BACKUP_RUN)?;
+            encoder.identifier(value.backup_id.as_bytes())?;
+            encode_claim(encoder, value.expected_claim)?;
+        }
         crate::AuthoritativeCommand::RecordMetadataBackup(value) => {
             encode_backup(encoder, value)?;
         }
@@ -94,6 +113,12 @@ pub(super) fn decode_command(
     decoder: &mut Decoder<'_>,
 ) -> Result<crate::AuthoritativeCommand, MetadataCommandCodecError> {
     match kind {
+        super::backup_intent::KIND => super::backup_intent::decode(decoder)
+            .map(crate::AuthoritativeCommand::BindBackupPublicationIntent),
+        super::backup_route::KIND => super::backup_route::decode(decoder, 2)
+            .map(crate::AuthoritativeCommand::BindFederatedBackupRoute),
+        super::backup_route::LEGACY_KIND => super::backup_route::decode(decoder, 1)
+            .map(crate::AuthoritativeCommand::BindFederatedBackupRoute),
         RECONCILE_BACKUP_DEFAULTS => {
             let value = crate::ReconcileMetadataBackupDefaults {
                 partition_id: PartitionId::from_bytes(decoder.identifier()?)?,
@@ -121,6 +146,14 @@ pub(super) fn decode_command(
         }
         COMPLETE_METADATA_BACKUP_RUN => {
             decode_completion(decoder).map(crate::AuthoritativeCommand::CompleteMetadataBackupRun)
+        }
+        ABANDON_UNRECORDED_BACKUP_RUN => {
+            let value = crate::AbandonUnrecordedMetadataBackupRun {
+                backup_id: BackupId::from_bytes(decoder.identifier()?)?,
+                expected_claim: decode_claim(decoder)?,
+            };
+            validate_claim(value.expected_claim)?;
+            Ok(crate::AuthoritativeCommand::AbandonUnrecordedMetadataBackupRun(value))
         }
         RECORD_METADATA_BACKUP => {
             decode_backup(decoder).map(crate::AuthoritativeCommand::RecordMetadataBackup)

@@ -59,6 +59,21 @@ pub fn validate_node_certificate_renewal(
     request: NodeCertificateRequest<'_>,
 ) -> Result<(), CertificateError> {
     let identity = NodePublicIdentity::from_certificate(previous_certificate_der)?;
+    validate_node_certificate(certificate_der, &identity, issuer_certificate_der, request)
+}
+
+/// Validates a node leaf against an independently authorised public identity and issuer.
+/// First admission and offline recovery can use this without inventing a previous certificate.
+/// The caller must establish issuer trust and identity authority independently.
+/// # Errors
+/// Rejects substituted keys, issuers, names, usages, generation serials or validity intervals.
+/// This validates the explicit interval, not the current clock or service membership.
+pub fn validate_node_certificate(
+    certificate_der: &[u8],
+    identity: &NodePublicIdentity,
+    issuer_certificate_der: &[u8],
+    request: NodeCertificateRequest<'_>,
+) -> Result<(), CertificateError> {
     let certificate = parse_node_certificate(certificate_der)?;
     let issuer = parse_node_certificate(issuer_certificate_der)?;
     let signing_identity = NodePublicIdentity::from_certificate(issuer_certificate_der)?;
@@ -70,7 +85,7 @@ pub fn validate_node_certificate_renewal(
         .extended_key_usage()
         .map_err(|_| CertificateError::CertificateMaterial)?
         .ok_or(CertificateError::CertificateMaterial)?;
-    let serial = renewal_serial(&identity, issuer_certificate_der, request).to_bytes();
+    let serial = renewal_serial(identity, issuer_certificate_der, request).to_bytes();
     if request.generation == 0
         || request.dns_name.contains('*')
         || request.not_before < 0

@@ -77,7 +77,12 @@ impl<C: BackupExportController> BackupReadinessService<C> {
                 &workspace.file("plaintext.sqlite3"),
                 evidence,
             )
-            .map_err(|_| BackupExportError::NotReady)?;
+            .map_err(|error| match error {
+                meshspan_backup::BackupError::RecipientUnavailable => {
+                    BackupExportError::RecipientUnavailable
+                }
+                _ => BackupExportError::NotReady,
+            })?;
         request.budget.check()?;
         let source = evidence.source;
         let manifest = PartitionBackupManifest {

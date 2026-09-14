@@ -3,7 +3,10 @@
 //! Gateway-only loading and domain-separated expansion of the mesh authentication root.
 
 use hmac::{Hmac, KeyInit, Mac};
-use meshspan_domain::{ApiKeyIssuanceKey, JoinGrantIssuanceKey, MeshId, RecoveryCodeIssuanceKey};
+use meshspan_domain::{
+    ApiKeyIssuanceKey, FederationPairingIssuanceKey, JoinGrantIssuanceKey, MeshId,
+    RecoveryCodeIssuanceKey,
+};
 use meshspan_metadata::AUTHENTICATION_ROOT_KEY_SECRET_KIND;
 use meshspan_secret_envelope::{SecretContext, SecretPlaintext};
 use sha2::Sha256;
@@ -20,6 +23,8 @@ use crate::{
 const AUTHENTICATION_ROOT_BYTES: usize = 32;
 const API_KEY_ISSUANCE_DOMAIN: &[u8] = b"meshspan.authentication.api-key-issuance.v1";
 const JOIN_GRANT_ISSUANCE_DOMAIN: &[u8] = b"meshspan.authentication.join-grant-issuance.v1";
+const FEDERATION_PAIRING_ISSUANCE_DOMAIN: &[u8] =
+    b"meshspan.authentication.federation-pairing-issuance.v1";
 const RECOVERY_CODE_ISSUANCE_DOMAIN: &[u8] = b"meshspan.authentication.recovery-code-issuance.v1";
 const TOTP_ENVELOPE_DOMAIN: &[u8] = b"meshspan.authentication.totp-envelope.v1";
 const SMB_VERIFIER_ENCRYPTION_DOMAIN: &[u8] = b"meshspan.authentication.smb-verifier-encryption.v1";
@@ -52,6 +57,7 @@ pub struct AuthenticationRuntimeKeys {
     generation: u64,
     api_key_issuance: ApiKeyIssuanceKey,
     join_grant_issuance: JoinGrantIssuanceKey,
+    federation_pairing_issuance: FederationPairingIssuanceKey,
     recovery_code_issuance: RecoveryCodeIssuanceKey,
     totp_envelope: TotpEnvelopeKey,
     smb_verifier_envelope: SmbVerifierEnvelopeKey,
@@ -88,6 +94,12 @@ impl AuthenticationRuntimeKeys {
     #[must_use]
     pub fn into_join_grant_issuance_key(self) -> JoinGrantIssuanceKey {
         self.join_grant_issuance
+    }
+
+    /// Transfers federation pairing capability and its exact protected-root generation.
+    #[must_use]
+    pub fn into_federation_pairing_issuance(self) -> (FederationPairingIssuanceKey, u64) {
+        (self.federation_pairing_issuance, self.generation)
     }
 
     /// Transfers only the recovery-code issuance capability into an issuance service.
@@ -348,6 +360,12 @@ fn derive_runtime_keys(
     let join_grant_issuance =
         JoinGrantIssuanceKey::from_bytes(derive(&root, context, JOIN_GRANT_ISSUANCE_DOMAIN)?)
             .map_err(|_| AuthenticationRootLoadingError::Failed)?;
+    let federation_pairing_issuance = FederationPairingIssuanceKey::from_bytes(derive(
+        &root,
+        context,
+        FEDERATION_PAIRING_ISSUANCE_DOMAIN,
+    )?)
+    .map_err(|_| AuthenticationRootLoadingError::Failed)?;
     let recovery_code_issuance =
         RecoveryCodeIssuanceKey::from_bytes(derive(&root, context, RECOVERY_CODE_ISSUANCE_DOMAIN)?)
             .map_err(|_| AuthenticationRootLoadingError::Failed)?;
@@ -358,6 +376,7 @@ fn derive_runtime_keys(
         generation: context.generation(),
         api_key_issuance,
         join_grant_issuance,
+        federation_pairing_issuance,
         recovery_code_issuance,
         totp_envelope,
         smb_verifier_envelope,

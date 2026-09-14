@@ -15,6 +15,11 @@ import {
   workspaceVersion,
 } from "./local-package.mjs";
 import { commandFailure, runProcess } from "./process.mjs";
+import {
+  collectPackageNotices,
+  renderPackageNotices,
+} from "./package-notices.mjs";
+import { packageSbom } from "./package-sbom.mjs";
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
 const execute = promisify(execFile);
@@ -44,6 +49,7 @@ async function packageLocal() {
   const dirty = (await capture("git", ["status", "--porcelain"])).length > 0;
   await run("cargo", ["deny", "check", "licenses"]);
   await run(process.execPath, ["scripts/check-javascript-licences.mjs"]);
+  const sources = await packageSources();
   for (const [command, arguments_] of steps) await run(command, arguments_);
   const binary = join(
     repository,
@@ -53,42 +59,36 @@ async function packageLocal() {
     "meshspan-daemon",
   );
   const linkage = await inspectBinary(binary, options.target);
-  const [metadata, javascript] = await Promise.all([
-    capture("cargo", [
-      "metadata",
-      "--format-version",
-      "1",
-      "--locked",
-      "--offline",
-      "--filter-platform",
-      options.target,
-    ]),
-    capture("pnpm", ["licenses", "list", "--prod", "--json"]),
-  ]);
+  const provenance = {
+    version: await workspaceVersion(repository),
+    target: options.target,
+    profile: options.profile,
+    sourceCommit: commit,
+    apiSha256: await sha256(
+      join(repository, "contracts", "openapi", "latest.json"),
+    ),
+    workingTreeDirty: dirty,
+    rustc,
+    node: process.version,
+    linkage,
+    reproducibility: "Not asserted; local build and inventory only",
+  };
   const result = await assemblePackage({
     repository,
     output: resolve(
       options.output ?? join(repository, "target", "local-packages"),
     ),
     binary,
-    provenance: {
-      version: await workspaceVersion(repository),
-      target: options.target,
-      profile: options.profile,
-      sourceCommit: commit,
-      apiSha256: await sha256(
-        join(repository, "contracts", "openapi", "latest.json"),
-      ),
-      workingTreeDirty: dirty,
-      rustc,
-      node: process.version,
-      linkage,
-      reproducibility: "Not asserted; local build and inventory only",
+    provenance,
+    inventory: sources.inventory,
+    compliance: {
+      notices: renderPackageNotices(sources.notices),
+      sbom: packageSbom({
+        ...sources,
+        provenance,
+        binarySha256: await sha256(binary),
+      }),
     },
-    inventory: dependencyInventory(
-      JSON.parse(metadata),
-      JSON.parse(javascript),
-    ),
   });
   const archive = join(result.directory, `${result.name}.tar.gz`);
   await run("tar", ["-czf", archive, "-C", result.directory, result.name]);
@@ -100,6 +100,30 @@ async function packageLocal() {
   process.stdout.write(
     `${JSON.stringify({ ...result, archive, publication: "prohibited" }, null, 2)}\n`,
   );
+}
+
+async function packageSources() {
+  const [rustReport, webReport] = await Promise.all([
+    capture("cargo", [
+      "metadata",
+      "--format-version",
+      "1",
+      "--locked",
+      "--offline",
+      "--filter-platform",
+      options.target,
+    ]),
+    capture("pnpm", ["licenses", "list", "--prod", "--json"]),
+  ]);
+  const metadata = JSON.parse(rustReport);
+  const javascript = JSON.parse(webReport);
+  const inventory = dependencyInventory(metadata, javascript);
+  const notices = await collectPackageNotices({
+    repository,
+    metadata,
+    javascript,
+  });
+  return { metadata, inventory, notices };
 }
 
 async function inspectBinary(binary, target) {

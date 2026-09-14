@@ -12,6 +12,8 @@ use crate::{ActiveQuorumPlan, CompiledQuorumPlan, JointQuorumPlan};
 
 const MAXIMUM_LOG_ENTRY_BYTES: usize = 16 * 1_024 * 1_024;
 const MAXIMUM_APPEND_ENTRIES: usize = 64;
+pub(super) const TERM_CONFIRMATION_VERSION: u16 = u16::MAX;
+pub(super) const TERM_CONFIRMATION_BYTES: &[u8] = b"MSCT\x01";
 
 /// Term/index pair inside exactly one metadata partition.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
@@ -47,11 +49,15 @@ pub struct LogEntry {
 }
 
 impl LogEntry {
+    /// Maximum canonical command length accepted by this log format, excluding its operation ID.
+    pub const MAXIMUM_COMMAND_BYTES: usize = MAXIMUM_LOG_ENTRY_BYTES;
+
     /// Constructs a bounded log entry and independently derives its digest.
     ///
     /// # Errors
     ///
-    /// Rejects genesis/invalid positions, a zero version or payload beyond 16 MiB.
+    /// Rejects genesis/invalid positions, a zero version, malformed reserved term confirmation
+    /// or payload beyond 16 MiB. Version 65,535 is reserved for the fixed term-confirmation record.
     pub fn new(
         position: LogPosition,
         operation_id: OperationId,
@@ -61,6 +67,7 @@ impl LogEntry {
         if !position.is_valid()
             || position == LogPosition::GENESIS
             || command_version == 0
+            || (command_version == TERM_CONFIRMATION_VERSION && command != TERM_CONFIRMATION_BYTES)
             || command.len() > MAXIMUM_LOG_ENTRY_BYTES
         {
             return Err(CoreError::InvalidInput);
@@ -75,10 +82,16 @@ impl LogEntry {
         })
     }
 
-    pub(super) fn validate(&self) -> Result<(), CoreError> {
+    /// Independently validates the position, version, payload bound and command digest.
+    ///
+    /// # Errors
+    /// Rejects malformed or substituted records before a persistence/transport adapter uses them.
+    pub fn validate(&self) -> Result<(), CoreError> {
         if !self.position.is_valid()
             || self.position == LogPosition::GENESIS
             || self.command_version == 0
+            || (self.command_version == TERM_CONFIRMATION_VERSION
+                && self.command != TERM_CONFIRMATION_BYTES)
             || self.command.len() > MAXIMUM_LOG_ENTRY_BYTES
             || self.command_digest != command_digest(self.command_version, &self.command)
         {
@@ -99,6 +112,12 @@ impl LogEntry {
         digest.update(self.command_version.to_be_bytes());
         digest.update(self.command_digest);
         digest.finalize().into()
+    }
+
+    /// Whether this validated entry confirms leadership without an application mutation.
+    #[must_use]
+    pub fn is_term_confirmation(&self) -> bool {
+        self.command_version == TERM_CONFIRMATION_VERSION && self.command == TERM_CONFIRMATION_BYTES
     }
 }
 
@@ -353,6 +372,15 @@ pub enum CoreInput {
     },
     /// Current leader begins one quorum-confirmed linearizable read barrier.
     BeginReadBarrier(ReadBarrierId),
+    /// Forget an abandoned read without changing durable state or acknowledging it.
+    CancelReadBarrier(ReadBarrierId),
+    /// Propose the fixed no-op needed when a new term has not yet committed any entry.
+    ConfirmTerm {
+        /// Caller correlation for durable append.
+        proposal_id: ProposalId,
+        /// Unique log identity, not an application operation or user audit event.
+        operation_id: OperationId,
+    },
     /// Applies a committed old+new membership entry after its log position is applied.
     ActivateJointPlan {
         /// Independently proved old+new plan.

@@ -10,6 +10,7 @@ import fixtureDocument from "../../contracts/fixtures/create-session.json" with 
 import {
   zCreateSessionBody,
   zCreateSessionResponse2,
+  zEnrolNodeResponse,
 } from "../src/generated/zod.gen";
 
 const generatedDirectory = fileURLToPath(
@@ -17,6 +18,20 @@ const generatedDirectory = fileURLToPath(
 );
 
 describe("Rust and generated Zod contract parity", () => {
+  it("requires the bootstrap peer incarnation without coercion", () => {
+    const schema = zEnrolNodeResponse.shape.bootstrap_peers.element;
+    const peer = {
+      node_id: "00000000-0000-4000-8000-000000000001",
+      incarnation: "7",
+      private_endpoint: "127.0.0.1:443",
+      certificate_der_hex: "abcd",
+    };
+    expect(schema.parse(peer)).toEqual(peer);
+    for (const incarnation of [null, undefined, 7, "0", "07", "-1", "1.0"]) {
+      expect(schema.safeParse({ ...peer, incarnation }).success).toBe(false);
+    }
+  });
+
   it("uses the exact project licence identifier", () => {
     expect(fixtureDocument.license).toBe("GPL-2.0-only");
   });

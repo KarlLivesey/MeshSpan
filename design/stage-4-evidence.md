@@ -1,6 +1,8 @@
 # Stage 4 implementation evidence
 
-Status: complete, including federated partner capacity, on 2026-08-30.
+Status: core provider/federation evidence passed on 2026-08-30; DAT-021 pack
+bounds, rollover and CoW compaction reopened on 2026-09-07. See
+[Stage 10 task 17](stage-tasks.md) for the remaining implementation and estimate.
 
 Stage 4 turns registered existing folders into private immutable-shard providers.
 This document records executable evidence only; accepted design prose is not an
@@ -117,22 +119,107 @@ implementation claim.
 ## Closure gates
 
 1. [x] Repeatable headless paths, explicit capacity ceilings and separation of
-   daemon state from provider folders.
+       daemon state from provider folders.
 2. [x] Stable marker identity, exclusive ownership, sibling isolation and real
-   filesystem capability probes.
+       filesystem capability probes.
 3. [x] Durable target journal, bounded inventory, reservations, recovery checkpoint
-   and target-incarnation fencing.
+       and target-incarnation fencing.
 4. [x] Immutable packed shard put/get with exact replay, bounded read authority,
-   durable receipts and independent integrity verification.
+       durable receipts and independent integrity verification.
 5. [x] Exact removal permits, durable tombstones, guarded unlink and scrub
-   observations that never become deletion authority.
+       observations that never become deletion authority.
 6. [x] Reusable provider conformance plus real IO/process proofs for restart,
-   `ENOSPC`, short/partial writes, lost flush results, corruption, path/media
-   replacement, stale incarnation and three-process remote transfer.
+       `ENOSPC`, short/partial writes, lost flush results, corruption, path/media
+       replacement, stale incarnation and three-process remote transfer.
 7. [x] Capability-scoped partner capacity with bilateral limits, distinct
-   protection/read classifications, all six signed shard lifecycle operations,
-   bounded exact inventory, target return and revocation-with-retention proof.
+       protection/read classifications, all six signed shard lifecycle operations,
+       bounded exact inventory, target return and revocation-with-retention proof.
 
-Every Stage 4 gate is checked. The complete local suite, including the six-target
+The listed 2026-08-30 gates were checked. The complete local suite, including the six-target
 three-process proof and the real bilateral federation session, passes together;
 the four-worker run completed in 126.28 seconds on 2026-08-30.
+
+## Reopened pack lifecycle requirement
+
+The provider originally selected `ACTIVE_PACK_SEQUENCE = 1` and opened one `PackStore`.
+It provided immutable shard identity, exact replay, independent verification,
+durable tombstones and guarded BLOB unlink. Those proofs do not establish the
+explicit pack bounds and CoW compaction required by DAT-021. SQLite free-list
+reuse is not a compaction cutover or a host-space reclamation receipt.
+
+Rollover and indexed multi-pack routing are now implemented as described below.
+Copy-on-write replacement is implemented below, retaining the same logical pack
+sequence and record numbers under an exclusive reader/mutation fence.
+Finish acceptance for reads during compaction, interruption
+and restart at cutover, bounds and isolated pack corruption. The new pack-space
+metrics report only current database extent and reusable pages; they do not
+close these gates or authorise deletion.
+
+## Journal-owned pack rollover
+
+Target-journal migration 3 assigns an exact shard identity, length and digest to
+one pack in the same transaction that prepares its put. New assignments roll to
+another pack at **256 MiB of assigned payload or 4,096 shard records**. Retries
+retain the original route and do not consume another assignment. Payload bounds
+are not a claim about total SQLite/WAL/operation-log bytes. Existing v1/v2
+inventory and incomplete puts migrate without relocating bytes; an oversized
+legacy pack receives no further new assignments.
+
+Put/recovery, authenticated reads, scrub, tombstone/recovery and unlink use that
+indexed route. Reads of an older pack open it read-only and never search other
+packs or create a missing database. The updater's exact compatibility report now
+includes the storage-journal version, so an older report cannot silently stage
+over this changed persistence format.
+
+The new provider regression first failed with the previous single-pack path,
+then passed: two 19-byte shards exceed its 30-byte fixture limit, one put loses
+its result before journal commit, and restart recovers it from pack 1 after
+pack 2 exists. Scrub verifies both, an authenticated read returns the original
+bytes and guarded deletion removes only the older shard (quota 38 → 19).
+Separate fixtures exercise record-count rollover, transactional preparation
+failure and v2 migration with both committed and incomplete records.
+
+The full local storage library suite passed **35 tests in 2.16 s** after a
+**5.73 s** incremental build; affected storage Clippy passed in **35.21 s**.
+The run also exposed a test comparing live host free-space samples for equality;
+it now retains exact quota/identity/total checks and validates each independently
+changing available-space observation. No test serialisation or retry workaround
+was introduced. Daemon compatibility checks and compaction work follow.
+
+## Automatically retried copy-on-write compaction
+
+The existing daemon target-maintenance pass considers one pack per target every
+30 seconds, skipping a target already locked for foreground IO. At least 1 MiB
+and one-quarter of the database extent must be reusable before it copies the pack.
+The work source is durable free-page evidence, so restart requires no administrator
+or reconstruction of a lost in-memory queue. Failure contributes to the storage
+cycle's failed-step observations without removing a healthy target from service.
+
+Compaction uses the existing bundled SQLite backup facility to create a separate
+private copy, vacuums only that copy, checks identity/schema structure and verifies
+all remaining active/tombstoned shard bytes. It closes the copy, checkpoints and
+closes the old connection, persists WAL-sidecar removal, then atomically renames
+and directory-syncs the replacement. Logical pack sequences, record numbers,
+tombstones and operation receipts remain unchanged. All provider reads finish
+under the same exclusive target lock before physical replacement; this is not a
+claim that foreground readers run concurrently with the copy.
+
+An interrupted pre-publication copy leaves the original authoritative; its fixed
+provider-private scratch files are rebuilt on retry. Failure after replacement
+reopens whichever complete database is authoritative. No live pack is vacuumed
+in place, no shard location grants deletion authority, and no unlinked receipt
+claims that the filesystem/device has released an exact number of bytes.
+
+The complete storage library suite passed **36 tests in 1.71 s** after a
+**7.36 s** build. The new real-file test deletes a 2 MiB shard, preserves a
+4,096-byte shard, injects failures before and after replacement with reopen after
+each, verifies exact receipt replay and retained bytes, and observes at least
+1 MiB less database extent with zero reusable pages. Quota remains exactly
+4,096 bytes. These are controlled local interruption/reopen tests, not abrupt
+host-power-loss or real-daemon maintenance acceptance.
+
+Remaining work is explicit: operation-log growth bounds; oversized legacy packs
+(copies above 512 MiB are currently refused); complete metrics beyond the
+32-pack observation budget; reader contention, storage-exhaustion and actual
+daemon-maintenance acceptance; and measured copy/amplification cost. Compatible
+content deduplication remains the separately reopened Stage 5 requirement.

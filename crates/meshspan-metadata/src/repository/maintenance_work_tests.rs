@@ -135,6 +135,32 @@ fn ready_work_is_priority_ordered_budgeted_and_keyset_paged()
     fixture.apply(3, 11, &AuthoritativeCommand::QueueMaintenanceWork(urgent))?;
     fixture.apply(4, 12, &AuthoritativeCommand::QueueMaintenanceWork(fitting))?;
 
+    let observation = fixture
+        .repository
+        .maintenance_observation_page(None, super::PageLimit::new(2)?)?;
+    assert_eq!(
+        observation
+            .items
+            .iter()
+            .map(|job| job.work_id)
+            .collect::<Vec<_>>(),
+        vec![low_id, urgent_id]
+    );
+    assert_eq!(observation.next, Some(urgent_id));
+    let remainder = fixture
+        .repository
+        .maintenance_observation_page(observation.next, super::PageLimit::new(2)?)?;
+    assert_eq!(
+        remainder
+            .items
+            .iter()
+            .map(|job| job.work_id)
+            .collect::<Vec<_>>(),
+        vec![fitting_id]
+    );
+    assert!(remainder.next.is_none());
+    assert_eq!(fixture.repository.current_revision()?, Revision::new(4));
+
     let budget = WorkBudget::new(2, 5_000, None)?;
     let usage = WorkUsage {
         active_jobs: 1,
@@ -272,6 +298,14 @@ fn repair_effect_advances_one_cow_route_then_completes_exact_claim()
         fixture.record(work_id)?.state,
         MaintenanceWorkState::Complete
     );
+    let observed = fixture
+        .repository
+        .maintenance_observation_page(None, super::PageLimit::new(1)?)?;
+    assert_eq!(observed.items.len(), 1);
+    assert_eq!(observed.items[0].work_id, work_id);
+    assert_eq!(observed.items[0].state, MaintenanceWorkState::Complete);
+    assert_eq!(observed.items[0].result_digest, Some(effect.result_digest));
+    assert!(observed.next.is_none());
     Ok(())
 }
 
@@ -329,6 +363,14 @@ fn scrub_effect_requires_exact_classified_summary_then_completes_claim()
     assert_eq!(stored.target_generation, 1);
     assert_eq!(stored.observation_count, 6);
     assert_eq!(stored.verified_bytes, 12_288);
+    let progress = fixture
+        .repository
+        .maintenance_verification_progress(work_id)?
+        .ok_or("scrub progress missing")?;
+    assert_eq!(
+        (progress.observations, progress.verified_bytes),
+        (6, 12_288)
+    );
     assert_eq!(stored.outcome_counts, [1; 6]);
     assert_eq!(stored.evidence_digest, [63; 32]);
     assert_eq!(
@@ -410,6 +452,11 @@ fn returning_target_reconciliation_has_its_own_terminal_effect()
     assert_eq!(reference.operation_id, effect.operation_id);
     assert_eq!(reference.revision, effect.committed_revision);
     assert_eq!(reference.result_digest, effect.result_digest);
+    let progress = fixture
+        .repository
+        .maintenance_verification_progress(work_id)?
+        .ok_or("reconciliation progress missing")?;
+    assert_eq!((progress.observations, progress.verified_bytes), (2, 4_096));
     fixture.apply(
         6,
         73,

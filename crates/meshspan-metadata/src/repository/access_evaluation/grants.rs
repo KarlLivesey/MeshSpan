@@ -29,6 +29,7 @@ pub(super) fn load_grant_activations(
          JOIN access_activation_policies ap ON ap.policy_id = a.policy_id
          WHERE a.principal_id = ?1 AND a.grant_id IS NOT NULL
            AND a.revoked_at IS NULL AND a.activated_at <= ?2 AND a.expires_at > ?2
+           AND a.revision > COALESCE((SELECT source_revision FROM partition_recovery_credential_fence), 0)
            AND a.identity_revision = ?3 AND a.source_revision = pg.revision
            AND a.policy_revision = ap.revision AND pg.activation_policy_id = a.policy_id
          GROUP BY a.grant_id LIMIT ?4",

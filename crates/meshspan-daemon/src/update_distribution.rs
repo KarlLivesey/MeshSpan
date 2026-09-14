@@ -21,11 +21,20 @@ use std::{
 };
 
 pub(crate) struct UpdateDistribution {
+    observations: Option<crate::runtime_observations::RuntimeObservations>,
     service: UpdateService,
     network: Arc<PrivateConsensusRuntime>,
     directory: PathBuf,
     verified: Option<(WorkId, String)>,
     source_cursor: Option<NodeId>,
+    installation: super::installation::UpdateProcessControl,
+    workload: super::workload::UpdateWorkloadPreparation,
+}
+
+enum PreparationOutcome {
+    Idle,
+    AwaitingInstallation,
+    Prepared,
 }
 
 impl UpdateDistribution {
@@ -34,14 +43,29 @@ impl UpdateDistribution {
         gateway: GatewaySessionIdentity,
         network: Arc<PrivateConsensusRuntime>,
         directory: PathBuf,
+        installation: super::installation::UpdateProcessControl,
     ) -> Self {
         Self {
+            observations: None,
             service: UpdateService::new(authority, gateway),
             network,
             directory,
             verified: None,
             source_cursor: None,
+            workload: super::workload::UpdateWorkloadPreparation::new(
+                installation.filesystem.clone(),
+                installation.workload_status(),
+            ),
+            installation,
         }
+    }
+
+    pub(crate) fn with_observations(
+        mut self,
+        observations: crate::runtime_observations::RuntimeObservations,
+    ) -> Self {
+        self.observations = Some(observations);
+        self
     }
 
     pub(crate) async fn run_until(mut self, mut stop: tokio::sync::watch::Receiver<bool>) {
@@ -58,7 +82,22 @@ impl UpdateDistribution {
             // Exactly one owned fetch job per daemon. Shutdown interrupts transport, then
             // observes cache cleanup; no failed update takes down file or consensus service.
             let result = tokio::task::spawn_blocking(move || {
+                let started = Instant::now();
                 let outcome = handle.block_on(self.run_once(stopping));
+                if let Some(observations) = &self.observations {
+                    use meshspan_contracts::{LifecycleKind, LifecycleOutcome};
+                    let observed = match &outcome {
+                        Ok(PreparationOutcome::Idle) => LifecycleOutcome::Idle,
+                        Ok(PreparationOutcome::AwaitingInstallation) => LifecycleOutcome::Pending,
+                        Ok(PreparationOutcome::Prepared) => LifecycleOutcome::Completed,
+                        Err(_) => LifecycleOutcome::Failed,
+                    };
+                    observations.record_lifecycle(
+                        LifecycleKind::UpdatePreparation,
+                        observed,
+                        started.elapsed(),
+                    );
+                }
                 (self, outcome)
             })
             .await;
@@ -75,11 +114,22 @@ impl UpdateDistribution {
     async fn run_once(
         &mut self,
         stop: tokio::sync::watch::Receiver<bool>,
-    ) -> Result<(), update_peer::UpdatePeerError> {
+    ) -> Result<PreparationOutcome, update_peer::UpdatePeerError> {
         let Some(active) = self.service.authority.reader().active_update_rollout()? else {
-            return Ok(());
+            return Ok(PreparationOutcome::Idle);
         };
+        if self
+            .service
+            .install_admitted(&active, &self.directory, &self.installation)
+            .await
+            .map_err(|_| update_peer::UpdatePeerError::Unavailable)?
+        {
+            return Ok(PreparationOutcome::AwaitingInstallation);
+        }
         let record = update_peer::candidate(self.service.authority.reader(), active.rollout_id)?;
+        self.workload
+            .tick(self.service.authority.reader(), &record, &self.directory)
+            .map_err(|_| update_peer::UpdatePeerError::Unavailable)?;
         let target = crate::update_candidate::local_target()
             .map_err(|_| update_peer::UpdatePeerError::Rejected)?;
         if self
@@ -89,7 +139,9 @@ impl UpdateDistribution {
         {
             return self
                 .service
-                .stage_pending(&record, &self.directory)
+                .stage_and_coordinate(&record, &self.directory, &self.installation, &self.network)
+                .await
+                .map(|()| PreparationOutcome::AwaitingInstallation)
                 .map_err(|_| update_peer::UpdatePeerError::Unavailable);
         }
         let expected = update_peer::identity(record.rollout_id, &record.manifest, target)?;
@@ -108,7 +160,9 @@ impl UpdateDistribution {
         self.verified = Some((record.rollout_id, target.to_owned()));
         self.source_cursor = None;
         self.service
-            .stage_pending(&record, &self.directory)
+            .stage_and_coordinate(&record, &self.directory, &self.installation, &self.network)
+            .await
+            .map(|()| PreparationOutcome::Prepared)
             .map_err(|_| update_peer::UpdatePeerError::Unavailable)
     }
 

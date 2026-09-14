@@ -68,6 +68,12 @@ pub struct AuthenticatedFederationAuthorityFetch {
 }
 
 impl AuthenticatedFederationAuthorityFetch {
+    /// Exact identity admitted by mTLS/signature verification, for current-authority fencing.
+    #[must_use]
+    pub const fn peer_binding(&self) -> crate::FederationPeerBinding {
+        self.binding
+    }
+
     /// Returns the exact admitted relationship.
     #[must_use]
     pub const fn relationship_id(&self) -> meshspan_domain::FederationRelationshipId {

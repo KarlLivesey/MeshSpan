@@ -15,7 +15,36 @@ use crate::format::{
     AUTHENTICATION_TAG_BYTES, BackupHeader, FORMAT_VERSION, MAGIC, MAXIMUM_HEADER_BYTES, chunk_aad,
     chunk_count, chunk_nonce, chunk_plaintext_length, hash_file,
 };
-use crate::{BackupError, BackupFileEvidence};
+use crate::{
+    BackupError, BackupFileEvidence, BackupFiles, BackupHistoryEvidence, BackupJournalEvidence,
+};
+
+/// Reads the source manifest only after matching an independently retained container digest.
+///
+/// This does not decrypt the backup or verify its database. Callers must subsequently restore
+/// and validate the authenticated contents before reporting recoverability. The digest must
+/// come from a trusted export receipt, not be calculated from an untrusted replacement file.
+///
+/// # Errors
+/// Rejects non-regular inputs, changed container bytes and malformed or unknown headers.
+pub fn read_backup_evidence(
+    source: &Path,
+    expected_digest: [u8; 32],
+) -> Result<BackupFileEvidence, BackupError> {
+    if expected_digest == [0; 32] || !std::fs::symlink_metadata(source)?.is_file() {
+        return Err(BackupError::InvalidInput);
+    }
+    let (byte_length, digest) = hash_file(source)?;
+    if digest != expected_digest {
+        return Err(BackupError::Corrupt);
+    }
+    let (header, _) = read_header(&mut File::open(source)?)?;
+    Ok(BackupFileEvidence {
+        source: header.source,
+        byte_length,
+        digest,
+    })
+}
 
 /// Restores exact plaintext bytes from an authenticated backup into a new path.
 ///
@@ -32,6 +61,30 @@ pub fn restore_backup(
     evidence: BackupFileEvidence,
     recipient: &WrappingPrivateKey,
 ) -> Result<(), BackupError> {
+    restore_backup_files(
+        source,
+        BackupFiles {
+            metadata: destination,
+            history: None,
+        },
+        evidence,
+        recipient,
+    )
+    .map(|_| ())
+}
+
+/// Restores fixed caller-selected members, authenticating every byte even when history is discarded.
+/// A requested history pair must exist in the archive. Returned journal evidence describes bytes,
+/// not valid SQLite state, complete roots, available shards or authority to start services.
+/// # Errors
+/// Rejects missing requested members, changed evidence, malformed/authentication failures,
+/// existing destinations and IO failures. Partial private outputs may remain on failure.
+pub fn restore_backup_files(
+    source: &Path,
+    destinations: BackupFiles<'_>,
+    evidence: BackupFileEvidence,
+    recipient: &WrappingPrivateKey,
+) -> Result<Option<BackupHistoryEvidence>, BackupError> {
     evidence
         .source
         .validate()
@@ -47,17 +100,53 @@ pub fn restore_backup(
     if header.source != evidence.source {
         return Err(BackupError::Corrupt);
     }
+    if destinations.history.is_some() && header.history.is_none() {
+        return Err(BackupError::InvalidInput);
+    }
     let content_key = open_content_key(&header, recipient)?;
-    let mut destination_file = create_destination(destination)?;
-    restore_chunks(
+    let mut stream = DecryptionStream {
+        cipher: XChaCha20Poly1305::new_from_slice(content_key.expose())
+            .map_err(|_| BackupError::Corrupt)?,
+        nonce_prefix: header.nonce_prefix,
+        header_digest,
+        next_index: 0,
+    };
+    let mut destination_file = create_destination(destinations.metadata)?;
+    stream.member(
         &mut source_file,
         &mut destination_file,
-        &header,
-        content_key.expose(),
-        header_digest,
+        BackupJournalEvidence {
+            byte_length: header.source.byte_length,
+            digest: header.source.digest,
+        },
     )?;
     destination_file.sync_all()?;
-    Ok(())
+    if let Some(history) = header.history {
+        for (journal, destination) in [
+            (
+                history.namespace,
+                destinations.history.map(|files| files.namespace),
+            ),
+            (
+                history.content,
+                destinations.history.map(|files| files.content),
+            ),
+        ] {
+            match destination {
+                Some(destination) => {
+                    let mut file = create_destination(destination)?;
+                    stream.member(&mut source_file, &mut file, journal)?;
+                    file.sync_all()?;
+                }
+                None => stream.member(&mut source_file, &mut std::io::sink(), journal)?,
+            }
+        }
+    }
+    let mut trailing = [0_u8; 1];
+    if source_file.read(&mut trailing)? != 0 {
+        return Err(BackupError::Corrupt);
+    }
+    Ok(header.history)
 }
 
 fn read_header(source: &mut File) -> Result<(BackupHeader, [u8; 32]), BackupError> {
@@ -109,42 +198,50 @@ fn create_destination(destination: &Path) -> Result<File, BackupError> {
         })
 }
 
-fn restore_chunks(
-    source: &mut File,
-    destination: &mut File,
-    header: &BackupHeader,
-    content_key: &[u8],
+struct DecryptionStream {
+    cipher: XChaCha20Poly1305,
+    nonce_prefix: [u8; 16],
     header_digest: [u8; 32],
-) -> Result<(), BackupError> {
-    let cipher =
-        XChaCha20Poly1305::new_from_slice(content_key).map_err(|_| BackupError::Corrupt)?;
-    let mut digest = Sha256::new();
-    for index in 0..chunk_count(header.source.byte_length) {
-        let plaintext_length = chunk_plaintext_length(header.source.byte_length, index)?;
-        let mut ciphertext = vec![0; plaintext_length + AUTHENTICATION_TAG_BYTES];
-        read_exact(source, &mut ciphertext)?;
-        let nonce = chunk_nonce(header.nonce_prefix, index);
-        let aad = chunk_aad(header_digest, index, plaintext_length);
-        let plaintext = cipher
-            .decrypt(
-                &XNonce::from(nonce),
-                Payload {
-                    msg: &ciphertext,
-                    aad: &aad,
-                },
-            )
-            .map_err(|_| BackupError::Corrupt)?;
-        if plaintext.len() != plaintext_length {
+    next_index: u64,
+}
+
+impl DecryptionStream {
+    fn member(
+        &mut self,
+        source: &mut File,
+        destination: &mut dyn Write,
+        evidence: BackupJournalEvidence,
+    ) -> Result<(), BackupError> {
+        let mut digest = Sha256::new();
+        for member_index in 0..chunk_count(evidence.byte_length) {
+            let plaintext_length = chunk_plaintext_length(evidence.byte_length, member_index)?;
+            let mut ciphertext = vec![0; plaintext_length + AUTHENTICATION_TAG_BYTES];
+            read_exact(source, &mut ciphertext)?;
+            let nonce = chunk_nonce(self.nonce_prefix, self.next_index);
+            let aad = chunk_aad(self.header_digest, self.next_index, plaintext_length);
+            let plaintext = zeroize::Zeroizing::new(
+                self.cipher
+                    .decrypt(
+                        &XNonce::from(nonce),
+                        Payload {
+                            msg: &ciphertext,
+                            aad: &aad,
+                        },
+                    )
+                    .map_err(|_| BackupError::Corrupt)?,
+            );
+            if plaintext.len() != plaintext_length {
+                return Err(BackupError::Corrupt);
+            }
+            digest.update(&plaintext);
+            destination.write_all(&plaintext)?;
+            self.next_index = self.next_index.checked_add(1).ok_or(BackupError::Corrupt)?;
+        }
+        if digest.finalize().as_slice() != evidence.digest {
             return Err(BackupError::Corrupt);
         }
-        digest.update(&plaintext);
-        destination.write_all(&plaintext)?;
+        Ok(())
     }
-    let mut trailing = [0_u8; 1];
-    if source.read(&mut trailing)? != 0 || digest.finalize().as_slice() != header.source.digest {
-        return Err(BackupError::Corrupt);
-    }
-    Ok(())
 }
 
 fn read_array<const LENGTH: usize>(source: &mut File) -> Result<[u8; LENGTH], BackupError> {

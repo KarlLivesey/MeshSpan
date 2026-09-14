@@ -3,6 +3,74 @@
 use super::*;
 
 #[test]
+fn lifecycle_families_are_distinct_and_validate_durations() -> Result<(), ContractError> {
+    use crate::{LifecycleKind, LifecycleMetric};
+    let complete = RuntimeMetric::Lifecycle(LifecycleKind::Backup, LifecycleMetric::Completed(1));
+    RuntimeMetricSnapshot::new(vec![
+        complete.clone(),
+        RuntimeMetric::Lifecycle(LifecycleKind::Backup, LifecycleMetric::Pending(2)),
+        RuntimeMetric::Lifecycle(
+            LifecycleKind::CertificateAutomation,
+            LifecycleMetric::Completed(3),
+        ),
+    ])?;
+    assert!(RuntimeMetricSnapshot::new(vec![complete.clone(), complete]).is_err());
+    assert!(
+        RuntimeMetricSnapshot::new(vec![RuntimeMetric::Lifecycle(
+            LifecycleKind::UpdatePreparation,
+            LifecycleMetric::Duration(LatencyHistogram {
+                buckets: [1; 8],
+                count: 0,
+                sum: Duration::ZERO
+            })
+        )])
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn storage_io_families_are_distinct_and_reject_duplicate_or_invalid_histograms()
+-> Result<(), ContractError> {
+    use crate::{StorageIoKind, StorageIoMetric};
+    let read = RuntimeMetric::StorageIo(StorageIoKind::Read, StorageIoMetric::Calls(1));
+    let write = RuntimeMetric::StorageIo(StorageIoKind::Write, StorageIoMetric::Calls(1));
+    RuntimeMetricSnapshot::new(vec![read.clone(), write])?;
+    assert!(RuntimeMetricSnapshot::new(vec![read.clone(), read]).is_err());
+    assert!(
+        RuntimeMetricSnapshot::new(vec![RuntimeMetric::StorageIo(
+            StorageIoKind::Scrub,
+            StorageIoMetric::Duration(LatencyHistogram {
+                buckets: [1; 8],
+                count: 0,
+                sum: Duration::ZERO
+            })
+        )])
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn protection_metric_families_remain_distinct_and_reject_duplicates() {
+    use crate::ProtectionMetric;
+    assert!(
+        RuntimeMetricSnapshot::new(vec![
+            RuntimeMetric::Protection(ProtectionMetric::AssessedStripes(1)),
+            RuntimeMetric::Protection(ProtectionMetric::UnassessableStripes(2)),
+        ])
+        .is_ok()
+    );
+    assert!(
+        RuntimeMetricSnapshot::new(vec![
+            RuntimeMetric::Protection(ProtectionMetric::AssessedStripes(1)),
+            RuntimeMetric::Protection(ProtectionMetric::AssessedStripes(2)),
+        ])
+        .is_err()
+    );
+}
+
+#[test]
 fn consensus_metrics_reject_contradictory_indices() -> Result<(), ContractError> {
     RuntimeMetricSnapshot::new(vec![
         RuntimeMetric::Consensus(ConsensusMetric::CommittedIndex(7)),

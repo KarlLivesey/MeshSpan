@@ -21,11 +21,30 @@ pub(super) struct ObservedConsensus {
     queued: u64,
     persistence_blocked: bool,
     leader_known: bool,
+    remote_members: u64,
+    replication: Option<ReplicationCounts>,
+}
+
+#[derive(Clone)]
+struct ReplicationCounts {
+    unknown: u64,
+    lagging: u64,
+    maximum_gap: u64,
 }
 
 impl RuntimeObservations {
     pub(crate) fn record_consensus(&self, value: MetadataAuthorityObservation, now: UnixMicros) {
         if value.applied_index > value.commit_index {
+            self.drop_update();
+            return;
+        }
+        if let Some(replication) = value.replication
+            && (value.role != meshspan_consensus::Role::Leader
+                || replication.unknown_members > value.remote_members
+                || replication.lagging_members > value.remote_members - replication.unknown_members
+                || replication.maximum_committed_gap > value.commit_index
+                || (replication.maximum_committed_gap == 0) != (replication.lagging_members == 0))
+        {
             self.drop_update();
             return;
         }
@@ -44,6 +63,17 @@ impl RuntimeObservations {
                 queued: u64::try_from(value.queued_operations).map_err(|_| ())?,
                 persistence_blocked: value.persistence_blocked,
                 leader_known: value.known_leader.is_some(),
+                remote_members: u64::try_from(value.remote_members).map_err(|_| ())?,
+                replication: value
+                    .replication
+                    .map(|replication| {
+                        Ok(ReplicationCounts {
+                            unknown: u64::try_from(replication.unknown_members).map_err(|_| ())?,
+                            lagging: u64::try_from(replication.lagging_members).map_err(|_| ())?,
+                            maximum_gap: replication.maximum_committed_gap,
+                        })
+                    })
+                    .transpose()?,
             });
             Ok(())
         });
@@ -70,9 +100,22 @@ impl ObservedConsensus {
                 ConsensusMetric::QueuedOperations(self.queued),
                 ConsensusMetric::PersistenceBlocked(self.persistence_blocked),
                 ConsensusMetric::LeaderKnown(self.leader_known),
+                ConsensusMetric::RemoteMembers(self.remote_members),
+                ConsensusMetric::ApplyGap(self.committed - self.applied),
             ]
             .into_iter()
             .map(RuntimeMetric::Consensus),
         );
+        if let Some(replication) = &self.replication {
+            samples.extend(
+                [
+                    ConsensusMetric::ReplicationUnknownMembers(replication.unknown),
+                    ConsensusMetric::ReplicationLaggingMembers(replication.lagging),
+                    ConsensusMetric::ReplicationMaximumCommittedGap(replication.maximum_gap),
+                ]
+                .into_iter()
+                .map(RuntimeMetric::Consensus),
+            );
+        }
     }
 }

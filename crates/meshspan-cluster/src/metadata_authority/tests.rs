@@ -17,6 +17,8 @@ use super::*;
 use crate::{ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, ConsensusPeerConfig};
 
 mod election_deadline;
+mod leadership_waiters;
+mod read_barriers;
 
 #[tokio::test]
 async fn observation_tracks_local_state_without_appending_or_contacting_peers()
@@ -37,6 +39,8 @@ async fn observation_tracks_local_state_without_appending_or_contacting_peers()
     assert_eq!(before.node_id, local);
     assert_eq!(before.role, Role::Follower);
     assert_eq!(before.known_leader, None);
+    assert_eq!(before.remote_members, 0);
+    assert_eq!(before.replication, None);
     assert_eq!(
         (before.term, before.commit_index, before.applied_index),
         (0, 0, 0)
@@ -48,6 +52,11 @@ async fn observation_tracks_local_state_without_appending_or_contacting_peers()
     let after = authority.observe().await?;
     assert_eq!(after.role, Role::Leader);
     assert_eq!(after.known_leader, Some(local));
+    assert_eq!(after.remote_members, 0);
+    assert_eq!(
+        after.replication,
+        Some(MetadataReplicationObservation::default())
+    );
     assert_eq!(after.term, receipt.committed_position.term);
     assert_eq!(after.commit_index, receipt.committed_position.index);
     assert_eq!(after.applied_index, after.commit_index);
@@ -308,7 +317,17 @@ async fn three_independent_repositories_commit_and_resolve_one_exact_operation()
         .await
         .map_err(|_| format!("replica {index} resolution timed out"))??;
         assert_eq!(replay.result_digest, receipt.result_digest);
+        let observed = authority.observe().await?;
+        assert_eq!(observed.remote_members, 2);
+        assert_eq!(observed.replication.is_some(), index == 0);
     }
+    observe_interrupted_replication(
+        &authorities[0].0,
+        &handles,
+        nodes[2],
+        context.actor_principal_id,
+    )
+    .await?;
     for (authority, _) in &authorities {
         authority.shutdown().await?;
     }
@@ -318,9 +337,71 @@ async fn three_independent_repositories_commit_and_resolve_one_exact_operation()
     Ok(())
 }
 
+async fn observe_interrupted_replication(
+    leader: &MetadataAuthorityHandle,
+    peers: &Mutex<BTreeMap<NodeId, MetadataAuthorityHandle>>,
+    isolated: NodeId,
+    actor: PrincipalId,
+) -> Result<(), Box<dyn std::error::Error>> {
+    wait_for_replication(leader).await?;
+    let disconnected = peers
+        .lock()
+        .map_err(|_| "transport registry poisoned")?
+        .remove(&isolated)
+        .ok_or("missing peer")?;
+    let before = leader.observe().await?.commit_index;
+    let (context, command) = named_user_command(actor, 171, "Replication observation")?;
+    let receipt = tokio::time::timeout(
+        Duration::from_secs(5),
+        leader.commit_or_resolve(context, command),
+    )
+    .await??;
+    let observed = leader.observe().await?;
+    let replication = observed.replication.ok_or("leader replication absent")?;
+    assert_eq!(replication.unknown_members, 0);
+    assert_eq!(replication.lagging_members, 1);
+    assert_eq!(
+        replication.maximum_committed_gap,
+        receipt.committed_position.index - before
+    );
+    peers
+        .lock()
+        .map_err(|_| "transport registry poisoned")?
+        .insert(isolated, disconnected);
+    wait_for_replication(leader).await
+}
+
+async fn wait_for_replication(
+    leader: &MetadataAuthorityHandle,
+) -> Result<(), Box<dyn std::error::Error>> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let observed = leader.observe().await?;
+            if observed.replication == Some(MetadataReplicationObservation::default()) {
+                return Ok::<_, MetadataAuthorityRequestError>(());
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await??;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn three_real_quinn_nodes_re_elect_and_commit_after_leader_loss()
 -> Result<(), Box<dyn std::error::Error>> {
+    prove_quinn_failover(false).await
+}
+
+#[tokio::test]
+async fn quinn_failover_accepts_either_survivor_as_the_elected_leader()
+-> Result<(), Box<dyn std::error::Error>> {
+    prove_quinn_failover(true).await
+}
+
+async fn prove_quinn_failover(
+    elect_other_survivor: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut cluster = RealAuthorityCluster::start().await?;
     cluster.authorities[0].0.begin_election().await?;
     let (bootstrap_context, bootstrap) = command(cluster.nodes[0], [85; 16])?;
@@ -331,23 +412,60 @@ async fn three_real_quinn_nodes_re_elect_and_commit_after_leader_loss()
     .await
     .map_err(|_| "initial Quinn authority commit timed out")??;
     assert_eq!(bootstrap_receipt.committed_revision, Revision::new(1));
+    let original_fence = cluster.authorities[0].0.read_fence().await?;
+    assert_eq!(
+        original_fence.applied.index,
+        bootstrap_receipt.committed_position.index
+    );
 
     cluster.stop_first_authority().await?;
+    if elect_other_survivor {
+        cluster.authorities[1].0.begin_election().await?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if cluster.authorities[1].0.observe().await?.role == Role::Leader {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            Ok::<_, MetadataAuthorityRequestError>(())
+        })
+        .await??;
+    }
+    let survivor_fence = read_barriers::read_on_survivor(&cluster.authorities).await?;
+    assert_eq!(survivor_fence.revision, Revision::new(1));
+    assert!(survivor_fence.term > original_fence.term);
+    assert_eq!(
+        survivor_fence.applied.index,
+        original_fence.applied.index + 1
+    );
     let (user_context, user) = user_command(bootstrap_context.actor_principal_id)?;
-    let user_receipt = tokio::time::timeout(
+    let user_receipt = if let Ok(result) = tokio::time::timeout(
         Duration::from_secs(15),
-        commit_after_election(&cluster.authorities[0].0, user_context, &user),
+        commit_on_survivor(&cluster.authorities, user_context, &user),
     )
     .await
-    .map_err(|_| "Quinn authority re-election commit timed out")??;
+    {
+        result?
+    } else {
+        let first = cluster.authorities[0].0.observe().await;
+        let second = cluster.authorities[1].0.observe().await;
+        let diagnostic = format!(
+            "Quinn re-election commit timed out; first survivor: {first:?}; second survivor: {second:?}"
+        );
+        cluster.shutdown().await?;
+        return Err(diagnostic.into());
+    };
     assert_eq!(user_receipt.committed_revision, Revision::new(2));
-    let follower_receipt = tokio::time::timeout(
-        Duration::from_secs(15),
-        resolve_after_replication(&cluster.authorities[1].0, user_context, &user),
-    )
-    .await
-    .map_err(|_| "Quinn follower catch-up timed out")??;
-    assert_eq!(follower_receipt.result_digest, user_receipt.result_digest);
+    for (survivor, _) in &cluster.authorities {
+        let receipt = tokio::time::timeout(
+            Duration::from_secs(15),
+            resolve_after_replication(survivor, user_context, &user),
+        )
+        .await
+        .map_err(|_| "Quinn survivor catch-up timed out")??;
+        assert_eq!(receipt.result_digest, user_receipt.result_digest);
+    }
 
     cluster.shutdown().await?;
     Ok(())
@@ -583,6 +701,25 @@ async fn commit_after_election(
             }
             outcome => return outcome,
         }
+    }
+}
+
+async fn commit_on_survivor(
+    authorities: &[AuthorityTask],
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
+    loop {
+        for (authority, _) in authorities {
+            match authority.commit_or_resolve(context, command.clone()).await {
+                Err(
+                    MetadataAuthorityRequestError::NotLeader { .. }
+                    | MetadataAuthorityRequestError::Unavailable,
+                ) => {}
+                outcome => return outcome,
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
 

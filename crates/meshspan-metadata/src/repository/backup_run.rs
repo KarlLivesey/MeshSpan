@@ -160,6 +160,7 @@ pub(super) fn claim(
             RUN_CLAIMED,
             revision,
         )?;
+        super::backup_roots::open(transaction, command.backup_id, revision)?;
     }
     Ok(run_entity(command.backup_id))
 }
@@ -206,6 +207,20 @@ pub(super) fn validate_admission(
         return Err(RepositoryError::InvalidCommand);
     }
     require_live_claim(transaction, context, command.backup_id, command.claim).map(|_| ())
+}
+
+pub(super) fn validate_route_claim(
+    transaction: &Transaction<'_>,
+    partition: PartitionId,
+    context: CommandContext,
+    backup: BackupId,
+    claim: MetadataBackupRunClaim,
+) -> Result<(), RepositoryError> {
+    let run = run_head(transaction, backup)?;
+    if run.partition_id != partition || !matches!(run.state, RUN_CLAIMED | RUN_RECORDED) {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    require_live_claim(transaction, context, backup, claim).map(|_| ())
 }
 
 pub(super) fn mark_admitted(
@@ -290,8 +305,64 @@ pub(super) fn complete(
         ],
     )?;
     exactly_one(changed)?;
+    if terminal_state == RUN_INCOMPLETE {
+        let recorded: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM metadata_backups WHERE backup_id = ?1)",
+            [command.backup_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )?;
+        if !recorded {
+            super::backup_roots::release(transaction, command.backup_id)?;
+        }
+    }
     advance_schedule(transaction, context, run.partition_id, revision)?;
     Ok(run_entity(command.backup_id))
+}
+
+pub(super) fn abandon_unrecorded(
+    transaction: &Transaction<'_>,
+    context: CommandContext,
+    command: crate::AbandonUnrecordedMetadataBackupRun,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    let run = run_head(transaction, command.backup_id)?;
+    let claim =
+        active_claim(transaction, command.backup_id)?.ok_or(RepositoryError::InvalidCommand)?;
+    let admitted: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM metadata_backups WHERE backup_id = ?1)",
+        [command.backup_id.as_bytes().as_slice()],
+        |row| row.get(0),
+    )?;
+    if run.state != RUN_CLAIMED
+        || admitted
+        || claim.claim != command.expected_claim
+        || claim.lease_expires_at > context.occurred_at
+    {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    let evidence = query::protection_evidence(transaction, command.backup_id)?;
+    let entity = complete(
+        transaction,
+        context,
+        CompleteMetadataBackupRun {
+            backup_id: command.backup_id,
+            outcome: MetadataBackupRunCompletion::Incomplete {
+                result_digest: evidence.digest,
+            },
+        },
+        revision,
+    )?;
+    // A lost producer is not a completed scheduled capture. Admit a fresh ID on
+    // the next bounded worker pass rather than waiting another whole interval.
+    let changed = transaction.execute(
+        "UPDATE metadata_backup_schedule_heads SET next_due_at = ?1 WHERE partition_id = ?2",
+        params![
+            context.occurred_at.get(),
+            run.partition_id.as_bytes().as_slice()
+        ],
+    )?;
+    exactly_one(changed)?;
+    Ok(entity)
 }
 
 pub(super) fn load(

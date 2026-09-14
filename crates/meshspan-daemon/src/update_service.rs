@@ -2,10 +2,19 @@
 
 //! Manager commands use the same replicated trust and rollout owner as installation workers.
 
+#[path = "update_coordinator.rs"]
+mod coordinator;
 #[path = "update_distribution.rs"]
 pub(crate) mod distribution;
+#[path = "update_actuator.rs"]
+pub(crate) mod installation;
 #[path = "update_staging.rs"]
 mod staging;
+#[path = "update_workload.rs"]
+mod workload;
+#[path = "update_workload_status.rs"]
+mod workload_status;
+pub(crate) use workload_status::UpdateWorkloadStatus;
 
 use crate::{
     ConsensusAuthenticationAuthority, GatewaySessionIdentity, IdentityAdministrator,
@@ -92,9 +101,11 @@ impl UpdateService {
 
     pub(crate) fn status(&self, rollout: Option<WorkId>) -> Result<UpdatesResponse, UpdateError> {
         let repository = self.authority.reader();
-        let signers = repository
-            .update_signers()
-            .map_err(|_| UpdateError::Unavailable)?
+        let snapshot = repository
+            .update_administration_snapshot(rollout)
+            .map_err(|_| UpdateError::Unavailable)?;
+        let signers = snapshot
+            .signers
             .into_iter()
             .map(|signer| UpdateSignerStatus {
                 signer_id: identifier(signer.signer_id.as_bytes()),
@@ -103,18 +114,14 @@ impl UpdateService {
                 enabled: signer.enabled,
             })
             .collect();
-        let record = match rollout {
-            Some(id) => repository.update_rollout(id),
-            None => repository.active_update_rollout(),
-        }
-        .map_err(|_| UpdateError::Unavailable)?;
-        let rollout = record
-            .map(|record| crate::update_status::rollout(repository, &record))
+        let rollout = snapshot
+            .rollout
+            .map(|(record, counts)| crate::update_status::rollout(&record, counts))
             .transpose()?;
         Ok(UpdatesResponse {
             signers,
             rollout,
-            installation_available: false,
+            installation_available: true,
         })
     }
 

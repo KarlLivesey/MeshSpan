@@ -283,7 +283,7 @@ fn validate_source_state(
     Ok(())
 }
 
-fn reject_operation_collision(
+pub(super) fn reject_operation_collision(
     transaction: &Transaction<'_>,
     operation_id: OperationId,
 ) -> Result<(), PublicationError> {
@@ -303,7 +303,7 @@ fn reject_operation_collision(
     }
 }
 
-fn persist_receipt(
+pub(super) fn persist_receipt(
     transaction: &Transaction<'_>,
     publication: SnapshotRestorePublication,
     request_digest: [u8; 32],

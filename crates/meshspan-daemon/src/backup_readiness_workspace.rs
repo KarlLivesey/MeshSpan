@@ -18,6 +18,14 @@ const FILES: &[&str] = &[
     "restored.sqlite3-wal",
     "restored.sqlite3-shm",
     "restored.sqlite3-journal",
+    "filesystem-branch.sqlite3",
+    "filesystem-branch.sqlite3-wal",
+    "filesystem-branch.sqlite3-shm",
+    "filesystem-branch.sqlite3-journal",
+    "filesystem-content.sqlite3",
+    "filesystem-content.sqlite3-wal",
+    "filesystem-content.sqlite3-shm",
+    "filesystem-content.sqlite3-journal",
 ];
 
 pub(crate) struct ReadinessWorkspace {
@@ -76,6 +84,26 @@ impl ReadinessWorkspace {
 
     pub(crate) fn file(&self, name: &str) -> PathBuf {
         self.directory.join(name)
+    }
+
+    pub(crate) fn directory(&self) -> &Path {
+        &self.directory
+    }
+
+    /// Rebuilds only this caller-owned unpublished capture under its existing worker lease.
+    pub(crate) fn rebuild(
+        root: &Path,
+        operation_id: meshspan_domain::OperationId,
+    ) -> io::Result<Self> {
+        let directory = root.join(crate::create_mesh_setup::format_uuid(
+            operation_id.as_bytes(),
+        ));
+        match fs::symlink_metadata(&directory) {
+            Ok(_) => Self { directory }.cleanup()?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        Self::create(root, operation_id)
     }
 
     pub(crate) fn encrypted_file(&self) -> io::Result<File> {

@@ -8,10 +8,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::gateway_transfer_io::ObservedGatewayIo;
 use axum::Router;
 use hyper::server::conn::http1;
 use hyper_util::rt::TokioIo;
 use hyper_util::service::TowerToHyperService;
+use meshspan_contracts::{GatewayProtocol, GatewayTransferObserver};
 use rustls::ServerConfig;
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
@@ -27,6 +29,7 @@ pub struct HttpsServer {
     listener: TcpListener,
     router: Router,
     tls: TlsAcceptor,
+    transfer_observer: Option<Arc<dyn GatewayTransferObserver>>,
 }
 
 impl HttpsServer {
@@ -49,7 +52,16 @@ impl HttpsServer {
             listener,
             router,
             tls: TlsAcceptor::from(tls),
+            transfer_observer: None,
         })
+    }
+
+    pub(crate) fn with_transfer_observer(
+        mut self,
+        observer: Arc<dyn GatewayTransferObserver>,
+    ) -> Self {
+        self.transfer_observer = Some(observer);
+        self
     }
 
     /// Returns the operating-system-selected listener address.
@@ -87,6 +99,7 @@ impl HttpsServer {
                         self.tls.clone(),
                         self.router.clone(),
                         stream,
+                        self.transfer_observer.clone(),
                     );
                 }
                 completed = connections.join_next(), if !connections.is_empty() => {
@@ -107,17 +120,24 @@ fn spawn_connection(
     tls: TlsAcceptor,
     router: Router,
     stream: TcpStream,
+    observer: Option<Arc<dyn GatewayTransferObserver>>,
 ) {
     connections.spawn(async move {
-        serve_connection(tls, router, stream).await;
+        serve_connection(tls, router, stream, observer).await;
     });
 }
 
-async fn serve_connection(tls: TlsAcceptor, router: Router, stream: TcpStream) {
+async fn serve_connection(
+    tls: TlsAcceptor,
+    router: Router,
+    stream: TcpStream,
+    observer: Option<Arc<dyn GatewayTransferObserver>>,
+) {
     let Ok(Ok(stream)) = timeout(TLS_HANDSHAKE_TIMEOUT, tls.accept(stream)).await else {
         return;
     };
     let service = TowerToHyperService::new(router);
+    let stream = ObservedGatewayIo::new(stream, GatewayProtocol::Https, observer);
     let connection = http1::Builder::new().serve_connection(TokioIo::new(stream), service);
     drop(connection.await);
 }

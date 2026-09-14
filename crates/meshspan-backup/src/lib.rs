@@ -14,7 +14,10 @@ mod error;
 mod export;
 #[cfg(test)]
 mod export_tests;
+mod files;
 mod format;
+mod intersected_capacity;
+mod namespaced_provider;
 mod reader;
 mod shared_provider;
 mod writer;
@@ -22,10 +25,15 @@ mod writer;
 pub use directory_provider::{DirectoryBackupProvider, DirectoryBackupProviderError};
 pub use error::BackupError;
 pub use export::{BackupExportEvidence, VerifiedBackupExport};
-pub use format::{BackupFileEvidence, BackupSourceManifest};
-pub use reader::restore_backup;
+pub use files::{BackupFiles, BackupHistoryFiles};
+pub use format::{
+    BackupFileEvidence, BackupHistoryEvidence, BackupJournalEvidence, BackupSourceManifest,
+};
+pub use intersected_capacity::IntersectedBackupCapacity;
+pub use namespaced_provider::NamespacedBackupProvider;
+pub use reader::{read_backup_evidence, restore_backup, restore_backup_files};
 pub use shared_provider::SharedBackupProvider;
-pub use writer::encrypt_backup;
+pub use writer::{encrypt_backup, encrypt_backup_files};
 
 #[cfg(test)]
 mod tests;

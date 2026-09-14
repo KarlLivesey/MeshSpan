@@ -29,6 +29,244 @@ struct Fixture {
 }
 
 #[test]
+fn storage_permit_redistribution_cannot_drop_a_storage_only_recipient()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture(true)?;
+    // Isolate recipient policy from enrolment: the registered node keeps its storage role.
+    fixture
+        .repository
+        .database
+        .connection()
+        .execute("DELETE FROM node_roles WHERE role_code = 2", [])?;
+    let identity = SecretContext::new(crate::STORAGE_PERMIT_KEY_SECRET_KIND, [7; 16], 2)?;
+    let missing_storage = secret_command(
+        identity,
+        &[72; 32],
+        &[fixture.recovery_private_key.public_key()],
+        40,
+    )?;
+    assert!(matches!(
+        fixture.repository.apply_committed(
+            LogPosition { index: 3, term: 1 },
+            context(41, fixture.administrator, 42, 30, Some(2))?,
+            &missing_storage,
+        ),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    assert!(fixture.repository.secret_generation(identity)?.is_none());
+    let recipients = fixture.repository.storage_permit_recipients()?;
+    let complete = secret_command(identity, &[72; 32], &recipients, 43)?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 3, term: 1 },
+        context(41, fixture.administrator, 42, 30, Some(2))?,
+        &complete,
+    )?;
+    let stored = fixture
+        .repository
+        .secret_generation(identity)?
+        .ok_or("missing permit key")?;
+    let local = stored
+        .recipients
+        .iter()
+        .find(|envelope| envelope.recipient_public_key() == Ok(fixture.private_key.public_key()))
+        .ok_or("storage envelope missing")?;
+    let correct_plaintext = stored
+        .secret
+        .decrypt(&local.open(&fixture.private_key)?)?
+        .expose()
+        == [72; 32];
+    assert!(correct_plaintext, "storage permit plaintext changed");
+    Ok(())
+}
+
+#[test]
+fn storage_permit_recipients_deduplicate_roles_and_retain_draining_storage()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = fixture(true)?;
+    let mut expected = vec![
+        fixture.private_key.public_key(),
+        fixture.recovery_private_key.public_key(),
+    ];
+    expected.sort_by_key(|key| key.fingerprint());
+    assert_eq!(fixture.repository.storage_permit_recipients()?, expected);
+    assert_eq!(fixture.repository.volume_key_recipients()?, expected);
+    let connection = fixture.repository.database.connection();
+    connection.execute("DELETE FROM node_roles WHERE role_code = 2", [])?;
+    assert_eq!(fixture.repository.storage_permit_recipients()?, expected);
+    assert!(fixture.repository.volume_key_recipients().is_err());
+    connection.execute("UPDATE nodes SET state = 3", [])?;
+    assert_eq!(fixture.repository.storage_permit_recipients()?, expected);
+    assert!(fixture.repository.volume_key_recipients().is_err());
+    // A metadata-only node must not receive storage permits merely for being enrolled.
+    connection.execute("DELETE FROM node_roles WHERE role_code = 1", [])?;
+    assert!(fixture.repository.storage_permit_recipients().is_err());
+    Ok(())
+}
+
+#[test]
+fn volume_recipient_extension_preserves_historical_ciphertext_and_rejects_unregistered_keys()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture(true)?;
+    let identity = SecretContext::new(1, [30; 16], 1)?;
+    let create = secret_command(
+        identity,
+        b"historical volume key",
+        &[fixture.recovery_private_key.public_key()],
+        40,
+    )?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 3, term: 1 },
+        context(41, fixture.administrator, 42, 30, Some(2))?,
+        &create,
+    )?;
+    let original = fixture
+        .repository
+        .secret_generation(identity)?
+        .ok_or("missing original key")?;
+    let unregistered = WrappingPrivateKey::from_bytes([98; 32])?;
+    let rejected =
+        recovery_recipient_extension(&fixture, &original, unregistered.public_key(), 51)?;
+    let request = context(51, fixture.administrator, 52, 31, Some(3))?;
+    assert!(matches!(
+        fixture
+            .repository
+            .apply_committed(LogPosition { index: 4, term: 1 }, request, &rejected),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    assert_eq!(
+        fixture.repository.secret_generation(identity)?,
+        Some(original.clone())
+    );
+
+    let extension =
+        recovery_recipient_extension(&fixture, &original, fixture.private_key.public_key(), 61)?;
+    let receipt = fixture.repository.apply_committed(
+        LogPosition { index: 4, term: 1 },
+        request,
+        &extension,
+    )?;
+    assert_eq!(receipt.entity.kind, EntityKind::SecretGeneration);
+    let expanded = fixture
+        .repository
+        .secret_generation(identity)?
+        .ok_or("missing expanded key")?;
+    assert_eq!(expanded.secret, original.secret);
+    assert_eq!(expanded.revision, original.revision);
+    assert_eq!(expanded.recipients.len(), 2);
+    let local = expanded
+        .recipients
+        .iter()
+        .find(|recipient| recipient.recipient_public_key() == Ok(fixture.private_key.public_key()))
+        .ok_or("missing local envelope")?;
+    assert_eq!(
+        expanded
+            .secret
+            .decrypt(&local.open(&fixture.private_key)?)?
+            .expose(),
+        b"historical volume key"
+    );
+    assert_eq!(
+        fixture
+            .repository
+            .latest_volume_key_generation(meshspan_domain::VolumeId::from_bytes([30; 16])?)?,
+        Some(1)
+    );
+    assert_eq!(
+        fixture
+            .repository
+            .apply_committed(LogPosition { index: 5, term: 1 }, request, &extension)?
+            .disposition,
+        ApplyDisposition::Replayed
+    );
+
+    // An authenticated but different ciphertext cannot replace an existing generation.
+    let AuthoritativeCommand::CommitSecretGeneration(changed) = secret_command(
+        identity,
+        b"replacement key",
+        &[fixture.private_key.public_key()],
+        71,
+    )?
+    else {
+        return Err("wrong fixture command".into());
+    };
+    assert!(matches!(
+        fixture.repository.apply_committed(
+            LogPosition { index: 6, term: 1 },
+            context(61, fixture.administrator, 62, 32, Some(4))?,
+            &AuthoritativeCommand::ExtendVolumeKeyRecipients(changed)
+        ),
+        Err(RepositoryError::OperationConflict)
+    ));
+    assert_eq!(
+        fixture.repository.secret_generation(identity)?,
+        Some(expanded)
+    );
+    Ok(())
+}
+
+#[test]
+fn recovery_inventory_pages_historical_generations_in_identity_order()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture(true)?;
+    let identities = [
+        SecretContext::new(60_000, [30; 16], 1)?,
+        SecretContext::new(60_000, [30; 16], 2)?,
+        SecretContext::new(60_000, [31; 16], 1)?,
+        SecretContext::new(60_001, [29; 16], 1)?,
+    ];
+    for (offset, identity) in identities.iter().enumerate() {
+        let offset = u8::try_from(offset)?;
+        fixture.repository.apply_committed(
+            LogPosition {
+                index: u64::from(offset) + 3,
+                term: 1,
+            },
+            context(
+                40 + offset,
+                fixture.administrator,
+                50 + offset,
+                30,
+                Some(u64::from(offset) + 2),
+            )?,
+            &secret_command(
+                *identity,
+                b"retained secret",
+                &[fixture.recovery_private_key.public_key()],
+                60 + offset,
+            )?,
+        )?;
+    }
+    let limit = super::PageLimit::new(2)?;
+    let first = fixture
+        .repository
+        .secret_generation_contexts(Some(SecretContext::new(59_999, [255; 16], 1)?), limit)?;
+    assert_eq!(first.items, identities[..2]);
+    assert_eq!(first.next, Some(identities[1]));
+    let last = fixture
+        .repository
+        .secret_generation_contexts(first.next, limit)?;
+    assert_eq!(last.items, identities[2..]);
+    assert_eq!(last.next, None);
+    let empty = fixture
+        .repository
+        .secret_generation_contexts(Some(identities[3]), limit)?;
+    assert!(empty.items.is_empty());
+    assert_eq!(empty.next, None);
+    let plan: String = fixture.repository.database.connection().query_row(
+        "EXPLAIN QUERY PLAN SELECT secret_kind, secret_id, generation FROM secret_generations
+         WHERE (secret_kind, secret_id, generation) > (60000, x'1e', 1)
+         ORDER BY secret_kind, secret_id, generation LIMIT 3",
+        [],
+        |row| row.get(3),
+    )?;
+    assert!(
+        plan.contains("SEARCH secret_generations USING COVERING INDEX"),
+        "{plan}"
+    );
+    Ok(())
+}
+
+#[test]
 fn ciphertext_and_recipient_commit_atomically_replay_and_decrypt_after_read()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = fixture(true)?;
@@ -344,6 +582,30 @@ fn fixture(verify_recovery: bool) -> Result<Fixture, Box<dyn std::error::Error>>
         private_key,
         recovery_private_key,
     })
+}
+
+fn recovery_recipient_extension(
+    fixture: &Fixture,
+    original: &crate::SecretGenerationRecord,
+    recipient: WrappingPublicKey,
+    seed: u8,
+) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
+    let source = original
+        .recipients
+        .first()
+        .ok_or("missing recovery recipient")?;
+    let envelope = source.rewrap(
+        &original.secret,
+        &fixture.recovery_private_key,
+        recipient,
+        &mut SecretRandom(seed),
+    )?;
+    Ok(AuthoritativeCommand::ExtendVolumeKeyRecipients(
+        CommitSecretGeneration {
+            secret: original.secret.parts(),
+            recipients: vec![envelope.parts()],
+        },
+    ))
 }
 
 fn secret_command(

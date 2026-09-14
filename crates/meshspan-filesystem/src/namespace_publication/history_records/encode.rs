@@ -5,10 +5,10 @@
 use meshspan_domain::ObjectRevisionId;
 use meshspan_domain::{FederatedMutationAcknowledgement, FederationResourceScope};
 
-use super::super::transfer::TransferredMutationCommit;
+use super::super::transfer::{CommitEvidence, TransferredNamespaceCommit};
 use super::{
     COMMIT_DOMAIN, FEDERATED_COMMIT_FORMAT_VERSION, LOCAL_COMMIT_FORMAT_VERSION,
-    NamespaceHistoryRecordError,
+    MERGE_COMMIT_FORMAT_VERSION, NamespaceHistoryRecordError, RESTORE_COMMIT_FORMAT_VERSION,
 };
 use crate::{
     BranchMutation, BranchMutationIntent, BranchRenameIntent, DirectoryRevisionTransition,
@@ -16,23 +16,22 @@ use crate::{
 };
 
 pub(super) fn encode_commit(
-    record: &TransferredMutationCommit,
+    record: &TransferredNamespaceCommit,
 ) -> Result<Vec<u8>, NamespaceHistoryRecordError> {
-    let ReconciliationCommitPayload::Mutation { intent_digest } = record.commit.payload else {
-        return Err(NamespaceHistoryRecordError::Invalid);
-    };
-    if record.commit.commit_id != record.intent.commit_id
-        || record.intent.digest() != intent_digest
-        || record.commit.parents.len() > 1
-    {
-        return Err(NamespaceHistoryRecordError::Invalid);
-    }
+    super::validation::validate(record)?;
     let mut bytes = Vec::with_capacity(512);
     bytes.extend_from_slice(COMMIT_DOMAIN);
-    bytes.push(if record.acknowledgement.is_some() {
-        FEDERATED_COMMIT_FORMAT_VERSION
-    } else {
-        LOCAL_COMMIT_FORMAT_VERSION
+    bytes.push(match record.evidence {
+        CommitEvidence::Mutation {
+            acknowledgement: Some(_),
+            ..
+        } => FEDERATED_COMMIT_FORMAT_VERSION,
+        CommitEvidence::Mutation {
+            acknowledgement: None,
+            ..
+        } => LOCAL_COMMIT_FORMAT_VERSION,
+        CommitEvidence::Merge { .. } => MERGE_COMMIT_FORMAT_VERSION,
+        CommitEvidence::Restore { .. } => RESTORE_COMMIT_FORMAT_VERSION,
     });
     identifier(&mut bytes, record.commit.commit_id.as_bytes());
     identifier(&mut bytes, record.commit.branch_id.as_bytes());
@@ -42,15 +41,40 @@ pub(super) fn encode_commit(
     identifiers(&mut bytes, &record.commit.parents)?;
     identifier(&mut bytes, record.commit.operation_id.as_bytes());
     digest(&mut bytes, record.commit.request_digest);
-    bytes.push(1);
-    digest(&mut bytes, intent_digest);
+    match record.commit.payload {
+        ReconciliationCommitPayload::Mutation { intent_digest } => {
+            bytes.push(1);
+            digest(&mut bytes, intent_digest);
+        }
+        ReconciliationCommitPayload::Merge { replay_digest } => {
+            bytes.push(2);
+            digest(&mut bytes, replay_digest);
+        }
+        ReconciliationCommitPayload::Restore {
+            snapshot_id,
+            snapshot_namespace_commit_id,
+        } => {
+            bytes.push(3);
+            identifier(&mut bytes, snapshot_id.as_bytes());
+            identifier(&mut bytes, snapshot_namespace_commit_id.as_bytes());
+        }
+    }
     identifier(&mut bytes, record.created_by.as_bytes());
     bytes.extend_from_slice(&record.created_at.get().to_be_bytes());
     digest(&mut bytes, record.commit_digest);
-    encode_intent(&mut bytes, &record.intent)?;
-    if let Some(acknowledgement) = record.acknowledgement {
-        let mut bare = record.clone();
-        bare.acknowledgement = None;
+    match &record.evidence {
+        CommitEvidence::Mutation { intent, .. } => encode_intent(&mut bytes, intent)?,
+        CommitEvidence::Merge {
+            causal_plan_digest,
+            result_digest,
+        } => {
+            digest(&mut bytes, *causal_plan_digest);
+            digest(&mut bytes, *result_digest);
+        }
+        CommitEvidence::Restore { result_digest } => digest(&mut bytes, *result_digest),
+    }
+    if let Some(acknowledgement) = record.acknowledgement() {
+        let bare = record.without_acknowledgement();
         let mutation_digest = blake3::hash(&encode_commit(&bare)?).into();
         super::validate_acknowledgement(record, &acknowledgement, mutation_digest)?;
         encode_acknowledgement(&mut bytes, &acknowledgement);

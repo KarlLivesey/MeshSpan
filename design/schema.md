@@ -410,6 +410,12 @@ local_targets(
   state, registered_at, last_opened_at
 )
 
+local_recovered_targets(
+  target_id PK, node_id, mesh_id, recovery_id, state_digest,
+  generation, marker_fingerprint, canonical_path UNIQUE, journal_directory,
+  policy_revision, usage_limit_kind, usage_limit_value
+)
+
 local_reservations(
   reservation_id PK, target_id -> local_targets, operation_id,
   bytes_reserved, expires_at, state
@@ -436,9 +442,19 @@ local_scrub_cursors(
 `local_claim_bundles` stores only the verifier digest. The printable claim
 secret exists only in the one-time interactive output or protected automation
 file. Losing that output requires a local rotation that invalidates the previous
-digest before issuing a replacement. Only `local_targets` contains host paths.
+digest before issuing a replacement. Host paths stay in node-local bindings,
+including `local_targets` and `local_recovered_targets`, never replicated records.
 A target generation changes when path identity or target marker continuity
 cannot be proved.
+
+Local schema 16 adds immutable recovery mount bindings, separate from pending
+user registration commands. Each names the exact recovery/state digest, target,
+marker, minimum authority revision, folder and original journal root. The two
+registration origins cannot claim the same target or path. Installation verifies
+root/node evidence and the existing provider before saving a binding; runtime
+use still requires current replicated provider authority and an applied revision.
+The binding neither commits metadata nor marks a provider active. Journal state
+is reused in place; missing journals must not be recreated as empty ones.
 
 ## 8. Fault groups, cells and placement policies
 
@@ -1482,6 +1498,44 @@ backup_copies(
   state, verified_at NULL, PK(backup_id, destination_id)
 )
 
+backup_publication_intents(
+  backup_id -> metadata_backup_runs, destination_id -> backup_destinations,
+  canonical_command, revision,
+  PK(backup_id, destination_id)
+)
+
+federated_backup_routes(
+  backup_id -> metadata_backup_runs, destination_id -> backup_destinations,
+  relationship_id -> federation_relationships, canonical_record, revision,
+  PK(backup_id, destination_id)
+)
+
+abandoned_backup_retirements(
+  backup_id -> metadata_backup_runs, destination_id -> backup_destinations,
+  canonical_command, retirement_revision,
+  PK(backup_id, destination_id)
+)
+
+abandoned_backup_reclamations(
+  backup_id, destination_id,
+  operation_id UNIQUE, retirement_revision, provider_generation,
+  byte_length, copy_digest, reclaimed_at, revision,
+  PK(backup_id, destination_id),
+  FK(backup_id, destination_id) -> abandoned_backup_retirements
+)
+
+federation_storage_authority(
+  allocation_id PK -> federation_storage_allocations,
+  grant_id -> federation_grants, valid_from, valid_until,
+  write_limit_bytes, revision
+)
+
+federation_storage_seals(
+  allocation_id PK -> federation_storage_allocations, provider_node_id,
+  node_incarnation, key_generation -> cleanup_attestation_keys,
+  ceiling_bytes, sequence, sealed_at, signature, revision
+)
+
 recovery_epochs(
   recovery_epoch PK, source_backup_id -> metadata_backups,
   initiated_by -> principals, started_at, committed_at NULL,
@@ -1492,6 +1546,166 @@ recovery_epochs(
 Protected copies on local targets, other swarms or other provider destinations
 do not vote and cannot appoint authority. Recovery material remains encrypted
 for the administrator-held recovery mechanism.
+
+Partition schema 104 implements the **offline preparation barrier**, not the
+logical `recovery_epochs` activation workflow above. Its immutable
+`partition_recovery_preparation` singleton stores partition/mesh/recovery IDs,
+the proposed recovery epoch, source backup ID, exact root-signed authorisation
+container and preparation time. It lives only in the isolated restored copy;
+ordinary migrated databases have no row. Its presence refuses consensus loading,
+persistence and bootstrap until explicit recovery admission is implemented.
+It neither advances the converged revision nor grants a replacement voter set.
+The source backup ID deliberately has no foreign key to `metadata_backups`:
+the exported source predates its own subsequent publication record. Source
+identity instead comes from independently verified encrypted bytes and signed
+claims. The retained replacement/inventory digests are bindings, not evidence
+that their semantic validators or live recovery have completed.
+
+Schemas 105–107 extend this isolated preparation with exact encrypted control
+material, per-generation retained-secret material and its complete-inventory
+commitment, followed by the root-authorised replacement manifest. These records
+are immutable and never become active key heads or recipient grants by staging
+alone. The canonical replacement format binds identities, roles, endpoints,
+incarnations, public keys, quorum specification and the prepared key commitment.
+Its bounded initial replacement selection permits up to 1,024 nodes and a 2 MiB
+manifest; this is not a mesh-wide node limit. Further nodes can join through the
+normal admission workflow. Quorum specifications retain their existing compiler
+bounds and are independently re-proved when decoded. The stored plan must match
+the authorisation's replacement digest, exact saved key recipients/inventory and
+successor membership epoch. Node installation, target/content completeness,
+credential fencing and recovery activation remain separate required transitions.
+
+Schema 108 adds `partition_recovery_credential_fence` to that isolated copy.
+It binds the recovery ID, replacement-manifest digest, selected source revision,
+offline operation time, successor CA/permit generation floors and affected
+credential counts. One transaction revokes source sessions and join grants,
+retires source node certificates and pending rotations, cancels pending pairing
+invitations and persists this immutable receipt. No converged revision is invented.
+Local group/grant and federated assignment activations at or below the signed
+source revision are excluded by their runtime readers. Their original user
+evidence is retained, rather than attributing offline-root revocation to a user.
+Later activations must have a newer committed revision. Accounts, authentication
+methods, durable permissions and established federation relationships remain.
+Online secret loading enforces the operational generation floors; archival
+loading retains exact historical encrypted material for verification/recovery.
+This fence does not install successor keys or open the consensus admission gate,
+and cannot revoke material on unreachable old nodes before they learn recovery.
+
+Schema 109 adds immutable `partition_recovery_key_installations`, keyed by exact
+selected node ID and referencing the isolated credential fence. Each record
+contains the encrypted bundle digest, bounded DER node signature and first
+coordinator receipt time. Before insertion or loading, the coordinator revalidates
+the signed preparation and deterministically exports its expected bytes into a
+streaming digest, reconstructs the incarnation/recovery-bound transcript and
+verifies the selected node's signature. It does not accept caller-supplied hashes
+or counts as authority. Missing evidence returns `None`; changed or corrupted
+evidence fails. Exact retries preserve the first receipt. This is a node's key
+installation attestation, not certificate, target-readiness or admission proof;
+the consensus barrier and source applied revision remain unchanged.
+
+Recovery transfer format 2 includes a deterministic replacement certificate before
+the retained-secret frames: positive generation (`u64`), exact validity start/end
+(`i64` Unix seconds), then bounded length-prefixed leaf DER. The prepared online
+issuer is already in the signed control-key commitment. Generation is one above
+every source certificate for that node; validity is 30 days from the fixed fence
+time rounded down to seconds. The recipient verifies the selected identity, exact
+issuer, name, usages, serial and interval. Its format-2 installation signature
+covers the certificate through the complete transfer digest. These remain public
+staged credentials inside the installed bundle, not active `node_certificates`
+rows or service admission. Schema 109 is unchanged; pre-alpha format-1 transfers
+and receipts are not silently reinterpreted or upgraded.
+
+Schemas 114–115 materialise canonical node/key/provider records only in a
+disposable, admission-fenced recovery candidate. The projection marker binds
+the signed replacement digest, credential-fence time and reserved source revision
+plus one. All changes, including retiring source targets/keys and replacing
+complete secret-recipient sets, happen before that transaction seals its marker.
+Ciphertext and historical target generations remain immutable. Canonical records
+at a reserved revision do not make that revision committed or bypass admission.
+
+Schema 115 extends component instance/configuration creation provenance with
+`recovery_preparation -> partition_recovery_preparation.singleton`. Exactly one
+of `created_by -> principals` and `recovery_preparation` is present. Creation
+origin/time cannot be rewritten. A recovery origin is accepted only inside the
+matching open projection; normal component commands continue to record their
+user/service principal. Later user configuration revisions have their own creator
+without changing who created the instance. No synthetic user or service account
+stands in for the offline root.
+
+The numbered migration rebuilds these two referenced tables on the private
+migration connection. Foreign-key enforcement is temporarily suspended outside
+the transaction to prevent cascade deletion of existing children, every reference
+is checked before commit, and the prior enforcement setting is restored on success
+or failure. Transactional on-disk staging bounds memory; existing configurations,
+assignments, observations, target references and backup-provider references survive.
+Failed migration rolls back the schema and version together. This adds no public
+API model or private-wire version.
+
+Partition schema 97 records immutable consumer allocation routes before sending
+backup bytes. A route belongs to the queued/claimed backup run because the first
+successful store has not yet created `metadata_backups`. Binding requires the
+current worker claim, active destination revision and local federation relationship.
+Its exact object and physical allocation cannot change on retry; publication/copy
+records must agree with an existing route. Routing intent alone creates neither a
+stored copy nor a protection acknowledgement. Failed or unknown IO must not erase
+the route and select another allocation. Revocation does not remove routing evidence;
+current peer, grant and allocation admission remain required for every remote IO.
+
+Partition schema 98 separates the renewable grant/lease projection from immutable
+storage allocations. Grant replacement advances this projection in the same
+transaction, carrying every existing allocation into the successor's capacity
+budget. Lowered write ceilings may be below already charged bytes; the separate
+local ledger retains those charges and refuses additional reservations beyond
+the new ceiling. Neither renewal nor authority refresh resets usage. Indexed
+discovery follows current lease authority rather than the allocation's original
+grant and expiry. The originating grant remains the physical namespace component.
+
+Consumer route encoding **2** stores both the observed permission and immutable
+namespace grant. Existing encoding **1** decodes its sole grant as both fields,
+preserving the original object locator. Metadata command capability version **13**
+adds route command kind **121**; kind **120** retains its original decoding rather
+than reinterpreting old log bytes. Saved routing intent does not change when its
+permission is refreshed. Wire and native acceptance evidence is tracked in
+Stage 10 task 7.
+
+Local schema 15 adds `local_federation_storage_seals(allocation_id,
+ceiling_bytes, sequence, sealed_at)`. A provider-owner transaction permanently
+stops new reservations and records the sum of committed bytes and unresolved
+reservations. Existing admitted operations can finish without another charge;
+reconciliation may only reduce the ceiling, advancing its local sequence.
+The fence and accounting update share SQLite's write ordering, including across
+connections and restart. It is separate from revoking read permission and never
+deletes retained bytes. These local records are not remote attestations or
+consensus quota credits: authenticated authoritative reconciliation is required
+before allowance can be reassigned to another allocation.
+
+Partition schema **99** records authenticated provider seals through metadata
+command **122**, introduced by command capability version **14**. The node signs
+the provider mesh, immutable allocation/node/target identities, target generation,
+retained ceiling, local sequence, seal time, node incarnation and key generation
+under `meshspan.federation.storage-capacity-seal.v1\0`. Its public attestation key
+is registered through command **123**; the private key never enters consensus.
+The existing node-attestation registry is reused with a separate signature domain.
+New seals require a current active node incarnation and active registered key.
+
+Authoritative quota accounting uses the verified retained ceiling for sealed
+allocations and the original maximum for unsealed allocations. A sealed allocation
+admits no new writes, but retains its read authority and immutable namespace.
+Grant renewal reserves all retained ceilings before distributing new-write
+allowances. Before allocation or renewal can use this credit, bounded indexed
+queries reverify stored signatures against their historical registered keys;
+retirement alone does not invalidate a permanent fence. Invalid evidence aborts
+the transaction. Only strictly lower ceilings with higher sequences can replace
+accepted seals. The provisioning planner can issue a new allocation for a target
+whose existing allocations are all sealed; its deterministic ID binds the count
+of retained allocations for that target incarnation. Planning and issuance remain
+revision-fenced. Partition schema **100** adds a partial active-provider keyset
+index for maintenance. Its cursor uses target ID/generation, original interval
+end and allocation ID; original expiry is ordering only, while current authority
+still follows renewal. Each node examines one of its own allocations per tick.
+Unavailable folders or reduced write allowances trigger local sealing and signed
+consensus submission; incomplete submissions are retried from the durable fence.
+No other node's absence is proof that its allowance is unused.
 
 `metadata_backups.created_at` is immutable source-capture time. A publication or
 retry has its own operation/audit time and must not rewrite that captured value.
@@ -1547,11 +1761,11 @@ an unauthorised automatic rewrite.
 Partition migration `091_update_rollouts.sql` stores the update control plane in
 authoritative metadata, not daemon-local configuration:
 
-| Record | Role |
-| --- | --- |
-| `update_signers` | Immutable public key per signer identity, explicit enablement and trust sequence. New keys require new identities. |
-| `update_rollouts` | Exact signed candidate, original interruption consent, selecting principal, aggregate state and sequence. |
-| `update_rollout_nodes` | Snapshotted active node/incarnation, monotonic checkpoint sequence, selected target, evidence digest and unresolved-restart ownership. |
+| Record                                    | Role                                                                                                                                                                                          |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `update_signers`                          | Immutable public key per signer identity, explicit enablement and trust sequence. New keys require new identities.                                                                            |
+| `update_rollouts`                         | Exact signed candidate, original interruption consent, selecting principal, aggregate state and sequence.                                                                                     |
+| `update_rollout_nodes`                    | Snapshotted active node/incarnation, monotonic checkpoint sequence, selected target, evidence digest and unresolved-restart ownership.                                                        |
 | `update_artifact_sources` (migration 092) | Candidate/platform/node source advertisement with exact incarnation, signed byte length/digest and committed revision. A retrieval hint, not installation or current byte-availability proof. |
 
 One partial unique index permits only one running/paused rollout. Another permits
@@ -1560,7 +1774,7 @@ still have side effects. Pausing and signer revocation retain that ownership.
 Resume returns such an attempt to probing; it does not mark it pending for blind
 reinstallation. Cancellation does not roll back already verified nodes.
 
-The canonical private metadata command codec remains version 4. After its normal
+The canonical private metadata command capability version is 14. After its normal
 command context, the update body begins with a big-endian `u16` kind: 84 signer
 configuration, 85 candidate selection, 86 node checkpoint, 87 rollout control,
 88 executable source publication.

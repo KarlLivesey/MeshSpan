@@ -244,6 +244,39 @@ pub(crate) fn validate_catalogue(
     {
         return Err(BackupRestoreReadinessError::NotReady);
     }
+    let encrypted = catalogue_evidence(backup)?;
+    Ok(EncryptedPartitionBackupManifest {
+        partition: PartitionBackupManifest {
+            backup_id: backup.backup_id,
+            partition_id: backup.partition_id,
+            mesh_id: backup.mesh_id,
+            applied_position: LogPosition {
+                index: backup.last_log_index,
+                term: backup.last_log_term,
+            },
+            state_revision: backup.state_revision,
+            schema_version: backup.schema_version,
+            byte_length: backup.source_byte_length,
+            digest: backup.source_digest,
+            created_at: encrypted.source.created_at,
+        },
+        encrypted,
+    })
+}
+
+/// Exact admitted bytes shared by restore checks and replacement-worker recovery.
+pub(crate) fn catalogue_evidence(
+    backup: MetadataBackupRecord,
+) -> Result<BackupFileEvidence, BackupRestoreReadinessError> {
+    if !matches!(
+        backup.state,
+        MetadataBackupState::Recorded | MetadataBackupState::Verified
+    ) || backup.revision == Revision::ZERO
+        || backup.encrypted_byte_length == 0
+        || backup.encrypted_digest == [0; 32]
+    {
+        return Err(BackupRestoreReadinessError::NotReady);
+    }
     let source = BackupSourceManifest {
         backup_id: backup.backup_id,
         partition_id: backup.partition_id,
@@ -260,26 +293,10 @@ pub(crate) fn validate_catalogue(
     if source.catalogue_digest() != backup.manifest_digest {
         return Err(BackupRestoreReadinessError::NotReady);
     }
-    Ok(EncryptedPartitionBackupManifest {
-        partition: PartitionBackupManifest {
-            backup_id: backup.backup_id,
-            partition_id: backup.partition_id,
-            mesh_id: backup.mesh_id,
-            applied_position: LogPosition {
-                index: backup.last_log_index,
-                term: backup.last_log_term,
-            },
-            state_revision: backup.state_revision,
-            schema_version: backup.schema_version,
-            byte_length: backup.source_byte_length,
-            digest: backup.source_digest,
-            created_at: backup.created_at,
-        },
-        encrypted: BackupFileEvidence {
-            source,
-            byte_length: backup.encrypted_byte_length,
-            digest: backup.encrypted_digest,
-        },
+    Ok(BackupFileEvidence {
+        source,
+        byte_length: backup.encrypted_byte_length,
+        digest: backup.encrypted_digest,
     })
 }
 

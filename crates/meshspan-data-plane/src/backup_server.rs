@@ -2,6 +2,7 @@
 
 //! Provider-neutral server for authenticated remote metadata-backup streams.
 
+mod lookup;
 mod mutation;
 mod preparation;
 mod read;
@@ -23,6 +24,8 @@ use crate::BackupPlaneError;
 /// Exact provider operation presented to current replicated backup authority.
 #[derive(Clone, Copy, Debug)]
 pub enum RemoteBackupAuthorisation<'a> {
+    /// Recover retained exact-object evidence for an authoritative upload intent.
+    Lookup(&'a meshspan_contracts::BackupLookupRequest),
     /// Persist one exact encrypted generation.
     Store(&'a BackupStoreRequest),
     /// Read one exact encrypted generation.
@@ -74,6 +77,7 @@ where
 }
 
 enum OwnedRemoteBackupAuthorisation {
+    Lookup(meshspan_contracts::BackupLookupRequest),
     Store(BackupStoreRequest),
     Read(BackupReadRequest),
     Verify(BackupVerifyRequest),
@@ -151,6 +155,10 @@ where
         message: Message,
     ) -> Result<(), BackupPlaneError> {
         match message {
+            Message::LookupBackupRequest(value) => {
+                self.serve_lookup(&mut stream, peer, limits, observed_at, value)
+                    .await
+            }
             Message::StoreBackupBegin(value) => {
                 self.serve_store(&mut stream, peer, limits, observed_at, value)
                     .await
@@ -180,6 +188,9 @@ where
         let authority = self.authority.clone();
         tokio::task::spawn_blocking(move || {
             let borrowed = match &request {
+                OwnedRemoteBackupAuthorisation::Lookup(value) => {
+                    RemoteBackupAuthorisation::Lookup(value)
+                }
                 OwnedRemoteBackupAuthorisation::Store(value) => {
                     RemoteBackupAuthorisation::Store(value)
                 }

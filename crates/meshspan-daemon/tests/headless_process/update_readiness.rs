@@ -76,7 +76,7 @@ async fn update_readiness_observes_the_real_peer_and_rejects_stale_barriers_afte
     fixture::retain_failure_state(proof, [root.temporary, peer.temporary])
 }
 
-async fn probe(
+pub(super) async fn probe(
     network: &ConsensusNetwork,
     peer: NodeId,
     plan: [u8; 32],
@@ -111,7 +111,9 @@ async fn probe(
     Ok(result)
 }
 
-fn repository(fixture: &ProcessFixture) -> Result<AuthoritativeRepository, Box<dyn Error>> {
+pub(super) fn repository(
+    fixture: &ProcessFixture,
+) -> Result<AuthoritativeRepository, Box<dyn Error>> {
     Ok(AuthoritativeRepository::new(
         PartitionDatabase::open_existing(
             &fixture.state_path.join("root-authority.sqlite3"),
@@ -120,7 +122,7 @@ fn repository(fixture: &ProcessFixture) -> Result<AuthoritativeRepository, Box<d
     ))
 }
 
-fn network(
+pub(super) fn network(
     source: &ProcessFixture,
     target: &ProcessFixture,
 ) -> Result<ConsensusNetwork, Box<dyn Error>> {

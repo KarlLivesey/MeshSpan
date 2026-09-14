@@ -3,6 +3,7 @@
 //! Metadata, routing, presence, branch, work and certificate message validation.
 
 mod http01;
+mod read_fence;
 mod routing;
 mod updates;
 
@@ -30,6 +31,8 @@ use super::{
 
 pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireContractError> {
     match value {
+        Message::FetchMetadataReadFence(value) => valid_digest(&value.nonce),
+        Message::MetadataReadFenceResult(value) => read_fence::response(value),
         Message::ProbeUpdateReadiness(value) => updates::request(value),
         Message::UpdateReadinessResult(value) => updates::response(value),
         Message::FetchHttp01Challenge(value) => http01::token(&value.token),

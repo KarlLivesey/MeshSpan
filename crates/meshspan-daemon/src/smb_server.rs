@@ -6,8 +6,11 @@ use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
+use crate::gateway_transfer_io::ObservedGatewayIo;
+use meshspan_contracts::{GatewayProtocol, GatewayTransferObserver};
 use meshspan_smb::{DIRECT_TCP_MAX_PAYLOAD_LENGTH, DirectTcpFrameHeader, encode_direct_tcp_header};
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -68,6 +71,7 @@ pub trait SmbConnectionHandler: Send + 'static {
 pub struct SmbServer {
     listener: TcpListener,
     limits: SmbServerLimits,
+    transfer_observer: Option<Arc<dyn GatewayTransferObserver>>,
 }
 
 impl SmbServer {
@@ -85,7 +89,19 @@ impl SmbServer {
         let listener = TcpListener::bind(address)
             .await
             .map_err(SmbServerError::Bind)?;
-        Ok(Self { listener, limits })
+        Ok(Self {
+            listener,
+            limits,
+            transfer_observer: None,
+        })
+    }
+
+    pub(crate) fn with_transfer_observer(
+        mut self,
+        observer: Arc<dyn GatewayTransferObserver>,
+    ) -> Self {
+        self.transfer_observer = Some(observer);
+        self
     }
 
     /// Returns the operating-system-selected listener address.
@@ -129,6 +145,7 @@ impl SmbServer {
                         continue;
                     };
                     let limits = self.limits;
+                    let stream = ObservedGatewayIo::new(stream, GatewayProtocol::Smb, self.transfer_observer.clone());
                     connections.spawn(async move {
                         drop(serve_connection(stream, limits, &mut handler).await);
                     });
@@ -147,7 +164,7 @@ impl SmbServer {
 }
 
 async fn serve_connection<H: SmbConnectionHandler>(
-    mut stream: TcpStream,
+    mut stream: ObservedGatewayIo<TcpStream>,
     limits: SmbServerLimits,
     handler: &mut H,
 ) -> Result<(), SmbConnectionIoError> {
@@ -167,7 +184,7 @@ async fn serve_connection<H: SmbConnectionHandler>(
 }
 
 async fn read_frame(
-    stream: &mut TcpStream,
+    stream: &mut ObservedGatewayIo<TcpStream>,
     limits: SmbServerLimits,
 ) -> Result<Option<Vec<u8>>, SmbConnectionIoError> {
     let mut header = [0; DIRECT_TCP_HEADER_BYTES];
@@ -188,7 +205,7 @@ async fn read_frame(
 }
 
 async fn write_frame(
-    stream: &mut TcpStream,
+    stream: &mut ObservedGatewayIo<TcpStream>,
     limits: SmbServerLimits,
     response: &[u8],
 ) -> Result<(), SmbConnectionIoError> {

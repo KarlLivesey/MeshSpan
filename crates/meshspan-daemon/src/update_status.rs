@@ -2,15 +2,12 @@
 
 use crate::update_service::{UpdateError, identifier};
 use meshspan_api_contract::{UpdateProgress, UpdateRolloutStatus, UpdateState};
-use meshspan_metadata::{AuthoritativeRepository, UpdateRolloutRecord, UpdateRolloutState};
+use meshspan_metadata::{UpdateProgressCounts, UpdateRolloutRecord, UpdateRolloutState};
 
 pub(crate) fn rollout(
-    repository: &AuthoritativeRepository,
     record: &UpdateRolloutRecord,
+    counts: UpdateProgressCounts,
 ) -> Result<UpdateRolloutStatus, UpdateError> {
-    let counts = repository
-        .update_progress_counts(record.rollout_id)
-        .map_err(|_| UpdateError::Unavailable)?;
     Ok(UpdateRolloutStatus {
         artifacts: record
             .manifest

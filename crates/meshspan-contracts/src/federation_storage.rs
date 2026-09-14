@@ -2,6 +2,14 @@
 
 //! Provider-issued authority for one exact cross-swarm shard operation.
 
+mod backup;
+pub use backup::{
+    FederatedBackupPermit, FederatedBackupRequest, FederatedBackupScope,
+    MAXIMUM_FEDERATED_BACKUP_PERMIT_LIFETIME_MICROS, federated_backup_permit_mac,
+    federated_backup_request_digest, federated_provider_backup_identity,
+    validate_federated_backup_permit, verify_federated_backup_permit_mac,
+};
+
 use meshspan_domain::{
     FederationGrantId, FederationRelationshipId, FederationStorageAction,
     FederationStorageAllocationId, MeshId, NodeId, OperationId, Revision, TargetId, UnixMicros,

@@ -83,6 +83,7 @@ pub(super) fn retire(
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
     validate(transaction, partition, command)?;
+    super::backup_roots::release(transaction, command.backup_id)?;
     transaction.execute(
         "UPDATE metadata_backups SET state = 3, verified_at = NULL, revision = ?1 WHERE backup_id = ?2",
         params![to_i64(revision.get())?, command.backup_id.as_bytes().as_slice()],

@@ -12,6 +12,7 @@ import {
 } from "./fetch-contract.mjs";
 import { renderUploadClientMethods } from "./render-upload-client.mjs";
 import { renderBackupScheduleClientMethods } from "./render-backup-schedule-client.mjs";
+import { renderFederationClientMethods } from "./render-federation-client.mjs";
 import { renderNotificationClientMethods } from "./render-notification-client.mjs";
 import { renderUpdateClientMethods } from "./render-update-client.mjs";
 import {
@@ -153,6 +154,7 @@ export function createMeshSpanFetchClient(
     ${renderAuthenticationClientMethods(routes)}
     ${renderCertificateClientMethods(routes)}
     ${renderBackupScheduleClientMethods(routes)}
+    ${renderFederationClientMethods(routes)}
     ${renderMetricsClientMethods(routes)}
     ${renderNotificationClientMethods(routes)}
     ${renderUpdateClientMethods(routes)}

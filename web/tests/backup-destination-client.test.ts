@@ -97,25 +97,6 @@ describe("generated backup destination validation", () => {
     expect(sent).toHaveLength(1);
   });
 
-  it("rejects unknown, missing, nullable and coerced mutation fields", () => {
-    expect(zConfigureBackupDestinationBody.safeParse(request()).success).toBe(
-      true,
-    );
-    for (const changed of [
-      { ...request(), enabled: null },
-      { ...request(), enabled: "true" },
-      { ...request(), target_generation: 0 },
-      { ...request(), expected_revision: -1 },
-      { ...request(), target_id: "not-a-uuid" },
-      { ...request(), extra: true },
-      { operation_id: OPERATION_ID },
-      { ...request(), name: "bad\nname" },
-    ])
-      expect(zConfigureBackupDestinationBody.safeParse(changed).success).toBe(
-        false,
-      );
-  });
-
   it("rejects invalid server receipts and external continuation URLs", async () => {
     const client = createMeshSpanFetchClient({
       baseUrl: "https://node.example/api/latest/",
@@ -145,14 +126,58 @@ describe("generated backup destination validation", () => {
   });
 });
 
+describe("generated backup destination request schemas", () => {
+  it("rejects unknown, missing, nullable and coerced mutation fields", () => {
+    expect(zConfigureBackupDestinationBody.safeParse(request()).success).toBe(
+      true,
+    );
+    for (const changed of [
+      { ...request(), enabled: null },
+      { ...request(), enabled: "true" },
+      { ...request(), provider_generation: 0 },
+      { ...request(), expected_revision: -1 },
+      {
+        ...request(),
+        provider: { kind: "registered_target", target_id: "not-a-uuid" },
+      },
+      { ...request(), extra: true },
+      { operation_id: OPERATION_ID },
+      { ...request(), name: "bad\nname" },
+    ])
+      expect(zConfigureBackupDestinationBody.safeParse(changed).success).toBe(
+        false,
+      );
+  });
+
+  it("validates all provider variants without accepting mixed identities", () => {
+    for (const provider of [
+      { kind: "registered_target", target_id: DESTINATION_ID },
+      { kind: "federated_mesh", remote_mesh_id: DESTINATION_ID },
+      { kind: "component_provider", instance_id: DESTINATION_ID },
+    ]) {
+      const input = { ...request(), provider };
+      expect(zConfigureBackupDestinationBody.parse(input)).toEqual(input);
+      expect(
+        zConfigureBackupDestinationBody.safeParse({
+          ...input,
+          provider: { ...provider, path: "/not-a-provider-identity" },
+        }).success,
+      ).toBe(false);
+    }
+  });
+});
+
 function request(): ConfigureBackupDestinationRequest {
   return {
     operation_id: OPERATION_ID,
     destination_id: DESTINATION_ID,
     expected_revision: 0,
     name: "Recovery",
-    target_id: "01900000-0000-7000-8000-000000000003",
-    target_generation: "1",
+    provider: {
+      kind: "registered_target",
+      target_id: "01900000-0000-7000-8000-000000000003",
+    },
+    provider_generation: "1",
     enabled: true,
   };
 }

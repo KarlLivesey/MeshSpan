@@ -33,6 +33,65 @@ immutable request digest and durable result receipt: the local source remains
 until the authoritative outcome is known, and every step is safe to replay.
 SQLite `ATTACH` and multi-file transaction behaviour are not correctness tools.
 
+## Non-voting metadata replicas
+
+A storage-only node may retain an applied metadata projection without belonging
+to the partition's voters or learners. `MetadataReplica` is the non-voting
+application adapter; it never constructs a consensus core, votes, campaigns,
+accepts client commands or acknowledges consensus replication. Its initial
+database must already come from authenticated installation. This is a historical
+read model, not an independent authority or a fresh permission decision.
+
+The cursor binds partition, membership epoch, compiled plan digest, last applied
+position and complete entry digest. A supplying voter can read at most 64 entries
+and 16 MiB of aggregate command bytes through the existing metadata owner queue.
+It returns only durably applied history and stops at each membership transition.
+Historical phases end at their own applied transition, not today's unrelated
+head. An empty page is not a read barrier or proof that the supplier is current.
+
+The receiver requires an authenticated same-swarm voter in its exact phase and
+incarnation. It revalidates bounds, continuity, command digests and operation IDs,
+then uses the normal metadata and membership validators. Persistence precedes
+application; application and its cursor advance are durable. Each command is
+atomic, not an entire page. After a failed application the instance is fenced
+until reopened; its unapplied tail cannot become visible merely because bytes
+were persisted. Retry resumes from the durable applied cursor. Committed history
+cannot be overwritten, and historical terms cannot erase a newer durable term.
+
+If a committed transition admits the local node as a learner, passive application
+stops and its durable state is available for the ordinary member runtime. Merely
+being metadata-eligible does not cause this handoff. Fresh authorisation and
+destructive permits still require current-authority checks, not these cursors.
+
+The adapter, bounded authority-owner read and authenticated
+[bulk transfer](protocol.md#non-voting-metadata-history-transfer) are implemented.
+The daemon dispatches source requests separately from storage operations. Bulk
+framing preserves the existing 64 KiB private-control limit while independently
+bounding larger history bodies.
+
+The owned passive worker opens only an existing installation, selects authenticated
+voters from its installed phase, and applies successive pages automatically. Empty
+pages poll at 250 ms; failures back off from 250 ms to eight seconds. Explicit
+wake-ups coalesce rather than queue. Failed application drops the database
+connection before reopening from its durable cursor. Missing state is retried,
+never replaced with an empty database. Shutdown cancels network IO and drains
+already-started parsing/application. Committed learner admission ends passive work
+with a distinct handoff result. Progress remains historical, including after a
+successful fetch; it must not be used as readiness or permission evidence.
+
+Daemon startup now selects an initial non-member storage path from committed roles
+and membership. That path owns private transport, the catch-up worker, local folder
+providers and coarse HTTPS setup/health endpoints. Target registration forwards to
+the actual authority and waits for its exact receipt to appear through replication;
+there is no fabricated local consensus handle. Shard reads/writes use the existing
+capability checks. Applied key/policy changes invalidate opened provider bindings.
+
+This composition is incomplete: destructive/maintenance RPCs remain withheld until
+live-authority checks are integrated. It deliberately reports degraded health and
+does not instantiate file gateways, grant gateway keys or advertise cached progress
+as full service readiness. Certificate maintenance, remaining role transitions and
+complete recovered-file service acceptance still require integrated evidence.
+
 ## SQL rules
 
 - Use `STRICT` tables, foreign keys, unique constraints and explicit checks.
@@ -302,6 +361,26 @@ contract. Restore verifies mesh identity, schema, snapshot digest, membership an
 opening public services. A destination may be a registered target, another
 swarm or another installed backup-provider instance. Its declared failure overlap
 with the protected source is retained and reported; a copy never becomes a voter.
+
+The automatic encrypted archive also contains fixed namespace-history and
+content-layout journal members, captured and checked against that exact control
+snapshot. Its outer digest covers all members; per-member authenticated evidence
+preserves the distinction between control-state identity and filesystem history.
+Metadata-only extraction must still authenticate every archived member. Copies
+are not serving authority, and archived layouts do not prove that their physical
+shards still exist. Claiming a capture atomically retains current volume heads and
+user snapshots; subsequent head/snapshot changes retain revision windows until
+the exact captured source revision is admitted. Admission seals only roots present
+at that revision. Retirement releases that generation's pins, never another
+backup's ownership. An abandoned, unrecorded capture releases its temporary pins;
+an admitted but incompletely protected backup retains them until retirement.
+
+Backup roots participate in the metadata retained-root query/digest and the
+filesystem reachability proof. An archive covers its source's current heads and
+user snapshots, not older archives' pins: backup generations must not recursively
+inherit one another's retention. End-to-end physical reclamation and recovery
+admission still need their assembled-stage proof before complete recoverability
+can be claimed.
 
 ## Turso eligibility
 

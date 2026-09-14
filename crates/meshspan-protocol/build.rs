@@ -12,6 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "proto/meshspan/private/v1/control.proto",
         "proto/meshspan/private/v1/data.proto",
         "proto/meshspan/private/v1/federation.proto",
+        "proto/meshspan/private/v1/data_control.proto",
     ];
     for schema in schemas {
         println!("cargo:rerun-if-changed={schema}");

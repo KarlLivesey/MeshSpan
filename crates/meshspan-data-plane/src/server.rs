@@ -6,6 +6,8 @@ mod federation;
 mod removal;
 mod scrub;
 
+pub use removal::reject_shard_maintenance;
+
 pub use federation::{
     FederatedReclamationEvidence, FederatedRetirementEvidence, FederatedScrubEvidence,
     FederatedScrubPreparation, FederatedShardAuthority, FederatedShardOutcome,

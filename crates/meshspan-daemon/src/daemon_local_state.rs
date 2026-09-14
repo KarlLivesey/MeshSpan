@@ -2,6 +2,8 @@
 
 //! Exclusive daemon-state ownership and restart-safe first-start composition.
 
+mod recovery;
+
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -24,6 +26,7 @@ use crate::{
 const DIRECTORY_MODE: u32 = 0o700;
 const FILE_MODE: u32 = 0o600;
 const LOCAL_DATABASE_FILE: &str = "local.sqlite3";
+pub(crate) const ROOT_AUTHORITY_DATABASE: &str = "root-authority.sqlite3";
 const LOCK_FILE: &str = "daemon.lock";
 const SECRET_DIRECTORY: &str = "secrets";
 const IDENTITY_FILE: &str = "node-identity.pk8";
@@ -61,10 +64,20 @@ impl DaemonLocalState {
         config: &HeadlessDaemonConfig,
         now: UnixMicros,
     ) -> Result<Self, DaemonLocalStateError> {
-        let directory = StateDirectory::open(
-            config.storage().daemon_state_dir(),
-            config.storage().storage_paths(),
-        )?;
+        Self::open_paths(config.storage(), config.claim_output(), now)
+    }
+
+    pub(crate) fn open_paths(
+        storage: &meshspan_storage::HeadlessStorageConfig,
+        claim_output: Option<&Path>,
+        now: UnixMicros,
+    ) -> Result<Self, DaemonLocalStateError> {
+        let directory = StateDirectory::open(storage.daemon_state_dir(), storage.storage_paths())?;
+        // A transferred candidate is never a fresh appliance. This marker is durable before
+        // any database/key installation, so interruption cannot fall through to first boot.
+        if regular_file_exists(&directory.path().join("state.auth"))? {
+            return recovery::open(directory, claim_output, now);
+        }
         let database_path = directory.path().join(LOCAL_DATABASE_FILE);
         let database_exists = regular_file_exists(&database_path)?;
         let secret_directory = ensure_private_directory(&directory.path().join(SECRET_DIRECTORY))?;
@@ -102,7 +115,7 @@ impl DaemonLocalState {
         if database.node_id() != expected_node_id {
             return Err(DaemonLocalStateError::IdentityMismatch);
         }
-        let claim_output_path = config.claim_output().map_or_else(
+        let claim_output_path = claim_output.map_or_else(
             || directory.path().join(DEFAULT_CLAIM_FILE),
             Path::to_path_buf,
         );
@@ -129,6 +142,33 @@ impl DaemonLocalState {
         self.directory.path()
     }
 
+    /// Installs the selected node's existing keys into a fresh, fenced recovery destination.
+    /// No first-boot claim or configured setup receipt is manufactured by this operation.
+    pub(crate) fn install_recovery_material(
+        directory: &Path,
+        node_id: NodeId,
+        identity: &LocalNodeIdentity,
+        wrapping: &LocalWrappingKey,
+        now: UnixMicros,
+    ) -> Result<(), DaemonLocalStateError> {
+        if !regular_file_exists(&directory.join("state.auth"))? {
+            return Err(DaemonLocalStateError::UnsafeStateDirectory);
+        }
+        let secrets = ensure_private_directory(&directory.join(SECRET_DIRECTORY))?;
+        crate::protected_file::publish(
+            &secrets.join(IDENTITY_FILE),
+            identity.private_key_pkcs8(),
+            crate::protected_file::PublishMode::Create,
+        )
+        .map_err(|_| DaemonLocalStateError::UnsafeStateFile)?;
+        wrapping.persist_new(&secrets.join(WRAPPING_KEY_FILE))?;
+        LocalTotpCeremonyKey::open_or_create(&secrets.join(TOTP_CEREMONY_KEY_FILE))?;
+        LocalPasskeyCeremonyKey::open_or_create(&secrets.join(PASSKEY_CEREMONY_KEY_FILE))?;
+        let local = LocalDatabase::open(&directory.join(LOCAL_DATABASE_FILE), node_id, now)?;
+        local.check_integrity()?;
+        Ok(())
+    }
+
     /// Returns the stable node identity bound to both the local database and private key.
     #[must_use]
     pub const fn node_id(&self) -> NodeId {
@@ -139,6 +179,27 @@ impl DaemonLocalState {
     #[must_use]
     pub const fn claim_outcome(&self) -> ClaimEnsureOutcome {
         self.claim_outcome
+    }
+
+    pub(crate) fn reconcile_setup(
+        &self,
+        snapshot: &crate::SetupStateSnapshot,
+    ) -> Result<meshspan_api_contract::SetupState, crate::SetupLifecycleError> {
+        if self.claim_outcome.disposition == crate::ClaimEnsureDisposition::RecoveryAuthorized {
+            let state = meshspan_api_contract::SetupState::Configured;
+            snapshot.store(state);
+            Ok(state)
+        } else {
+            snapshot.reconcile(&self.database)
+        }
+    }
+
+    pub(crate) fn admit_recovery_state(
+        directory: &Path,
+        permission: &[u8],
+        now: UnixMicros,
+    ) -> Result<meshspan_domain::Revision, DaemonLocalStateError> {
+        recovery::admit(directory, permission, now)
     }
 
     /// Returns the protected path where the active claim exists until consumption.
@@ -313,13 +374,16 @@ impl DaemonLocalState {
     }
 }
 
-struct StateDirectory {
+pub(crate) struct StateDirectory {
     canonical_path: PathBuf,
     _lock: File,
 }
 
 impl StateDirectory {
-    fn open(path: &Path, storage_paths: &[PathBuf]) -> Result<Self, DaemonLocalStateError> {
+    pub(crate) fn open(
+        path: &Path,
+        storage_paths: &[PathBuf],
+    ) -> Result<Self, DaemonLocalStateError> {
         reject_storage_overlap(path, storage_paths)?;
         let canonical_path = ensure_private_directory(path)?;
         let lock_path = canonical_path.join(LOCK_FILE);
@@ -341,8 +405,20 @@ impl StateDirectory {
         })
     }
 
-    fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.canonical_path
+    }
+
+    /// Read the existing node identity without opening or migrating any database.
+    pub(crate) fn existing_node_id(&self) -> Result<NodeId, DaemonLocalStateError> {
+        if regular_file_exists(&self.path().join("state.auth"))? {
+            return recovery::existing_node_id(self.path());
+        }
+        let identity = LocalNodeIdentity::open(
+            &self.path().join(SECRET_DIRECTORY).join(IDENTITY_FILE),
+            BOOTSTRAP_DNS_NAME,
+        )?;
+        InitialBootstrapMaterial::node_id(identity.public_key_fingerprint()).map_err(Into::into)
     }
 }
 
@@ -352,7 +428,7 @@ fn reject_storage_overlap(
 ) -> Result<(), DaemonLocalStateError> {
     let state = canonical_candidate(state_path)?;
     for storage_path in storage_paths {
-        let storage = fs::canonicalize(storage_path)?;
+        let storage = storage_path_candidate(storage_path)?;
         if storage.starts_with(&state) || state.starts_with(&storage) {
             return Err(DaemonLocalStateError::StateStorageOverlap);
         }
@@ -374,6 +450,34 @@ fn canonical_candidate(path: &Path) -> Result<PathBuf, DaemonLocalStateError> {
         }
         Err(error) => Err(error.into()),
     }
+}
+
+// An absent data mount must not prevent the independent control plane from starting.
+// Resolve the existing prefix without creating storage. Admission rechecks the actual
+// canonical location when it returns; unresolved parent traversal is not guessed.
+fn storage_path_candidate(path: &Path) -> Result<PathBuf, DaemonLocalStateError> {
+    let absolute = std::env::current_dir()?.join(path);
+    for ancestor in absolute.ancestors() {
+        match fs::canonicalize(ancestor) {
+            Ok(canonical) => {
+                let suffix = absolute
+                    .strip_prefix(ancestor)
+                    .map_err(|_| DaemonLocalStateError::UnsafeStateDirectory)?;
+                if suffix.components().any(|component| {
+                    !matches!(
+                        component,
+                        std::path::Component::Normal(_) | std::path::Component::CurDir
+                    )
+                }) {
+                    return Err(DaemonLocalStateError::UnsafeStateDirectory);
+                }
+                return Ok(canonical.join(suffix));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(DaemonLocalStateError::UnsafeStateDirectory)
 }
 
 pub(crate) fn ensure_private_directory(path: &Path) -> Result<PathBuf, DaemonLocalStateError> {
@@ -432,6 +536,12 @@ fn sync_parent(path: &Path) -> Result<(), DaemonLocalStateError> {
 /// Stable daemon-local-state failure without secret or path contents.
 #[derive(Debug, Error)]
 pub enum DaemonLocalStateError {
+    /// Installed recovery candidates cannot initialise first boot or start services.
+    #[error("recovered daemon state requires recovery admission before startup")]
+    RecoveryAdmissionRequired,
+    /// Recovery files or their identity/authority binding failed verification.
+    #[error("recovery state, identity or consensus permission failed verification")]
+    InvalidRecoveryState,
     /// A filesystem operation failed.
     #[error("daemon local-state filesystem operation failed")]
     Io(#[from] io::Error),

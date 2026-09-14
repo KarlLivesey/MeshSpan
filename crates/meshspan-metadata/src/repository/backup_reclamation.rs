@@ -2,13 +2,28 @@
 
 //! Durable physical-cleanup debt survives provider failure and worker restart.
 
+mod candidate;
+pub use candidate::BackupReclamationCandidate;
+
+pub(super) const PENDING_RECLAMATIONS_SQL: &str =
+    "SELECT c.backup_id, c.destination_id FROM backup_copies c
+     WHERE c.state = 4 AND (c.backup_id, c.destination_id) > (?1, ?2)
+       AND NOT EXISTS (SELECT 1 FROM backup_copy_reclamations r
+           WHERE r.backup_id = c.backup_id AND r.destination_id = c.destination_id)
+     UNION ALL
+     SELECT a.backup_id, a.destination_id FROM abandoned_backup_retirements a
+     WHERE (a.backup_id, a.destination_id) > (?1, ?2)
+       AND NOT EXISTS (SELECT 1 FROM abandoned_backup_reclamations r
+           WHERE r.backup_id = a.backup_id AND r.destination_id = a.destination_id)
+     ORDER BY backup_id, destination_id LIMIT ?3";
+
 use meshspan_domain::{BackupDestinationId, BackupId, Revision};
 use rusqlite::{Transaction, params};
 
 use super::apply::to_i64;
 use super::{
-    AuthoritativeRepository, BackupCopyRecord, BackupCopyState, EntityKind, EntityReference,
-    MetadataBackupState, Page, PageLimit, RepositoryError, backup_catalogue,
+    AuthoritativeRepository, BackupCopyState, EntityKind, EntityReference, MetadataBackupState,
+    Page, PageLimit, RepositoryError, backup_catalogue,
 };
 use crate::{CommandContext, RecordBackupReclamation};
 
@@ -33,17 +48,19 @@ impl AuthoritativeRepository {
         &self,
         after: Option<BackupReclamationCursor>,
         limit: PageLimit,
-    ) -> Result<Page<BackupCopyRecord, BackupReclamationCursor>, RepositoryError> {
+    ) -> Result<Page<BackupReclamationCandidate, BackupReclamationCursor>, RepositoryError> {
+        self.with_read_view(|view| view.pending_reclamations_in_view(after, limit))?
+    }
+
+    fn pending_reclamations_in_view(
+        &self,
+        after: Option<BackupReclamationCursor>,
+        limit: PageLimit,
+    ) -> Result<Page<BackupReclamationCandidate, BackupReclamationCursor>, RepositoryError> {
         let connection = self.database.connection();
         let after_backup = after.map_or([0; 16], |value| value.backup_id.as_bytes());
         let after_destination = after.map_or([0; 16], |value| value.destination_id.as_bytes());
-        let mut statement = connection.prepare(
-            "SELECT c.backup_id, c.destination_id FROM backup_copies c
-             WHERE c.state = 4 AND (c.backup_id, c.destination_id) > (?1, ?2)
-               AND NOT EXISTS (SELECT 1 FROM backup_copy_reclamations r
-                   WHERE r.backup_id = c.backup_id AND r.destination_id = c.destination_id)
-             ORDER BY c.backup_id, c.destination_id LIMIT ?3",
-        )?;
+        let mut statement = connection.prepare(PENDING_RECLAMATIONS_SQL)?;
         let rows = statement.query_map(
             params![
                 after_backup.as_slice(),
@@ -68,7 +85,7 @@ impl AuthoritativeRepository {
             )
             .map_err(|_| RepositoryError::CorruptState)?;
             items.push(
-                backup_catalogue::copy(connection, backup, destination)?
+                candidate::load(connection, backup, destination)?
                     .ok_or(RepositoryError::CorruptState)?,
             );
         }
@@ -78,8 +95,8 @@ impl AuthoritativeRepository {
         }
         let next_cursor = if has_more {
             items.last().map(|copy| BackupReclamationCursor {
-                backup_id: copy.backup_id,
-                destination_id: copy.destination_id,
+                backup_id: copy.object.backup_id,
+                destination_id: copy.object.destination_id,
             })
         } else {
             None
@@ -99,6 +116,16 @@ pub(super) fn record(
 ) -> Result<EntityReference, RepositoryError> {
     let receipt = command.receipt;
     let object = receipt.object;
+    if super::backup_orphan::load(transaction, object.backup_id, object.destination_id)?.is_some() {
+        let candidate = candidate::load(transaction, object.backup_id, object.destination_id)?
+            .ok_or(RepositoryError::InvalidCommand)?;
+        if candidate.object != object
+            || candidate.retirement_revision != receipt.retirement_revision
+        {
+            return Err(RepositoryError::InvalidCommand);
+        }
+        return super::backup_orphan::record_reclamation(transaction, context, receipt, revision);
+    }
     let backup = backup_catalogue::backup(transaction, object.backup_id)?
         .ok_or(RepositoryError::InvalidCommand)?;
     let copy = backup_catalogue::copy(transaction, object.backup_id, object.destination_id)?

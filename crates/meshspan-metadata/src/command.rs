@@ -28,10 +28,18 @@ use crate::AdmitFederatedMutation;
 use crate::RecordFederatedActorAttestation;
 use crate::RecordName;
 use crate::{
+    AbandonUnrecordedMetadataBackupRun, ClaimMetadataBackupRun, CompleteMetadataBackupRun,
+    ConfigureBackupDestination, ConfigureMetadataBackupSchedule, MetadataBackupRunCompletion,
+    QueueMetadataBackupRun, RecordBackupCopy, RecordBackupReclamation, RecordMetadataBackup,
+    RenewMetadataBackupRun, RetireAbandonedBackupCopy, RetireMetadataBackup, VerifyBackupCopy,
+};
+use crate::{
     AcceptFederationSuccessor, ActivateFederationSuccessor, ApproveFederationRelationship,
-    DesignateFederationSuccessor, ProposeFederationRelationship, RecoverFederationRelationship,
-    RestrictFederationRelationship, RetireFederationRelationship, RevokeFederationRelationship,
-    RevokeFederationSuccessorDesignation, RotateFederationTrustIdentity,
+    CancelFederationPairingInvitation, DesignateFederationSuccessor,
+    IssueFederationPairingInvitation, PrepareFederationConnection, ProposeFederationRelationship,
+    RecoverFederationRelationship, RestrictFederationRelationship, RetireFederationRelationship,
+    RevokeFederationRelationship, RevokeFederationSuccessorDesignation,
+    RotateFederationTrustIdentity,
 };
 use crate::{
     AcknowledgeExternalCertificateInstallation, AcknowledgeMeshLocalCertificateInstallation,
@@ -45,12 +53,6 @@ use crate::{
     ActivateFederationGrantAssignment, CreateFederationGrantAssignment, IssueFederationGrant,
     ReplaceFederationGrant, RevokeFederationGrant, RevokeFederationGrantAssignment,
     RevokeFederationGrantAssignmentActivation,
-};
-use crate::{
-    ClaimMetadataBackupRun, CompleteMetadataBackupRun, ConfigureBackupDestination,
-    ConfigureMetadataBackupSchedule, MetadataBackupRunCompletion, QueueMetadataBackupRun,
-    RecordBackupCopy, RecordBackupReclamation, RecordMetadataBackup, RenewMetadataBackupRun,
-    RetireMetadataBackup, VerifyBackupCopy,
 };
 use crate::{IssueFederationStorageAllocation, RevokeFederationStorageAllocation};
 use crate::{
@@ -296,20 +298,30 @@ pub enum AuthoritativeCommand {
     RenewMetadataBackupRun(RenewMetadataBackupRun),
     /// Terminates one run as protected or explicitly incomplete.
     CompleteMetadataBackupRun(CompleteMetadataBackupRun),
+    /// Abandons an expired, unadmitted occurrence without authorising byte deletion.
+    AbandonUnrecordedMetadataBackupRun(AbandonUnrecordedMetadataBackupRun),
     /// Admits one exact encrypted partition backup generation.
     RecordMetadataBackup(RecordMetadataBackup),
     /// Records one provider-confirmed encrypted backup copy.
     RecordBackupCopy(RecordBackupCopy),
+    /// Retains a consumer-selected remote namespace before any backup bytes are sent.
+    BindFederatedBackupRoute(crate::BindFederatedBackupRoute),
+    /// Retains the exact upload identity before provider IO, without acknowledging storage.
+    BindBackupPublicationIntent(crate::BindBackupPublicationIntent),
     /// Records read-after-write verification of one unchanged backup copy.
     VerifyBackupCopy(VerifyBackupCopy),
     /// Retires an old backup and its copies against current retained-generation evidence.
     RetireMetadataBackup(RetireMetadataBackup),
     /// Records exact physical removal after authoritative retirement.
     RecordBackupReclamation(RecordBackupReclamation),
+    /// Retires an exact provider object after committed unadmitted-run abandonment.
+    RetireAbandonedBackupCopy(RetireAbandonedBackupCopy),
     /// Registers one node-local public key for encrypted secret generations.
     RegisterNodeWrappingKey(RegisterNodeWrappingKey),
     /// Commits one encrypted secret generation and every exact recipient envelope atomically.
     CommitSecretGeneration(CommitSecretGeneration),
+    /// Adds current gateway envelopes to an unchanged historical volume-key generation.
+    ExtendVolumeKeyRecipients(CommitSecretGeneration),
     /// Issues one bounded administrator-authorised node join grant.
     IssueJoinGrant(IssueJoinGrant),
     /// Consumes a join grant to admit one certificate-bound learner node.
@@ -332,6 +344,14 @@ pub enum AuthoritativeCommand {
     ActivateScopeHandoff(ActivateScopeHandoff),
     /// Restores source authority under a newer route fence.
     AbortScopeHandoff(AbortScopeHandoff),
+    /// Records bounded, administrator-approved federation connection material.
+    IssueFederationPairingInvitation(IssueFederationPairingInvitation),
+    /// Cancels unused federation connection material.
+    CancelFederationPairingInvitation(CancelFederationPairingInvitation),
+    /// Retains exact outbound pairing intent before contacting the remote swarm.
+    BeginFederationConnection(crate::BeginFederationConnection),
+    /// Retains signed pairing peers, consumes local approval and creates the relationship proposal.
+    PrepareFederationConnection(PrepareFederationConnection),
     /// Starts a mutually approved relationship without granting authority yet.
     ProposeFederationRelationship(ProposeFederationRelationship),
     /// Atomically activates a proposal with both initial public trust identities.
@@ -364,6 +384,8 @@ pub enum AuthoritativeCommand {
     IssueFederationStorageAllocation(IssueFederationStorageAllocation),
     /// Revokes one live provider allocation without deleting its authority history.
     RevokeFederationStorageAllocation(RevokeFederationStorageAllocation),
+    /// Accepts provider-signed capacity fencing before quota reassignment.
+    RecordFederationStorageSeal(crate::RecordFederationStorageSeal),
     /// Advances one signed home-swarm actor attestation.
     RecordFederatedActorAttestation(RecordFederatedActorAttestation),
     /// Persists a retiring swarm's signed pre-authorisation of one recovery successor.
@@ -524,14 +546,22 @@ impl AuthoritativeCommand {
             Self::ClaimMetadataBackupRun(value) => value.update_digest(digest),
             Self::RenewMetadataBackupRun(value) => value.update_digest(digest),
             Self::CompleteMetadataBackupRun(value) => value.update_digest(digest),
+            Self::AbandonUnrecordedMetadataBackupRun(value) => value.update_digest(digest),
             Self::RecordMetadataBackup(value) => value.update_digest(digest),
             Self::RecordBackupCopy(value) => value.update_digest(digest),
+            Self::BindFederatedBackupRoute(value) => value.update_digest(digest),
+            Self::BindBackupPublicationIntent(value) => value.update_digest(digest),
             Self::VerifyBackupCopy(value) => value.update_digest(digest),
             Self::ReconcileMetadataBackupDefaults(value) => value.update_digest(digest),
             Self::RetireMetadataBackup(value) => value.update_digest(digest),
             Self::RecordBackupReclamation(value) => value.update_digest(digest),
+            Self::RetireAbandonedBackupCopy(value) => value.update_digest(digest),
             Self::RegisterNodeWrappingKey(value) => value.update_digest(digest),
             Self::CommitSecretGeneration(value) => value.update_digest(digest),
+            Self::ExtendVolumeKeyRecipients(value) => {
+                digest.bytes(b"extend-volume-key-recipients-v1");
+                value.update_digest(digest);
+            }
             Self::IssueJoinGrant(value) => value.update_digest(digest),
             Self::ConsumeJoinGrant(value) => value.update_digest(digest),
             Self::ActivateNode(value) => value.update_digest(digest),
@@ -543,6 +573,10 @@ impl AuthoritativeCommand {
             Self::FreezeScopeHandoff(value) => value.update_digest(digest),
             Self::ActivateScopeHandoff(value) => value.update_digest(digest),
             Self::AbortScopeHandoff(value) => value.update_digest(digest),
+            Self::IssueFederationPairingInvitation(value) => value.update_digest(digest),
+            Self::CancelFederationPairingInvitation(value) => value.update_digest(digest),
+            Self::PrepareFederationConnection(value) => value.update_digest(digest),
+            Self::BeginFederationConnection(value) => value.update_digest(digest),
             Self::ProposeFederationRelationship(value) => value.update_digest(digest),
             Self::ApproveFederationRelationship(value) => value.update_digest(digest),
             Self::RotateFederationTrustIdentity(value) => value.update_digest(digest),
@@ -559,6 +593,7 @@ impl AuthoritativeCommand {
             Self::RevokeFederationGrantAssignmentActivation(value) => value.update_digest(digest),
             Self::IssueFederationStorageAllocation(value) => value.update_digest(digest),
             Self::RevokeFederationStorageAllocation(value) => value.update_digest(digest),
+            Self::RecordFederationStorageSeal(value) => value.update_digest(digest),
             Self::RecordFederatedActorAttestation(value) => value.update_digest(digest),
             Self::DesignateFederationSuccessor(value) => value.update_digest(digest),
             Self::AcceptFederationSuccessor(value) => value.update_digest(digest),
@@ -797,13 +832,15 @@ pub const MESH_LOCAL_CERTIFICATE_AUTHORITY_KEY_SECRET_KIND: u16 = 9;
 /// Exact durable local outcome accepted as the source of a converged-head transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConvergedHeadEvidence {
-    /// One ordinary branch publication, including initial volume publication.
+    /// One ordinary branch publication, including initial or validated imported publication.
     Publication {
         /// Stable local publication operation.
         operation_id: OperationId,
         /// Digest binding every local publication input.
         request_digest: [u8; 32],
-        /// Digest binding the complete local publication result.
+        /// Digest of the verified canonical immutable history record, excluding separately
+        /// checked federation admission. Never a connector-local receipt digest: foreground
+        /// and background publishers must present identical evidence for the same history.
         result_digest: [u8; 32],
     },
     /// One deterministic multi-parent reconciliation transaction.
@@ -1121,6 +1158,9 @@ pub struct VersionCleanupItemPlacement {
     /// Exact storage node that owns this target generation and must report provider results.
     pub storage_node_id: NodeId,
 }
+
+/// One bounded contiguous page of exact physical cleanup items.
+pub(crate) const MAXIMUM_CLEANUP_APPEND_ITEMS: usize = 1_000;
 
 /// One bounded contiguous page of exact physical cleanup items.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2451,7 +2491,9 @@ pub struct RegisterNodeWrappingKey {
     pub key_fingerprint: [u8; 32],
 }
 
-/// One encrypted secret generation plus its complete bounded recipient set.
+/// One encrypted secret plus a bounded recipient-envelope batch.
+/// `CommitSecretGeneration` uses a complete initial set; `ExtendVolumeKeyRecipients`
+/// uses only additions to an unchanged historical volume-key generation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitSecretGeneration {
     /// Authenticated secret ciphertext and immutable context.
@@ -3565,6 +3607,54 @@ digest_simple_record!(
     }
 );
 digest_simple_record!(
+    crate::BindFederatedBackupRoute,
+    b"bind-federated-backup-route",
+    |value, digest| {
+        let object = value.object;
+        let scope = value.scope;
+        for id in [
+            object.backup_id.as_bytes(),
+            object.destination_id.as_bytes(),
+            scope.relationship_id.as_bytes(),
+            scope.remote_mesh_id.as_bytes(),
+            scope.provider_mesh_id.as_bytes(),
+            scope.allocation_id.as_bytes(),
+            scope.grant_id.as_bytes(),
+            scope.provider_node_id.as_bytes(),
+            scope.target_id.as_bytes(),
+        ] {
+            digest.identifier(id);
+        }
+        for number in [
+            object.provider_generation,
+            object.byte_length,
+            scope.target_generation,
+            scope.relationship_authority_epoch,
+            scope.grant_revision.get(),
+            scope.allocation_revision.get(),
+        ] {
+            digest.unsigned(number);
+        }
+        digest.bytes(&object.digest);
+        update_backup_claim_digest(value.claim, digest);
+        digest.unsigned(value.expected_destination_revision.get());
+    }
+);
+digest_simple_record!(
+    crate::BindBackupPublicationIntent,
+    b"bind-backup-publication-intent",
+    |value, digest| {
+        digest.identifier(value.object.backup_id.as_bytes());
+        digest.identifier(value.object.destination_id.as_bytes());
+        digest.unsigned(value.object.provider_generation);
+        digest.unsigned(value.object.byte_length);
+        digest.bytes(&value.object.digest);
+        digest.identifier(value.store_operation_id.as_bytes());
+        update_backup_claim_digest(value.claim, digest);
+        digest.unsigned(value.expected_destination_revision.get());
+    }
+);
+digest_simple_record!(
     ConfigureBackupDestination,
     b"configure-backup-destination",
     |value, digest| {
@@ -3666,6 +3756,14 @@ digest_simple_record!(
     }
 );
 digest_simple_record!(
+    AbandonUnrecordedMetadataBackupRun,
+    b"abandon-unrecorded-metadata-backup-run-v1",
+    |value, digest| {
+        digest.identifier(value.backup_id.as_bytes());
+        update_backup_claim_digest(value.expected_claim, digest);
+    }
+);
+digest_simple_record!(
     RecordMetadataBackup,
     b"record-metadata-backup",
     |value, digest| {
@@ -3735,6 +3833,21 @@ digest_simple_record!(
         digest.unsigned(receipt.object.byte_length);
         digest.bytes(&receipt.object.digest);
         digest.unsigned(receipt.retirement_revision.get());
+    }
+);
+digest_simple_record!(
+    RetireAbandonedBackupCopy,
+    b"retire-abandoned-backup-copy",
+    |value, digest| {
+        let receipt = &value.receipt;
+        digest.unsigned(value.expected_run_revision.get());
+        digest.identifier(receipt.operation_id.as_bytes());
+        digest.identifier(receipt.object.backup_id.as_bytes());
+        digest.identifier(receipt.object.destination_id.as_bytes());
+        digest.unsigned(receipt.object.provider_generation);
+        digest.unsigned(receipt.object.byte_length);
+        digest.bytes(&receipt.object.digest);
+        digest.bytes(receipt.object_reference.as_str().as_bytes());
     }
 );
 digest_simple_record!(
@@ -4687,7 +4800,7 @@ impl CanonicalDigest {
         }
     }
 
-    fn optional_revision(&mut self, value: Option<Revision>) {
+    pub(crate) fn optional_revision(&mut self, value: Option<Revision>) {
         self.optional_unsigned(value.map(Revision::get));
     }
 

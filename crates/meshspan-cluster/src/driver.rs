@@ -101,6 +101,10 @@ pub struct PartitionConsensusDriver<P> {
 }
 
 impl<P: PartitionConsensusPersistence> PartitionConsensusDriver<P> {
+    pub(crate) fn applied_replication_limit(&self, epoch: u64, digest: [u8; 32]) -> Option<u64> {
+        self.core.applied_replication_limit(epoch, digest)
+    }
+
     /// Takes ownership of an already restored core and matching persistence adapter.
     #[must_use]
     pub const fn new(core: ConsensusCore, persistence: P) -> Self {
@@ -347,6 +351,24 @@ impl<P: PartitionConsensusPersistence + ScopeWriteAuthority> PartitionConsensusD
 }
 
 impl PartitionConsensusDriver<AuthoritativeRepository> {
+    /// Durably applies one committed term confirmation without changing application metadata.
+    ///
+    /// # Errors
+    /// Rejects an uncommitted/substituted entry or any persistence/application failure.
+    pub fn apply_term_confirmation(
+        &mut self,
+        entry: &LogEntry,
+        now: UnixMicros,
+    ) -> Result<Vec<DriverEffect>, ClusterDriverError> {
+        if !entry.is_term_confirmation()
+            || entry.position.index > self.commit_index()
+            || self.log_entry(entry.position.index) != Some(entry)
+        {
+            return Err(ClusterDriverError::InvalidCommittedCommand);
+        }
+        self.persistence.apply_term_confirmation(entry)?;
+        self.step(CoreInput::AppliedThrough(entry.position.index), now)
+    }
     /// Executes and rolls back the exact metadata transaction before log admission.
     ///
     /// # Errors

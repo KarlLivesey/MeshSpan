@@ -48,9 +48,13 @@ fn dispatch_materialises_resumes_fences_and_surfaces_recorded_work()
     assert_eq!(contended, MetadataBackupDispatchOutcome::Idle);
     assert_eq!(authority.commit_count.get(), 2);
 
+    authority.run.set(Some(MetadataBackupRun {
+        state: MetadataBackupRunState::Recorded,
+        ..run
+    }));
     let replacement = MetadataBackupDispatcher::new(&authority, &mut random, second_node, 1, actor)
         .dispatch(UnixMicros::new(200), DurationMicros::new(100))?;
-    let MetadataBackupDispatchOutcome::Claimed {
+    let MetadataBackupDispatchOutcome::AwaitingProtection {
         claim: replacement_claim,
         ..
     } = replacement
@@ -92,6 +96,43 @@ fn dispatch_materialises_resumes_fences_and_surfaces_recorded_work()
                 && claim.claim.worker_node_id == first_node
     ));
     assert_eq!(authority.commit_count.get(), 4);
+    Ok(())
+}
+
+#[test]
+fn dispatch_abandons_expired_unrecorded_identity_before_preparing_a_replacement()
+-> Result<(), Box<dyn std::error::Error>> {
+    let authority = MemoryAuthority::new(schedule()?);
+    let first_node = NodeId::from_bytes([2; 16])?;
+    let second_node = NodeId::from_bytes([3; 16])?;
+    let actor = PrincipalId::from_bytes([4; 16])?;
+    let mut random = CounterRandom::default();
+    let first = MetadataBackupDispatcher::new(&authority, &mut random, first_node, 1, actor)
+        .dispatch(UnixMicros::new(100), DurationMicros::new(100))?;
+    let MetadataBackupDispatchOutcome::Claimed { run: original, .. } = first else {
+        return Err("initial claim".into());
+    };
+    assert_eq!(
+        MetadataBackupDispatcher::new(&authority, &mut random, second_node, 1, actor)
+            .dispatch(UnixMicros::new(150), DurationMicros::new(100))?,
+        MetadataBackupDispatchOutcome::Idle
+    );
+    assert_eq!(authority.commit_count.get(), 2);
+    assert_eq!(
+        MetadataBackupDispatcher::new(&authority, &mut random, second_node, 1, actor)
+            .dispatch(UnixMicros::new(200), DurationMicros::new(100))?,
+        MetadataBackupDispatchOutcome::Idle
+    );
+    assert_eq!(authority.commit_count.get(), 3);
+    let fresh = MetadataBackupDispatcher::new(&authority, &mut random, second_node, 1, actor)
+        .dispatch(UnixMicros::new(200), DurationMicros::new(100))?;
+    let MetadataBackupDispatchOutcome::Claimed { run, claim } = fresh else {
+        return Err("replacement claim".into());
+    };
+    assert_ne!(run.backup_id, original.backup_id);
+    assert_eq!(run.run_sequence, original.run_sequence + 1);
+    assert_eq!(claim.claim.claim_generation, 1);
+    assert_eq!(claim.claim.worker_node_id, second_node);
     Ok(())
 }
 
@@ -178,7 +219,10 @@ impl MemoryAuthority {
             result_digest: None,
             revision,
         }));
-        self.schedule.set(None);
+        self.schedule.set(Some(MetadataBackupSchedule {
+            run_sequence: schedule.run_sequence + 1,
+            ..schedule
+        }));
         Ok(receipt(context, command, value.backup_id, revision))
     }
 
@@ -257,6 +301,36 @@ impl MetadataBackupDispatchAuthority for MemoryAuthority {
             }
             AuthoritativeCommand::ClaimMetadataBackupRun(value) => {
                 self.commit_claim(context, command, *value)
+            }
+            AuthoritativeCommand::AbandonUnrecordedMetadataBackupRun(value) => {
+                let run = self
+                    .run
+                    .get()
+                    .ok_or(MetadataAuthorityRequestError::Rejected)?;
+                let claim = self
+                    .claim
+                    .get()
+                    .ok_or(MetadataAuthorityRequestError::Rejected)?;
+                if run.backup_id != value.backup_id
+                    || run.state != MetadataBackupRunState::Claimed
+                    || claim.claim != value.expected_claim
+                    || claim.lease_expires_at > context.occurred_at
+                {
+                    return Err(MetadataAuthorityRequestError::Rejected);
+                }
+                self.run.set(None);
+                self.claim.set(None);
+                self.schedule
+                    .set(self.schedule.get().map(|schedule| MetadataBackupSchedule {
+                        next_due_at: context.occurred_at,
+                        ..schedule
+                    }));
+                Ok(receipt(
+                    context,
+                    command,
+                    value.backup_id,
+                    self.next_revision(),
+                ))
             }
             _ => Err(MetadataAuthorityRequestError::Rejected),
         }

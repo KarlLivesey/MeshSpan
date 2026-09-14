@@ -77,6 +77,7 @@ pub(crate) struct CertificateAuthoritySet {
 
 /// One restart-scoped certificate worker and its shared HTTP-01 challenge catalogue.
 pub(crate) struct CertificateRuntime {
+    observations: Option<crate::runtime_observations::RuntimeObservations>,
     service: CertificateService,
     installation: CertificateInstallation,
     http01: crate::http01_gateway::Http01Gateway,
@@ -162,10 +163,20 @@ impl CertificateRuntime {
             },
         )?;
         Ok(Self {
+            observations: None,
             service,
             installation,
             http01: authorities.http01_reader.into_http01_gateway(http01),
         })
+    }
+
+    /// Attaches best-effort lifecycle observations without changing certificate authority.
+    pub(crate) fn with_observations(
+        mut self,
+        observations: crate::runtime_observations::RuntimeObservations,
+    ) -> Self {
+        self.observations = Some(observations);
+        self
     }
 
     /// Returns the catalogue served by the isolated plain-HTTP listener.
@@ -190,15 +201,27 @@ impl CertificateRuntime {
             let mut service = self.service;
             let mut installation = self.installation;
             let runtime = tokio::runtime::Handle::current();
+            let observations = self.observations.clone();
             let (returned_service, returned_installation, outcome) =
                 tokio::task::spawn_blocking(move || {
+                    let started = std::time::Instant::now();
                     let automation = runtime.block_on(service.run_once());
+                    if let Some(observations) = &observations {
+                        observations.record_certificate_automation(&automation, started.elapsed());
+                    }
                     let outcome =
                         automation
                             .map_err(CertificateRuntimeError::from)
                             .and_then(|automation| {
-                                installation
-                                    .run_once(OperatingSystemClock.now())
+                                let started = std::time::Instant::now();
+                                let installed = installation.run_once(OperatingSystemClock.now());
+                                if let Some(observations) = &observations {
+                                    observations.record_certificate_installation(
+                                        &installed,
+                                        started.elapsed(),
+                                    );
+                                }
+                                installed
                                     .map(|installed| (automation, installed))
                                     .map_err(CertificateRuntimeError::from)
                             });

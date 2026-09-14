@@ -74,6 +74,17 @@ pub enum LocalScrubProgressError {
 }
 
 impl LocalDatabase {
+    /// Reads existing generation-bound verification progress without creating or advancing it.
+    ///
+    /// # Errors
+    /// Returns unavailable/corrupt evidence rather than replacing it with zero progress.
+    pub fn scrub_progress(
+        &self,
+        work_id: WorkId,
+    ) -> Result<Option<LocalScrubProgress>, LocalScrubProgressError> {
+        load(self.connection(), work_id)
+    }
+
     /// Loads or creates the initial continuation for one exact scrub job and target generation.
     ///
     /// # Errors
@@ -374,6 +385,7 @@ mod tests {
         )?;
         let work_id = WorkId::from_bytes([2; 16])?;
         let target_id = TargetId::from_bytes([3; 16])?;
+        assert!(database.scrub_progress(work_id)?.is_none());
         let initial =
             database.load_or_create_scrub_progress(work_id, target_id, 4, UnixMicros::new(2))?;
         let first = LocalScrubProgressUpdate {
@@ -387,6 +399,7 @@ mod tests {
         assert_eq!(advanced.page_index, 1);
         assert_eq!(advanced.next_cursor, first.next_cursor);
         assert!(!advanced.complete);
+        assert_eq!(database.scrub_progress(work_id)?, Some(advanced.clone()));
         assert_eq!(
             database.advance_scrub_progress(&initial, &first, UnixMicros::new(3))?,
             advanced
@@ -415,6 +428,13 @@ mod tests {
             ),
             Err(LocalScrubProgressError::Invalid)
         ));
+        drop(database);
+        let reopened = LocalDatabase::open(
+            &directory.path().join("local.sqlite3"),
+            node_id,
+            UnixMicros::new(6),
+        )?;
+        assert_eq!(reopened.scrub_progress(work_id)?, Some(finished));
         Ok(())
     }
 }

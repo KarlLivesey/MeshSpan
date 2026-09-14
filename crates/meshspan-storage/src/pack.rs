@@ -16,8 +16,11 @@ use crate::journal::DurablePackEvidence;
 use crate::shard::{decode_receipt, encode_receipt, encode_shard};
 use crate::{RegisteredFolder, TargetMarker};
 
+mod compaction;
+mod recovery;
 mod removal;
 mod scrub;
+mod space;
 
 pub(crate) use removal::PackTombstoneRequest;
 pub(crate) use scrub::PackScrubResult;
@@ -41,6 +44,8 @@ pub(crate) enum PackFault {
     FullBeforeWrite,
     ShortWriteAfterShardInsert,
     LostResultAfterCommit,
+    BeforeCompactionPublish,
+    AfterCompactionPublish,
 }
 
 #[derive(Clone, Copy)]
@@ -54,6 +59,36 @@ pub(crate) struct PackPutRequest<'a> {
 }
 
 impl PackStore {
+    pub(crate) const fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    /// Reads an existing pack without creating or repairing anything on the read path.
+    pub(crate) fn open_read(
+        folder: &RegisteredFolder,
+        sequence: u64,
+    ) -> Result<Self, PackStoreError> {
+        let file_path = folder.pack_database_path(sequence)?;
+        let mut connection = Connection::open_with_flags(
+            file_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        connection.busy_timeout(BUSY_TIMEOUT)?;
+        connection.execute_batch("PRAGMA trusted_schema = OFF; PRAGMA query_only = ON;")?;
+        let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version != SCHEMA_VERSION {
+            return Err(PackStoreError::UnsupportedSchema);
+        }
+        migrate(&mut connection, UnixMicros::new(0))?;
+        verify_identity(&connection, folder.marker(), sequence)?;
+        Ok(Self {
+            connection,
+            marker: folder.marker(),
+            sequence,
+            injected_fault: None,
+        })
+    }
+
     pub fn open(
         folder: &RegisteredFolder,
         sequence: u64,
@@ -124,19 +159,31 @@ impl PackStore {
     }
 
     pub fn get_exact(&self, shard: ShardIdentity) -> Result<BoundedBytes, PackStoreError> {
+        self.read_retained(shard, SHARD_ACTIVE)
+    }
+
+    fn read_retained(
+        &self,
+        shard: ShardIdentity,
+        maximum_state: i64,
+    ) -> Result<BoundedBytes, PackStoreError> {
         let key = encode_shard(shard);
-        let stored: Option<(i64, Vec<u8>, Vec<u8>)> = self
+        let stored: Option<(i64, Vec<u8>, Option<Vec<u8>>)> = self
             .connection
             .query_row(
-                "SELECT stored_length, stored_digest, stored_bytes
-                 FROM shards WHERE shard_identity = ?1 AND state = ?2",
-                params![key.as_slice(), SHARD_ACTIVE],
+                "SELECT stored_length,
+                        CASE WHEN length(stored_digest) = 32 THEN stored_digest ELSE NULL END,
+                        CASE WHEN length(stored_bytes) BETWEEN 1 AND ?3 THEN stored_bytes ELSE NULL END
+                 FROM shards WHERE shard_identity = ?1 AND state BETWEEN 1 AND ?2",
+                params![key.as_slice(), maximum_state,
+                    i64::try_from(MAXIMUM_SHARD_BYTES).map_err(|_| PackStoreError::InvalidInput)?],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
         let Some((length, digest, bytes)) = stored else {
             return Err(PackStoreError::NotFound);
         };
+        let bytes = bytes.ok_or(PackStoreError::Corrupt)?;
         verify_bytes(length, &digest, &bytes)?;
         BoundedBytes::copy_from(&bytes, MAXIMUM_SHARD_BYTES).map_err(|_| PackStoreError::Corrupt)
     }
@@ -266,7 +313,25 @@ fn bind_identity(
             opened_at.get(),
         ],
     )?;
-    let stored: (Vec<u8>, Vec<u8>, i64, Vec<u8>, i64) = transaction.query_row(
+    verify_identity(
+        &transaction,
+        marker,
+        u64::try_from(sequence).map_err(|_| PackStoreError::Corrupt)?,
+    )?;
+    transaction.execute(
+        "UPDATE pack_state SET last_opened_at = ?1 WHERE singleton = 1",
+        [opened_at.get()],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+fn verify_identity(
+    connection: &Connection,
+    marker: TargetMarker,
+    sequence: u64,
+) -> Result<(), PackStoreError> {
+    let stored: (Vec<u8>, Vec<u8>, i64, Vec<u8>, i64) = connection.query_row(
         "SELECT mesh_id, target_id, target_generation, marker_fingerprint, pack_sequence
          FROM pack_state WHERE singleton = 1",
         [],
@@ -282,20 +347,15 @@ fn bind_identity(
     )?;
     if stored
         != (
-            mesh.to_vec(),
-            target.to_vec(),
-            generation,
-            fingerprint.to_vec(),
-            sequence,
+            marker.mesh_id().as_bytes().to_vec(),
+            marker.target_id().as_bytes().to_vec(),
+            to_i64(marker.generation())?,
+            marker.fingerprint().as_bytes().to_vec(),
+            to_i64(sequence)?,
         )
     {
         return Err(PackStoreError::IdentityMismatch);
     }
-    transaction.execute(
-        "UPDATE pack_state SET last_opened_at = ?1 WHERE singleton = 1",
-        [opened_at.get()],
-    )?;
-    transaction.commit()?;
     Ok(())
 }
 
@@ -549,6 +609,9 @@ mod tests {
             now: UnixMicros::new(12),
         };
         let mut pack = PackStore::open(&folder, 1, UnixMicros::new(1))?;
+        let empty = pack.observe_space()?;
+        assert!(empty.database_bytes > 0);
+        assert!(empty.reusable_bytes <= empty.database_bytes);
         let first = pack.put_exact(request)?;
         assert_eq!(pack.put_exact(request)?, first);
         assert_eq!(pack.get_exact(shard)?.as_slice(), bytes.as_slice());
@@ -575,6 +638,9 @@ mod tests {
         drop(pack);
 
         let pack = PackStore::open(&folder, 1, UnixMicros::new(20))?;
+        let reopened = pack.observe_space()?;
+        assert!(reopened.database_bytes >= empty.database_bytes);
+        assert!(reopened.reusable_bytes <= reopened.database_bytes);
         assert_eq!(pack.get_exact(shard)?.as_slice(), bytes.as_slice());
         pack.check_integrity()?;
         Ok(())

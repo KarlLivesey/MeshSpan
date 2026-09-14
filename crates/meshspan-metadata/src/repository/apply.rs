@@ -10,7 +10,7 @@ use super::receipt::{decode_receipt, encode_result, result_digest, validate_posi
 use super::{
     ApplyDisposition, CommandReceipt, EntityReference, LogPosition, RepositoryError,
     acknowledgement_policy, acme, authentication_method, authentication_method_creation,
-    authentication_policy, availability_cell, backup_catalogue, backup_defaults,
+    authentication_policy, availability_cell, backup_catalogue, backup_defaults, backup_orphan,
     backup_reclamation, backup_retention, backup_run, backup_schedule, bootstrap,
     cleanup_attestation, cleanup_completion, cleanup_inventory, cleanup_permit,
     cleanup_reclamation, cluster, component, external_certificate, federation_actor_attestation,
@@ -216,7 +216,10 @@ fn apply_transaction(
         .next()
         .map_err(|_| RepositoryError::CapacityExceeded)?;
     authorise(transaction, context, command)?;
-    let entity = execute(transaction, partition_id, context, command, revision)?;
+    let entity = match update_rollout::execute(transaction, context, command, revision, position) {
+        Some(result) => result?,
+        None => execute(transaction, partition_id, context, command, revision)?,
+    };
     inject_fault(fault, ApplyFaultPoint::AfterCommand)?;
     let payload = encode_result(entity, revision, position)?;
     let stored_result_digest = result_digest(&payload);
@@ -450,6 +453,9 @@ fn execute(
     command: &AuthoritativeCommand,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
+    if super::federation_pairing::is_command(command) {
+        return super::federation_pairing::execute(transaction, context, command, revision);
+    }
     if is_cleanup_command(command) {
         return execute_cleanup_command(transaction, context, command, revision);
     }
@@ -652,6 +658,7 @@ fn is_infrastructure_command(command: &AuthoritativeCommand) -> bool {
                 | AuthoritativeCommand::WithdrawSmbExport(_)
                 | AuthoritativeCommand::RegisterNodeWrappingKey(_)
                 | AuthoritativeCommand::CommitSecretGeneration(_)
+                | AuthoritativeCommand::ExtendVolumeKeyRecipients(_)
                 | AuthoritativeCommand::ConfirmRecoveryBundleSaved(_)
                 | AuthoritativeCommand::IssueJoinGrant(_)
                 | AuthoritativeCommand::ConsumeJoinGrant(_)
@@ -668,12 +675,16 @@ fn is_backup_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::ClaimMetadataBackupRun(_)
             | AuthoritativeCommand::RenewMetadataBackupRun(_)
             | AuthoritativeCommand::CompleteMetadataBackupRun(_)
+            | AuthoritativeCommand::AbandonUnrecordedMetadataBackupRun(_)
             | AuthoritativeCommand::RecordMetadataBackup(_)
             | AuthoritativeCommand::RecordBackupCopy(_)
+            | AuthoritativeCommand::BindFederatedBackupRoute(_)
+            | AuthoritativeCommand::BindBackupPublicationIntent(_)
             | AuthoritativeCommand::VerifyBackupCopy(_)
             | AuthoritativeCommand::RetireMetadataBackup(_)
             | AuthoritativeCommand::ReconcileMetadataBackupDefaults(_)
             | AuthoritativeCommand::RecordBackupReclamation(_)
+            | AuthoritativeCommand::RetireAbandonedBackupCopy(_)
     )
 }
 
@@ -712,9 +723,6 @@ fn execute_infrastructure_command(
     }
     if is_backup_command(command) {
         return execute_backup_command(transaction, partition_id, context, command, revision);
-    }
-    if let Some(result) = update_rollout::execute(transaction, context, command, revision) {
-        return result;
     }
     match command {
         AuthoritativeCommand::CreateComponent(value) => {
@@ -789,6 +797,9 @@ fn execute_infrastructure_command(
         AuthoritativeCommand::CommitSecretGeneration(value) => {
             secret_generation::commit(transaction, context, value, revision)
         }
+        AuthoritativeCommand::ExtendVolumeKeyRecipients(value) => {
+            secret_generation::extend_volume_recipients(transaction, context, value, revision)
+        }
         AuthoritativeCommand::ConfirmRecoveryBundleSaved(value) => {
             recovery_authority::confirm_saved(transaction, context, *value, revision)
         }
@@ -821,6 +832,12 @@ fn execute_backup_command(
         AuthoritativeCommand::ConfigureBackupDestination(value) => {
             backup_catalogue::configure_destination(transaction, context, value, revision)
         }
+        AuthoritativeCommand::BindFederatedBackupRoute(value) => {
+            super::federated_backup_route::bind(transaction, partition_id, context, value, revision)
+        }
+        AuthoritativeCommand::BindBackupPublicationIntent(value) => {
+            super::backup_intent::bind(transaction, partition_id, context, value, revision)
+        }
         AuthoritativeCommand::ConfigureMetadataBackupSchedule(value) => {
             backup_schedule::configure(transaction, partition_id, context, *value, revision)
         }
@@ -835,6 +852,9 @@ fn execute_backup_command(
         }
         AuthoritativeCommand::CompleteMetadataBackupRun(value) => {
             backup_run::complete(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::AbandonUnrecordedMetadataBackupRun(value) => {
+            backup_run::abandon_unrecorded(transaction, context, *value, revision)
         }
         AuthoritativeCommand::RecordMetadataBackup(value) => {
             backup_run::validate_admission(transaction, context, value)?;
@@ -862,6 +882,9 @@ fn execute_backup_command(
         }
         AuthoritativeCommand::RecordBackupReclamation(value) => {
             backup_reclamation::record(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::RetireAbandonedBackupCopy(value) => {
+            backup_orphan::retire(transaction, context, value, revision)
         }
         _ => Err(RepositoryError::InvalidCommand),
     }
@@ -1421,6 +1444,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::RegisterStorageTarget(_) => 82,
         AuthoritativeCommand::RegisterNodeWrappingKey(_) => 83,
         AuthoritativeCommand::CommitSecretGeneration(_) => 84,
+        AuthoritativeCommand::ExtendVolumeKeyRecipients(_) => 153,
         AuthoritativeCommand::ConfirmRecoveryBundleSaved(_) => 85,
         AuthoritativeCommand::ActivateNode(_) => 86,
         AuthoritativeCommand::CreateFaultGroup(_) => 88,
@@ -1488,6 +1512,15 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::AdvanceUpdateNode(_) => 150,
         AuthoritativeCommand::ControlUpdateRollout(_) => 151,
         AuthoritativeCommand::PublishUpdateArtifact(_) => 152,
+        AuthoritativeCommand::AbandonUnrecordedMetadataBackupRun(_) => 154,
+        AuthoritativeCommand::IssueFederationPairingInvitation(_) => 155,
+        AuthoritativeCommand::CancelFederationPairingInvitation(_) => 156,
+        AuthoritativeCommand::PrepareFederationConnection(_) => 157,
+        AuthoritativeCommand::BeginFederationConnection(_) => 158,
+        AuthoritativeCommand::BindFederatedBackupRoute(_) => 159,
+        AuthoritativeCommand::RecordFederationStorageSeal(_) => 160,
+        AuthoritativeCommand::RetireAbandonedBackupCopy(_) => 161,
+        AuthoritativeCommand::BindBackupPublicationIntent(_) => 162,
     }
 }
 

@@ -30,6 +30,8 @@ pub enum ReachabilityRootSource {
     ConvergedHead(VolumeId),
     /// Active or expiring user snapshot root.
     Snapshot(SnapshotId),
+    /// Immutable commit retained by one or more backup generations.
+    Backup(NamespaceCommitId),
 }
 
 /// One exact metadata-authoritative root record supplied in stable order.
@@ -591,6 +593,7 @@ fn validate_root_order(
             .ok_or(VersionReachabilityError::InvalidInput)?;
         if (ordinal == 0 && root.source != ReachabilityRootSource::ConvergedHead(volume_id))
             || (ordinal != 0 && matches!(root.source, ReachabilityRootSource::ConvergedHead(_)))
+            || matches!(root.source, ReachabilityRootSource::Backup(commit) if commit != root.namespace_commit_id)
         {
             return Err(VersionReachabilityError::InvalidInput);
         }
@@ -607,6 +610,7 @@ fn root_sort_key(root: ReachabilityRoot) -> (u8, [u8; 16]) {
     match root.source {
         ReachabilityRootSource::ConvergedHead(volume) => (1, volume.as_bytes()),
         ReachabilityRootSource::Snapshot(snapshot) => (2, snapshot.as_bytes()),
+        ReachabilityRootSource::Backup(commit) => (3, commit.as_bytes()),
     }
 }
 
@@ -681,6 +685,10 @@ fn decode_root(
         ),
         2 => ReachabilityRootSource::Snapshot(
             SnapshotId::from_bytes(source_id).map_err(|_| VersionReachabilityError::Corrupt)?,
+        ),
+        3 if stored.1 == stored.2 => ReachabilityRootSource::Backup(
+            NamespaceCommitId::from_bytes(source_id)
+                .map_err(|_| VersionReachabilityError::Corrupt)?,
         ),
         _ => return Err(VersionReachabilityError::Corrupt),
     };
@@ -853,6 +861,9 @@ fn current_local_roots_digest(
          FROM namespace_snapshot_restore_operations restores
          JOIN namespace_commits commits USING(namespace_commit_id)
          WHERE restores.activated_at IS NULL AND commits.volume_id = ?1
+         UNION ALL
+         SELECT 3, operation_id, manifest_id, version_id FROM content_reuse_reservations
+         WHERE volume_id = ?1 AND state = 1
          ORDER BY 1, 2",
     )?;
     let rows = statement.query_map([volume_id.as_bytes().as_slice()], |row| {
@@ -865,7 +876,7 @@ fn current_local_roots_digest(
     })?;
     for row in rows {
         let row = row?;
-        if !matches!(row.0, 1 | 2) || row.1.len() != 16 || row.2.len() != 16 || row.3.len() != 16 {
+        if !matches!(row.0, 1..=3) || row.1.len() != 16 || row.2.len() != 16 || row.3.len() != 16 {
             return Err(VersionReachabilityError::Corrupt);
         }
         digest.update(&[u8::try_from(row.0).map_err(|_| VersionReachabilityError::Corrupt)?]);
@@ -1156,7 +1167,8 @@ pub(crate) fn reject_operation_collision(
           OR EXISTS(SELECT 1 FROM handle_flush_plans WHERE operation_id = ?1)
           OR EXISTS(SELECT 1 FROM version_reachability_scans WHERE operation_id = ?1)
           OR EXISTS(SELECT 1 FROM retired_manifest_roots WHERE retirement_operation_id = ?1)
-          OR EXISTS(SELECT 1 FROM cancelled_cleanup_releases WHERE release_operation_id = ?1)",
+          OR EXISTS(SELECT 1 FROM cancelled_cleanup_releases WHERE release_operation_id = ?1)
+          OR EXISTS(SELECT 1 FROM content_reuse_reservations WHERE operation_id = ?1)",
         [operation_id.as_bytes().as_slice()],
         |row| row.get(0),
     )?;

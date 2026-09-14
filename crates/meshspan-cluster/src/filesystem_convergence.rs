@@ -37,7 +37,8 @@ impl<'a> FilesystemConvergenceService<'a> {
     ///
     /// # Errors
     ///
-    /// Rejects unknown heads, mixed scopes, non-mutation history, corruption and exceeded bounds.
+    /// Rejects unknown heads, mixed scopes, unsupported snapshot-restore history, corruption
+    /// and exceeded bounds.
     pub fn export_history(
         &self,
         volume_id: VolumeId,

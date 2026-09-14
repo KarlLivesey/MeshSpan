@@ -2,8 +2,19 @@
 
 //! Immutable manifest/version publication with one atomic branch-file head transition.
 
+#[path = "content_reuse.rs"]
+mod content_reuse;
+#[path = "publication_convergence.rs"]
+mod convergence;
+#[path = "publication_delivery.rs"]
+mod delivery;
 #[path = "namespace_publication.rs"]
 mod namespace;
+
+pub use convergence::{
+    NamespaceConvergenceEvidence, NamespaceConvergenceJob, NamespaceConvergenceOutcome,
+};
+pub use delivery::NamespaceDelivery;
 
 pub use namespace::{
     FederatedNamespaceMutationProposal, NamespaceHistoryCommitRecord,
@@ -37,7 +48,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 41] = [
+const MIGRATIONS: [Migration; 45] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -202,8 +213,24 @@ const MIGRATIONS: [Migration; 41] = [
         version: 41,
         sql: include_str!("../schema/branch/041_initial_file_create_plans.sql"),
     },
+    Migration {
+        version: 42,
+        sql: include_str!("../schema/branch/042_content_reuse_reservations.sql"),
+    },
+    Migration {
+        version: 43,
+        sql: include_str!("../schema/branch/043_namespace_delivery.sql"),
+    },
+    Migration {
+        version: 44,
+        sql: include_str!("../schema/branch/044_namespace_convergence.sql"),
+    },
+    Migration {
+        version: 45,
+        sql: include_str!("../schema/branch/045_backup_reachability_roots.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 41;
+const SCHEMA_VERSION: u32 = 45;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -546,6 +573,7 @@ pub struct NamespacePublicationReceipt {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VerifiedPublicationHead {
     receipt: NamespacePublicationReceipt,
+    convergence_digest: [u8; 32],
     volume_id: VolumeId,
     expected_namespace_commit_id: Option<NamespaceCommitId>,
     root_object_revision_id: ObjectRevisionId,
@@ -561,9 +589,11 @@ impl VerifiedPublicationHead {
         root_object_revision_id: ObjectRevisionId,
         created_by: PrincipalId,
         created_at: UnixMicros,
+        convergence_digest: [u8; 32],
     ) -> Self {
         Self {
             receipt,
+            convergence_digest,
             volume_id,
             expected_namespace_commit_id,
             root_object_revision_id,
@@ -576,6 +606,13 @@ impl VerifiedPublicationHead {
     #[must_use]
     pub const fn receipt(self) -> NamespacePublicationReceipt {
         self.receipt
+    }
+
+    /// Canonical immutable history digest, excluding separately verified federation admission.
+    /// This is shared by foreground/background publishers, not the local connector receipt hash.
+    #[must_use]
+    pub const fn convergence_digest(self) -> [u8; 32] {
+        self.convergence_digest
     }
 
     /// Volume whose converged head may advance.
@@ -847,7 +884,7 @@ pub struct BranchFileHead {
 pub struct NamespaceHistoryLimits {
     /// Maximum distinct branch heads accepted in one request.
     pub maximum_heads: usize,
-    /// Maximum mutation commits carried by one bundle.
+    /// Maximum namespace commits carried by one bundle.
     pub maximum_commits: usize,
     /// Maximum combined directory nodes, manifests, versions and object revisions.
     pub maximum_immutable_records: usize,
@@ -862,14 +899,15 @@ impl NamespaceHistoryLimits {
     };
 }
 
-/// Opaque, validated mutation history ready for transport encoding.
+/// Opaque, validated mutation and merge history ready for transport encoding.
 ///
-/// Mutable branch heads, handles, sessions and local operation receipts are deliberately absent.
+/// Mutable branch heads, handles, sessions and connector receipts are deliberately absent.
+/// Merge receipts describe immutable reconciliation evidence, not converged-head authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NamespaceHistoryBundle {
     volume_id: VolumeId,
     heads: Vec<NamespaceCommitId>,
-    commits: Vec<namespace::transfer::TransferredMutationCommit>,
+    commits: Vec<namespace::transfer::TransferredNamespaceCommit>,
     directory_nodes: Vec<DirectoryNodeRecord>,
     manifests: Vec<ManifestPublication>,
     file_versions: Vec<namespace::transfer::TransferredFileVersion>,
@@ -889,7 +927,7 @@ impl NamespaceHistoryBundle {
         &self.heads
     }
 
-    /// Number of mutation commits carried by the bundle.
+    /// Number of namespace commits carried by the bundle.
     #[must_use]
     pub const fn commit_count(&self) -> usize {
         self.commits.len()
@@ -931,6 +969,12 @@ pub struct VersionPublicationStore {
 }
 
 impl VersionPublicationStore {
+    /// Local namespace schema understood by this build, for executable update admission.
+    #[must_use]
+    pub const fn supported_schema_version() -> u32 {
+        SCHEMA_VERSION
+    }
+
     /// Opens, migrates and verifies one daemon-local branch publication database.
     ///
     /// # Errors
@@ -969,7 +1013,8 @@ impl VersionPublicationStore {
     ///
     /// # Errors
     ///
-    /// Rejects unknown heads, non-mutation history, mixed volumes, corruption or exceeded bounds.
+    /// Rejects unknown heads, unsupported snapshot-restore history, mixed volumes, corruption
+    /// or exceeded bounds.
     pub fn export_namespace_history(
         &self,
         volume_id: VolumeId,
@@ -1000,6 +1045,24 @@ impl VersionPublicationStore {
         request: NamespaceHistoryPageRequest,
     ) -> Result<NamespaceHistoryPage, PublicationError> {
         namespace::namespace_history_page(&mut self.connection, request)
+    }
+
+    /// Pages only the object trees selected by exact retained roots, not their causal ancestors.
+    ///
+    /// Used by isolated backup/recovery verification. `known_commits` must be empty. Results
+    /// contain no commit records; immutable bodies use `namespace_history_object`. Separate
+    /// traversal-bound tokens/cursors cannot resume a causal-history export, or vice versa.
+    /// Progress uses the existing durable bounded graph queue and survives restart. This does
+    /// not grant access, select roots, restore branches or change namespace heads.
+    ///
+    /// # Errors
+    /// Rejects unknown/wrong-volume roots, non-empty known sets, malformed or expired cursors,
+    /// inconsistent immutable records and excessive bounds without returning a partial page.
+    pub fn namespace_retained_tree_page(
+        &mut self,
+        request: NamespaceHistoryPageRequest,
+    ) -> Result<NamespaceHistoryPage, PublicationError> {
+        namespace::namespace_retained_tree_page(&mut self.connection, request)
     }
 
     /// Loads one immutable body only when a live authority-bound export advertised its digest.
@@ -1094,6 +1157,8 @@ impl VersionPublicationStore {
     /// root supplied by the caller and belong to the current local lineage. A descendant advances
     /// the branch; an exact retry or already-superseded ancestor returns the existing head without
     /// advancing its sequence. Divergent history is never selected implicitly.
+    /// The caller must independently verify metadata authority for restore commits
+    /// in the selected lineage; an imported receipt alone does not authorise a restore.
     ///
     /// # Errors
     ///
@@ -1639,11 +1704,35 @@ impl VersionPublicationStore {
         volume_id: VolumeId,
         namespace_commit_id: NamespaceCommitId,
     ) -> Result<ObjectRevisionId, PublicationError> {
-        let commit = namespace::repository::load_commit(&self.connection, namespace_commit_id)?;
+        let commit =
+            namespace::repository::load_namespace_root(&self.connection, namespace_commit_id)?;
         if commit.volume_id == volume_id {
             Ok(commit.root_object_revision_id)
         } else {
             Err(PublicationError::InvalidInput)
+        }
+    }
+
+    /// Returns a verified immutable root, or `None` when that commit has not arrived locally.
+    /// Absence is not permission to adopt another head or discard pending history.
+    ///
+    /// # Errors
+    /// Rejects wrong-volume or corrupt retained commits and propagates database failures.
+    pub fn known_namespace_commit_root(
+        &self,
+        volume_id: VolumeId,
+        namespace_commit_id: NamespaceCommitId,
+    ) -> Result<Option<ObjectRevisionId>, PublicationError> {
+        let exists: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM namespace_commits WHERE namespace_commit_id = ?1)",
+            [namespace_commit_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )?;
+        if exists {
+            self.namespace_commit_root(volume_id, namespace_commit_id)
+                .map(Some)
+        } else {
+            Ok(None)
         }
     }
 
@@ -1656,7 +1745,8 @@ impl VersionPublicationStore {
         &self,
         namespace_commit_id: NamespaceCommitId,
     ) -> Result<(VolumeId, ObjectRevisionId), PublicationError> {
-        let commit = namespace::repository::load_commit(&self.connection, namespace_commit_id)?;
+        let commit =
+            namespace::repository::load_namespace_root(&self.connection, namespace_commit_id)?;
         Ok((commit.volume_id, commit.root_object_revision_id))
     }
 
@@ -2550,6 +2640,7 @@ fn persist_version(
     publication: FilePublication,
 ) -> Result<(), PublicationError> {
     crate::cleanup_fence::reject_manifest_reference(transaction, publication.manifest)?;
+    content_reuse::attach(transaction, publication)?;
     let version = publication.version_id.as_bytes();
     let collision: i64 = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM file_versions WHERE version_id = ?1)",

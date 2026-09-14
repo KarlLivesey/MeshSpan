@@ -76,6 +76,10 @@ pub struct FederationStorageAuthorityRequest {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FederationStorageAllocationAuthority {
     allocation: FederationStorageAllocation,
+    grant_id: FederationGrantId,
+    valid_from: UnixMicros,
+    valid_until: UnixMicros,
+    write_limit_bytes: u64,
     relationship_id: FederationRelationshipId,
     provider_mesh_id: MeshId,
     remote_mesh_id: MeshId,
@@ -88,6 +92,30 @@ pub struct FederationStorageAllocationAuthority {
 }
 
 impl FederationStorageAllocationAuthority {
+    /// Current renewable permission, distinct from the allocation's original grant identity.
+    #[must_use]
+    pub const fn grant_id(self) -> FederationGrantId {
+        self.grant_id
+    }
+
+    /// Inclusive intersection of the allocation lease and current grant validity.
+    #[must_use]
+    pub const fn valid_from(self) -> UnixMicros {
+        self.valid_from
+    }
+
+    /// Exclusive intersection of the allocation lease and current grant validity.
+    #[must_use]
+    pub const fn valid_until(self) -> UnixMicros {
+        self.valid_until
+    }
+
+    /// Current ceiling for new reservations; retained bytes may exceed a lowered ceiling.
+    #[must_use]
+    pub const fn write_limit_bytes(self) -> u64 {
+        self.write_limit_bytes
+    }
+
     /// Returns the exact immutable allocation.
     #[must_use]
     pub const fn allocation(self) -> FederationStorageAllocation {
@@ -154,6 +182,7 @@ pub(super) fn is_command(command: &AuthoritativeCommand) -> bool {
         command,
         AuthoritativeCommand::IssueFederationStorageAllocation(_)
             | AuthoritativeCommand::RevokeFederationStorageAllocation(_)
+            | AuthoritativeCommand::RecordFederationStorageSeal(_)
     )
 }
 
@@ -164,6 +193,9 @@ pub(super) fn execute(
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
     match command {
+        AuthoritativeCommand::RecordFederationStorageSeal(value) => {
+            super::federation_storage_seal::record(transaction, value, revision)
+        }
         AuthoritativeCommand::IssueFederationStorageAllocation(value) => {
             issue(transaction, context, *value, revision)
         }
@@ -213,6 +245,8 @@ pub(super) fn active_authority(
     let Some(allocation_record) = load(database.connection(), request.allocation_id)? else {
         return Ok(None);
     };
+    let lease =
+        super::federation_storage_lease::load(database.connection(), request.allocation_id)?;
     let Some(grant_record) = federation_grant_evidence::active_grant(database, request.grant_id)?
     else {
         return Ok(None);
@@ -232,6 +266,9 @@ pub(super) fn active_authority(
     };
     let allocation = allocation_record.allocation;
     let grant = grant_record.grant;
+    if lease.write_limit_bytes > allocation.maximum_bytes() {
+        return Err(RepositoryError::CorruptState);
+    }
     let current = allocation_record.state == FederationStorageAllocationState::Active
         && relationship.state == super::FederationRelationshipState::Active
         && relationship.relationship_id == request.relationship_id
@@ -241,13 +278,14 @@ pub(super) fn active_authority(
         && grant.authority_epoch() == relationship.authority_epoch
         && provider_mesh_id == relationship.local_mesh_id
         && allocation.allocation_id() == request.allocation_id
-        && allocation.grant_id() == request.grant_id
+        && lease.grant_id == request.grant_id
         && allocation.provider_node_id() == request.provider_node_id
         && allocation.target_id() == request.target_id
         && allocation.target_generation() == request.target_generation
         && request.requested_bytes > 0
         && request.requested_bytes <= allocation.maximum_bytes()
-        && allocation.is_valid_at(request.observed_at)
+        && request.observed_at >= lease.valid_from
+        && request.observed_at < lease.valid_until
         && request.observed_at >= grant.valid_from()
         && grant
             .valid_until()
@@ -258,6 +296,12 @@ pub(super) fn active_authority(
     }
     Ok(Some(FederationStorageAllocationAuthority {
         allocation,
+        grant_id: lease.grant_id,
+        valid_from: lease.valid_from.max(grant.valid_from()),
+        valid_until: grant
+            .valid_until()
+            .map_or(lease.valid_until, |until| until.min(lease.valid_until)),
+        write_limit_bytes: lease.write_limit_bytes,
         relationship_id: relationship.relationship_id,
         provider_mesh_id: relationship.local_mesh_id,
         remote_mesh_id: relationship.remote_mesh_id,
@@ -301,6 +345,7 @@ fn issue(
             to_i64(revision.get())?,
         ],
     )?;
+    super::federation_storage_lease::issue(transaction, allocation, revision)?;
     Ok(reference(allocation.allocation_id()))
 }
 
@@ -358,11 +403,13 @@ fn prove_disjoint_capacity(
     allocation: FederationStorageAllocation,
     grant_limit: u64,
 ) -> Result<(), RepositoryError> {
+    super::federation_storage_seal::verify_grant_seals(transaction, allocation.grant_id())?;
     let mut statement = transaction.prepare(
-        "SELECT maximum_bytes
-         FROM federation_storage_allocations
-         WHERE grant_id = ?1
-         ORDER BY allocation_id
+        "SELECT COALESCE(s.ceiling_bytes, a.maximum_bytes)
+         FROM federation_storage_allocations a JOIN federation_storage_authority l USING(allocation_id)
+         LEFT JOIN federation_storage_seals s USING(allocation_id)
+         WHERE l.grant_id = ?1
+         ORDER BY a.allocation_id
          LIMIT ?2",
     )?;
     let rows = statement.query_map(
@@ -377,7 +424,9 @@ fn prove_disjoint_capacity(
     let mut count = 0_usize;
     for row in rows {
         allocated = allocated
-            .checked_add(u128::from(positive(row?)?))
+            .checked_add(u128::from(
+                u64::try_from(row?).map_err(|_| RepositoryError::CorruptState)?,
+            ))
             .ok_or(RepositoryError::CapacityExceeded)?;
         count = count.saturating_add(1);
     }

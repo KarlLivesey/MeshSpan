@@ -50,7 +50,7 @@ pub(crate) fn derive(
     digest.finalize().into()
 }
 
-fn append_hex(output: &mut String, bytes: &[u8]) {
+pub(crate) fn append_hex(output: &mut String, bytes: &[u8]) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     for byte in bytes {
         output.push(char::from(HEX[usize::from(byte >> 4)]));
@@ -58,7 +58,7 @@ fn append_hex(output: &mut String, bytes: &[u8]) {
     }
 }
 
-fn decode_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
+pub(crate) fn decode_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
     if value.len() != N * 2 {
         return None;
     }

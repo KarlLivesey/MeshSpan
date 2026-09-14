@@ -16,7 +16,7 @@ use crate::{
     VersionCleanupItemPlacement,
 };
 
-const MAXIMUM_APPEND_ITEMS: usize = 1_000;
+use crate::command::MAXIMUM_CLEANUP_APPEND_ITEMS as MAXIMUM_APPEND_ITEMS;
 const INVENTORY_BUILDING: i64 = 1;
 const INVENTORY_SEALED: i64 = 2;
 const CLEANUP_AUTHORISED: i64 = 2;

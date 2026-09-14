@@ -11,7 +11,7 @@ use meshspan_domain::{
 use rusqlite::Connection;
 
 use super::super::repository::{ObjectRevisionInsert, load_object_revision};
-use super::{TransferredFileVersion, TransferredMutationCommit};
+use super::{TransferredFileVersion, TransferredNamespaceCommit};
 use crate::directory::DirectoryReachabilityReference;
 use crate::publication::{copy_array, decode_identifier, from_i64, load_directory_node};
 use crate::{
@@ -32,11 +32,16 @@ pub(in crate::publication) struct CommitReferences {
 }
 
 pub(in crate::publication) fn commit_references(
-    record: &TransferredMutationCommit,
+    record: &TransferredNamespaceCommit,
 ) -> CommitReferences {
     let mut revisions = BTreeSet::from([record.commit.root_object_revision_id]);
     let mut versions = BTreeSet::new();
-    let intent = &record.intent;
+    let Some(intent) = record.intent() else {
+        return CommitReferences {
+            revisions,
+            versions,
+        };
+    };
     revisions.insert(intent.object_revision_id);
     revisions.extend(intent.prior_object_revision_id);
     add_transitions(&mut revisions, &intent.ancestors);
@@ -59,7 +64,7 @@ pub(in crate::publication) fn commit_references(
 pub(super) fn collect(
     connection: &Connection,
     volume_id: VolumeId,
-    commits: &[TransferredMutationCommit],
+    commits: &[TransferredNamespaceCommit],
     limits: NamespaceHistoryLimits,
 ) -> Result<HistoryObjects, PublicationError> {
     let mut collector = GraphCollector::new(connection, volume_id, limits);
@@ -100,7 +105,7 @@ impl<'a> GraphCollector<'a> {
         }
     }
 
-    fn seed_commits(&mut self, commits: &[TransferredMutationCommit]) {
+    fn seed_commits(&mut self, commits: &[TransferredNamespaceCommit]) {
         for record in commits {
             let references = commit_references(record);
             self.pending_revisions.extend(references.revisions);

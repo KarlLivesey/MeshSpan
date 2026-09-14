@@ -49,6 +49,30 @@ message MetadataPage {
   bytes next_cursor = 3;
 }
 
+// A fresh read barrier, not metadata history or a reusable authorisation lease.
+message FetchMetadataReadFence {
+  bytes nonce = 1;
+}
+
+message MetadataReadFence {
+  bytes partition_id = 1;
+  bytes leader_node_id = 2;
+  uint64 term = 3;
+  uint64 membership_epoch = 4;
+  bytes plan_digest = 5;
+  LogPosition applied = 6;
+  bytes applied_digest = 7;
+  uint64 revision = 8;
+}
+
+message MetadataReadFenceResult {
+  bytes nonce = 1;
+  oneof outcome {
+    MetadataReadFence fence = 2;
+    WireError rejection = 3;
+  }
+}
+
 message MetadataWatch {
   uint64 after_revision = 1;
   repeated uint32 families = 2;
@@ -470,6 +494,30 @@ message UpdateReadinessResult {
   bool listeners_bound = 8;
   bytes runtime_report = 9;
   sint64 observed_at_unix_micros = 10;
+  // Historical local scan progress, never proof of whole-mesh coverage or permission to restart.
+  UpdateWorkloadObservation local_content_scan = 11;
+}
+
+enum UpdateWorkloadState {
+  UPDATE_WORKLOAD_STATE_UNSPECIFIED = 0;
+  UPDATE_WORKLOAD_STATE_CHECKING = 1;
+  UPDATE_WORKLOAD_STATE_LOCAL_CONTENT_CHECKED = 2;
+  UPDATE_WORKLOAD_STATE_UNAVAILABLE = 3;
+}
+
+message UpdateWorkloadObservation {
+  bytes excluded_node_id = 1;
+  uint64 excluded_node_incarnation = 2;
+  uint64 preparation_sequence = 3;
+  uint64 preparation_log_index = 4;
+  uint64 metadata_revision = 5;
+  UpdateWorkloadState state = 6;
+  sint64 observed_at_unix_micros = 7;
+  uint64 volumes_checked = 8;
+  uint64 publications_checked = 9;
+  uint64 stripes_checked = 10;
+  optional bytes current_volume_id = 11;
+  uint64 excluded_targets = 12;
 }
 
 message ControlEnvelope {
@@ -501,6 +549,8 @@ message ControlEnvelope {
     OperationStatusResponse operation_status_response = 34;
     MetadataWatch metadata_watch = 35;
     MetadataChangeBatch metadata_change_batch = 36;
+    FetchMetadataReadFence fetch_metadata_read_fence = 37;
+    MetadataReadFenceResult metadata_read_fence_result = 38;
     ResolveScopeRoute resolve_scope_route = 40;
     ScopeRoute scope_route = 41;
     FetchRoutingDelta fetch_routing_delta = 42;

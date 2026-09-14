@@ -68,6 +68,7 @@ pub(super) fn commit(
             .ok_or(RepositoryError::CapacityExceeded)
     })?;
     insert_transition(transaction, context, command, revision, sequence)?;
+    super::backup_roots::head_changed(transaction, command, revision)?;
     namespace::update_namespace_revision(transaction, revision)?;
     Ok(EntityReference {
         kind: EntityKind::Volume,
@@ -325,6 +326,47 @@ fn decode_head(
         committed_at: UnixMicros::new(stored.10),
         revision: Revision::new(parse_u64(stored.11)?),
     })
+}
+
+pub(super) fn publication_is_committed(
+    database: &PartitionDatabase,
+    expected: &CommitConvergedVolumeHead,
+) -> Result<bool, RepositoryError> {
+    let ConvergedHeadEvidence::Publication {
+        operation_id,
+        request_digest,
+        result_digest,
+    } = expected.evidence
+    else {
+        return Err(RepositoryError::InvalidCommand);
+    };
+    // Validate the retained chain before using an older transition as evidence.
+    // Its publisher and the current head may legitimately differ from this caller.
+    if load(database, expected.volume_id)?.is_none() {
+        return Ok(false);
+    }
+    let previous = expected
+        .expected_namespace_commit_id
+        .map(NamespaceCommitId::as_bytes);
+    let found: bool = database.connection().query_row(
+        "SELECT EXISTS(SELECT 1 FROM volume_head_transitions
+         WHERE namespace_commit_id = ?1 AND volume_id = ?2
+           AND previous_namespace_commit_id IS ?3 AND root_object_revision_id = ?4
+           AND evidence_kind = 1 AND source_operation_id = ?5
+           AND source_request_digest = ?6 AND source_result_digest = ?7
+           AND causal_plan_digest IS NULL AND replay_plan_digest IS NULL)",
+        params![
+            expected.namespace_commit_id.as_bytes().as_slice(),
+            expected.volume_id.as_bytes().as_slice(),
+            previous.as_ref().map(<[u8; 16]>::as_slice),
+            expected.root_object_revision_id.as_bytes().as_slice(),
+            operation_id.as_bytes().as_slice(),
+            request_digest.as_slice(),
+            result_digest.as_slice(),
+        ],
+        |row| row.get(0),
+    )?;
+    Ok(found)
 }
 
 fn decode_identifier<T>(

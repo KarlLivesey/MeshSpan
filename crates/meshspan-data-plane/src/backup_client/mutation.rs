@@ -19,6 +19,45 @@ use super::validate_invocation;
 use crate::BackupPlaneError;
 use crate::backup_wire::{delete_receipt, object_receipt, require_durable, wire_object};
 
+/// Recovers exact remote catalogue evidence without the original provider locator.
+/// # Errors
+/// Rejects stale/unauthorised requests, missing objects, transport failure or substituted evidence.
+pub async fn lookup_backup(
+    connection: &quinn::Connection,
+    header: RequestHeader,
+    request: &meshspan_contracts::BackupLookupRequest,
+    limits: WireLimits,
+    observed_at: UnixMicros,
+) -> Result<BackupObjectReceipt, BackupPlaneError> {
+    meshspan_contracts::validate_backup_lookup_request(request, observed_at)
+        .map_err(|_| BackupPlaneError::InvalidMessage)?;
+    let revision = validate_invocation(&header, request.context)?;
+    let response = exchange(
+        connection,
+        Message::LookupBackupRequest(meshspan_protocol::v1::LookupBackupRequest {
+            header: Some(header),
+            object: Some(wire_object(request.object)),
+            authority_revision: revision.get(),
+        }),
+        limits,
+    )
+    .await?;
+    let Message::LookupBackupResult(response) = response else {
+        return Err(BackupPlaneError::InvalidMessage);
+    };
+    require_durable(response.result.as_ref())?;
+    let receipt = object_receipt(
+        response
+            .receipt
+            .as_ref()
+            .ok_or(BackupPlaneError::InvalidMessage)?,
+    )?;
+    if receipt.operation_id != request.context.operation_id || receipt.object != request.object {
+        return Err(BackupPlaneError::InvalidMessage);
+    }
+    Ok(receipt)
+}
+
 /// Independently verifies one exact encrypted backup on a remote provider.
 ///
 /// # Errors

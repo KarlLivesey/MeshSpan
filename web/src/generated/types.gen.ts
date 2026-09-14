@@ -78,6 +78,46 @@ export type AbortUploadResponse = {
 };
 
 /**
+ * AcceptFederationPairingRequest
+ *
+ * Connection attempt sent through TLS pinned by the invitation; the code is in Authorization.
+ */
+export type AcceptFederationPairingRequest = {
+  /**
+   * Original accepting administrator's operation identity.
+   */
+  operation_id: string;
+  /**
+   * Unpadded base64url of a canonical MSFP-v1 signed public peer record.
+   */
+  peer_record: string;
+};
+
+/**
+ * AcceptFederationPairingResponse
+ *
+ * Issuing swarm's durable approval and signed public identity, not user/file access.
+ */
+export type AcceptFederationPairingResponse = {
+  /**
+   * Original approval revision in the issuing swarm's consensus.
+   */
+  committed_revision: number;
+  /**
+   * Original accepting administrator's operation identity.
+   */
+  operation_id: string;
+  /**
+   * Inviter's exact signed public peer record.
+   */
+  peer_record: string;
+  /**
+   * Shared relationship identity.
+   */
+  relationship_id: string;
+};
+
+/**
  * AddGroupMemberRequest
  *
  * Idempotent administrator request to add one direct user or nested-group member.
@@ -647,6 +687,50 @@ export type BeginUploadResponse = {
 };
 
 /**
+ * CancelFederationPairingInvitationRequest
+ *
+ * Cancels unused material without affecting an established relationship.
+ */
+export type CancelFederationPairingInvitationRequest = {
+  /**
+   * Revision observed when issuing the material.
+   */
+  expected_invitation_revision: number;
+  /**
+   * Exact reserved relationship to withdraw.
+   */
+  invitation_id: string;
+  /**
+   * Stable retry identity, distinct from issuance.
+   */
+  operation_id: string;
+  /**
+   * Administrator's non-secret audit explanation.
+   */
+  reason: string;
+};
+
+/**
+ * CancelFederationPairingInvitationResponse
+ *
+ * Durable cancellation receipt; no connection secret is returned.
+ */
+export type CancelFederationPairingInvitationResponse = {
+  /**
+   * Original cancellation revision, preserved on retry.
+   */
+  committed_revision: number;
+  /**
+   * Withdrawn reserved relationship.
+   */
+  invitation_id: string;
+  /**
+   * Exact committed cancellation operation.
+   */
+  operation_id: string;
+};
+
+/**
  * CertificateStatusResponse
  *
  * Current certificate status; `certificate` is `null` before a source is configured.
@@ -894,7 +978,7 @@ export type CommitUploadResponse = {
 /**
  * ConfigureBackupDestinationRequest
  *
- * One registered target selected for encrypted recovery copies.
+ * One exact provider binding selected for encrypted recovery copies.
  */
 export type ConfigureBackupDestinationRequest = {
   /**
@@ -918,13 +1002,34 @@ export type ConfigureBackupDestinationRequest = {
    */
   operation_id: string;
   /**
-   * Observed target generation. A returned or replaced target must match it.
+   * Exact provider identity, never a raw path or a credential.
    */
-  target_generation: string;
+  provider:
+    | {
+        kind: "registered_target";
+        /**
+         * Registered target identity.
+         */
+        target_id: string;
+      }
+    | {
+        kind: "federated_mesh";
+        /**
+         * Remote swarm identity.
+         */
+        remote_mesh_id: string;
+      }
+    | {
+        /**
+         * Component instance identity.
+         */
+        instance_id: string;
+        kind: "component_provider";
+      };
   /**
-   * Exact registered storage target, never a raw path.
+   * Observed provider generation. Configuration does not prove delivery support.
    */
-  target_id: string;
+  provider_generation: string;
 };
 
 /**
@@ -1006,6 +1111,137 @@ export type ConfigureBackupScheduleResponse = {
    * Immutable policy sequence created by this operation.
    */
   sequence: number;
+};
+
+/**
+ * ConfigureFederationStorageGrantRequest
+ *
+ * Exact-retry mutation against an observed root-metadata revision.
+ */
+export type ConfigureFederationStorageGrantRequest = {
+  /**
+   * Exact provider-owned change.
+   */
+  change:
+    | {
+        /**
+         * Client-chosen unused grant identity.
+         */
+        grant_id: string;
+        kind: "issue";
+        /**
+         * This provider's offered upper bound; consumer-local limits remain independent.
+         */
+        policy: {
+          /**
+           * Whether the recipient can re-offer an equal or narrower storage delegation.
+           */
+          allow_downstream_delegation: boolean;
+          /**
+           * Whether verified placements may count towards protection; this alone proves no copies.
+           */
+          counts_towards_protection: boolean;
+          /**
+           * Positive decimal bytes; domain admission also enforces the metadata integer range.
+           */
+          maximum_bytes: string;
+          /**
+           * Whether ordinary reads may query this storage, independently of backup/recovery reads.
+           */
+          serves_reads: boolean;
+        };
+        /**
+         * Existing mutually approved relationship, not a node join grant.
+         */
+        relationship_id: string;
+        /**
+         * Omitted means 30 days; null explicitly means indefinite authority.
+         */
+        valid_for_seconds?: number | null;
+      }
+    | {
+        /**
+         * New unused grant identity.
+         */
+        grant_id: string;
+        kind: "replace";
+        /**
+         * New provider ceiling, still intersected with every retained peer restriction.
+         */
+        policy: {
+          /**
+           * Whether the recipient can re-offer an equal or narrower storage delegation.
+           */
+          allow_downstream_delegation: boolean;
+          /**
+           * Whether verified placements may count towards protection; this alone proves no copies.
+           */
+          counts_towards_protection: boolean;
+          /**
+           * Positive decimal bytes; domain admission also enforces the metadata integer range.
+           */
+          maximum_bytes: string;
+          /**
+           * Whether ordinary reads may query this storage, independently of backup/recovery reads.
+           */
+          serves_reads: boolean;
+        };
+        /**
+         * Exact previous grant; its current state is fenced by the request's metadata revision.
+         */
+        predecessor_grant_id: string;
+        /**
+         * Non-secret administrator explanation.
+         */
+        reason: string;
+        /**
+         * True requires an equal or narrower effective policy; false is renewal/reconfiguration.
+         */
+        restricts_authority: boolean;
+        /**
+         * Omitted means 30 days; null explicitly means indefinite authority.
+         */
+        valid_for_seconds?: number | null;
+      }
+    | {
+        /**
+         * Exact grant to withdraw.
+         */
+        grant_id: string;
+        kind: "revoke";
+        /**
+         * Non-secret administrator explanation.
+         */
+        reason: string;
+      };
+  /**
+   * Root revision returned by the grant lookup; concurrent changes return conflict.
+   */
+  expected_metadata_revision: number;
+  /**
+   * Stable operation identity, never reused for changed input.
+   */
+  operation_id: string;
+};
+
+/**
+ * ConfigureFederationStorageGrantResponse
+ *
+ * Durable original mutation receipt, not a claim of transferred or protected bytes.
+ */
+export type ConfigureFederationStorageGrantResponse = {
+  /**
+   * Original commit revision, retained on exact retry.
+   */
+  committed_revision: number;
+  /**
+   * Created, replaced or withdrawn grant identity.
+   */
+  grant_id: string;
+  /**
+   * Original operation identity.
+   */
+  operation_id: string;
 };
 
 /**
@@ -1208,6 +1444,46 @@ export type ConfirmRecoveryBundleResponse = {
    * Authoritative verification instant.
    */
   verified_at_epoch_micros: number;
+};
+
+/**
+ * ConnectFederationRequest
+ *
+ * Local manager intent to connect to the swarm that issued the secret invitation.
+ */
+export type ConnectFederationRequest = {
+  /**
+   * Secret invitation supplied by the other administrator; never a node join grant.
+   */
+  connection_code: string;
+  /**
+   * This gateway's reachable HTTPS origin and corresponding federation UDP endpoint.
+   */
+  local_endpoint: string;
+  /**
+   * Stable retry identity for the whole connection attempt.
+   */
+  operation_id: string;
+};
+
+/**
+ * ConnectFederationResponse
+ *
+ * Both swarms have committed relationship approval; live transport health is separate.
+ */
+export type ConnectFederationResponse = {
+  /**
+   * Original local approval revision.
+   */
+  committed_revision: number;
+  /**
+   * Exact local operation, resolved to a durable approval receipt.
+   */
+  operation_id: string;
+  /**
+   * Shared relationship identity.
+   */
+  relationship_id: string;
 };
 
 /**
@@ -1575,6 +1851,54 @@ export type CreateFaultGroupResponse = {
   };
   /**
    * Exact idempotency identity whose result was resolved.
+   */
+  operation_id: string;
+};
+
+/**
+ * CreateFederationPairingInvitationRequest
+ *
+ * Administrator request to approve one connection attempt by another autonomous swarm.
+ */
+export type CreateFederationPairingInvitationRequest = {
+  /**
+   * Stable retry identity.
+   */
+  operation_id: string;
+  /**
+   * HTTPS origin of this gateway, normally supplied from the panel's current origin.
+   */
+  pairing_endpoint: string;
+  /**
+   * Short-lived validity; the simple panel uses 900 seconds.
+   */
+  valid_for_seconds: number;
+};
+
+/**
+ * CreateFederationPairingInvitationResponse
+ *
+ * Secret-bearing original receipt. This does not mean a peer relationship is active.
+ */
+export type CreateFederationPairingInvitationResponse = {
+  /**
+   * Original committed metadata revision.
+   */
+  committed_revision: number;
+  /**
+   * Share only with the intended other swarm's administrator. Never a node join code.
+   */
+  connection_code: string;
+  /**
+   * Exclusive original expiry, not extended by retry.
+   */
+  expires_at_epoch_micros: number;
+  /**
+   * Reserved relationship identity used to inspect or cancel this material.
+   */
+  invitation_id: string;
+  /**
+   * Exact committed issuance operation.
    */
   operation_id: string;
 };
@@ -3182,6 +3506,10 @@ export type EnrolNodeResponse = {
      */
     certificate_der_hex: string;
     /**
+     * Current committed peer incarnation, not its certificate generation.
+     */
+    incarnation: string;
+    /**
      * Permanent peer node identity.
      */
     node_id: string;
@@ -3222,6 +3550,84 @@ export type EnrolNodeResponse = {
    * Current non-zero route epoch for the root metadata partition.
    */
   routing_epoch: number;
+};
+
+/**
+ * FederationStorageGrantQuery
+ *
+ * Exact lookup rather than a collection scan; absent grants return null for creation planning.
+ */
+export type FederationStorageGrantQuery = {
+  /**
+   * Exact identity to inspect.
+   */
+  grant_id: string;
+};
+
+/**
+ * FederationStorageGrantResponse
+ *
+ * Revision-consistent exact lookup; current authentication is applied on every call.
+ */
+export type FederationStorageGrantResponse = {
+  /**
+   * Null means this identity has not been issued in the provider's authority.
+   */
+  grant: {
+    /**
+     * Exact immutable identity.
+     */
+    grant_id: string;
+    /**
+     * Effective intersection, not necessarily the provider's original requested maximum.
+     */
+    policy: {
+      /**
+       * Whether the recipient can re-offer an equal or narrower storage delegation.
+       */
+      allow_downstream_delegation: boolean;
+      /**
+       * Whether verified placements may count towards protection; this alone proves no copies.
+       */
+      counts_towards_protection: boolean;
+      /**
+       * Positive decimal bytes; domain admission also enforces the metadata integer range.
+       */
+      maximum_bytes: string;
+      /**
+       * Whether ordinary reads may query this storage, independently of backup/recovery reads.
+       */
+      serves_reads: boolean;
+    };
+    /**
+     * Paired swarm relationship.
+     */
+    relationship_id: string;
+    /**
+     * Last change of this grant record.
+     */
+    revision: number;
+    /**
+     * Active, superseded or revoked grants remain visible to current managers.
+     */
+    state: "active" | "superseded" | "revoked";
+    /**
+     * Replacement identity when this historical grant has a successor.
+     */
+    successor_grant_id: string | null;
+    /**
+     * Original first authorised instant.
+     */
+    valid_from_epoch_micros: number;
+    /**
+     * Null represents explicitly indefinite authority.
+     */
+    valid_until_epoch_micros: number | null;
+  } | null;
+  /**
+   * Root revision for the next conditional mutation.
+   */
+  metadata_revision: number;
 };
 
 /**
@@ -7699,6 +8105,314 @@ export type ReadMetadataDiagnosticsResponses = {
 export type ReadMetadataDiagnosticsResponse =
   ReadMetadataDiagnosticsResponses[keyof ReadMetadataDiagnosticsResponses];
 
+export type ConnectFederationData = {
+  /**
+   * Invitation and reachable local origin
+   */
+  body: ConnectFederationRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/admin/federation/connections";
+};
+
+export type ConnectFederationErrors = {
+  /**
+   * Invalid input or peer reply
+   */
+  400: ApiError;
+  /**
+   * Authentication required
+   */
+  401: ApiError;
+  /**
+   * Current manager authority required
+   */
+  403: ApiError;
+  /**
+   * Changed intent or relationship state
+   */
+  409: ApiError;
+  /**
+   * Body exceeds its bound
+   */
+  413: ApiError;
+  /**
+   * JSON required
+   */
+  415: ApiError;
+  /**
+   * Invalid retained or outgoing evidence
+   */
+  500: ApiError;
+  /**
+   * Authority or peer unavailable; outcome may be unknown
+   */
+  503: ApiError;
+};
+
+export type ConnectFederationError =
+  ConnectFederationErrors[keyof ConnectFederationErrors];
+
+export type ConnectFederationResponses = {
+  /**
+   * Durable local approval following remote approval; no-store
+   */
+  201: ConnectFederationResponse;
+};
+
+export type ConnectFederationResponse2 =
+  ConnectFederationResponses[keyof ConnectFederationResponses];
+
+export type CreateFederationPairingInvitationData = {
+  /**
+   * Pinned origin and bounded lifetime
+   */
+  body: CreateFederationPairingInvitationRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/admin/federation/invitations";
+};
+
+export type CreateFederationPairingInvitationErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Authentication required
+   */
+  401: ApiError;
+  /**
+   * Current manager authority required
+   */
+  403: ApiError;
+  /**
+   * Changed retry or cancelled invitation
+   */
+  409: ApiError;
+  /**
+   * Body exceeds its bound
+   */
+  413: ApiError;
+  /**
+   * JSON required
+   */
+  415: ApiError;
+  /**
+   * Invalid retained or outgoing evidence
+   */
+  500: ApiError;
+  /**
+   * Authority unavailable
+   */
+  503: ApiError;
+};
+
+export type CreateFederationPairingInvitationError =
+  CreateFederationPairingInvitationErrors[keyof CreateFederationPairingInvitationErrors];
+
+export type CreateFederationPairingInvitationResponses = {
+  /**
+   * Original committed secret-bearing invitation; no-store
+   */
+  201: CreateFederationPairingInvitationResponse;
+};
+
+export type CreateFederationPairingInvitationResponse2 =
+  CreateFederationPairingInvitationResponses[keyof CreateFederationPairingInvitationResponses];
+
+export type CancelFederationPairingInvitationData = {
+  /**
+   * Exact invitation revision and reason
+   */
+  body: CancelFederationPairingInvitationRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/admin/federation/invitations/cancel";
+};
+
+export type CancelFederationPairingInvitationErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Authentication required
+   */
+  401: ApiError;
+  /**
+   * Current manager authority required
+   */
+  403: ApiError;
+  /**
+   * Changed retry or invitation no longer pending
+   */
+  409: ApiError;
+  /**
+   * Body exceeds its bound
+   */
+  413: ApiError;
+  /**
+   * JSON required
+   */
+  415: ApiError;
+  /**
+   * Invalid retained or outgoing evidence
+   */
+  500: ApiError;
+  /**
+   * Authority unavailable
+   */
+  503: ApiError;
+};
+
+export type CancelFederationPairingInvitationError =
+  CancelFederationPairingInvitationErrors[keyof CancelFederationPairingInvitationErrors];
+
+export type CancelFederationPairingInvitationResponses = {
+  /**
+   * Durable original cancellation receipt
+   */
+  200: CancelFederationPairingInvitationResponse;
+};
+
+export type CancelFederationPairingInvitationResponse2 =
+  CancelFederationPairingInvitationResponses[keyof CancelFederationPairingInvitationResponses];
+
+export type GetFederationStorageGrantData = {
+  body?: never;
+  path?: never;
+  query: {
+    /**
+     * Exact identity to inspect.
+     */
+    grant_id: string;
+  };
+  url: "/admin/federation/storage-grants";
+};
+
+export type GetFederationStorageGrantErrors = {
+  /**
+   * Invalid query
+   */
+  400: ApiError;
+  /**
+   * Authentication required
+   */
+  401: ApiError;
+  /**
+   * Current manager or local provider authority required
+   */
+  403: ApiError;
+  /**
+   * Metadata changed during lookup; retry
+   */
+  409: ApiError;
+  /**
+   * Invalid retained or outgoing evidence
+   */
+  500: ApiError;
+  /**
+   * Authority unavailable
+   */
+  503: ApiError;
+};
+
+export type GetFederationStorageGrantError =
+  GetFederationStorageGrantErrors[keyof GetFederationStorageGrantErrors];
+
+export type GetFederationStorageGrantResponses = {
+  /**
+   * Current offer or null; no-store
+   */
+  200: FederationStorageGrantResponse;
+};
+
+export type GetFederationStorageGrantResponse =
+  GetFederationStorageGrantResponses[keyof GetFederationStorageGrantResponses];
+
+export type ConfigureFederationStorageGrantData = {
+  /**
+   * Exact operation, observed revision and storage offer change
+   */
+  body: ConfigureFederationStorageGrantRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/admin/federation/storage-grants";
+};
+
+export type ConfigureFederationStorageGrantErrors = {
+  /**
+   * Invalid request
+   */
+  400: ApiError;
+  /**
+   * Authentication required
+   */
+  401: ApiError;
+  /**
+   * Current manager or local provider authority required
+   */
+  403: ApiError;
+  /**
+   * Stale revision, changed retry or conflicting grant
+   */
+  409: ApiError;
+  /**
+   * Body exceeds its bound
+   */
+  413: ApiError;
+  /**
+   * JSON required
+   */
+  415: ApiError;
+  /**
+   * Invalid retained or outgoing evidence
+   */
+  500: ApiError;
+  /**
+   * Authority unavailable; outcome may be unknown
+   */
+  503: ApiError;
+};
+
+export type ConfigureFederationStorageGrantError =
+  ConfigureFederationStorageGrantErrors[keyof ConfigureFederationStorageGrantErrors];
+
+export type ConfigureFederationStorageGrantResponses = {
+  /**
+   * Original durable mutation receipt
+   */
+  200: ConfigureFederationStorageGrantResponse;
+};
+
+export type ConfigureFederationStorageGrantResponse2 =
+  ConfigureFederationStorageGrantResponses[keyof ConfigureFederationStorageGrantResponses];
+
 export type ListGroupsData = {
   body?: never;
   path?: never;
@@ -10332,6 +11046,67 @@ export type PublishSmbExportResponses = {
 
 export type PublishSmbExportResponse2 =
   PublishSmbExportResponses[keyof PublishSmbExportResponses];
+
+export type AcceptFederationPairingData = {
+  /**
+   * Exact operation and signed public peer record
+   */
+  body: AcceptFederationPairingRequest;
+  headers: {
+    Authorization: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/federation/pairings/accept";
+};
+
+export type AcceptFederationPairingErrors = {
+  /**
+   * Invalid peer or request
+   */
+  400: ApiError;
+  /**
+   * Missing, expired or withdrawn invitation
+   */
+  401: ApiError;
+  /**
+   * Issuer no longer has manager authority
+   */
+  403: ApiError;
+  /**
+   * Changed retry or relationship state
+   */
+  409: ApiError;
+  /**
+   * Body exceeds its bound
+   */
+  413: ApiError;
+  /**
+   * JSON required
+   */
+  415: ApiError;
+  /**
+   * Invalid retained or outgoing evidence
+   */
+  500: ApiError;
+  /**
+   * Authority unavailable; outcome may be unknown
+   */
+  503: ApiError;
+};
+
+export type AcceptFederationPairingError =
+  AcceptFederationPairingErrors[keyof AcceptFederationPairingErrors];
+
+export type AcceptFederationPairingResponses = {
+  /**
+   * Original local approval and signed peer; no-store
+   */
+  201: AcceptFederationPairingResponse;
+};
+
+export type AcceptFederationPairingResponse2 =
+  AcceptFederationPairingResponses[keyof AcceptFederationPairingResponses];
 
 export type GetHealthData = {
   body?: never;

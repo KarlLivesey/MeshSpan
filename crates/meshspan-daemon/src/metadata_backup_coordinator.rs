@@ -18,8 +18,9 @@ use crate::{
     MetadataBackupDispatcher, MetadataBackupPlacementAuthority, MetadataBackupPlacementError,
     MetadataBackupPlacementInput, MetadataBackupPlacementPage, MetadataBackupPlacementService,
     MetadataBackupPreparationAuthority, MetadataBackupPreparationError,
-    MetadataBackupPreparationService, MetadataBackupProviderResolver, PreparedMetadataBackup,
-    ResolvingMetadataBackupDestinationWriter,
+    MetadataBackupPreparationService, MetadataBackupProviderResolver,
+    MetadataBackupRecoveryAuthority, MetadataBackupRecoveryInput, MetadataBackupRecoveryOutcome,
+    PreparedMetadataBackup, ResolvingMetadataBackupDestinationWriter,
 };
 
 /// Bounded timing and page limits for one backup-worker pass.
@@ -38,6 +39,13 @@ pub struct MetadataBackupWorkerLimits {
 pub enum MetadataBackupWorkerOutcome {
     /// No work belongs to this daemon now.
     Idle,
+    /// The recorded generation is waiting for a usable source copy, not a fresh snapshot.
+    Recovering {
+        /// Original admitted generation whose encrypted bytes must be recovered.
+        backup_id: BackupId,
+        /// Next recorded source page; absent means the next pass wraps to the first page.
+        next: Option<BackupDestinationCursor>,
+    },
     /// One page completed and an exact continuation remains.
     Progress {
         /// Backup generation being protected.
@@ -90,6 +98,15 @@ pub trait MetadataBackupCycle {
         run: MetadataBackupRun,
         now: UnixMicros,
     ) -> Result<PreparedMetadataBackup, MetadataBackupCycleError>;
+
+    /// Recovers the original admitted container through one bounded recorded-copy page.
+    ///
+    /// # Errors
+    /// Rejects malformed authority or local IO failure; unavailable sources remain pending.
+    fn recover(
+        &mut self,
+        input: MetadataBackupRecoveryInput,
+    ) -> Result<MetadataBackupRecoveryOutcome, MetadataBackupCycleError>;
 
     /// Publishes one bounded page of destinations.
     ///
@@ -146,6 +163,7 @@ pub struct MetadataBackupCyclePlacement<'a> {
 #[derive(Default)]
 pub struct MetadataBackupWorker {
     continuation: Option<(BackupId, BackupDestinationCursor)>,
+    recovery_continuation: Option<(BackupId, BackupDestinationCursor)>,
 }
 
 impl MetadataBackupWorker {
@@ -165,19 +183,48 @@ impl MetadataBackupWorker {
         let (run, claim) = match cycle.dispatch(now, limits.lease_duration)? {
             MetadataBackupDispatchOutcome::Idle => {
                 self.continuation = None;
+                self.recovery_continuation = None;
                 return Ok(MetadataBackupWorkerOutcome::Idle);
             }
             MetadataBackupDispatchOutcome::Claimed { run, claim }
             | MetadataBackupDispatchOutcome::AwaitingProtection { run, claim } => (run, claim),
         };
-        let prepared = cycle.prepare(run, now)?;
+        let deadline = now
+            .checked_add(limits.provider_timeout)
+            .ok_or(MetadataBackupWorkerError::InvalidInput)?;
+        let prepared = match cycle.prepare(run, now) {
+            Ok(prepared) => prepared,
+            Err(MetadataBackupCycleError::Preparation(
+                MetadataBackupPreparationError::MissingRecordedStaging,
+            )) => {
+                let recovery = cycle.recover(MetadataBackupRecoveryInput {
+                    run,
+                    now,
+                    deadline,
+                    page_items: limits.destination_page_items,
+                    after: self
+                        .recovery_continuation
+                        .filter(|(id, _)| *id == run.backup_id)
+                        .map(|(_, cursor)| cursor),
+                })?;
+                match recovery {
+                    MetadataBackupRecoveryOutcome::Recovered(prepared) => *prepared,
+                    MetadataBackupRecoveryOutcome::Pending { next } => {
+                        self.recovery_continuation = next.map(|cursor| (run.backup_id, cursor));
+                        return Ok(MetadataBackupWorkerOutcome::Recovering {
+                            backup_id: run.backup_id,
+                            next,
+                        });
+                    }
+                }
+            }
+            Err(error) => return Err(error.into()),
+        };
+        self.recovery_continuation = None;
         let after = self
             .continuation
             .filter(|(backup_id, _)| *backup_id == run.backup_id)
             .map(|(_, cursor)| cursor);
-        let deadline = now
-            .checked_add(limits.provider_timeout)
-            .ok_or(MetadataBackupWorkerError::InvalidInput)?;
         let page = cycle.place(MetadataBackupCyclePlacement {
             run,
             claim,
@@ -262,7 +309,8 @@ where
         + MetadataBackupPreparationAuthority
         + MetadataBackupPlacementAuthority
         + MetadataBackupCompletionAuthority
-        + BackupPublicationAuthority,
+        + BackupPublicationAuthority
+        + MetadataBackupRecoveryAuthority,
     Resolver: MetadataBackupProviderResolver,
     Random: RandomSource,
 {
@@ -294,6 +342,20 @@ where
             self.state_directory,
         )?
         .prepare(run, now)
+        .map_err(Into::into)
+    }
+
+    fn recover(
+        &mut self,
+        input: MetadataBackupRecoveryInput,
+    ) -> Result<MetadataBackupRecoveryOutcome, MetadataBackupCycleError> {
+        MetadataBackupPreparationService::open(
+            self.authority,
+            self.local,
+            self.random,
+            self.state_directory,
+        )?
+        .recover(self.resolver, input)
         .map_err(Into::into)
     }
 

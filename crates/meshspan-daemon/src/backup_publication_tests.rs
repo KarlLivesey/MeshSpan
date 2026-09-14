@@ -33,6 +33,9 @@ use crate::{
     ResolvingMetadataBackupDestinationWriter,
 };
 
+#[path = "backup_publication_intent_tests.rs"]
+mod intent;
+
 #[test]
 fn publication_records_stores_verifies_and_replays_exact_copy()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -77,7 +80,7 @@ fn publication_records_stores_verifies_and_replays_exact_copy()
     assert_eq!(replay, first);
     assert_eq!(provider.stores, 1);
     assert_eq!(provider.verifications.get(), 2);
-    assert_eq!(authority.commit_count(), 2);
+    assert_eq!(authority.commit_count(), 3);
     Ok(())
 }
 
@@ -218,7 +221,7 @@ fn existing_generation_publishes_and_verifies_an_additional_destination()
     assert_eq!(outcome.copy.destination_id, second_destination);
     assert_eq!(outcome.copy.state, BackupCopyState::Verified);
     assert_eq!(second_provider.stores, 1);
-    assert_eq!(authority.commit_count(), 4);
+    assert_eq!(authority.commit_count(), 6);
     Ok(())
 }
 
@@ -266,7 +269,7 @@ fn publication_uses_real_restartable_directory_provider() -> Result<(), Box<dyn 
     };
     let replay = publisher.publish(&mut reopened, &replay_request)?;
     assert_eq!(replay, first);
-    assert_eq!(authority.commit_count(), 2);
+    assert_eq!(authority.commit_count(), 3);
     Ok(())
 }
 
@@ -305,7 +308,7 @@ fn corrupt_encrypted_source_never_records_a_copy() -> Result<(), Box<dyn std::er
         ))
     ));
     assert!(authority.copy.borrow().is_none());
-    assert_eq!(authority.commit_count(), 0);
+    assert_eq!(authority.commit_count(), 1);
     Ok(())
 }
 
@@ -352,7 +355,7 @@ fn provider_success_before_authority_failure_replays_without_false_catalogue_sta
     let completed = publisher.publish(&mut provider, &retry_request)?;
     assert_eq!(completed.backup.state, MetadataBackupState::Recorded);
     assert_eq!(completed.copy.state, BackupCopyState::Verified);
-    assert_eq!(authority.commit_count(), 3);
+    assert_eq!(authority.commit_count(), 5);
     Ok(())
 }
 
@@ -414,6 +417,8 @@ impl Fixture {
 }
 
 struct MemoryAuthority {
+    intent: RefCell<Option<meshspan_metadata::BindBackupPublicationIntent>>,
+    reject_intents: Cell<bool>,
     destination: RefCell<BackupDestinationRecord>,
     backup: RefCell<Option<MetadataBackupRecord>>,
     copy: RefCell<Option<BackupCopyRecord>>,
@@ -424,6 +429,8 @@ struct MemoryAuthority {
 impl MemoryAuthority {
     fn new(destination: BackupDestinationRecord) -> Self {
         Self {
+            intent: RefCell::new(None),
+            reject_intents: Cell::new(false),
             destination: RefCell::new(destination),
             backup: RefCell::new(None),
             copy: RefCell::new(None),
@@ -472,10 +479,29 @@ impl BackupPublicationAuthority for MemoryAuthority {
         command: &AuthoritativeCommand,
     ) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
         *self.commits.borrow_mut() += 1;
-        if self.reject_commits.get() {
+        let is_intent = matches!(
+            command,
+            AuthoritativeCommand::BindBackupPublicationIntent(_)
+        );
+        if (is_intent && self.reject_intents.get()) || (!is_intent && self.reject_commits.get()) {
             return Err(MetadataAuthorityRequestError::Unavailable);
         }
         let (kind, id, revision) = match command {
+            AuthoritativeCommand::BindBackupPublicationIntent(value) => {
+                if self.intent.borrow().as_ref().is_some_and(|existing| {
+                    existing.object.destination_id == value.object.destination_id
+                        && (existing.object != value.object
+                            || existing.store_operation_id != value.store_operation_id)
+                }) {
+                    return Err(MetadataAuthorityRequestError::Failed);
+                }
+                *self.intent.borrow_mut() = Some(*value);
+                (
+                    EntityKind::MetadataBackup,
+                    value.object.backup_id.as_bytes(),
+                    9,
+                )
+            }
             AuthoritativeCommand::RecordMetadataBackup(value) => {
                 *self.backup.borrow_mut() = Some(MetadataBackupRecord {
                     backup_id: value.backup_id,
@@ -579,6 +605,29 @@ struct MemoryProvider {
 }
 
 impl BackupProvider for MemoryProvider {
+    fn lookup_exact(
+        &self,
+        request: &meshspan_contracts::BackupLookupRequest,
+        observed_at: UnixMicros,
+    ) -> Result<BackupObjectReceipt, ContractError> {
+        meshspan_contracts::validate_backup_lookup_request(request, observed_at)?;
+        if self.bytes.is_empty() {
+            return Err(ContractError::NotFound);
+        }
+        if self.bytes.len() as u64 != request.object.byte_length
+            || <[u8; 32]>::from(Sha256::digest(&self.bytes)) != request.object.digest
+        {
+            return Err(ContractError::Conflict);
+        }
+        Ok(BackupObjectReceipt {
+            operation_id: request.context.operation_id,
+            object: request.object,
+            object_reference: meshspan_contracts::BackupObjectReference::new(
+                "memory-object".into(),
+            )?,
+        })
+    }
+
     fn describe(&self) -> ImplementationDescriptor {
         ImplementationDescriptor {
             implementation_id: "memory-backup-test",

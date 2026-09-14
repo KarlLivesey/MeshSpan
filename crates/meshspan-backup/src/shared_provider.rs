@@ -49,6 +49,14 @@ impl<P> Clone for SharedBackupProvider<P> {
 }
 
 impl<P: BackupProvider> BackupProvider for SharedBackupProvider<P> {
+    fn lookup_exact(
+        &self,
+        request: &meshspan_contracts::BackupLookupRequest,
+        observed_at: UnixMicros,
+    ) -> Result<BackupObjectReceipt, ContractError> {
+        self.lock()?.lookup_exact(request, observed_at)
+    }
+
     fn describe(&self) -> ImplementationDescriptor {
         self.descriptor
     }

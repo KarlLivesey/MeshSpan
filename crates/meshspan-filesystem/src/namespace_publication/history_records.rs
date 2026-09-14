@@ -8,6 +8,8 @@ mod decode;
 mod encode;
 #[path = "history_records/immutable.rs"]
 pub(in crate::publication) mod immutable;
+#[path = "history_records/validation.rs"]
+pub(in crate::publication) mod validation;
 
 use meshspan_domain::{
     FederationResourceScope, NamespaceCommitId, ObjectId, OperationId, PrincipalId, Rights,
@@ -18,15 +20,18 @@ use thiserror::Error;
 use self::decode::decode_commit;
 use self::encode::encode_commit;
 pub use self::immutable::{NamespaceHistoryImmutableKind, NamespaceHistoryImmutableRecord};
-use super::transfer::TransferredMutationCommit;
+use super::transfer::TransferredNamespaceCommit;
 use crate::NamespaceHistoryBundle;
 
 const MAXIMUM_COMMIT_RECORD_BYTES: usize = 2 * 1_024 * 1_024;
 const COMMIT_DOMAIN: &[u8] = b"meshspan.filesystem.history-commit\0";
 const LOCAL_COMMIT_FORMAT_VERSION: u8 = 1;
 const FEDERATED_COMMIT_FORMAT_VERSION: u8 = 3;
+const MERGE_COMMIT_FORMAT_VERSION: u8 = 4;
+const RESTORE_COMMIT_FORMAT_VERSION: u8 = 5;
+const MAXIMUM_COMMIT_PARENTS: usize = 1_024;
 
-/// One canonical immutable mutation record suitable for a bounded control page.
+/// One canonical immutable mutation or merge record suitable for a bounded control page.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NamespaceHistoryCommitRecord {
     canonical_bytes: Vec<u8>,
@@ -160,26 +165,38 @@ impl NamespaceHistoryCommitRecord {
         self.digest
     }
 
+    /// Revalidates the complete record before separating immutable history from admission.
+    /// An added federation acknowledgement must not change an already converged content identity.
+    pub(in crate::publication) fn convergence_digest(
+        &self,
+    ) -> Result<[u8; 32], NamespaceHistoryRecordError> {
+        let record = self.decoded()?;
+        if record.acknowledgement().is_none() {
+            return Ok(self.digest);
+        }
+        Ok(Self::from_commit(&record.without_acknowledgement())?.digest())
+    }
+
     /// Decodes only the facts required for federation admission from the canonical record.
     ///
     /// # Errors
     ///
-    /// Rejects any malformed or internally inconsistent record.
+    /// Rejects malformed records and merge records, which confer no mutation authority.
     pub fn mutation_authority(
         &self,
     ) -> Result<NamespaceHistoryMutationAuthority, NamespaceHistoryRecordError> {
         let record = self.decoded()?;
-        Ok(authority_from_record(&record))
+        authority_from_record(&record)
     }
 
     /// Returns the digest signed by a federated acknowledgement, excluding that acknowledgement.
     ///
     /// # Errors
     ///
-    /// Rejects an internally inconsistent canonical record.
+    /// Rejects inconsistent records and merges, which cannot be signed as federated mutations.
     pub fn mutation_digest(&self) -> Result<[u8; 32], NamespaceHistoryRecordError> {
-        let mut record = self.decoded()?;
-        record.acknowledgement = None;
+        let record = self.decoded()?.without_acknowledgement();
+        authority_from_record(&record)?;
         Ok(blake3::hash(&encode_commit(&record)?).into())
     }
 
@@ -194,11 +211,11 @@ impl NamespaceHistoryCommitRecord {
         Option<meshspan_domain::FederatedMutationAcknowledgement>,
         NamespaceHistoryRecordError,
     > {
-        Ok(self.decoded()?.acknowledgement)
+        Ok(self.decoded()?.acknowledgement())
     }
 
     pub(in crate::publication) fn from_commit(
-        commit: &TransferredMutationCommit,
+        commit: &TransferredNamespaceCommit,
     ) -> Result<Self, NamespaceHistoryRecordError> {
         let canonical_bytes = encode_commit(commit)?;
         if canonical_bytes.len() > MAXIMUM_COMMIT_RECORD_BYTES {
@@ -217,14 +234,18 @@ impl NamespaceHistoryCommitRecord {
 
     pub(in crate::publication) fn decoded(
         &self,
-    ) -> Result<TransferredMutationCommit, NamespaceHistoryRecordError> {
+    ) -> Result<TransferredNamespaceCommit, NamespaceHistoryRecordError> {
         decode_commit(&self.canonical_bytes)
     }
 }
 
-fn authority_from_record(record: &TransferredMutationCommit) -> NamespaceHistoryMutationAuthority {
-    let intent = &record.intent;
-    NamespaceHistoryMutationAuthority {
+fn authority_from_record(
+    record: &TransferredNamespaceCommit,
+) -> Result<NamespaceHistoryMutationAuthority, NamespaceHistoryRecordError> {
+    let intent = record
+        .intent()
+        .ok_or(NamespaceHistoryRecordError::Invalid)?;
+    Ok(NamespaceHistoryMutationAuthority {
         commit_id: record.commit.commit_id,
         operation_id: record.commit.operation_id,
         volume_id: record.commit.volume_id,
@@ -244,15 +265,15 @@ fn authority_from_record(record: &TransferredMutationCommit) -> NamespaceHistory
         created_by: record.created_by,
         created_at: record.created_at,
         required_rights: mutation_rights(intent),
-    }
+    })
 }
 
 pub(super) fn validate_acknowledgement(
-    record: &TransferredMutationCommit,
+    record: &TransferredNamespaceCommit,
     acknowledgement: &meshspan_domain::FederatedMutationAcknowledgement,
     mutation_digest: [u8; 32],
 ) -> Result<(), NamespaceHistoryRecordError> {
-    let authority = authority_from_record(record);
+    let authority = authority_from_record(record)?;
     let evidence = acknowledgement.evidence;
     if acknowledgement.signer_generation == 0
         || acknowledgement.signature == [0; 64]
@@ -287,7 +308,7 @@ fn mutation_rights(intent: &crate::BranchMutationIntent) -> Rights {
 }
 
 impl NamespaceHistoryBundle {
-    /// Encodes each mutation commit independently without embedding immutable object bytes.
+    /// Encodes each namespace commit independently without embedding immutable object bytes.
     ///
     /// # Errors
     ///
@@ -345,7 +366,7 @@ mod tests {
     };
 
     use super::super::repository::{StoredCommit, stored_commit_digest};
-    use super::super::transfer::TransferredMutationCommit;
+    use super::super::transfer::TransferredNamespaceCommit;
     use super::{NamespaceHistoryCommitRecord, NamespaceHistoryRecordError};
     use crate::{
         BranchMutation, BranchMutationIntent, BranchRenameIntent, DirectoryRevisionTransition,
@@ -424,12 +445,12 @@ mod tests {
         assert!(authority.is_within(FederationResourceScope::File {
             owner_mesh_id: owner,
             volume_id: original.commit.volume_id,
-            object_id: original.intent.object_id,
+            object_id: original.intent().ok_or("missing mutation")?.object_id,
         }));
         assert!(!authority.is_within(FederationResourceScope::Subtree {
             owner_mesh_id: owner,
             volume_id: original.commit.volume_id,
-            root_object_id: original.intent.ancestors[0].object_id(),
+            root_object_id: original.intent().ok_or("missing mutation")?.ancestors[0].object_id(),
         }));
         assert!(
             !authority.is_within(FederationResourceScope::StorageCapacity {
@@ -444,9 +465,13 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let version_id = FileVersionId::from_bytes([100; 16])?;
         let mut create = record(80, BranchMutation::File { version_id }, false)?;
-        create.intent.prior_object_revision_id = None;
+        let super::super::transfer::CommitEvidence::Mutation { intent, .. } = &mut create.evidence
+        else {
+            return Err("expected mutation fixture".into());
+        };
+        intent.prior_object_revision_id = None;
         create.commit.payload = ReconciliationCommitPayload::Mutation {
-            intent_digest: create.intent.digest(),
+            intent_digest: intent.digest(),
         };
         assert_eq!(
             NamespaceHistoryCommitRecord::from_commit(&create)?
@@ -483,7 +508,7 @@ mod tests {
         seed: u8,
         mutation: BranchMutation,
         with_rename: bool,
-    ) -> Result<TransferredMutationCommit, Box<dyn std::error::Error>> {
+    ) -> Result<TransferredNamespaceCommit, Box<dyn std::error::Error>> {
         let commit_id = NamespaceCommitId::from_bytes([seed; 16])?;
         let branch_id = BranchId::from_bytes([seed.saturating_add(1); 16])?;
         let volume_id = VolumeId::from_bytes([seed.saturating_add(2); 16])?;
@@ -518,13 +543,15 @@ mod tests {
                 intent_digest: intent.digest(),
             },
         };
-        Ok(TransferredMutationCommit {
+        Ok(TransferredNamespaceCommit {
             commit,
             created_by,
             created_at,
             commit_digest: stored_commit_digest(&stored, request_digest),
-            intent,
-            acknowledgement: None,
+            evidence: super::super::transfer::CommitEvidence::Mutation {
+                intent,
+                acknowledgement: None,
+            },
         })
     }
 

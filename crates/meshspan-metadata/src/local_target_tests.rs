@@ -157,7 +157,7 @@ fn target_registration_rejects_changed_replays_out_of_order_work_and_corruption(
     Ok(())
 }
 
-fn target_intent(node_id: NodeId) -> Result<NewLocalTarget, Box<dyn std::error::Error>> {
+pub(super) fn target_intent(node_id: NodeId) -> Result<NewLocalTarget, Box<dyn std::error::Error>> {
     let configuration = b"{\"provider\":\"folder\"}".to_vec();
     Ok(NewLocalTarget {
         target_id: TargetId::from_bytes([2; 16])?,

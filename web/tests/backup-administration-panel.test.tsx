@@ -71,6 +71,28 @@ describe("backup schedule administration", () => {
 });
 
 describe("backup destination changes", () => {
+  it("pauses a retained partner binding without converting it into a folder", async () => {
+    const provider = {
+      kind: "federated_mesh",
+      remote_mesh_id: SECOND_ID,
+    } as const;
+    const client = fixture([{ ...destination(), provider }]);
+    const configure = vi.spyOn(client, "configureBackupDestination");
+    mount(client);
+    await ready();
+    button("Pause Recovery folder").click();
+    await vi.waitFor(() => {
+      expect(configure).toHaveBeenCalledOnce();
+    });
+    expect(configure.mock.calls[0]?.[0]).toMatchObject({
+      provider,
+      provider_generation: "1",
+      expected_revision: 7,
+      enabled: false,
+    });
+    await shows("Backup settings saved.");
+  });
+
   it("pauses and resumes with exact identity, generation and observed revisions", async () => {
     const client = fixture();
     const configure = vi.spyOn(client, "configureBackupDestination");
@@ -87,8 +109,8 @@ describe("backup destination changes", () => {
         operation_id: operationId,
         destination_id: ID,
         expected_revision: 7,
-        target_id: ID,
-        target_generation: "1",
+        provider: { kind: "registered_target", target_id: ID },
+        provider_generation: "1",
         name: "Recovery folder",
         enabled: false,
       },
@@ -188,8 +210,8 @@ describe("backup inventory", () => {
     expect(configure).toHaveBeenCalledWith(
       expect.objectContaining({
         name: "Off-machine recovery",
-        target_id: SECOND_ID,
-        target_generation: "9007199254740993",
+        provider: { kind: "registered_target", target_id: SECOND_ID },
+        provider_generation: "9007199254740993",
         enabled: true,
         expected_revision: 0,
       }),
@@ -215,9 +237,11 @@ describe("backup inventory", () => {
   });
 });
 
-function fixture(): BackupAdministrationClient {
+function fixture(
+  initialDestinations: BackupDestination[] = [destination()],
+): BackupAdministrationClient {
   let currentSchedule = schedule();
-  let destinations = [destination()];
+  let destinations = initialDestinations;
   return {
     getBackupSchedule: async () => currentSchedule,
     listBackupRuns: async () => ({ runs: [], next_page_url: null }),
@@ -263,8 +287,8 @@ function fixture(): BackupAdministrationClient {
       destinations.push({
         destination_id: request.destination_id,
         name: request.name,
-        provider: { kind: "registered_target", target_id: request.target_id },
-        provider_generation: request.target_generation,
+        provider: request.provider,
+        provider_generation: request.provider_generation,
         failure_relationship: "unknown",
         revision: request.expected_revision + 1,
         state: request.enabled ? "active" : "paused",

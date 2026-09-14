@@ -69,13 +69,22 @@ the ephemeral container layer must never hold acknowledged data or identity.
 archive. Hashes detect corruption, **not publisher authenticity**. Provenance
 records the source commit, dirty-worktree flag, toolchain, profile and linkage;
 it does not claim a reproducible build or a completed acceptance run.
-`dependencies.json` is a conservative package inventory including Rust build
-dependencies, not a link-level SBOM or the complete third-party licence notices.
+`dependencies.json` and `sbom.cdx.json` describe the conservative Cargo normal/build
+closure and production web packages. The CycloneDX 1.6 SBOM binds the exact
+executable hash and includes Cargo dependency edges. It explicitly records
+incomplete composition: it is not a linked-symbol inventory or an assertion that
+all transitive vendored source has been independently reviewed.
+`THIRD-PARTY-NOTICES.txt` preserves collected upstream notice text and hashes,
+including nested licence directories. Missing notices refuse package assembly;
+reviewed missing archive notices may be recovered from a pinned upstream commit.
+Local filesystem paths are not included. These files are covered by `SHA256SUMS`
+and copied into container images. Existing licence admission checks still run;
+notice collection is not a substitute for the owner's dependency review.
 
 Pre-1.0 migrations can be one-way. Do not downgrade, replace binaries on live
 state or infer upgrade safety from successful packaging. Keep verified encrypted
 backups; supported rolling updates and disaster recovery require their separate
-acceptance. Release signatures, complete notices/SBOM, platform proofs and
+acceptance. Release signatures, dependency-review clearance, platform proofs and
 publication approval remain separate Stage 10 requirements.
 
 ### Read-only local update verification

@@ -275,6 +275,22 @@ names appear in the test matrix, not the product contract.
 
 ## 10. Hardware and destructive fault laboratory
 
+The separate process-loss backup acceptance test uses three real daemon
+executables, test-owned provider-catalogue write locks and `SIGKILL`. It honours
+the production five-minute backup lease rather than shortening time or editing
+authoritative state. It is deliberately ignored by the ordinary edit/test gate
+and must be invoked explicitly for backup recovery acceptance:
+
+```sh
+cargo test -p meshspan-daemon --test headless_process --all-features \
+  surviving_daemon_retires_unadmitted_upload_after_worker_sigkill \
+  -- --ignored --nocapture --test-threads=4
+```
+
+This is process-loss and local SQLite fault evidence, not physical power-loss
+or independent-machine evidence. Its fixture folders, ports and processes are
+isolated; it does not serialise unrelated tests.
+
 Release gates include:
 
 - six physical storage machines surviving two simultaneous machine failures;

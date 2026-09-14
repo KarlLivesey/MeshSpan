@@ -11,18 +11,16 @@ use meshspan_domain::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::super::repository::{
-    ObjectRevisionInsert, StoredCommit, load_branch_intent, load_object_revision,
-    load_reconciliation_commit, persist_branch_intent, persist_object_revision,
-    persist_stored_commit, stored_commit_digest,
+    ObjectRevisionInsert, load_object_revision, load_reconciliation_commit, persist_object_revision,
 };
-use super::{TransferredFileVersion, TransferredMutationCommit, imported_evidence_digest};
+use super::{TransferredFileVersion, TransferredNamespaceCommit};
 use crate::NamespaceHistoryMutationDecision;
 use crate::publication::{
     copy_array, decode_identifier, from_i64, persist_directory_node, persist_manifest, to_i64,
 };
 use crate::{
     DirectoryNodeRecord, ManifestPublication, NamespaceHistoryBundle, NamespaceHistoryImport,
-    NamespaceHistoryLimits, PublicationError, ReconciliationCommitPayload,
+    NamespaceHistoryLimits, PublicationError,
 };
 
 pub(in crate::publication) fn import_history(
@@ -70,13 +68,13 @@ pub(in crate::publication) fn import_history_transaction(
 }
 
 fn validate_decisions(
-    commits: &[TransferredMutationCommit],
+    commits: &[TransferredNamespaceCommit],
     decisions: Option<&[NamespaceHistoryMutationDecision]>,
 ) -> Result<BTreeMap<NamespaceCommitId, NamespaceHistoryMutationDecision>, PublicationError> {
     let Some(decisions) = decisions else {
         return if commits
             .iter()
-            .all(|record| record.acknowledgement.is_none())
+            .all(|record| record.acknowledgement().is_none())
         {
             Ok(BTreeMap::new())
         } else {
@@ -86,7 +84,7 @@ fn validate_decisions(
     if decisions.len() != commits.len()
         || commits
             .iter()
-            .any(|record| record.acknowledgement.is_none())
+            .any(|record| record.acknowledgement().is_none())
     {
         return Err(PublicationError::InvalidInput);
     }
@@ -154,25 +152,24 @@ fn validate_bundle_shape(
     {
         return Err(PublicationError::InvalidInput);
     }
-    if bundle.commits.iter().any(|record| {
-        record.commit.volume_id != bundle.volume_id
-            || record.commit.commit_id != record.intent.commit_id
-            || record.commit.parents.len() > 1
-            || record.intent.digest()
-                != match record.commit.payload {
-                    ReconciliationCommitPayload::Mutation { intent_digest } => intent_digest,
-                    _ => return true,
-                }
-    }) || bundle
-        .file_versions
+    if bundle
+        .commits
         .iter()
-        .any(|record| record.volume_id != bundle.volume_id)
+        .any(|record| record.commit.volume_id != bundle.volume_id)
+        || bundle
+            .file_versions
+            .iter()
+            .any(|record| record.volume_id != bundle.volume_id)
         || bundle
             .object_revisions
             .iter()
             .any(|record| record.volume_id != bundle.volume_id)
     {
         return Err(PublicationError::InvalidInput);
+    }
+    for record in &bundle.commits {
+        super::super::history_records::validation::validate(record)
+            .map_err(|_| PublicationError::Corrupt)?;
     }
     Ok(())
 }
@@ -373,7 +370,7 @@ fn revision_exists(
 
 fn persist_commits(
     transaction: &Transaction<'_>,
-    commits: &[TransferredMutationCommit],
+    commits: &[TransferredNamespaceCommit],
     decisions: &BTreeMap<NamespaceCommitId, NamespaceHistoryMutationDecision>,
 ) -> Result<usize, PublicationError> {
     let mut pending = commits
@@ -386,41 +383,24 @@ fn persist_commits(
         let identifiers = pending.keys().copied().collect::<Vec<_>>();
         for commit_id in identifiers {
             let record = pending[&commit_id];
-            if !all_commits_exist(transaction, &record.commit.parents)? {
+            if !all_commits_exist(transaction, record.dependencies())? {
                 continue;
             }
-            if let Some(existing) = load_reconciliation_commit(transaction, commit_id)? {
+            if load_reconciliation_commit(transaction, commit_id)?.is_some() {
                 let expected_decision = decisions.get(&commit_id).copied();
-                if existing != record.commit
-                    || load_branch_intent(transaction, commit_id)?.as_ref() != Some(&record.intent)
-                    || super::super::federated_mutation::load(transaction, commit_id)?
-                        != record.acknowledgement
+                if super::export::load_commit_record(
+                    transaction,
+                    record.commit.volume_id,
+                    commit_id,
+                )? != *record
                     || super::super::federated_admission::load(transaction, commit_id)?
                         != expected_decision
                 {
                     return Err(PublicationError::OperationConflict);
                 }
             } else {
-                let stored = StoredCommit {
-                    commit_id,
-                    branch_id: record.commit.branch_id,
-                    volume_id: record.commit.volume_id,
-                    root_object_id: record.commit.root_object_id,
-                    root_object_revision_id: record.commit.root_object_revision_id,
-                    parent_id: record.commit.parents.first().copied(),
-                    created_by: record.created_by,
-                    operation_id: record.commit.operation_id,
-                    created_at: record.created_at,
-                };
-                if stored_commit_digest(&stored, record.commit.request_digest)
-                    != record.commit_digest
-                {
-                    return Err(PublicationError::Corrupt);
-                }
-                persist_stored_commit(transaction, &stored, record.commit.request_digest)?;
-                persist_imported_evidence(transaction, record)?;
-                persist_branch_intent(transaction, &record.intent)?;
-                if let Some(acknowledgement) = record.acknowledgement {
+                super::commit_import::persist(transaction, record)?;
+                if let Some(acknowledgement) = record.acknowledgement() {
                     super::super::federated_mutation::persist(
                         transaction,
                         commit_id,
@@ -454,10 +434,10 @@ fn persist_commits(
 
 fn all_commits_exist(
     connection: &Connection,
-    commit_ids: &[NamespaceCommitId],
+    commit_ids: impl Iterator<Item = NamespaceCommitId>,
 ) -> Result<bool, PublicationError> {
     for commit_id in commit_ids {
-        if !commit_exists(connection, *commit_id)? {
+        if !commit_exists(connection, commit_id)? {
             return Ok(false);
         }
     }
@@ -473,23 +453,6 @@ fn commit_exists(
         [commit_id.as_bytes().as_slice()],
         |row| row.get::<_, i64>(0),
     )? != 0)
-}
-
-fn persist_imported_evidence(
-    transaction: &Transaction<'_>,
-    record: &TransferredMutationCommit,
-) -> Result<(), PublicationError> {
-    let intent_digest = record.intent.digest();
-    let evidence_digest = imported_evidence_digest(
-        record.commit.commit_id,
-        record.commit.request_digest,
-        intent_digest,
-    );
-    transaction.execute(
-        "INSERT INTO imported_namespace_commit_evidence(namespace_commit_id, request_digest, intent_digest, evidence_digest)
-         VALUES (?1, ?2, ?3, ?4)", params![record.commit.commit_id.as_bytes().as_slice(), record.commit.request_digest.as_slice(),
-            intent_digest.as_slice(), evidence_digest.as_slice()])?;
-    Ok(())
 }
 
 fn verify_heads(

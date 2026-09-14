@@ -14,7 +14,8 @@ async fn private_node_renewal_runs_automatically_and_survives_restart_and_join()
 -> Result<(), Box<dyn Error>> {
     let root = ProcessFixture::new()?;
     let peer = ProcessFixture::new()?;
-    let mut processes = vec![root.start()?];
+    let mut cleanup = ProcessCleanup(vec![root.start()?]);
+    let processes = &mut cleanup.0;
     let proof: Result<(), Box<dyn Error>> = async {
         let claim = wait_for_claim(&root.claim_path).await?;
         let client = wait_for_client(&root.identity_path).await?;
@@ -58,15 +59,60 @@ async fn private_node_renewal_runs_automatically_and_survives_restart_and_join()
         Ok(())
     }
     .await;
-    stop_processes(&mut processes);
+    stop_processes(processes);
     retain_failure_state(proof, [root.temporary, peer.temporary])
 }
 
 fn node_id(fixture: &ProcessFixture) -> Result<NodeId, Box<dyn Error>> {
-    let identity = LocalNodeIdentity::open(&fixture.identity_path, CERTIFICATE_NAME)?;
-    Ok(InitialBootstrapMaterial::node_id(
-        identity.public_key_fingerprint(),
-    )?)
+    Ok(meshspan_metadata::LocalDatabase::open_existing(
+        &fixture.state_path.join("local.sqlite3"),
+        UnixMicros::new(1),
+    )?
+    .node_id())
+}
+
+pub(super) async fn renew_storage_node(
+    gateway: &ProcessFixture,
+    storage: &ProcessFixture,
+) -> Result<(), Box<dyn Error>> {
+    let node = node_id(storage)?;
+    let identity = fs::read(&storage.identity_path)?;
+    let authority = AuthoritativeRepository::new(PartitionDatabase::open_existing(
+        &gateway.state_path.join("root-authority.sqlite3"),
+        UnixMicros::new(1),
+    )?);
+    // Replicated command validation compares the previous expiry. Inject scheduling on
+    // the passive copy first too, otherwise the fixture itself creates divergent state.
+    make_renewal_due(storage, node)?;
+    make_renewal_due(gateway, node)?;
+    wait_for_renewal(&authority, node).await?;
+    let replica = repository(storage, authority.partition_id())?;
+    wait_for_renewal(&replica, node).await?;
+    assert_eq!(fs::read(&storage.identity_path)?, identity);
+    verify_storage_node(gateway, storage).await
+}
+
+pub(super) async fn verify_storage_node(
+    gateway: &ProcessFixture,
+    storage: &ProcessFixture,
+) -> Result<(), Box<dyn Error>> {
+    let authority = AuthoritativeRepository::new(PartitionDatabase::open_existing(
+        &gateway.state_path.join("root-authority.sqlite3"),
+        UnixMicros::new(1),
+    )?);
+    let node = node_id(storage)?;
+    let expected = authority
+        .active_node_certificate(node)?
+        .ok_or("storage certificate missing")?;
+    assert_eq!(expected.generation, 2);
+    assert!(
+        !authority
+            .load_active_consensus_quorum_plan()?
+            .ok_or("plan missing")?
+            .members()
+            .contains(&node)
+    );
+    prove_private_leaf(storage, gateway, authority.partition_id(), &expected).await
 }
 
 fn repository(
@@ -81,14 +127,18 @@ fn repository(
 }
 
 fn make_initial_renewal_due(fixture: &ProcessFixture) -> Result<(), Box<dyn Error>> {
+    make_renewal_due(fixture, node_id(fixture)?)
+}
+
+fn make_renewal_due(fixture: &ProcessFixture, node: NodeId) -> Result<(), Box<dyn Error>> {
     let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros())?;
     let database = rusqlite::Connection::open(fixture.state_path.join("root-authority.sqlite3"))?;
-    // Single-node fixture only: shorten the scheduling metadata, leaving the real TLS
-    // key/leaf untouched. Production scheduling and signing still run unmodified.
+    // Fixture scheduling injection on the sole metadata voter; leave the real TLS key/leaf
+    // untouched. Production issuance, replication, installation and acknowledgement are real.
     assert_eq!(
         database.execute(
-            "UPDATE node_certificates SET valid_until = ?1 WHERE generation = 1 AND state = 1",
-            [now + 60_000_000],
+            "UPDATE node_certificates SET valid_until = ?1 WHERE node_id = ?2 AND generation = 1 AND state = 1",
+            rusqlite::params![now + 300_000_000, node.as_bytes().as_slice()],
         )?,
         1
     );

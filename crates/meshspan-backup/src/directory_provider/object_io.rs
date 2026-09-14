@@ -192,6 +192,24 @@ pub(super) fn remove_if_present(
 
 /// Absence is a filesystem fact, not an expired lease. A dangling symlink or
 /// non-file entry is still present and must retain its charge for investigation.
+/// Recover only a regular, exact-length object; neither a symlink nor a path grants ownership.
+pub(super) fn verify_recoverable_object(
+    objects: &Dir,
+    expected: BackupObjectIdentity,
+    reference: &BackupObjectReference,
+) -> Result<(), DirectoryBackupProviderError> {
+    let metadata = objects.symlink_metadata(reference.as_str())?;
+    if !metadata.is_file() || metadata.len() != expected.byte_length {
+        return Err(DirectoryBackupProviderError::Corrupt);
+    }
+    let mut file = objects.open(reference.as_str())?;
+    let (length, digest) =
+        copy_and_hash(&mut file, &mut std::io::sink(), Some(expected.byte_length))?;
+    verify_measurement(expected, length, digest)?;
+    file.sync_all()?;
+    sync_directory(objects)
+}
+
 pub(super) fn confirm_object_absent(
     objects: &Dir,
     object_reference: &str,

@@ -88,6 +88,21 @@ function readableFile(bytes: Uint8Array<ArrayBuffer>): File {
   });
 }
 
+it("explains interruption consent without claiming uninterrupted installation", async () => {
+  const client = fixture();
+  const status = initial();
+  status.installation_available = true;
+  vi.spyOn(client, "getUpdates").mockResolvedValue(status);
+  mount(client);
+  await shows(
+    "This build installs updates only when service interruption is allowed.",
+  );
+  expect(document.body.textContent).toContain("no node restarts");
+  expect(document.body.textContent).not.toContain(
+    "Installation is not connected",
+  );
+});
+
 it("retries the identical executable and operation after a lost upload reply without claiming installation", async () => {
   const client = fixture();
   const bytes = new File(["abc"], "meshspan-daemon");

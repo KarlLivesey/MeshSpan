@@ -2,6 +2,11 @@
 
 //! Real public configuration, encrypted storage, remote delivery, restart and exact retries.
 
+#[path = "notifications/gateways.rs"]
+mod gateways;
+#[path = "notifications/smtp.rs"]
+mod smtp;
+
 use super::{Error, ProcessFixture, request_with_headers, require_status, response_body};
 use axum::{
     Router,
@@ -13,7 +18,7 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use meshspan_certificates::CertificateAuthority;
 use meshspan_daemon::{HttpsServer, HttpsServerError};
-use meshspan_domain::{InitialBootstrapMaterial, WorkId};
+use meshspan_domain::WorkId;
 use meshspan_metadata::{AuthoritativeRepository, NotificationDeliveryState, PartitionDatabase};
 use rustls::{
     ClientConfig, ServerConfig,
@@ -136,13 +141,13 @@ async fn notification_channel_delivers_retries_after_restart_and_retains_credent
     stopped
 }
 
-fn configuration(endpoint: &str) -> Value {
+pub(super) fn configuration(endpoint: &str) -> Value {
     json!({ "operation_id": "00000000-0000-4000-8000-000000000302", "channel_id": CHANNEL,
         "expected_sequence": 0, "display_name": "Operator alerts", "enabled": true, "event_filter": 1,
         "settings": { "mode": "replace", "destination": { "kind": "webhook", "endpoint": endpoint, "bearer_token": TOKEN } } })
 }
 
-async fn configure(
+pub(super) async fn configure(
     root: &ProcessFixture,
     client: &ClientConfig,
     key: &str,
@@ -192,15 +197,10 @@ async fn await_delivery(
     expected: NotificationDeliveryState,
     attempt: u64,
 ) -> Result<(), Box<dyn Error>> {
-    let identity =
-        meshspan_daemon::LocalNodeIdentity::open(&root.identity_path, super::CERTIFICATE_NAME)?;
-    let node = InitialBootstrapMaterial::node_id(identity.public_key_fingerprint())?;
-    let partition = InitialBootstrapMaterial::root_partition_id(node)?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
-        let repository = AuthoritativeRepository::new(PartitionDatabase::open(
+        let repository = AuthoritativeRepository::new(PartitionDatabase::open_existing(
             &root.state_path.join("root-authority.sqlite3"),
-            partition,
             super::UnixMicros::new(1),
         )?);
         if repository
@@ -228,38 +228,25 @@ fn parse(value: &str) -> Result<[u8; 16], Box<dyn Error>> {
     Ok(bytes)
 }
 
-struct Receiver {
-    endpoint: String,
-    anchor: String,
+pub(super) struct Receiver {
+    pub(super) endpoint: String,
+    pub(super) anchor: String,
     events: mpsc::Receiver<Value>,
     shutdown: oneshot::Sender<()>,
     task: JoinHandle<Result<(), HttpsServerError>>,
 }
 
 impl Receiver {
-    async fn start() -> Result<Self, Box<dyn Error>> {
-        let ca = CertificateAuthority::new()?;
-        let (leaf, key) = ca.issue_node("localhost")?.into_parts();
-        let tls =
-            ServerConfig::builder_with_provider(Arc::new(meshspan_rustls_provider::provider()))
-                .with_protocol_versions(&[&rustls::version::TLS13])?
-                .with_no_client_auth()
-                .with_single_cert(
-                    vec![CertificateDer::from(leaf)],
-                    PrivatePkcs8KeyDer::from(key).into(),
-                )?;
+    pub(super) async fn start() -> Result<Self, Box<dyn Error>> {
+        let (tls, anchor) = receiver_tls()?;
         let (send, events) = mpsc::channel(8);
         let router = Router::new()
             .route("/events", post(receive_event))
             .fallback(|| async { StatusCode::SERVICE_UNAVAILABLE })
             .layer(DefaultBodyLimit::max(4096))
             .with_state((send, Arc::new(AtomicUsize::new(0))));
-        let server = HttpsServer::bind("127.0.0.1:0".parse()?, Arc::new(tls), router).await?;
+        let server = HttpsServer::bind("127.0.0.1:0".parse()?, tls, router).await?;
         let endpoint = format!("https://localhost:{}/events", server.local_addr()?.port());
-        let anchor = format!(
-            "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
-            STANDARD.encode(ca.certificate_der())
-        );
         let (shutdown, stopped) = oneshot::channel();
         let task = tokio::spawn(server.run_until(async {
             drop(stopped.await);
@@ -277,13 +264,73 @@ impl Receiver {
             .await?
             .ok_or_else(|| "notification receiver stopped".into())
     }
-    async fn stop(self) -> Result<(), Box<dyn Error>> {
+    pub(super) async fn stop(self) -> Result<(), Box<dyn Error>> {
         self.shutdown
             .send(())
             .map_err(|()| "notification receiver already stopped")?;
         self.task.await??;
         Ok(())
     }
+}
+
+pub(super) async fn expect_manual_dns_lifecycle(
+    receiver: &mut Receiver,
+    root: &ProcessFixture,
+) -> Result<(), Box<dyn Error>> {
+    let mut deliveries = std::collections::BTreeMap::<String, (Value, u64)>::new();
+    // Four committed task phases plus the receiver's one deliberately rejected attempt.
+    for _ in 0..5 {
+        let event = receiver.receive().await?;
+        assert_eq!(event["kind"], "manual_dns_task_changed");
+        assert_eq!(event["version"], 1);
+        assert_eq!(event.as_object().ok_or("invalid event")?.len(), 5);
+        assert!(!event.to_string().contains("_acme-challenge"));
+        let id = event["delivery_id"]
+            .as_str()
+            .ok_or("missing delivery ID")?
+            .to_owned();
+        match deliveries.entry(id) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert((event, 1));
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                assert_eq!(entry.get().0, event, "retry changed the redacted event");
+                entry.get_mut().1 += 1;
+            }
+        }
+    }
+    assert_eq!(
+        deliveries.len(),
+        4,
+        "manual DNS phases were lost or duplicated"
+    );
+    for (id, (_, attempts)) in deliveries {
+        await_delivery(
+            root,
+            WorkId::from_bytes(parse(&id)?)?,
+            NotificationDeliveryState::Accepted,
+            attempts,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+fn receiver_tls() -> Result<(Arc<ServerConfig>, String), Box<dyn Error>> {
+    let ca = CertificateAuthority::new()?;
+    let (leaf, key) = ca.issue_node("localhost")?.into_parts();
+    let tls = ServerConfig::builder_with_provider(Arc::new(meshspan_rustls_provider::provider()))
+        .with_protocol_versions(&[&rustls::version::TLS13])?
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![CertificateDer::from(leaf)],
+            PrivatePkcs8KeyDer::from(key).into(),
+        )?;
+    let anchor = format!(
+        "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+        STANDARD.encode(ca.certificate_der())
+    );
+    Ok((Arc::new(tls), anchor))
 }
 
 async fn receive_event(

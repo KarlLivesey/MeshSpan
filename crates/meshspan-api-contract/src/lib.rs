@@ -2,6 +2,27 @@
 
 //! Authoritative public API models, schemas, and trust-boundary validation.
 
+mod recovery_installation;
+mod recovery_state_installation;
+pub use recovery_state_installation::decode_recovery_state_installation_signature;
+mod recovery_restoration;
+pub use recovery_restoration::{
+    RecoveryRestorationAttestation, decode_recovery_restoration_attestation,
+};
+mod recovery_preparation;
+pub use recovery_installation::{
+    RecoveryInstallationReport, decode_recovery_installation_signature,
+};
+pub use recovery_preparation::{
+    MAX_RECOVERY_SELECTION_BYTES, RecoveryNodeRole, RecoveryNodeSelection,
+    RecoveryPreparationSelection, RecoveryQuorumSelection, RecoveryStorageSelection,
+    RecoveryStorageTarget, decode_recovery_preparation_selection,
+    decode_recovery_storage_selection,
+};
+pub use recovery_preparation::{
+    RecoveryTargetRestoreRequest, decode_recovery_target_restore_request,
+};
+
 mod api_key_management;
 mod api_key_validation;
 mod authentication_method_listing;
@@ -24,6 +45,30 @@ mod backup_schedule;
 #[cfg(test)]
 mod backup_schedule_tests;
 mod backup_schedule_validation;
+mod federation_connection;
+mod federation_pairing;
+mod federation_storage_grant;
+#[cfg(test)]
+mod federation_storage_grant_tests;
+mod federation_storage_grant_validation;
+pub use federation_connection::{
+    AcceptFederationPairingRequest, AcceptFederationPairingResponse, ConnectFederationRequest,
+    ConnectFederationResponse, MAX_FEDERATION_CONNECTION_BYTES,
+    decode_accept_federation_pairing_request, decode_accept_federation_pairing_response,
+    decode_connect_federation_request, encode_accept_federation_pairing_response,
+    encode_connect_federation_response,
+};
+pub use federation_storage_grant::{
+    ConfigureFederationStorageGrantRequest, ConfigureFederationStorageGrantResponse,
+    FederationStorageGrantChange, FederationStorageGrantLifetime, FederationStorageGrantPolicy,
+    FederationStorageGrantQuery, FederationStorageGrantResponse, FederationStorageGrantState,
+    FederationStorageGrantSummary,
+};
+pub use federation_storage_grant_validation::{
+    MAX_FEDERATION_STORAGE_GRANT_BYTES, decode_federation_storage_grant_query,
+    decode_federation_storage_grant_request, encode_federation_storage_grant_receipt,
+    encode_federation_storage_grant_response,
+};
 
 mod certificate_administration;
 mod certificate_administration_validation;
@@ -252,6 +297,13 @@ pub use directory_listing::{
 pub use directory_listing_validation::{
     encode_list_directory_response, validate_list_directory_query,
     validate_list_directory_query_value, validate_list_directory_response_value,
+};
+pub use federation_pairing::{
+    CancelFederationPairingInvitationRequest, CancelFederationPairingInvitationResponse,
+    CreateFederationPairingInvitationRequest, CreateFederationPairingInvitationResponse,
+    MAX_CREATE_FEDERATION_PAIRING_BYTES, decode_cancel_federation_pairing_request,
+    decode_create_federation_pairing_request, encode_cancel_federation_pairing_response,
+    encode_create_federation_pairing_response,
 };
 pub use file_read::{MAX_FILE_READ_BYTES, MAX_SAFE_FILE_OFFSET, ReadFileQuery};
 pub use file_read_validation::{validate_read_file_query, validate_read_file_query_value};

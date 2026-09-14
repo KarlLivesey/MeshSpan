@@ -16,7 +16,7 @@ use sha2::Digest;
 use crate::BackupError;
 
 pub(crate) const MAGIC: [u8; 8] = *b"MSBACKUP";
-pub(crate) const FORMAT_VERSION: u16 = 1;
+pub(crate) const FORMAT_VERSION: u16 = 2;
 pub(crate) const CONTENT_KEY_SECRET_KIND: u16 = 0x100;
 pub(crate) const CONTENT_KEY_GENERATION: u64 = 1;
 pub(crate) const CHUNK_BYTES: usize = 1_048_576;
@@ -99,8 +99,27 @@ pub struct BackupFileEvidence {
     pub digest: [u8; 32],
 }
 
+/// Exact bytes of one closed filesystem journal captured alongside control metadata.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BackupJournalEvidence {
+    /// Positive plaintext byte length; streaming never allocates this length.
+    pub byte_length: u64,
+    /// SHA-256 of the complete closed journal.
+    pub digest: [u8; 32],
+}
+
+/// Fixed archive members, not paths or independently selected backup generations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BackupHistoryEvidence {
+    /// Namespace commits, immutable objects and versions.
+    pub namespace: BackupJournalEvidence,
+    /// Content layouts, wrapped content keys and shard routes.
+    pub content: BackupJournalEvidence,
+}
+
 pub(crate) struct BackupHeader {
     pub(crate) source: BackupSourceManifest,
+    pub(crate) history: Option<BackupHistoryEvidence>,
     pub(crate) nonce_prefix: [u8; 16],
     pub(crate) encrypted_content_key: EncryptedSecret,
     pub(crate) recipient_envelopes: Vec<RecipientKeyEnvelope>,
@@ -127,6 +146,17 @@ impl BackupHeader {
         }
         let mut output = Vec::new();
         encode_source(&mut output, self.source);
+        match self.history {
+            None => output.push(0),
+            Some(history) => {
+                output.push(1);
+                for journal in [history.namespace, history.content] {
+                    validate_journal(journal)?;
+                    output.extend_from_slice(&journal.byte_length.to_be_bytes());
+                    output.extend_from_slice(&journal.digest);
+                }
+            }
+        }
         output.extend_from_slice(&self.nonce_prefix);
         encode_secret(&mut output, &self.encrypted_content_key.parts())?;
         push_u16(&mut output, self.recipient_envelopes.len())?;
@@ -149,6 +179,14 @@ impl BackupHeader {
         let mut input = Cursor::new(bytes);
         let source = decode_source(&mut input)?;
         source.validate().map_err(|_| BackupError::Corrupt)?;
+        let history = match read_u8(&mut input)? {
+            0 => None,
+            1 => Some(BackupHistoryEvidence {
+                namespace: decode_journal(&mut input)?,
+                content: decode_journal(&mut input)?,
+            }),
+            _ => return Err(BackupError::Corrupt),
+        };
         let nonce_prefix = read_array(&mut input)?;
         let context = SecretContext::new(
             CONTENT_KEY_SECRET_KIND,
@@ -170,11 +208,28 @@ impl BackupHeader {
         }
         Ok(Self {
             source,
+            history,
             nonce_prefix,
             encrypted_content_key,
             recipient_envelopes,
         })
     }
+}
+
+fn validate_journal(journal: BackupJournalEvidence) -> Result<(), BackupError> {
+    if journal.byte_length == 0 || journal.digest == [0; 32] {
+        return Err(BackupError::InvalidInput);
+    }
+    Ok(())
+}
+
+fn decode_journal(input: &mut Cursor<&[u8]>) -> Result<BackupJournalEvidence, BackupError> {
+    let journal = BackupJournalEvidence {
+        byte_length: read_u64(input)?,
+        digest: read_array(input)?,
+    };
+    validate_journal(journal).map_err(|_| BackupError::Corrupt)?;
+    Ok(journal)
 }
 
 fn encode_source(output: &mut Vec<u8>, source: BackupSourceManifest) {

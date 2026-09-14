@@ -95,6 +95,7 @@ pub(super) fn decode(
                 3 => UpdateNodePhase::Restarting,
                 4 => UpdateNodePhase::Verified,
                 5 => UpdateNodePhase::Failed,
+                6 => UpdateNodePhase::Preparing,
                 _ => return Err(MetadataCommandCodecError::Invalid),
             },
             target: decoder.text(64)?,

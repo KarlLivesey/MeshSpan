@@ -66,7 +66,7 @@ fn captured_backup_survives_later_commits_without_rewriting_its_capture_time()
     Ok(())
 }
 
-fn captured(
+pub(super) fn captured(
     fixture: &Fixture,
     backup: BackupId,
     destination: BackupDestinationId,

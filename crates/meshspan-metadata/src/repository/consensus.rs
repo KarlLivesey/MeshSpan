@@ -14,6 +14,10 @@ use crate::PartitionDatabase;
 const COMMAND_ENTRY_KIND: i64 = 1;
 const MAXIMUM_RECOVERED_LOG_ENTRIES: usize = 1_000_000;
 const MAXIMUM_RECOVERED_LOG_BYTES: u64 = 512 * 1_024 * 1_024;
+const APPLIED_ENTRY_QUERY: &str = "SELECT l.entry_kind, l.entry_version, length(l.payload),
+            substr(l.payload, 1, ?3), l.payload_digest
+     FROM consensus_log l JOIN applied_state a ON a.singleton = 1
+     WHERE l.log_index = ?1 AND l.term = ?2 AND l.log_index <= a.last_log_index";
 
 /// Replaceable durable boundary consumed by a consensus driver.
 pub trait PartitionConsensusPersistence {
@@ -85,6 +89,9 @@ pub enum ConsensusStoreError {
     /// No bootstrap quorum plan was installed before consensus admission.
     #[error("durable consensus quorum plan is missing")]
     MissingQuorumPlan,
+    /// An offline-restored database has not completed explicit replacement admission.
+    #[error("prepared recovery cannot start consensus before explicit service admission")]
+    RecoveryAdmissionRequired,
     /// Active quorum plan state or transition contradicts durable consensus history.
     #[error("durable consensus quorum plan is invalid")]
     InvalidQuorumPlan,
@@ -97,12 +104,118 @@ pub(super) fn load_state(
     database: &PartitionDatabase,
     membership_epoch: u64,
 ) -> Result<DurableCoreState, ConsensusStoreError> {
+    require_admitted(database.connection())?;
     if membership_epoch == 0 {
         return Err(ConsensusStoreError::MembershipEpochMismatch);
     }
     let partition_id = database.partition_id().as_bytes();
     super::quorum_plan::verify_epoch(database.connection(), &partition_id, membership_epoch)?;
     load_state_from_connection(database.connection(), &partition_id, membership_epoch)
+}
+
+/// Reads at most one bounded entry from an already applied prefix, never the speculative tail.
+pub(super) fn applied_entry(
+    database: &PartitionDatabase,
+    position: LogPosition,
+) -> Result<Option<LogEntry>, ConsensusStoreError> {
+    require_admitted(database.connection())?;
+    if position.index == 0 || position.term == 0 {
+        return Err(ConsensusStoreError::InvalidMutation);
+    }
+    let maximum_payload = i64::try_from(LogEntry::MAXIMUM_COMMAND_BYTES + 16)
+        .map_err(|_| ConsensusStoreError::RecoveryBoundExceeded)?;
+    database
+        .connection()
+        .query_row(
+            APPLIED_ENTRY_QUERY,
+            params![
+                to_i64(position.index)?,
+                to_i64(position.term)?,
+                maximum_payload
+            ],
+            |row| {
+                let kind: i64 = row.get(0)?;
+                let version: i64 = row.get(1)?;
+                let length: i64 = row.get(2)?;
+                let payload: Vec<u8> = row.get(3)?;
+                let digest = row.get_ref(4)?.as_blob()?;
+                let decoded = || -> Result<LogEntry, ConsensusStoreError> {
+                    if kind != COMMAND_ENTRY_KIND
+                        || !(16..=maximum_payload).contains(&length)
+                        || usize::try_from(length).ok() != Some(payload.len())
+                        || digest.len() != 32
+                    {
+                        return Err(ConsensusStoreError::CorruptState);
+                    }
+                    let entry = LogEntry::new(
+                        position,
+                        operation_id(&payload[..16])?,
+                        u16::try_from(version).map_err(|_| ConsensusStoreError::CorruptState)?,
+                        payload[16..].to_vec(),
+                    )?;
+                    if entry.entry_digest().as_slice() != digest {
+                        return Err(ConsensusStoreError::CorruptState);
+                    }
+                    Ok(entry)
+                };
+                Ok(decoded())
+            },
+        )
+        .optional()?
+        .transpose()
+}
+
+/// Apply only an exact durable no-op, preserving application revision and receipts.
+pub(super) fn apply_term_confirmation(
+    database: &mut PartitionDatabase,
+    entry: &LogEntry,
+) -> Result<(), ConsensusStoreError> {
+    entry.validate()?;
+    if !entry.is_term_confirmation() {
+        return Err(ConsensusStoreError::InvalidMutation);
+    }
+    require_admitted(database.connection())?;
+    let transaction = database
+        .connection_mut()
+        .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut payload = entry.operation_id.as_bytes().to_vec();
+    payload.extend_from_slice(&entry.command);
+    let matched: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM consensus_log WHERE log_index = ?1 AND term = ?2
+         AND entry_kind = 1 AND entry_version = ?3 AND payload = ?4 AND payload_digest = ?5)",
+        params![
+            to_i64(entry.position.index)?,
+            to_i64(entry.position.term)?,
+            i64::from(entry.command_version),
+            payload,
+            entry.entry_digest().as_slice()
+        ],
+        |row| row.get(0),
+    )?;
+    if !matched {
+        return Err(ConsensusStoreError::InvalidMutation);
+    }
+    let (index, term): (i64, i64) = transaction.query_row(
+        "SELECT last_log_index, last_log_term FROM applied_state WHERE singleton = 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    if nonnegative_u64(index)? == entry.position.index
+        && nonnegative_u64(term)? == entry.position.term
+    {
+        return Ok(());
+    }
+    if nonnegative_u64(index)?.checked_add(1) != Some(entry.position.index)
+        || nonnegative_u64(term)? > entry.position.term
+    {
+        return Err(ConsensusStoreError::InvalidMutation);
+    }
+    transaction.execute(
+        "UPDATE applied_state SET last_log_index = ?1, last_log_term = ?2 WHERE singleton = 1",
+        params![to_i64(entry.position.index)?, to_i64(entry.position.term)?],
+    )?;
+    transaction.commit()?;
+    Ok(())
 }
 
 pub(super) fn persist_mutation(
@@ -133,6 +246,7 @@ fn persist_mutation_with_failpoint(
     persisted_at: UnixMicros,
     failpoint: StoreFailpoint,
 ) -> Result<(), ConsensusStoreError> {
+    require_admitted(database.connection())?;
     if membership_epoch == 0
         || (mutation.vote_state.is_none()
             && mutation.truncate_from.is_none()
@@ -170,7 +284,17 @@ fn persist_mutation_with_failpoint(
     Ok(())
 }
 
-fn load_state_from_connection(
+pub(super) fn require_admitted(connection: &Connection) -> Result<(), ConsensusStoreError> {
+    if super::recovery_preparation::pending(connection)
+        .map_err(|_| ConsensusStoreError::CorruptState)?
+    {
+        Err(ConsensusStoreError::RecoveryAdmissionRequired)
+    } else {
+        Ok(())
+    }
+}
+
+pub(super) fn load_state_from_connection(
     connection: &Connection,
     partition_id: &[u8; 16],
     membership_epoch: u64,
@@ -548,6 +672,80 @@ mod tests {
         persist_mutation_with_failpoint,
     };
     use crate::PartitionDatabase;
+
+    #[test]
+    fn applied_entry_is_exact_indexed_and_rejects_unapplied_or_corrupt_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let file_path = directory.path().join("applied-entry.sqlite3");
+        let mut database = PartitionDatabase::open(
+            &file_path,
+            PartitionId::from_bytes([1; 16])?,
+            UnixMicros::new(1),
+        )?;
+        initialise_plan(&mut database, NodeId::from_bytes([2; 16])?, 1)?;
+        let first = entry(1, 1, 3, b"first")?;
+        let second = entry(1, 2, 4, b"second")?;
+        persist_mutation(
+            &mut database,
+            1,
+            &DurableMutation {
+                vote_state: Some((1, None)),
+                truncate_from: None,
+                append: vec![first.clone(), second.clone()],
+                membership_epoch: None,
+                quorum_plan: None,
+            },
+            UnixMicros::new(2),
+        )?;
+        assert_eq!(super::applied_entry(&database, first.position)?, None);
+        database.connection_mut().execute(
+            "UPDATE applied_state SET last_log_index = 1, last_log_term = 1 WHERE singleton = 1",
+            [],
+        )?;
+        assert_eq!(
+            super::applied_entry(&database, first.position)?,
+            Some(first.clone())
+        );
+        assert_eq!(super::applied_entry(&database, second.position)?, None);
+        assert_eq!(
+            super::applied_entry(&database, LogPosition { index: 1, term: 2 })?,
+            None
+        );
+        assert!(matches!(
+            super::applied_entry(&database, LogPosition::GENESIS),
+            Err(ConsensusStoreError::InvalidMutation)
+        ));
+        let query = format!("EXPLAIN QUERY PLAN {}", super::APPLIED_ENTRY_QUERY);
+        let plan = database
+            .connection()
+            .prepare(&query)?
+            .query_map(params![1, 1, 1024], |row| row.get::<_, String>(3))?
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(plan.len(), 2, "{plan:?}");
+        assert!(
+            plan.iter()
+                .all(|step| step.contains("USING INTEGER PRIMARY KEY")),
+            "{plan:?}"
+        );
+        drop(database);
+        let database = PartitionDatabase::open_existing(&file_path, UnixMicros::new(3))?;
+        assert_eq!(
+            super::applied_entry(&database, first.position)?,
+            Some(first)
+        );
+        for size in [16_i64, i64::try_from(LogEntry::MAXIMUM_COMMAND_BYTES)? + 17] {
+            database.connection().execute(
+                "UPDATE consensus_log SET payload = zeroblob(?1) WHERE log_index = 1",
+                [size],
+            )?;
+            assert!(matches!(
+                super::applied_entry(&database, LogPosition { index: 1, term: 1 }),
+                Err(ConsensusStoreError::CorruptState)
+            ));
+        }
+        Ok(())
+    }
 
     #[test]
     fn vote_and_log_mutation_survive_exact_restart() -> Result<(), Box<dyn std::error::Error>> {

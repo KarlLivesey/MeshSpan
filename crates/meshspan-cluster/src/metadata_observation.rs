@@ -38,6 +38,21 @@ pub struct MetadataAuthorityObservation {
     pub pending_operations: usize,
     /// Mutations queued for admission, excluding peer/lifecycle messages.
     pub queued_operations: usize,
+    /// Remote members in the current stable or joint plan, including learners.
+    pub remote_members: usize,
+    /// Leader-local replication tracking; absent on followers and candidates.
+    pub replication: Option<MetadataReplicationObservation>,
+}
+
+/// Aggregate current-plan match positions, not fresh reachability or quorum evidence.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MetadataReplicationObservation {
+    /// Remote members without a tracked match position.
+    pub unknown_members: usize,
+    /// Tracked remote members whose match position precedes the committed head.
+    pub lagging_members: usize,
+    /// Largest committed-entry gap among tracked remote members.
+    pub maximum_committed_gap: u64,
 }
 
 impl MetadataAuthorityHandle {
@@ -65,6 +80,23 @@ impl MetadataAuthorityHandle {
 
 impl MetadataAuthorityRuntime {
     pub(super) fn observation(&self) -> MetadataAuthorityObservation {
+        let members = self.driver.active_plan().members();
+        let remote_members = members
+            .iter()
+            .filter(|node| **node != self.driver.local_node_id());
+        let mut remote_count = 0;
+        let mut replication = MetadataReplicationObservation::default();
+        for node in remote_members {
+            remote_count += 1;
+            match self.driver.peer_matched_index(*node) {
+                Some(index) => {
+                    let gap = self.driver.commit_index().saturating_sub(index);
+                    replication.lagging_members += usize::from(gap > 0);
+                    replication.maximum_committed_gap = replication.maximum_committed_gap.max(gap);
+                }
+                None => replication.unknown_members += 1,
+            }
+        }
         MetadataAuthorityObservation {
             partition_id: self.driver.persistence().partition_id(),
             node_id: self.driver.local_node_id(),
@@ -78,6 +110,8 @@ impl MetadataAuthorityRuntime {
             persistence_blocked: self.driver.persistence_blocked(),
             pending_operations: self.pending.len(),
             queued_operations: self.queued.len(),
+            remote_members: remote_count,
+            replication: (self.driver.role() == Role::Leader).then_some(replication),
         }
     }
 }

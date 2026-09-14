@@ -6,7 +6,7 @@ use meshspan_domain::{Revision, WorkId};
 use rusqlite::{Connection, Transaction, params};
 use sha2::{Digest as _, Sha256};
 
-use super::{EntityKind, EntityReference, RepositoryError, apply::to_i64};
+use super::{EntityKind, EntityReference, LogPosition, RepositoryError, apply::to_i64};
 use crate::{
     AdvanceUpdateNode, CommandContext, ConfigureUpdateSigner, ControlUpdateRollout,
     StartUpdateRollout, UpdateNodePhase, UpdateRolloutControl, authenticate_update_manifest,
@@ -17,12 +17,15 @@ pub(super) fn execute(
     context: CommandContext,
     command: &crate::AuthoritativeCommand,
     revision: Revision,
+    position: LogPosition,
 ) -> Option<Result<EntityReference, RepositoryError>> {
     use crate::AuthoritativeCommand;
     Some(match command {
         AuthoritativeCommand::ConfigureUpdateSigner(value) => configure_signer(tx, value, revision),
         AuthoritativeCommand::StartUpdateRollout(value) => start(tx, context, value, revision),
-        AuthoritativeCommand::AdvanceUpdateNode(value) => advance(tx, context, value, revision),
+        AuthoritativeCommand::AdvanceUpdateNode(value) => {
+            advance(tx, context, value, revision, position)
+        }
         AuthoritativeCommand::ControlUpdateRollout(value) => control(tx, *value, revision),
         AuthoritativeCommand::PublishUpdateArtifact(value) => {
             super::update_artifact::publish(tx, value, revision)
@@ -143,6 +146,7 @@ fn advance(
     context: CommandContext,
     value: &AdvanceUpdateNode,
     revision: Revision,
+    position: LogPosition,
 ) -> Result<EntityReference, RepositoryError> {
     let rollout = load(tx, value.rollout_id)?.ok_or(RepositoryError::InvalidCommand)?;
     if !matches!(
@@ -190,20 +194,32 @@ fn advance(
     let restart_pending = match value.phase {
         UpdateNodePhase::Restarting => true,
         UpdateNodePhase::Failed => previous.restart_pending,
-        UpdateNodePhase::Verified | UpdateNodePhase::Staged | UpdateNodePhase::Pending => false,
+        UpdateNodePhase::Verified
+        | UpdateNodePhase::Staged
+        | UpdateNodePhase::Pending
+        | UpdateNodePhase::Preparing => false,
+    };
+    let (phase, preparation) = if value.phase == UpdateNodePhase::Preparing {
+        (UpdateNodePhase::Staged as u8, Some(to_i64(position.index)?))
+    } else {
+        (
+            value.phase as u8,
+            previous.preparation_log_index.map(to_i64).transpose()?,
+        )
     };
     tx.execute(
         "UPDATE update_rollout_nodes SET phase=?1,restart_pending=?2,sequence=sequence+1,
-        target=?3,evidence_digest=?4,observed_at=?5,revision=?6 WHERE rollout_id=?7 AND node_id=?8",
+        target=?3,evidence_digest=?4,observed_at=?5,revision=?6,preparation_log_index=?9 WHERE rollout_id=?7 AND node_id=?8",
         params![
-            value.phase as u8,
+            phase,
             restart_pending,
             value.target,
             value.evidence_digest.as_slice(),
             context.occurred_at.get(),
             to_i64(revision.get())?,
             value.rollout_id.as_bytes().as_slice(),
-            value.node_id.as_bytes().as_slice()
+            value.node_id.as_bytes().as_slice(),
+            preparation,
         ],
     )?;
     let next_state = if value.phase == UpdateNodePhase::Failed {
@@ -235,8 +251,12 @@ fn validate_transition(
         UpdateNodePhase::Staged => {
             previous.phase == UpdateNodePhase::Pending && !previous.restart_pending
         }
-        UpdateNodePhase::Restarting => {
+        UpdateNodePhase::Preparing => {
             previous.phase == UpdateNodePhase::Staged
+                && rollout.state == UpdateRolloutState::Running
+        }
+        UpdateNodePhase::Restarting => {
+            previous.phase == UpdateNodePhase::Preparing
                 && rollout.state == UpdateRolloutState::Running
         }
         UpdateNodePhase::Verified => {
@@ -253,12 +273,19 @@ fn validate_transition(
     if !valid {
         return Err(RepositoryError::InvalidCommand);
     }
-    if next == UpdateNodePhase::Restarting {
+    if matches!(
+        next,
+        UpdateNodePhase::Preparing | UpdateNodePhase::Restarting
+    ) {
         let trust = signer(tx, rollout.signer_id)?.ok_or(RepositoryError::CorruptState)?;
         let busy: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM update_rollout_nodes
-            WHERE rollout_id=?1 AND (restart_pending=1 OR phase IN (1,5)))",
-            [rollout.rollout_id.as_bytes().as_slice()],
+            WHERE rollout_id=?1 AND (restart_pending=1 OR phase IN (1,5)
+                OR (phase=2 AND preparation_log_index IS NOT NULL AND node_id<>?2)))",
+            params![
+                rollout.rollout_id.as_bytes().as_slice(),
+                previous.node_id.as_bytes().as_slice()
+            ],
             |row| row.get(0),
         )?;
         if !trust.enabled || busy {
@@ -292,6 +319,7 @@ fn control(
             }
             // An ambiguous restart stays exclusive and resumes probing, never blind replacement.
             tx.execute("UPDATE update_rollout_nodes SET phase=CASE WHEN restart_pending=1 THEN 3 ELSE 1 END,
+                preparation_log_index=CASE WHEN restart_pending=1 THEN preparation_log_index ELSE NULL END,
                 sequence=sequence+1, revision=?1 WHERE rollout_id=?2 AND phase=5",
                 params![to_i64(revision.get())?, value.rollout_id.as_bytes().as_slice()])?;
             1

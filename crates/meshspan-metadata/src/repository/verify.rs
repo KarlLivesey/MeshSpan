@@ -193,9 +193,10 @@ fn collect_federation_storage_findings(
     collect(
         database,
         "WITH allocation_usage AS (
-             SELECT grant_id, min(allocation_id) AS allocation_id,
-                    sum(maximum_bytes) AS allocated_bytes
-             FROM federation_storage_allocations GROUP BY grant_id
+             SELECT a.grant_id, min(a.allocation_id) AS allocation_id,
+                    sum(COALESCE(s.ceiling_bytes, a.maximum_bytes)) AS allocated_bytes
+             FROM federation_storage_allocations a
+             LEFT JOIN federation_storage_seals s USING(allocation_id) GROUP BY a.grant_id
          ), grant_limits AS (
              SELECT grant_id, min(maximum_storage_bytes) AS maximum_bytes
              FROM federation_grant_restrictions

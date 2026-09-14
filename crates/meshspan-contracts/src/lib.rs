@@ -13,15 +13,40 @@ mod data;
 mod federation_storage;
 mod filesystem;
 mod maintenance_metrics;
+mod maintenance_progress_metrics;
+pub use maintenance_progress_metrics::MaintenanceProgressMetric;
+mod coding_metrics;
+mod filesystem_metrics;
+pub use filesystem_metrics::{FileOperationKind, FileOperationMetric};
+mod gateway_transfer;
+mod inventory_metrics;
+mod lifecycle_metrics;
 mod metrics;
+pub use coding_metrics::{CodingMetric, CodingOperation};
+pub use gateway_transfer::{GatewayTransferMetric, GatewayTransferObserver};
+pub use inventory_metrics::InventoryMetric;
+pub use lifecycle_metrics::{LifecycleKind, LifecycleMetric, LifecycleOutcome};
+mod placement_assessment;
+mod protection_metrics;
+pub use placement_assessment::{PlacementAssessment, PlacementAssessmentRequest};
+pub use protection_metrics::ProtectionMetric;
 mod observability;
 mod security;
+mod shard_receipt;
 mod storage;
+pub use shard_receipt::{SHARD_RECEIPT_V1_BYTES, decode_shard_receipt_v1, encode_shard_receipt_v1};
+mod storage_io;
 mod storage_usage;
+pub use storage_io::{
+    StorageIoCounts, StorageIoKind, StorageIoMetric, StorageIoObservation, StorageIoObserver,
+};
 mod suites;
 
 pub use maintenance_metrics::{MaintenanceMetric, MaintenanceMetricKind};
-pub use storage_usage::{StorageUsageMetric, StorageUsageObservation, StorageUsageSource};
+pub use storage_usage::{
+    FilesystemSpaceObservation, PackSpaceObservation, StorageUsageMetric, StorageUsageObservation,
+    StorageUsageSource,
+};
 
 pub use access::{
     AccessConnector, AccessIntent, AccessOperation, AccessResult, AccessSession,
@@ -34,10 +59,11 @@ pub use authority::{
     OperationState, RepositorySnapshot,
 };
 pub use backup::{
-    BackupDeleteReceipt, BackupDeleteRequest, BackupObjectIdentity, BackupObjectReceipt,
-    BackupObjectReference, BackupProvider, BackupReadReceipt, BackupReadRequest,
-    BackupStoreRequest, BackupVerifyRequest, MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES,
-    validate_backup_delete_request, validate_backup_read_request, validate_backup_store_request,
+    BackupDeleteReceipt, BackupDeleteRequest, BackupLookupRequest, BackupObjectIdentity,
+    BackupObjectReceipt, BackupObjectReference, BackupProvider, BackupReadReceipt,
+    BackupReadRequest, BackupStoreRequest, BackupVerifyRequest,
+    MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES, validate_backup_delete_request,
+    validate_backup_lookup_request, validate_backup_read_request, validate_backup_store_request,
     validate_backup_verify_request,
 };
 pub use backup_capacity::{BackupCapacityBudget, MAXIMUM_BACKUP_CAPACITY_PAGE};
@@ -60,11 +86,15 @@ pub use data::{
     ShardAcknowledgement,
 };
 pub use federation_storage::{
-    FederatedShardPermit, FederatedStorageInventoryRecord, FederatedStoragePermitMacKey,
+    FederatedBackupPermit, FederatedBackupRequest, FederatedBackupScope, FederatedShardPermit,
+    FederatedStorageInventoryRecord, FederatedStoragePermitMacKey,
+    MAXIMUM_FEDERATED_BACKUP_PERMIT_LIFETIME_MICROS, federated_backup_permit_mac,
+    federated_backup_request_digest, federated_provider_backup_identity,
     federated_provider_shard_identity, federated_shard_permit_mac,
     federated_shard_read_result_digest, federated_shard_reclamation_result_digest,
     federated_shard_retirement_result_digest, federated_shard_scrub_result_digest,
-    federated_shard_write_result_digest, validate_federated_storage_inventory_record,
+    federated_shard_write_result_digest, validate_federated_backup_permit,
+    validate_federated_storage_inventory_record, verify_federated_backup_permit_mac,
     verify_federated_shard_permit_mac,
 };
 pub use filesystem::{

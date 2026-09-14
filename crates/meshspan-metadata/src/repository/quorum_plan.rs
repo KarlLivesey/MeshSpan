@@ -18,6 +18,7 @@ pub(super) fn initialise(
     plan: &CompiledQuorumPlan,
     updated_at: UnixMicros,
 ) -> Result<ActiveQuorumPlan, ConsensusStoreError> {
+    super::consensus::require_admitted(database.connection())?;
     let active = ActiveQuorumPlan::Stable(Box::new(plan.clone()));
     let canonical = active.encode()?;
     let partition_id = database.partition_id().as_bytes();
@@ -81,7 +82,7 @@ pub(super) fn persist(
         "UPDATE consensus_active_quorum_plan
          SET phase_kind = ?1, membership_epoch = ?2, record_version = ?3,
              canonical_plan = ?4, proof_digest = ?5, activated_log_index = ?6,
-             activated_log_term = ?7, updated_at = ?8
+             activated_log_term = ?7, updated_at = ?8, activation_kind = 1
          WHERE singleton = 1 AND partition_id = ?9",
         params![
             phase,
@@ -254,7 +255,7 @@ fn load_from_connection(
     let row = connection
         .query_row(
             "SELECT partition_id, phase_kind, membership_epoch, record_version,
-                    canonical_plan, proof_digest, activated_log_index, activated_log_term
+                    canonical_plan, proof_digest, activated_log_index, activated_log_term, activation_kind
              FROM consensus_active_quorum_plan WHERE singleton = 1",
             [],
             |row| {
@@ -267,11 +268,13 @@ fn load_from_connection(
                     row.get::<_, Vec<u8>>(5)?,
                     row.get::<_, i64>(6)?,
                     row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
                 ))
             },
         )
         .optional()?;
-    let Some((stored_partition, phase, epoch, version, canonical, digest, index, term)) = row
+    let Some((stored_partition, phase, epoch, version, canonical, digest, index, term, origin)) =
+        row
     else {
         return Ok(None);
     };
@@ -287,9 +290,21 @@ fn load_from_connection(
         term,
         active: &active,
     })?;
-    if position != LogPosition::GENESIS {
-        verify_transition_entry(connection, position)?;
-        verify_transition_history(connection, position, &active)?;
+    match origin {
+        1 => {
+            if position != LogPosition::GENESIS {
+                verify_transition_entry(connection, position)?;
+                verify_transition_history(connection, position, &active)?;
+            }
+        }
+        2 => {
+            verify_transition_entry(connection, position)?;
+            super::recovery_preparation::consensus_activation::verify_quorum_origin(
+                connection, &active, position,
+            )
+            .map_err(|_| ConsensusStoreError::InvalidQuorumPlan)?;
+        }
+        _ => return Err(ConsensusStoreError::InvalidQuorumPlan),
     }
     Ok(Some(active))
 }

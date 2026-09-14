@@ -51,8 +51,8 @@ export function destinationRequest(
     destination_id: crypto.randomUUID(),
     expected_revision: 0,
     name: form.get("name"),
-    target_id: target.target_id,
-    target_generation: target.generation,
+    provider: { kind: "registered_target", target_id: target.target_id },
+    provider_generation: target.generation,
     enabled: true,
   });
 }
@@ -60,21 +60,16 @@ export function destinationRequest(
 export function toggleDestination(
   destination: BackupDestination,
 ): ConfigureBackupDestinationRequest {
-  if (
-    destination.provider.kind !== "registered_target" ||
-    destination.state === "retired"
-  ) {
-    throw new TypeError(
-      "This destination cannot be changed through registered-folder controls.",
-    );
+  if (destination.state === "retired") {
+    throw new TypeError("A retired destination cannot be changed.");
   }
   return zConfigureBackupDestinationBody.parse({
     operation_id: crypto.randomUUID(),
     destination_id: destination.destination_id,
     expected_revision: destination.revision,
     name: destination.name,
-    target_id: destination.provider.target_id,
-    target_generation: destination.provider_generation,
+    provider: destination.provider,
+    provider_generation: destination.provider_generation,
     enabled: destination.state === "paused",
   });
 }

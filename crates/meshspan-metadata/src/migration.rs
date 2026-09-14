@@ -8,14 +8,16 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+#[cfg(test)]
+pub(crate) mod component_origins;
 mod http01;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 92;
-pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 13;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 117;
+pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 16;
 
-const PARTITION_MIGRATIONS: [Migration; 92] = [
+const PARTITION_MIGRATIONS: [Migration; 117] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -381,12 +383,112 @@ const PARTITION_MIGRATIONS: [Migration; 92] = [
         sql: include_str!("../schema/partition/091_update_rollouts.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 92,
         sql: include_str!("../schema/partition/092_update_artifact_sources.sql"),
+    },
+    Migration {
+        version: 93,
+        sql: include_str!("../schema/partition/093_update_preparation_barrier.sql"),
+    },
+    Migration {
+        version: 94,
+        sql: include_str!("../schema/partition/094_federation_pairing_invitations.sql"),
+    },
+    Migration {
+        version: 95,
+        sql: include_str!("../schema/partition/095_federation_pairing_connections.sql"),
+    },
+    Migration {
+        version: 96,
+        sql: include_str!("../schema/partition/096_federation_connection_intents.sql"),
+    },
+    Migration {
+        version: 97,
+        sql: include_str!("../schema/partition/097_federated_backup_routes.sql"),
+    },
+    Migration {
+        version: 98,
+        sql: include_str!("../schema/partition/098_federation_storage_authority.sql"),
+    },
+    Migration {
+        version: 99,
+        sql: include_str!("../schema/partition/099_federation_storage_seals.sql"),
+    },
+    Migration {
+        version: 100,
+        sql: include_str!("../schema/partition/100_federation_storage_maintenance.sql"),
+    },
+    Migration {
+        version: 101,
+        sql: include_str!("../schema/partition/101_abandoned_backup_retirements.sql"),
+    },
+    Migration {
+        version: 102,
+        sql: include_str!("../schema/partition/102_abandoned_backup_reclamations.sql"),
+    },
+    Migration {
+        version: 103,
+        sql: include_str!("../schema/partition/103_backup_publication_intents.sql"),
+    },
+    Migration {
+        version: 104,
+        sql: include_str!("../schema/partition/104_recovery_preparation.sql"),
+    },
+    Migration {
+        version: 105,
+        sql: include_str!("../schema/partition/105_recovery_control_material.sql"),
+    },
+    Migration {
+        version: 106,
+        sql: include_str!("../schema/partition/106_recovery_secret_inventory.sql"),
+    },
+    Migration {
+        version: 107,
+        sql: include_str!("../schema/partition/107_recovery_replacement_plan.sql"),
+    },
+    Migration {
+        version: 108,
+        sql: include_str!("../schema/partition/108_recovery_credential_fence.sql"),
+    },
+    Migration {
+        version: 109,
+        sql: include_str!("../schema/partition/109_recovery_key_installation.sql"),
+    },
+    Migration {
+        version: 110,
+        sql: include_str!("../schema/partition/110_backup_namespace_roots.sql"),
+    },
+    Migration {
+        version: 111,
+        sql: include_str!("../schema/partition/111_recovery_targets.sql"),
+    },
+    Migration {
+        version: 112,
+        sql: include_str!("../schema/partition/112_recovery_restorations.sql"),
+    },
+    Migration {
+        version: 113,
+        sql: include_str!("../schema/partition/113_recovery_state_installations.sql"),
+    },
+    Migration {
+        version: 114,
+        sql: include_str!("../schema/partition/114_recovery_node_key_projection.sql"),
+    },
+    Migration {
+        version: 115,
+        sql: include_str!("../schema/partition/115_recovery_component_origins.sql"),
+    },
+    Migration {
+        version: 116,
+        sql: include_str!("../schema/partition/116_recovery_consensus_permission.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/117_recovery_consensus_activation.sql"),
     },
 ];
 
-const LOCAL_MIGRATIONS: [Migration; 13] = [
+const LOCAL_MIGRATIONS: [Migration; 16] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/local/001_initial.sql"),
@@ -436,8 +538,20 @@ const LOCAL_MIGRATIONS: [Migration; 13] = [
         sql: include_str!("../schema/local/012_maintenance_scrub_progress.sql"),
     },
     Migration {
-        version: LOCAL_SCHEMA_VERSION,
+        version: 13,
         sql: include_str!("../schema/local/013_metadata_backup_staging.sql"),
+    },
+    Migration {
+        version: 14,
+        sql: include_str!("../schema/local/014_federation_backup_capacity.sql"),
+    },
+    Migration {
+        version: 15,
+        sql: include_str!("../schema/local/015_federation_storage_seals.sql"),
+    },
+    Migration {
+        version: LOCAL_SCHEMA_VERSION,
+        sql: include_str!("../schema/local/016_recovered_storage_targets.sql"),
     },
 ];
 
@@ -549,9 +663,41 @@ fn apply_one(
     applied_at: i64,
     transform: fn(&rusqlite::Transaction<'_>, u32) -> Result<(), MetadataStoreError>,
 ) -> Result<(), MetadataStoreError> {
+    // Only this catalogued, digest-checked migration rebuilds referenced parent tables.
+    // Toggling must happen outside a transaction. Restore the connection setting even
+    // when SQL, validation or commit fails; the transaction owns rollback on every error.
+    let rebuild =
+        migration.sql == include_str!("../schema/partition/115_recovery_component_origins.sql");
+    let foreign_keys: bool =
+        connection.pragma_query_value(None, "foreign_keys", |row| row.get(0))?;
+    if rebuild {
+        connection.pragma_update(None, "foreign_keys", false)?;
+    }
+    let result = apply_one_transaction(connection, migration, applied_at, transform, rebuild);
+    if rebuild {
+        connection.pragma_update(None, "foreign_keys", foreign_keys)?;
+    }
+    result
+}
+
+fn apply_one_transaction(
+    connection: &mut Connection,
+    migration: Migration,
+    applied_at: i64,
+    transform: fn(&rusqlite::Transaction<'_>, u32) -> Result<(), MetadataStoreError>,
+    check_references: bool,
+) -> Result<(), MetadataStoreError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute_batch(migration.sql)?;
     transform(&transaction, migration.version)?;
+    if check_references
+        && transaction
+            .query_row("PRAGMA foreign_key_check", [], |_| Ok(()))
+            .optional()?
+            .is_some()
+    {
+        return Err(MetadataStoreError::IntegrityFailed);
+    }
     transaction.execute(
         "INSERT INTO schema_migrations(version, migration_digest, applied_at) VALUES (?1, ?2, ?3)",
         params![

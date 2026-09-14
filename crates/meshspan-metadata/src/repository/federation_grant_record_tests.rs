@@ -23,6 +23,23 @@ fn namespace_and_storage_records_have_one_canonical_round_trip()
             record
         );
         assert_eq!(record.canonical_bytes()?, encoded);
+        let context = crate::CommandContext {
+            operation_id: meshspan_domain::OperationId::from_bytes([90; 16])?,
+            actor_principal_id: meshspan_domain::PrincipalId::from_bytes([91; 16])?,
+            audit_event_id: meshspan_domain::AuditEventId::from_bytes([92; 16])?,
+            occurred_at: UnixMicros::new(100),
+            expected_revision: None,
+        };
+        let command =
+            crate::AuthoritativeCommand::IssueFederationGrant(crate::IssueFederationGrant {
+                grant: record.grant,
+                restrictions: meshspan_contracts::BoundedItems::new(record.restrictions, 64)?,
+            });
+        let bytes = crate::encode_authoritative_command(context, &command)?;
+        assert_eq!(
+            crate::decode_authoritative_command(&bytes)?.command,
+            command
+        );
     }
     Ok(())
 }

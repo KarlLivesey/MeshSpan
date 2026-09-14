@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 fn request() -> Value {
     json!({"operation_id":"01900000-0000-7000-8000-000000000001",
         "destination_id":"01900000-0000-7000-8000-000000000002", "expected_revision":0,
-        "name":"Recovery", "target_id":"01900000-0000-7000-8000-000000000003",
-        "target_generation":"1", "enabled":true})
+        "name":"Recovery", "provider":{"kind":"registered_target", "target_id":"01900000-0000-7000-8000-000000000003"},
+        "provider_generation":"1", "enabled":true})
 }
 
 #[test]
@@ -19,9 +19,12 @@ fn backup_destination_requests_reject_missing_unknown_null_and_coercion()
         "Recovery"
     );
     for (field, value) in [
-        ("target_generation", json!(0)),
-        ("target_generation", json!(1)),
-        ("target_id", json!("not-a-uuid")),
+        ("provider_generation", json!(0)),
+        ("provider_generation", json!(1)),
+        (
+            "provider",
+            json!({"kind":"registered_target", "target_id":"not-a-uuid"}),
+        ),
         ("enabled", Value::Null),
         ("enabled", json!("true")),
         ("expected_revision", json!(-1)),
@@ -44,6 +47,24 @@ fn backup_destination_requests_reject_missing_unknown_null_and_coercion()
         decode_configure_backup_destination_request(&vec![b' '; 2049]),
         Err(BoundaryError::BodyTooLarge { limit: 2048 })
     ));
+    Ok(())
+}
+
+#[test]
+fn backup_destination_requests_accept_only_exact_provider_variants()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (kind, field) in [
+        ("registered_target", "target_id"),
+        ("federated_mesh", "remote_mesh_id"),
+        ("component_provider", "instance_id"),
+    ] {
+        let mut input = request();
+        input["provider"] = json!({"kind":kind, field:"01900000-0000-7000-8000-000000000003"});
+        let decoded = decode_configure_backup_destination_request(&serde_json::to_vec(&input)?)?;
+        assert_eq!(serde_json::to_value(decoded)?, input);
+        input["provider"]["path"] = json!("/tmp/not-authority");
+        assert!(decode_configure_backup_destination_request(&serde_json::to_vec(&input)?).is_err());
+    }
     Ok(())
 }
 

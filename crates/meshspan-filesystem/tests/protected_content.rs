@@ -36,6 +36,15 @@ use tempfile::tempdir;
 
 const PERMIT_KEY: [u8; 32] = [42; 32];
 
+#[path = "protected_content/availability.rs"]
+mod availability;
+
+#[path = "protected_content/reuse.rs"]
+mod reuse;
+
+#[path = "protected_content/recovery.rs"]
+mod recovery;
+
 #[test]
 fn real_folders_commit_without_eventual_target_and_read_after_two_target_losses()
 -> Result<(), Box<dyn std::error::Error>> {

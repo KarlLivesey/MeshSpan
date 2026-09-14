@@ -25,6 +25,7 @@ export function readRequiredRoutes(document) {
   const operations = collectOperations(document);
   return {
     ...readAdministrationRoutes(operations),
+    ...readFederationRoutes(operations),
     ...readObservabilityRoutes(operations),
     ...readAuthenticationRoutes(operations),
     ...readFileRoutes(operations),
@@ -115,6 +116,32 @@ function readObservabilityRoutes(operations) {
     configureMetricsExporter: requireOperation(
       operations,
       "configureMetricsExporter",
+    ),
+  };
+}
+
+function readFederationRoutes(operations) {
+  return {
+    connectFederation: requireOperation(operations, "connectFederation"),
+    getFederationStorageGrant: requireOperation(
+      operations,
+      "getFederationStorageGrant",
+    ),
+    configureFederationStorageGrant: requireOperation(
+      operations,
+      "configureFederationStorageGrant",
+    ),
+    acceptFederationPairing: requireOperation(
+      operations,
+      "acceptFederationPairing",
+    ),
+    createFederationPairingInvitation: requireOperation(
+      operations,
+      "createFederationPairingInvitation",
+    ),
+    cancelFederationPairingInvitation: requireOperation(
+      operations,
+      "cancelFederationPairingInvitation",
     ),
   };
 }

@@ -45,6 +45,26 @@ pub(super) fn name_and_help(sample: &ConsensusMetric) -> (&'static str, &'static
             "consensus_leader_known",
             "Whether a leader identity was known; not leader reachability.",
         ),
+        ConsensusMetric::RemoteMembers(_) => (
+            "consensus_remote_members",
+            "Remote voters and learners in the observed stable or joint plan.",
+        ),
+        ConsensusMetric::ApplyGap(_) => (
+            "consensus_apply_gap",
+            "Locally committed entries not yet applied at observation time.",
+        ),
+        ConsensusMetric::ReplicationUnknownMembers(_) => (
+            "consensus_replication_unknown_members",
+            "Remote members without a leader-local match position; not a reachability count.",
+        ),
+        ConsensusMetric::ReplicationLaggingMembers(_) => (
+            "consensus_replication_lagging_members",
+            "Tracked remote members behind the committed head; not fresh acknowledgements.",
+        ),
+        ConsensusMetric::ReplicationMaximumCommittedGap(_) => (
+            "consensus_replication_maximum_committed_gap",
+            "Largest committed-entry gap among tracked peers; unknown peers are excluded.",
+        ),
     }
 }
 
@@ -60,6 +80,11 @@ pub(super) fn measurement(sample: &ConsensusMetric) -> Measurement<'_> {
         | ConsensusMetric::CommittedIndex(value)
         | ConsensusMetric::AppliedIndex(value)
         | ConsensusMetric::PendingOperations(value)
-        | ConsensusMetric::QueuedOperations(value) => Measurement::Gauge(*value),
+        | ConsensusMetric::QueuedOperations(value)
+        | ConsensusMetric::RemoteMembers(value)
+        | ConsensusMetric::ApplyGap(value)
+        | ConsensusMetric::ReplicationUnknownMembers(value)
+        | ConsensusMetric::ReplicationLaggingMembers(value)
+        | ConsensusMetric::ReplicationMaximumCommittedGap(value) => Measurement::Gauge(*value),
     }
 }

@@ -23,6 +23,8 @@ mod scope_drain;
 mod scope_drain_state;
 mod scrub;
 mod scrub_schedule;
+mod verification_progress;
+pub use verification_progress::MaintenanceVerificationProgress;
 
 pub use rebalance::RebalanceScanProgress;
 pub use repair::ShardRepairEffectRecord;
@@ -146,6 +148,51 @@ pub struct MaintenanceEffectReference {
 }
 
 impl AuthoritativeRepository {
+    /// Pages retained jobs by stable identity for background observation, including completions.
+    ///
+    /// This does not claim work or promise a cross-page snapshot. Each job is decoded through
+    /// the same validated boundary as execution; a failed page must not become zero debt.
+    ///
+    /// # Errors
+    /// Rejects corrupt records, invalid bounds and unavailable metadata.
+    pub fn maintenance_observation_page(
+        &self,
+        after: Option<WorkId>,
+        limit: super::PageLimit,
+    ) -> Result<super::Page<MaintenanceWorkRecord, WorkId>, RepositoryError> {
+        let connection = self.database.connection();
+        let lower = after.map_or([0; 16], WorkId::as_bytes);
+        let mut statement = connection.prepare(
+            "SELECT work_id FROM maintenance_work_jobs WHERE work_id > ?1 ORDER BY work_id LIMIT ?2",
+        )?;
+        let identifiers = statement
+            .query_map(
+                params![
+                    lower.as_slice(),
+                    i64::try_from(limit.get() + 1)
+                        .map_err(|_| RepositoryError::InvalidPageLimit)?
+                ],
+                |row| row.get::<_, Vec<u8>>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        let more = identifiers.len() > limit.get();
+        let items = identifiers
+            .into_iter()
+            .take(limit.get())
+            .map(|bytes| {
+                let id =
+                    WorkId::from_bytes(exact(bytes)?).map_err(|_| RepositoryError::CorruptState)?;
+                load_record(connection, id)?.ok_or(RepositoryError::CorruptState)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let next = if more {
+            items.last().map(|item| item.work_id)
+        } else {
+            None
+        };
+        Ok(super::Page { items, next })
+    }
+
     /// Returns one exact target, node or fault-group drain.
     ///
     /// # Errors

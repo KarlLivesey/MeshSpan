@@ -6,7 +6,7 @@ use meshspan_domain::{BranchId, FileVersionId, ObjectId, ObjectRevisionId, Volum
 use rusqlite::{Connection, Transaction};
 
 use super::super::repository::{
-    ObjectRevisionInsert, load_object_revision, persist_object_revision,
+    ObjectRevisionInsert, load_commit, load_object_revision, persist_object_revision,
 };
 use super::super::{
     DirectoryRevisionResult, load_path_directories, load_path_editor, mutate_namespace_path,
@@ -28,6 +28,29 @@ pub(super) struct ApplyContext {
     pub volume_id: VolumeId,
 }
 
+impl ApplyContext {
+    fn for_source(
+        self,
+        transaction: &Transaction<'_>,
+        action: &NamespaceReplayAction,
+    ) -> Result<Self, PublicationError> {
+        let source = load_commit(transaction, action.commit_id)?;
+        if source.volume_id != self.volume_id {
+            return Err(PublicationError::Corrupt);
+        }
+        // Replay identities are plan-derived, so their immutable attribution must be too.
+        // The outer merge receipt separately records the actual coordinator and attempt time.
+        Ok(Self {
+            application: NamespaceReconciliationApplication {
+                created_by: source.created_by,
+                created_at: source.created_at,
+                ..self.application
+            },
+            ..self
+        })
+    }
+}
+
 pub(super) fn apply_action(
     transaction: &Transaction<'_>,
     context: ApplyContext,
@@ -35,6 +58,7 @@ pub(super) fn apply_action(
     current_root: ObjectRevisionId,
     action: &NamespaceReplayAction,
 ) -> Result<ObjectRevisionId, PublicationError> {
+    let context = context.for_source(transaction, action)?;
     if action.effect == NamespaceReplayEffect::Preserve {
         return Err(PublicationError::InvalidInput);
     }

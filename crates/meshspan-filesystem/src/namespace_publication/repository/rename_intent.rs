@@ -5,7 +5,9 @@
 use meshspan_domain::{NamespaceCommitId, ObjectId, ObjectRevisionId};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-use super::{StoredCommit, load_commit, load_object_revision, validate_directory_transition};
+use super::{
+    StoredCommit, load_namespace_root, load_object_revision, validate_directory_transition,
+};
 use crate::publication::{decode_identifier, from_i64, to_i64};
 use crate::{
     BranchMutationIntent, BranchRenameIntent, NamespaceComponent, NamespacePath, PublicationError,
@@ -214,7 +216,7 @@ pub(super) fn validate_loaded(
     rename: &BranchRenameIntent,
 ) -> Result<(), PublicationError> {
     let parent_id = commit.parent_id.ok_or(PublicationError::Corrupt)?;
-    let parent = load_commit(connection, parent_id)?;
+    let parent = load_namespace_root(connection, parent_id)?;
     let intermediate =
         load_object_revision(connection, rename.intermediate_root_object_revision_id)?;
     let final_root = load_object_revision(connection, commit.root_object_revision_id)?;

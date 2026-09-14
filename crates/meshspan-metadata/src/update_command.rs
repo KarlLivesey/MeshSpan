@@ -66,6 +66,8 @@ pub enum UpdateNodePhase {
     Verified = 4,
     /// A bounded probe failed; the whole rollout pauses.
     Failed = 5,
+    /// Staged bytes with an exclusive fixed catch-up barrier; the process must keep serving.
+    Preparing = 6,
 }
 
 /// A coordinator checkpoint, not a public client permission to restart arbitrary nodes.

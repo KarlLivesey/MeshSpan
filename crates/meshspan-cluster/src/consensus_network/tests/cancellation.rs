@@ -3,6 +3,95 @@
 use super::*;
 
 #[tokio::test]
+async fn failed_control_handler_does_not_cancel_another_request_on_the_connection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (first, second, mut received) = control_pair()?;
+    let peer = second.local_node_id();
+    let operation = OperationId::from_bytes([45; 16])?;
+    let request = control_request(&first, operation, 1)?;
+    let client = first.clone();
+    let failing = tokio::spawn(async move { client.request_control(peer, &request).await });
+    let failed_request = tokio::time::timeout(Duration::from_secs(5), received.recv())
+        .await?
+        .ok_or("first request missing")?;
+    let connection = first
+        .control_connections
+        .lock()
+        .map_err(|_| "cache lock")?
+        .get(&peer)
+        .ok_or("connection missing")?
+        .clone();
+    let operation = OperationId::from_bytes([46; 16])?;
+    let request = control_request(&first, operation, 2)?;
+    let client = first.clone();
+    let surviving = tokio::spawn(async move { client.request_control(peer, &request).await });
+    let surviving_request = tokio::time::timeout(Duration::from_secs(5), received.recv())
+        .await?
+        .ok_or("second request missing")?;
+    // Both requests are authenticated and fully decoded. Only one application
+    // handler fails; it is not evidence that this peer's other streams are bad.
+    drop(failed_request.respond);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), failing)
+            .await??
+            .is_err()
+    );
+    let expected = control_response(&second, operation, 2)?;
+    let sent = surviving_request.respond.send(expected.clone());
+    let response = tokio::time::timeout(Duration::from_secs(5), surviving).await??;
+    assert!(
+        sent.is_ok(),
+        "failed handler cancelled the other response producer"
+    );
+    assert_eq!(response?.as_inner(), &expected);
+    assert!(
+        connection.close_reason().is_none(),
+        "application failure closed shared transport"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn late_response_to_cancelled_call_does_not_close_shared_transport()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (first, second, mut received) = control_pair()?;
+    let peer = second.local_node_id();
+    let operation = OperationId::from_bytes([47; 16])?;
+    let request = control_request(&first, operation, 1)?;
+    let client = first.clone();
+    let cancelled = tokio::spawn(async move { client.request_control(peer, &request).await });
+    let held = tokio::time::timeout(Duration::from_secs(5), received.recv())
+        .await?
+        .ok_or("control request missing")?;
+    let connection = first
+        .control_connections
+        .lock()
+        .map_err(|_| "cache lock")?
+        .get(&peer)
+        .ok_or("connection missing")?
+        .clone();
+    cancelled.abort();
+    assert!(cancelled.await.is_err_and(|error| error.is_cancelled()));
+    // Cancellation itself must leave the connection alive. This also allows
+    // STOP_SENDING to reach the server before its delayed application response.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), connection.closed())
+            .await
+            .is_err()
+    );
+    held.respond
+        .send(control_response(&second, operation, 1)?)
+        .map_err(|_| "application response producer was cancelled")?;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), connection.closed())
+            .await
+            .is_err(),
+        "responding to a cancelled request closed shared transport"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn cancelled_control_call_evicts_only_its_cached_connection()
 -> Result<(), Box<dyn std::error::Error>> {
     let (first, second, mut received) = control_pair()?;
@@ -121,34 +210,31 @@ pub(super) fn control_pair() -> Result<
     let second_identity = authority.issue_node("meshspan.internal")?;
     let first_node = NodeId::from_bytes([31; 16])?;
     let second_node = NodeId::from_bytes([32; 16])?;
-    let first_address = unused_udp_address()?;
-    let second_address = unused_udp_address()?;
+    let bind_address = SocketAddr::from(([127, 0, 0, 1], 0));
     let mesh_id = MeshId::from_bytes([33; 16])?;
     let partition_id = PartitionId::from_bytes([34; 16])?;
     let anchor = authority.certificate_der().to_vec();
     let (first_messages, _first_received) = mpsc::channel(8);
     let (second_messages, _second_received) = mpsc::channel(8);
     let (controls, received_controls) = mpsc::channel(4);
-    let first = ConsensusNetwork::start(
-        config(
-            first_node,
-            first_address,
-            &first_identity,
-            anchor.clone(),
-            peer(
-                second_node,
-                second_address,
-                second_identity.certificate_der(),
-            ),
-            mesh_id,
-            partition_id,
-        ),
-        first_messages,
-    )?;
+    let mut first_config = config(
+        first_node,
+        bind_address,
+        &first_identity,
+        anchor.clone(),
+        peer(second_node, bind_address, second_identity.certificate_der()),
+        mesh_id,
+        partition_id,
+    );
+    first_config.peers.clear();
+    // Discover addresses from live sockets rather than releasing an ephemeral
+    // reservation before binding, which races concurrent network/process tests.
+    let first = ConsensusNetwork::start(first_config, first_messages)?;
+    let first_address = first.transport.server_endpoint().local_addr()?;
     let second = ConsensusNetwork::start_with_control(
         config(
             second_node,
-            second_address,
+            bind_address,
             &second_identity,
             anchor,
             peer(first_node, first_address, first_identity.certificate_der()),
@@ -158,5 +244,10 @@ pub(super) fn control_pair() -> Result<
         second_messages,
         controls,
     )?;
+    first.upsert_peer(&peer(
+        second_node,
+        second.transport.server_endpoint().local_addr()?,
+        second_identity.certificate_der(),
+    ))?;
     Ok((first, second, received_controls))
 }

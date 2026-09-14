@@ -111,6 +111,7 @@ where
 
 fn message_route(message: &Message) -> Result<(BackupDestinationId, u64), BackupPlaneError> {
     let object = match message {
+        Message::LookupBackupRequest(value) => value.object.as_ref(),
         Message::StoreBackupBegin(value) => value.object.as_ref(),
         Message::ReadBackupRequest(value) => value.object.as_ref(),
         Message::VerifyBackupRequest(value) => value.object.as_ref(),

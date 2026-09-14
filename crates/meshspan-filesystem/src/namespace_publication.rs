@@ -64,10 +64,10 @@ pub use history_records::{
     NamespaceHistoryMutationAuthority, NamespaceHistoryRecordError,
 };
 use repository::{
-    ObjectRevisionInsert, advance_namespace_head, load_commit, load_object_revision,
-    persist_commit, persist_directory_intent, persist_directory_operation,
-    persist_directory_path_revisions, persist_file_intent,
-    persist_file_operation as persist_namespace_operation, persist_object_revision,
+    ObjectRevisionInsert, advance_namespace_head, load_object_revision, persist_commit,
+    persist_directory_intent, persist_directory_operation, persist_directory_path_revisions,
+    persist_file_intent, persist_file_operation as persist_namespace_operation,
+    persist_object_revision,
 };
 pub(super) use repository::{
     load_branch_intent, load_directory_operation, load_file_operation as load_operation, load_head,
@@ -86,6 +86,13 @@ pub(super) fn namespace_history_object(
     request: NamespaceHistoryObjectRequest,
 ) -> Result<NamespaceHistoryImmutableRecord, PublicationError> {
     history_export::history_object(connection, request)
+}
+
+pub(super) fn namespace_retained_tree_page(
+    connection: &mut Connection,
+    request: NamespaceHistoryPageRequest,
+) -> Result<NamespaceHistoryPage, PublicationError> {
+    history_export::retained_tree_page(connection, request)
 }
 
 pub(super) fn begin_namespace_history_receive(
@@ -178,7 +185,7 @@ pub(super) fn ensure_branch(
     base_commit_id: NamespaceCommitId,
 ) -> Result<BranchNamespaceHead, PublicationError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let base = repository::load_commit(&transaction, base_commit_id)?;
+    let base = repository::load_namespace_root(&transaction, base_commit_id)?;
     if base.volume_id != volume_id {
         return Err(PublicationError::InvalidInput);
     }
@@ -261,6 +268,13 @@ pub(super) fn verify_publication_head(
     {
         return Err(PublicationError::StaleHead);
     }
+    let record = transfer::export::load_commit_record(
+        connection,
+        commit.volume_id,
+        receipt.namespace_commit_id,
+    )?;
+    let canonical = NamespaceHistoryCommitRecord::from_commit(&record)
+        .map_err(|_| PublicationError::Corrupt)?;
     Ok(super::VerifiedPublicationHead::new(
         durable,
         commit.volume_id,
@@ -268,6 +282,9 @@ pub(super) fn verify_publication_head(
         commit.root_object_revision_id,
         commit.created_by,
         commit.created_at,
+        canonical
+            .convergence_digest()
+            .map_err(|_| PublicationError::Corrupt)?,
     ))
 }
 
@@ -999,7 +1016,7 @@ fn load_existing_base(
     intent: NamespaceIntent<'_>,
     head: BranchNamespaceHead,
 ) -> Result<NamespaceBase, PublicationError> {
-    let commit = load_commit(transaction, head.namespace_commit_id)?;
+    let commit = repository::load_namespace_root(transaction, head.namespace_commit_id)?;
     if commit.volume_id != intent.volume_id || commit.root_object_id != intent.root_object_id {
         return Err(PublicationError::Corrupt);
     }

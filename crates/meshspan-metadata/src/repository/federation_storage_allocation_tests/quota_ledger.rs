@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+mod backup_capacity;
+mod backup_provider;
+mod seal;
+
 use meshspan_contracts::{FederatedShardPermit, ShardIdentity};
 use meshspan_domain::{FederationStorageAction, OperationId, UnixMicros};
 

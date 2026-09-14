@@ -360,7 +360,7 @@ pub fn federation_storage_inventory_page_digest_payload(
     single_message_payload(STORAGE_INVENTORY_PAGE_DIGEST_DOMAIN, &unsigned)
 }
 
-fn signing_payload(
+pub(crate) fn signing_payload(
     domain: &[u8],
     header: &FederationHeader,
     message: &impl Message,
@@ -370,7 +370,10 @@ fn signing_payload(
     assemble_payload(domain, &[&header, &message])
 }
 
-fn single_message_payload(domain: &[u8], message: &impl Message) -> Result<Vec<u8>, EncodeError> {
+pub(crate) fn single_message_payload(
+    domain: &[u8],
+    message: &impl Message,
+) -> Result<Vec<u8>, EncodeError> {
     let message = message.encode_to_vec()?;
     assemble_payload(domain, &[&message])
 }

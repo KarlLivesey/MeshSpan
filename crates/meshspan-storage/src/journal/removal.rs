@@ -48,6 +48,34 @@ pub enum PrepareTombstoneResult {
 }
 
 impl TargetJournal {
+    /// Resolves an already committed exact request without preparing or advancing any work.
+    /// A prepared operation is not evidence of completed deletion.
+    pub(crate) fn committed_tombstone(
+        &self,
+        request: JournalTombstoneRequest,
+    ) -> Result<Option<TombstoneReceipt>, TargetJournalError> {
+        validate_request(self, request, true)?;
+        let transaction = self.connection.unchecked_transaction()?;
+        let receipt = match load_operation(&transaction, request.permit.operation_id)? {
+            Some(existing) => match resolve_operation(existing, request)? {
+                PrepareTombstoneResult::Committed(receipt) => {
+                    validate_evidence(request.permit, receipt)?;
+                    if receipt.tombstone_digest
+                        != meshspan_contracts::tombstone_receipt_digest(request.permit)
+                    {
+                        return Err(TargetJournalError::CorruptState);
+                    }
+                    self.verify_committed_tombstone(receipt)?;
+                    Some(receipt)
+                }
+                PrepareTombstoneResult::Prepared => None,
+            },
+            None => None,
+        };
+        transaction.commit()?;
+        Ok(receipt)
+    }
+
     /// Records or resolves one exact removal intent before touching pack reachability.
     ///
     /// # Errors

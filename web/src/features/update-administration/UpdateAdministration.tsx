@@ -81,6 +81,13 @@ function UpdateStatus(
 ): JSX.Element {
   return (
     <>
+      <Show when={props.status.installation_available}>
+        <p>
+          This build installs updates only when service interruption is allowed.
+          Without that consent, verified executables stay staged and no node
+          restarts. Uninterrupted rolling installation is still being completed.
+        </p>
+      </Show>
       <Show when={!props.status.installation_available}>
         <p>
           Installation is not connected in this build. You can configure

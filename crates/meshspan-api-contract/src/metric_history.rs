@@ -86,7 +86,7 @@ pub struct MetricHistoryPoint {
     #[schemars(range(min = 0, max = 9_007_199_254_740_991_i64))]
     pub observed_at_epoch_micros: Option<i64>,
     /// Null means the sampling attempt failed; an empty vector is a valid empty source.
-    #[schemars(length(max = 64))]
+    #[schemars(length(max = 250))]
     pub metrics: Option<Vec<HistoricalMetric>>,
 }
 

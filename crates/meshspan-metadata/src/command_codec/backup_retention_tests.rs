@@ -6,6 +6,20 @@ use super::*;
 fn backup_retirement_and_reclamation_roundtrip_and_reject_truncation()
 -> Result<(), Box<dyn std::error::Error>> {
     let commands = [
+        AuthoritativeCommand::RetireAbandonedBackupCopy(RetireAbandonedBackupCopy {
+            expected_run_revision: Revision::new(9),
+            receipt: BackupObjectReceipt {
+                operation_id: OperationId::from_bytes([5; 16])?,
+                object: BackupObjectIdentity {
+                    backup_id: BackupId::from_bytes([1; 16])?,
+                    destination_id: BackupDestinationId::from_bytes([6; 16])?,
+                    provider_generation: 1,
+                    byte_length: 100,
+                    digest: [7; 32],
+                },
+                object_reference: BackupObjectReference::new("provider-reference".into())?,
+            },
+        }),
         AuthoritativeCommand::RetireMetadataBackup(retirement()?),
         AuthoritativeCommand::RecordBackupReclamation(RecordBackupReclamation {
             receipt: BackupDeleteReceipt {

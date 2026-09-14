@@ -2,12 +2,17 @@
 
 //! Worker-fed target accounting and selected-attempt distributions; never admission authority.
 
-use super::RuntimeObservations;
+use super::{MaintenanceProgressCounts, RuntimeObservations};
 use meshspan_contracts::{
     ContractError, LatencyHistogram, MaintenanceMetric, MaintenanceMetricKind, RuntimeMetric,
     StorageUsageMetric, StorageUsageObservation,
 };
 use std::time::{Duration, Instant};
+
+#[path = "runtime_observations_filesystems.rs"]
+mod filesystems;
+#[path = "runtime_observations_packs.rs"]
+mod packs;
 
 #[derive(Clone)]
 pub(crate) struct StorageUsagePass {
@@ -15,6 +20,8 @@ pub(crate) struct StorageUsagePass {
     sampled: u64,
     unavailable: u64,
     totals: StorageUsageObservation,
+    filesystems: filesystems::FilesystemMeasurements,
+    packs: packs::PackMeasurements,
 }
 
 impl Default for StorageUsagePass {
@@ -24,14 +31,22 @@ impl Default for StorageUsagePass {
             sampled: 0,
             unavailable: 0,
             totals: StorageUsageObservation::default(),
+            filesystems: filesystems::FilesystemMeasurements::default(),
+            packs: packs::PackMeasurements::default(),
         }
     }
 }
 
 impl StorageUsagePass {
     pub(crate) fn observe(&mut self, observation: Result<StorageUsageObservation, ContractError>) {
+        self.packs
+            .observe(observation.as_ref().ok().and_then(|value| value.pack));
+        self.filesystems
+            .observe(observation.as_ref().ok().and_then(|value| value.filesystem));
         let total = observation.ok().and_then(|value| {
             Some(StorageUsageObservation {
+                pack: None,
+                filesystem: None,
                 committed_bytes: self
                     .totals
                     .committed_bytes
@@ -74,6 +89,8 @@ impl StorageUsagePass {
             ]);
         }
         output.extend(values.into_iter().map(RuntimeMetric::StorageUsage));
+        self.filesystems.append_metrics(output);
+        self.packs.append_metrics(output);
     }
 }
 
@@ -99,6 +116,21 @@ impl MaintenanceCounters {
 pub(super) struct StorageMeasurements {
     usage: Option<StorageUsagePass>,
     work: [MaintenanceCounters; 5],
+    jobs: Option<(
+        Instant,
+        [MaintenanceJobCounts; 5],
+        MaintenanceProgressCounts,
+    )>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct MaintenanceJobCounts {
+    pub(crate) queued: u64,
+    pub(crate) claimed: u64,
+    pub(crate) completed: u64,
+    pub(crate) protection_debt: u64,
+    pub(crate) locality_debt: u64,
+    pub(crate) pending_demand_bytes: u64,
 }
 
 impl StorageMeasurements {
@@ -119,10 +151,45 @@ impl StorageMeasurements {
         if let Some(usage) = &self.usage {
             usage.append_metrics(now, output);
         }
+        if let Some((started, jobs, progress)) = &self.jobs {
+            progress.append_metrics(output);
+            for (kind, counts) in MaintenanceMetricKind::ALL.into_iter().zip(jobs) {
+                output.extend(
+                    [
+                        MaintenanceMetric::JobObservationAge(
+                            now.saturating_duration_since(*started),
+                        ),
+                        MaintenanceMetric::QueuedJobs(counts.queued),
+                        MaintenanceMetric::ClaimedJobs(counts.claimed),
+                        MaintenanceMetric::CompletedJobs(counts.completed),
+                        MaintenanceMetric::ProtectionDebtJobs(counts.protection_debt),
+                        MaintenanceMetric::LocalityDebtJobs(counts.locality_debt),
+                        MaintenanceMetric::PendingDemandBytes(counts.pending_demand_bytes),
+                    ]
+                    .into_iter()
+                    .map(|value| RuntimeMetric::Maintenance(kind, value)),
+                );
+            }
+        }
     }
 }
 
 impl RuntimeObservations {
+    pub(crate) fn record_maintenance_observation_failure(&self) {
+        self.drop_update();
+    }
+    pub(crate) fn record_maintenance_jobs(
+        &self,
+        started: Instant,
+        jobs: [MaintenanceJobCounts; 5],
+        progress: MaintenanceProgressCounts,
+    ) {
+        let Ok(mut state) = self.0.state.try_lock() else {
+            self.drop_update();
+            return;
+        };
+        state.storage.jobs = Some((started, jobs, progress));
+    }
     pub(crate) fn record_storage_usage(&self, pass: StorageUsagePass) {
         let Ok(mut state) = self.0.state.try_lock() else {
             self.drop_update();

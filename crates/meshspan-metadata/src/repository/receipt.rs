@@ -158,6 +158,10 @@ pub enum EntityKind {
     UpdateSigner = 61,
     /// Durable mesh-wide software rollout.
     UpdateRollout = 62,
+    /// Administrator-approved connection material for another autonomous swarm.
+    FederationPairingInvitation = 63,
+    /// Consumer-owned remote route, without a provider storage acknowledgement.
+    FederatedBackupRoute = 64,
 }
 
 impl EntityKind {
@@ -225,6 +229,8 @@ impl EntityKind {
             60 => Ok(Self::NotificationDelivery),
             61 => Ok(Self::UpdateSigner),
             62 => Ok(Self::UpdateRollout),
+            63 => Ok(Self::FederationPairingInvitation),
+            64 => Ok(Self::FederatedBackupRoute),
             _ => Err(RepositoryError::CorruptState),
         }
     }

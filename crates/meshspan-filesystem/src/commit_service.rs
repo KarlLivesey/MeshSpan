@@ -25,6 +25,8 @@ use crate::{
 
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 
+mod reuse;
+
 /// Exact stage and manifest identity presented to a replaceable durable-content publisher.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ContentPublicationRequest {
@@ -72,6 +74,35 @@ pub trait DurableContentPublisher {
     /// Private, unpublished destination for one completion attempt.
     type Sink: Write;
 
+    /// Checks an existing layout against the complete uploaded plaintext and current policy.
+    ///
+    /// This does not publish a reference. The namespace owner must retain the selected manifest
+    /// before calling `finish_reuse`. Publishers without compatible layouts return `None`.
+    ///
+    /// # Errors
+    /// Rejects corrupt evidence or unavailable authority. Missing/incompatible content is a miss.
+    fn verify_reuse(
+        &mut self,
+        _request: ContentPublicationRequest,
+        _candidate: ManifestPublication,
+        _completed: CompletedStage,
+    ) -> Result<Option<VerifiedContentReuse>, ContentPublicationError> {
+        Ok(None)
+    }
+
+    /// Durably binds a verified, namespace-retained selection to this exact upload operation.
+    ///
+    /// # Errors
+    /// Rejects changed input, substituted upload bytes and unsupported reuse.
+    fn finish_reuse(
+        &mut self,
+        _request: ContentPublicationRequest,
+        _sink: Self::Sink,
+        _reuse: VerifiedContentReuse,
+    ) -> Result<ManifestPublication, ContentPublicationError> {
+        Err(ContentPublicationError::InvalidInput)
+    }
+
     /// Reconstructs immutable receipt/debt evidence for one completed content publication.
     ///
     /// # Errors
@@ -113,6 +144,17 @@ pub trait DurableContentPublisher {
         sink: Self::Sink,
         completed: CompletedStage,
     ) -> Result<ManifestPublication, ContentPublicationError>;
+}
+
+/// Checked immutable layout and acknowledgement evidence for one complete upload attempt.
+///
+/// Only the verifying publisher constructs this value. The namespace reserves its manifest
+/// before the publisher durably records reuse; it is not a client-supplied access capability.
+#[derive(Clone, Copy, Debug)]
+pub struct VerifiedContentReuse {
+    pub(crate) request: ContentPublicationRequest,
+    pub(crate) content: crate::PublishedContentReference,
+    pub(crate) evidence: crate::ContentAcknowledgementEvidence,
 }
 
 #[cfg(test)]
@@ -839,11 +881,11 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
                 self.stages.stream_complete(request.completion, &mut sink)?
             };
             (
-                self.content.finish(content_request, sink, completed)?,
+                self.finish_root_content(request, sink, completed)?,
                 Some(completed),
             )
         };
-        validate_manifest(content_request, manifest, completed)?;
+        self.validate_root_manifest(request, manifest, completed)?;
         self.publications
             .publish_root_file(&root_publication(request, manifest))
             .map_err(Into::into)
@@ -1053,11 +1095,11 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
             let mut sink = self.content.begin(content_request)?;
             let completed = self.stages.stream_complete(request.completion, &mut sink)?;
             (
-                self.content.finish(content_request, sink, completed)?,
+                self.finish_root_content(request, sink, completed)?,
                 Some(completed),
             )
         };
-        validate_manifest(content_request, manifest, completed)?;
+        self.validate_root_manifest(request, manifest, completed)?;
         self.publications
             .publish_root_file(&root_publication(request, manifest))
             .map_err(Into::into)

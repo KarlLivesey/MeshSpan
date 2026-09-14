@@ -10,7 +10,12 @@ mod external_request;
 mod external_response;
 mod mesh_local_ca;
 mod node_renewal;
+mod online_authority_validation;
+pub use online_authority_validation::validate_online_authority_certificate;
+#[cfg(test)]
+mod online_authority_validation_tests;
 mod public_bundle;
+mod recovery_signature;
 mod update_signature;
 
 use p256::ecdsa::signature::{SignatureEncoding as _, Signer as _, Verifier as _};
@@ -29,8 +34,11 @@ pub use external_response::{
     validate_external_certificate_response,
 };
 pub use mesh_local_ca::{MeshLocalCertificateAuthority, MeshLocalCertificateAuthorityError};
-pub use node_renewal::{NodeCertificateRequest, validate_node_certificate_renewal};
+pub use node_renewal::{
+    NodeCertificateRequest, validate_node_certificate, validate_node_certificate_renewal,
+};
 pub use public_bundle::{PublicCertificateBundle, PublicCertificateBundleError};
+pub use recovery_signature::verify_recovery_signature;
 pub use update_signature::{UPDATE_SIGNATURE_DOMAIN, verify_update_signature};
 
 const KEY_BYTES: usize = 32;
@@ -382,22 +390,20 @@ impl OnlineCertificateAuthority {
     /// Reopens an encrypted-at-rest online authority generation.
     ///
     /// The exact certificate is carried separately from the private key because it was signed by
-    /// the offline root. TLS composition subsequently proves their match before service starts.
+    /// the offline root. The key must match the certificate before this type is constructed;
+    /// the caller must separately validate the certificate against its trusted offline root.
     ///
     /// # Errors
     ///
-    /// Rejects an empty certificate or malformed, non-canonical P-256 private key.
+    /// Rejects malformed, trailing, oversized or non-CA certificates and mismatched,
+    /// malformed or non-canonical P-256 private keys.
     pub fn from_pkcs8_and_certificate(
         private_key: &[u8],
         certificate_der: &[u8],
     ) -> Result<Self, CertificateError> {
-        if certificate_der.is_empty() {
-            return Err(CertificateError::CertificateMaterial);
-        }
-        Self::from_parts(
-            RustCryptoKey::from_pkcs8(private_key)?,
-            certificate_der.to_vec(),
-        )
+        let key = RustCryptoKey::from_pkcs8(private_key)?;
+        online_authority_validation::validate_key_match(&key, certificate_der)?;
+        Self::from_parts(key, certificate_der.to_vec())
     }
 
     fn from_parts(key: RustCryptoKey, certificate_der: Vec<u8>) -> Result<Self, CertificateError> {

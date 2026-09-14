@@ -8,8 +8,8 @@ use meshspan_domain::{
     BackupId, EntropyError, MeshId, NodeId, PartitionId, RandomSource, Revision, UnixMicros,
 };
 use meshspan_metadata::{
-    EncryptedBackupPaths, EncryptedPartitionBackupManifest, LocalDatabase, MetadataBackupRun,
-    MetadataBackupRunState, PartitionBackupManifest, RepositoryError,
+    EncryptedPartitionBackupManifest, LocalDatabase, MetadataBackupRun, MetadataBackupRunState,
+    PartitionBackupManifest, RepositoryError,
 };
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
@@ -143,11 +143,12 @@ impl MemoryAuthority {
 impl MetadataBackupPreparationAuthority for MemoryAuthority {
     fn create_encrypted_metadata_backup<Random: RandomSource>(
         &self,
-        paths: EncryptedBackupPaths<'_>,
+        capture: crate::MetadataBackupCapturePaths<'_>,
         backup_id: BackupId,
         created_at: UnixMicros,
         _random: &mut Random,
     ) -> Result<EncryptedPartitionBackupManifest, RepositoryError> {
+        let paths = capture.metadata;
         self.calls.set(self.calls.get() + 1);
         fs::write(paths.encrypted_destination, ENCRYPTED_BYTES)
             .map_err(|_| RepositoryError::BackupMismatch)?;

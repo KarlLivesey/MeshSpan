@@ -30,7 +30,7 @@ const EXPORT_LIFETIME: DurationMicros = DurationMicros::new(60 * 60 * 1_000_000)
 const SCOPE_DOMAIN: &[u8] = b"meshspan.native.gateway-history-scope.v1\0";
 
 pub(super) fn history_page(
-    state_directory: &Path,
+    store: &mut VersionPublicationStore,
     requester: NodeId,
     request: FetchNamespaceHistoryPage,
 ) -> Result<Message, NativeGatewaySyncError> {
@@ -49,8 +49,6 @@ pub(super) fn history_page(
     let expires_at = now
         .checked_add(EXPORT_LIFETIME)
         .ok_or(NativeGatewaySyncError::Invalid)?;
-    let mut store = VersionPublicationStore::open(&state_directory.join("filesystem"), now)
-        .map_err(|_| NativeGatewaySyncError::Unavailable)?;
     let page = store
         .namespace_history_page(NamespaceHistoryPageRequest {
             scope_binding: scope_binding(requester, volume_id),
@@ -85,14 +83,12 @@ pub(super) fn history_page(
 }
 
 pub(super) fn history_object(
-    state_directory: &Path,
+    store: &VersionPublicationStore,
     requester: NodeId,
     request: &FetchNamespaceHistoryObject,
 ) -> Result<Message, NativeGatewaySyncError> {
     let now = current_time().map_err(|_| NativeGatewaySyncError::Unavailable)?;
     let volume_id = volume(&request.volume_id)?;
-    let store = VersionPublicationStore::open(&state_directory.join("filesystem"), now)
-        .map_err(|_| NativeGatewaySyncError::Unavailable)?;
     let record = store
         .namespace_history_object(NamespaceHistoryObjectRequest {
             scope_binding: scope_binding(requester, volume_id),

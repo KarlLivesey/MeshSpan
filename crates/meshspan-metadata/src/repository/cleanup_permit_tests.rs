@@ -124,6 +124,18 @@ fn same_epoch_reissue_waits_for_expiry_but_new_epoch_fences_it_early()
         latest.permit.operation_id,
         OperationId::from_bytes([131; 16])?
     );
+    assert!(
+        repository
+            .version_cleanup_storage_authority(first_authority.item.removal_operation_id)?
+            .is_none()
+    );
+    assert_eq!(
+        repository
+            .version_cleanup_storage_authority(latest.permit.operation_id)?
+            .ok_or("latest storage authority missing")?
+            .attempt,
+        latest
+    );
     Ok(())
 }
 

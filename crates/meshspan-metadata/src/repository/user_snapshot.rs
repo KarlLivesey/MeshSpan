@@ -110,6 +110,7 @@ pub(super) fn create(
             to_i64(revision.get())?,
         ],
     )?;
+    super::backup_roots::snapshot_created(transaction, command, revision)?;
     Ok(EntityReference {
         kind: EntityKind::VolumeSnapshot,
         id: command.snapshot_id.as_bytes(),
@@ -246,6 +247,7 @@ pub(super) fn remove_root(
             to_i64(revision.get())?,
         ],
     )?;
+    super::backup_roots::snapshot_removed(transaction, command.snapshot_id, revision)?;
     Ok(EntityReference {
         kind: EntityKind::VolumeSnapshot,
         id: command.snapshot_id.as_bytes(),

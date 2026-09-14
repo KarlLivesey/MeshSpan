@@ -2,10 +2,14 @@
 
 //! Same-swarm immutable namespace and content-layout convergence for native gateways.
 
+mod convergence;
+mod history;
 mod receiver;
+mod sender;
 mod source;
 
-use std::path::Path;
+pub(crate) use history::NativeGatewayHistory;
+pub(crate) use sender::NamespaceDeliveryWorker;
 
 use meshspan_cluster::{ConsensusNetwork, PeerControlRequest};
 use meshspan_domain::OperationId;
@@ -15,7 +19,7 @@ use thiserror::Error;
 
 pub(crate) async fn handle(
     network: &ConsensusNetwork,
-    state_directory: &Path,
+    history: &NativeGatewayHistory,
     peer: &PeerControlRequest,
     operation_id: OperationId,
     request_header: &RequestHeader,
@@ -23,27 +27,21 @@ pub(crate) async fn handle(
 ) -> Result<Option<ControlEnvelope>, NativeGatewaySyncError> {
     let response = match message {
         Message::FetchNamespaceHistoryPage(request) => {
-            let state_directory = state_directory.to_path_buf();
             let request = request.clone();
             let requester = peer.from;
-            tokio::task::spawn_blocking(move || {
-                source::history_page(&state_directory, requester, request)
-            })
-            .await
-            .map_err(|_| NativeGatewaySyncError::Unavailable)??
+            history
+                .execute(move |store| source::history_page(store, requester, request))
+                .await?
         }
         Message::FetchNamespaceHistoryObject(request) => {
-            let state_directory = state_directory.to_path_buf();
             let request = request.clone();
             let requester = peer.from;
-            tokio::task::spawn_blocking(move || {
-                source::history_object(&state_directory, requester, &request)
-            })
-            .await
-            .map_err(|_| NativeGatewaySyncError::Unavailable)??
+            history
+                .execute(move |store| source::history_object(store, requester, &request))
+                .await?
         }
         Message::FetchNativeContentLayout(request) => {
-            let state_directory = state_directory.to_path_buf();
+            let state_directory = history.state_directory.clone();
             let request = request.clone();
             tokio::task::spawn_blocking(move || source::content_layout(&state_directory, &request))
                 .await
@@ -52,7 +50,7 @@ pub(crate) async fn handle(
         Message::PublishNamespaceHead(request) => {
             receiver::publish_head(
                 network,
-                state_directory,
+                history,
                 peer.from,
                 operation_id,
                 request_header.deadline_unix_micros,

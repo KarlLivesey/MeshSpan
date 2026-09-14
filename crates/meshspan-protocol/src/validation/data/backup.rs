@@ -20,6 +20,15 @@ const MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES: usize = 2_048;
 
 pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireContractError> {
     match value {
+        Message::LookupBackupRequest(value) => {
+            validate_required_header(value.header.as_ref())?;
+            validate_object(value.object.as_ref())?;
+            nonzero(value.authority_revision)
+        }
+        Message::LookupBackupResult(value) => {
+            validate_operation_result(value.result.as_ref(), limits)?;
+            validate_object_outcome(value.result.as_ref(), value.receipt.as_ref(), limits)
+        }
         Message::StoreBackupBegin(value) => store_begin(value),
         Message::StoreBackupReady(value) => store_ready(value, limits),
         Message::StoreBackupFinish(value) => {
@@ -114,7 +123,9 @@ fn read_header(value: &ReadBackupHeader, limits: WireLimits) -> Result<(), WireC
     }
 }
 
-fn validate_object(value: Option<&BackupObjectIdentity>) -> Result<(), WireContractError> {
+pub(in crate::validation) fn validate_object(
+    value: Option<&BackupObjectIdentity>,
+) -> Result<(), WireContractError> {
     let object = value.ok_or(WireContractError::InvalidMessage)?;
     valid_identifier(&object.backup_id)?;
     valid_identifier(&object.destination_id)?;
@@ -123,7 +134,7 @@ fn validate_object(value: Option<&BackupObjectIdentity>) -> Result<(), WireContr
     valid_nonzero_digest(&object.digest)
 }
 
-fn validate_object_receipt(
+pub(in crate::validation) fn validate_object_receipt(
     value: Option<&BackupObjectReceipt>,
     limits: WireLimits,
 ) -> Result<(), WireContractError> {
@@ -133,14 +144,18 @@ fn validate_object_receipt(
     validate_reference(&receipt.object_reference, limits)
 }
 
-fn validate_read_receipt(value: Option<&BackupReadReceipt>) -> Result<(), WireContractError> {
+pub(in crate::validation) fn validate_read_receipt(
+    value: Option<&BackupReadReceipt>,
+) -> Result<(), WireContractError> {
     let receipt = value.ok_or(WireContractError::InvalidMessage)?;
     valid_identifier(&receipt.operation_id)?;
     nonzero(receipt.byte_length)?;
     valid_nonzero_digest(&receipt.digest)
 }
 
-fn validate_delete_receipt(value: Option<&BackupDeleteReceipt>) -> Result<(), WireContractError> {
+pub(in crate::validation) fn validate_delete_receipt(
+    value: Option<&BackupDeleteReceipt>,
+) -> Result<(), WireContractError> {
     let receipt = value.ok_or(WireContractError::InvalidMessage)?;
     valid_identifier(&receipt.operation_id)?;
     validate_object(receipt.object.as_ref())?;
@@ -196,7 +211,10 @@ fn validate_required_header(
     validate_header(value.ok_or(WireContractError::InvalidMessage)?)
 }
 
-fn validate_reference(value: &str, limits: WireLimits) -> Result<(), WireContractError> {
+pub(in crate::validation) fn validate_reference(
+    value: &str,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
     let maximum = limits
         .maximum_text_bytes()
         .min(MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES);
@@ -207,7 +225,10 @@ fn validate_reference(value: &str, limits: WireLimits) -> Result<(), WireContrac
     }
 }
 
-fn validate_maximum_frame_bytes(value: u64, limits: WireLimits) -> Result<(), WireContractError> {
+pub(in crate::validation) fn validate_maximum_frame_bytes(
+    value: u64,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
     let maximum = u64::try_from(limits.maximum_data_frame_bytes())
         .map_err(|_| WireContractError::InvalidMessage)?;
     if value == 0 || value > maximum {

@@ -53,7 +53,7 @@ pub(super) fn reject_nonce_reuse(
     }
 }
 
-pub(super) fn install_or_validate_usage(
+pub(crate) fn install_or_validate_usage(
     transaction: &Transaction<'_>,
     authority: FederationStorageAllocationAuthority,
     updated_at: UnixMicros,
@@ -83,13 +83,16 @@ pub(super) fn install_or_validate_usage(
             updated_at.get()
         ],
     )?;
-    let matches: i64 = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM local_federation_storage_usage
+    // A fresh authority revision may advance over the same physical allocation.
+    // Never replace its counters or accept an older fence after observing a successor.
+    let matches = transaction.execute(
+        "UPDATE local_federation_storage_usage SET relationship_authority_epoch = ?11,
+           grant_revision = ?12, allocation_revision = ?13
          WHERE allocation_id = ?1 AND relationship_id = ?2 AND remote_mesh_id = ?3
            AND grant_id = ?4 AND provider_node_id = ?5 AND target_id = ?6
            AND target_generation = ?7 AND maximum_bytes = ?8 AND valid_from = ?9
-           AND valid_until = ?10 AND relationship_authority_epoch = ?11
-           AND grant_revision = ?12 AND allocation_revision = ?13)",
+           AND valid_until = ?10 AND relationship_authority_epoch <= ?11
+           AND grant_revision <= ?12 AND allocation_revision <= ?13",
         params![
             allocation.allocation_id().as_bytes().as_slice(),
             authority.relationship_id().as_bytes().as_slice(),
@@ -105,7 +108,6 @@ pub(super) fn install_or_validate_usage(
             to_i64(authority.grant_revision().get())?,
             to_i64(authority.allocation_revision().get())?
         ],
-        |row| row.get(0),
     )?;
     if matches == 1 {
         Ok(())
@@ -114,7 +116,7 @@ pub(super) fn install_or_validate_usage(
     }
 }
 
-pub(super) fn hold_capacity(
+pub(crate) fn hold_capacity(
     transaction: &Transaction<'_>,
     authority: FederationStorageAllocationAuthority,
     updated_at: UnixMicros,
@@ -122,11 +124,14 @@ pub(super) fn hold_capacity(
     let updated_rows = transaction.execute(
         "UPDATE local_federation_storage_usage
          SET reserved_bytes = reserved_bytes + ?1, updated_at = ?2
-         WHERE allocation_id = ?3 AND ?1 <= maximum_bytes - committed_bytes - reserved_bytes",
+         WHERE allocation_id = ?3 AND ?1 <= maximum_bytes - committed_bytes - reserved_bytes
+           AND ?1 <= ?4 - committed_bytes - reserved_bytes
+           AND NOT EXISTS (SELECT 1 FROM local_federation_storage_seals WHERE allocation_id = ?3)",
         params![
             to_i64(authority.requested_bytes())?,
             updated_at.get(),
-            authority.allocation().allocation_id().as_bytes().as_slice()
+            authority.allocation().allocation_id().as_bytes().as_slice(),
+            to_i64(authority.write_limit_bytes())?
         ],
     )?;
     if updated_rows == 1 {

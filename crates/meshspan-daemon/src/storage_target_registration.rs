@@ -4,7 +4,8 @@
 
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::os::unix::ffi::OsStringExt as _;
+use std::path::{Path, PathBuf};
 
 use meshspan_domain::{
     AuditEventId, ComponentInstanceId, EntropyError, NodeId, OperationId, RandomSource, TargetId,
@@ -63,6 +64,7 @@ pub trait StorageTargetRegistrationAuthority {
 pub struct RegisteredStorageTarget {
     folder: RegisteredFolder,
     context: StorageTargetProviderContext,
+    existing_journal_directory: Option<PathBuf>,
 }
 
 impl RegisteredStorageTarget {
@@ -70,7 +72,11 @@ impl RegisteredStorageTarget {
         folder: RegisteredFolder,
         context: StorageTargetProviderContext,
     ) -> Self {
-        Self { folder, context }
+        Self {
+            folder,
+            context,
+            existing_journal_directory: None,
+        }
     }
 
     /// Returns the marker identity proven by both the folder and replicated context.
@@ -85,10 +91,17 @@ impl RegisteredStorageTarget {
         self.context
     }
 
-    /// Transfers exclusive folder ownership into a provider-opening boundary.
+    /// Transfers folder ownership, authority and an optional required existing journal root.
+    /// An existing root must be reopened without creating a missing journal.
     #[must_use]
-    pub fn into_parts(self) -> (RegisteredFolder, StorageTargetProviderContext) {
-        (self.folder, self.context)
+    pub fn into_parts(
+        self,
+    ) -> (
+        RegisteredFolder,
+        StorageTargetProviderContext,
+        Option<PathBuf>,
+    ) {
+        (self.folder, self.context, self.existing_journal_directory)
     }
 }
 
@@ -164,6 +177,16 @@ where
         self.local.local_targets().map_err(Into::into)
     }
 
+    /// Returns recovery-installed folders, including those still awaiting admission.
+    ///
+    /// # Errors
+    /// Fails closed for invalid node-local installation evidence.
+    pub fn recovered_targets(
+        &self,
+    ) -> Result<Vec<meshspan_metadata::LocalRecoveredTarget>, StorageTargetRegistrationError> {
+        self.local.local_recovered_targets().map_err(Into::into)
+    }
+
     fn register_internal(
         &mut self,
         storage_path: &Path,
@@ -172,6 +195,16 @@ where
     ) -> Result<RegisteredStorageTarget, StorageTargetRegistrationError> {
         let canonical_path = fs::canonicalize(storage_path)?;
         let canonical_bytes = canonical_path.as_os_str().as_bytes().to_vec();
+        if let Some(recovered) = self
+            .local
+            .local_recovered_target_by_path(&canonical_bytes)?
+        {
+            if requested.is_some() {
+                // Recovery is not a replay of a user's registration operation.
+                return Err(StorageTargetRegistrationError::Conflict);
+            }
+            return self.reopen_recovered(&canonical_path, &recovered);
+        }
         let record = if let Some(record) = self.local.local_target_by_path(&canonical_bytes)? {
             if let Some((operation_id, usage_limit)) = requested
                 && (record.intent.registration_operation_id != operation_id
@@ -233,6 +266,50 @@ where
         Ok(RegisteredStorageTarget::from_validated_parts(
             folder, provider,
         ))
+    }
+
+    fn reopen_recovered(
+        &self,
+        folder_path: &Path,
+        record: &meshspan_metadata::LocalRecoveredTarget,
+    ) -> Result<RegisteredStorageTarget, StorageTargetRegistrationError> {
+        let context = self
+            .authority
+            .provider_context(self.local.node_id(), record.target_id)?
+            .ok_or(StorageTargetRegistrationError::Conflict)?;
+        if context.mesh_id != record.mesh_id
+            || context.node_id != record.node_id
+            || context.target_id != record.target_id
+            || context.generation != record.generation
+            || context.policy_revision < record.policy_revision
+            || context.catalogue_revision < context.policy_revision
+        {
+            return Err(StorageTargetRegistrationError::Conflict);
+        }
+        let folder = RegisteredFolder::reopen(
+            folder_path,
+            FolderRegistration {
+                mesh_id: record.mesh_id,
+                target_id: record.target_id,
+                generation: record.generation,
+                usage_limit: match record.usage_limit {
+                    StorageUsageLimit::Percent(value) => UsageLimit::percent(value)?,
+                    StorageUsageLimit::Bytes(value) => UsageLimit::bytes(value)?,
+                },
+            },
+            meshspan_storage::MarkerFingerprint::from_bytes(record.marker_fingerprint),
+        )?;
+        let journal = PathBuf::from(std::ffi::OsString::from_vec(
+            record.journal_directory.clone(),
+        ));
+        if fs::canonicalize(&journal)? != journal {
+            return Err(StorageTargetRegistrationError::Conflict);
+        }
+        Ok(RegisteredStorageTarget {
+            folder,
+            context,
+            existing_journal_directory: Some(journal),
+        })
     }
 }
 

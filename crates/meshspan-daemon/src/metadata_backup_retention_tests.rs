@@ -12,8 +12,9 @@ use meshspan_domain::{
 use meshspan_metadata::{
     ApplyDisposition, AuthoritativeCommand, BackupCopyRecord, BackupCopyState,
     BackupDestinationBinding, BackupDestinationRecord, BackupDestinationState,
-    BackupFailureRelationship, BackupReclamationCursor, CommandContext, CommandReceipt, EntityKind,
-    EntityReference, LogPosition, Page, PageLimit, RepositoryError, RetireMetadataBackup,
+    BackupFailureRelationship, BackupReclamationCandidate, BackupReclamationCursor, CommandContext,
+    CommandReceipt, EntityKind, EntityReference, LogPosition, Page, PageLimit, RepositoryError,
+    RetireMetadataBackup,
 };
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
@@ -136,6 +137,20 @@ struct MemoryAuthority {
 }
 
 impl BackupRetentionAuthority for MemoryAuthority {
+    fn unadmitted(
+        &self,
+        _after: Option<BackupReclamationCursor>,
+        _limit: PageLimit,
+    ) -> Result<
+        Page<meshspan_metadata::AbandonedBackupPublication, BackupReclamationCursor>,
+        RepositoryError,
+    > {
+        Ok(Page {
+            items: Vec::new(),
+            next: None,
+        })
+    }
+
     fn candidate(&self) -> Result<Option<RetireMetadataBackup>, RepositoryError> {
         Ok(None)
     }
@@ -143,7 +158,7 @@ impl BackupRetentionAuthority for MemoryAuthority {
         &self,
         after: Option<BackupReclamationCursor>,
         limit: PageLimit,
-    ) -> Result<Page<BackupCopyRecord, BackupReclamationCursor>, RepositoryError> {
+    ) -> Result<Page<BackupReclamationCandidate, BackupReclamationCursor>, RepositoryError> {
         assert_eq!(limit, PageLimit::new(1)?);
         let mut items = self
             .copies
@@ -170,7 +185,13 @@ impl BackupRetentionAuthority for MemoryAuthority {
         } else {
             None
         };
-        Ok(Page { items, next })
+        Ok(Page {
+            items: items
+                .into_iter()
+                .map(BackupReclamationCandidate::try_from)
+                .collect::<Result<_, _>>()?,
+            next,
+        })
     }
     fn destination(
         &self,

@@ -26,10 +26,11 @@ async fn https_dispatch(
 ) -> Response {
     let observation = DispatchLifetime::start(observer, GatewayProtocol::Https);
     let response = next.run(request).await;
-    observation.finish(if response.status().is_server_error() {
-        GatewayDispatchOutcome::Failed
-    } else {
-        GatewayDispatchOutcome::Returned
+    observation.finish(match response.status() {
+        axum::http::StatusCode::UNAUTHORIZED => GatewayDispatchOutcome::AuthenticationRequired,
+        axum::http::StatusCode::FORBIDDEN => GatewayDispatchOutcome::Forbidden,
+        status if status.is_server_error() => GatewayDispatchOutcome::Failed,
+        _ => GatewayDispatchOutcome::Returned,
     });
     response
 }

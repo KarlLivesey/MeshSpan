@@ -19,6 +19,9 @@ fn runtime_probe_requires_the_exact_signed_build_and_unchanged_persistence_forma
         ("metadata_command_version", json!(0)),
         ("partition_schema_target", json!(0)),
         ("local_schema_target", json!(999)),
+        ("storage_journal_schema_target", json!(0)),
+        ("filesystem_branch_schema_target", json!(0)),
+        ("filesystem_content_schema_target", json!(0)),
         ("format", json!("1")),
         ("unexpected", json!(true)),
     ] {

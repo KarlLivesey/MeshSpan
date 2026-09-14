@@ -275,6 +275,15 @@ fn backup_run_commands_round_trip_canonically() -> Result<(), Box<dyn std::error
             lease_expires_at: UnixMicros::new(7_000),
         }),
     )?;
+    assert_round_trip(
+        context,
+        AuthoritativeCommand::AbandonUnrecordedMetadataBackupRun(
+            crate::AbandonUnrecordedMetadataBackupRun {
+                backup_id,
+                expected_claim: claim,
+            },
+        ),
+    )?;
     for outcome in [
         crate::MetadataBackupRunCompletion::Protected {
             result_digest: [94; 32],
@@ -1427,6 +1436,15 @@ fn encrypted_secret_generation_round_trips_only_in_canonical_recipient_order()
         command_context,
         AuthoritativeCommand::CommitSecretGeneration(valid.clone()),
     )?;
+    assert_round_trip(
+        command_context,
+        AuthoritativeCommand::ExtendVolumeKeyRecipients(valid.clone()),
+    )?;
+    assert_ne!(
+        AuthoritativeCommand::CommitSecretGeneration(valid.clone()).request_digest(command_context),
+        AuthoritativeCommand::ExtendVolumeKeyRecipients(valid.clone())
+            .request_digest(command_context),
+    );
 
     let mut reversed = valid.clone();
     reversed.recipients.reverse();

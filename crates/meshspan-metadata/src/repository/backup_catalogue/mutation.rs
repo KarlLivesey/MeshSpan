@@ -48,7 +48,12 @@ pub(in crate::repository) fn configure_destination(
     }) {
         return Err(RepositoryError::InvalidCommand);
     }
-    validate_destination_binding(transaction, command.binding)?;
+    // An existing immutable binding can always stop accepting new work, even
+    // after its provider is replaced or its federation relationship is revoked.
+    // Creation and resumption still require current provider eligibility.
+    if existing.is_none() || command.enabled {
+        validate_destination_binding(transaction, command.binding)?;
+    }
     let binding = binding_columns(command.binding);
     let state = if command.enabled {
         DESTINATION_ACTIVE
@@ -118,6 +123,17 @@ pub(in crate::repository) fn record_backup(
         return Err(RepositoryError::InvalidCommand);
     }
     validate_initial_copy(transaction, command)?;
+    super::super::backup_roots::seal(transaction, command.backup_id, command.state_revision)?;
+    super::super::backup_intent::validate_bound_object(
+        transaction,
+        meshspan_contracts::BackupObjectIdentity {
+            backup_id: command.backup_id,
+            destination_id: command.initial_copy.destination_id,
+            provider_generation: command.initial_copy.provider_generation,
+            byte_length: command.encrypted_byte_length,
+            digest: command.encrypted_digest,
+        },
+    )?;
     transaction.execute(
         "INSERT INTO metadata_backups(
             backup_id, partition_id, mesh_id, last_log_index, last_log_term, state_revision,
@@ -170,6 +186,16 @@ pub(in crate::repository) fn record_copy(
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
     validate_object_reference(&command.object_reference)?;
+    super::super::backup_intent::validate_bound_object(
+        transaction,
+        meshspan_contracts::BackupObjectIdentity {
+            backup_id: command.backup_id,
+            destination_id: command.destination_id,
+            provider_generation: command.provider_generation,
+            byte_length: command.byte_length,
+            digest: command.copy_digest,
+        },
+    )?;
     let expected = expected_copy(transaction, command.backup_id, command.destination_id)?;
     if expected
         != (

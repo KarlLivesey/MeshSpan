@@ -3,7 +3,7 @@
 //! Retry-safe publication of one encrypted metadata backup to one exact destination.
 
 mod authority;
-mod evidence;
+pub(crate) mod evidence;
 
 use std::fs::File;
 use std::path::Path;
@@ -155,7 +155,7 @@ where
         object: BackupObjectIdentity,
         destination_revision: Revision,
     ) -> Result<BackupCopyRecord, BackupPublicationError> {
-        let receipt = Self::store(provider, request, object, destination_revision)?;
+        let receipt = self.store(provider, request, object, destination_revision)?;
         let context = command_context(
             PublicationStep::RecordBackup,
             request.evidence,
@@ -192,7 +192,7 @@ where
         object: BackupObjectIdentity,
         destination_revision: Revision,
     ) -> Result<BackupCopyRecord, BackupPublicationError> {
-        let receipt = Self::store(provider, request, object, destination_revision)?;
+        let receipt = self.store(provider, request, object, destination_revision)?;
         let context = command_context(
             PublicationStep::RecordCopy,
             request.evidence,
@@ -218,6 +218,7 @@ where
     }
 
     fn store<P: BackupProvider + ?Sized>(
+        &self,
         provider: &mut P,
         request: &BackupPublicationRequest<'_>,
         object: BackupObjectIdentity,
@@ -231,6 +232,31 @@ where
             request.now,
             request.deadline,
             destination_revision,
+        )?;
+        let context = command_context(
+            PublicationStep::BindUploadIntent,
+            request.evidence,
+            object.destination_id,
+            request.actor_principal_id,
+            request.now,
+        )?;
+        let command = AuthoritativeCommand::BindBackupPublicationIntent(
+            meshspan_metadata::BindBackupPublicationIntent {
+                object,
+                store_operation_id: store_context.operation_id,
+                claim: request.claim,
+                expected_destination_revision: destination_revision,
+            },
+        );
+        let intent = self
+            .authority
+            .commit_backup_publication(context, &command)?;
+        validate_receipt(
+            intent,
+            context,
+            &command,
+            EntityKind::MetadataBackup,
+            object.backup_id.as_bytes(),
         )?;
         let receipt = provider.store_exact(
             BackupStoreRequest {
@@ -334,7 +360,9 @@ where
     }
 }
 
-fn validate_request(request: &BackupPublicationRequest<'_>) -> Result<(), BackupPublicationError> {
+pub(crate) fn validate_request(
+    request: &BackupPublicationRequest<'_>,
+) -> Result<(), BackupPublicationError> {
     if request.now.get() < 0 || request.deadline <= request.now {
         return Err(BackupPublicationError::InvalidInput);
     }

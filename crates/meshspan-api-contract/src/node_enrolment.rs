@@ -128,6 +128,9 @@ pub struct EnrolmentBootstrapPeer {
     /// Permanent peer node identity.
     #[schemars(length(equal = 36), pattern(UUID_PATTERN))]
     pub node_id: String,
+    /// Current committed peer incarnation, not its certificate generation.
+    #[schemars(length(min = 1, max = 20), pattern(r"^[1-9][0-9]*$"))]
+    pub incarnation: String,
     /// Current private QUIC endpoint.
     #[schemars(length(min = 3, max = 512))]
     pub private_endpoint: String,

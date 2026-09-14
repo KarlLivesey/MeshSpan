@@ -3,14 +3,103 @@
 use std::io::Cursor;
 
 use meshspan_contracts::{
-    BackupDeleteRequest, BackupObjectIdentity, BackupProvider, BackupReadRequest,
-    BackupStoreRequest, BackupVerifyRequest, ContractError, ContractVersion, RequestContext,
+    BackupDeleteRequest, BackupLookupRequest, BackupObjectIdentity, BackupProvider,
+    BackupReadRequest, BackupStoreRequest, BackupVerifyRequest, ContractError, ContractVersion,
+    RequestContext,
 };
 use meshspan_domain::{BackupDestinationId, BackupId, OperationId, Revision, UnixMicros};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 use crate::DirectoryBackupProvider;
+
+#[test]
+fn lookup_recovers_only_exact_live_catalogue_identity() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let destination = BackupDestinationId::from_bytes([1; 16])?;
+    let object = identity(
+        destination,
+        BackupId::from_bytes([2; 16])?,
+        b"encrypted bytes",
+    );
+    let request = BackupLookupRequest {
+        context: context(4, 10)?,
+        object,
+    };
+    let mut provider =
+        DirectoryBackupProvider::open(directory.path(), destination, 1, 1024, UnixMicros::new(1))?;
+    assert_eq!(
+        provider.lookup_exact(&request, UnixMicros::new(2)),
+        Err(ContractError::NotFound)
+    );
+    let stored = provider.store_exact(
+        BackupStoreRequest {
+            context: context(3, 10)?,
+            object,
+        },
+        &mut Cursor::new(b"encrypted bytes"),
+        UnixMicros::new(2),
+    )?;
+    drop(provider);
+    let mut provider =
+        DirectoryBackupProvider::open(directory.path(), destination, 1, 1024, UnixMicros::new(3))?;
+    let recovered = provider.lookup_exact(&request, UnixMicros::new(3))?;
+    assert_eq!(recovered.operation_id, OperationId::from_bytes([4; 16])?);
+    assert_eq!(recovered.object, object);
+    assert_eq!(recovered.object_reference, stored.object_reference);
+    for (changed, error) in [
+        (
+            BackupObjectIdentity {
+                provider_generation: 2,
+                ..object
+            },
+            ContractError::Stale,
+        ),
+        (
+            BackupObjectIdentity {
+                digest: [9; 32],
+                ..object
+            },
+            ContractError::Conflict,
+        ),
+        (
+            BackupObjectIdentity {
+                byte_length: object.byte_length + 1,
+                ..object
+            },
+            ContractError::Conflict,
+        ),
+    ] {
+        assert_eq!(
+            provider.lookup_exact(
+                &BackupLookupRequest {
+                    object: changed,
+                    ..request
+                },
+                UnixMicros::new(3)
+            ),
+            Err(error)
+        );
+    }
+    assert_eq!(
+        provider.lookup_exact(&request, UnixMicros::new(101)),
+        Err(ContractError::DeadlineExceeded)
+    );
+    provider.delete_exact(
+        &BackupDeleteRequest {
+            context: context(5, 11)?,
+            object,
+            object_reference: recovered.object_reference,
+            retirement_revision: Revision::new(11),
+        },
+        UnixMicros::new(4),
+    )?;
+    assert_eq!(
+        provider.lookup_exact(&request, UnixMicros::new(5)),
+        Err(ContractError::NotFound)
+    );
+    Ok(())
+}
 
 #[test]
 fn exact_stream_survives_restart_replays_and_retires_once() -> Result<(), Box<dyn std::error::Error>>
@@ -162,6 +251,66 @@ fn deletion_retry_renews_deadline_after_restart_without_changing_authority()
     assert_eq!(
         reopened.delete_exact(&deletion, UnixMicros::new(102)),
         Err(ContractError::Conflict)
+    );
+    Ok(())
+}
+
+#[test]
+fn upload_retry_renews_attempt_authority_after_reopen_without_reading_source()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let destination = BackupDestinationId::from_bytes([1; 16])?;
+    let object = identity(destination, BackupId::from_bytes([2; 16])?, b"bytes");
+    let mut request = BackupStoreRequest {
+        context: context(3, 10)?,
+        object,
+    };
+    let receipt = {
+        let mut provider = DirectoryBackupProvider::open(
+            directory.path(),
+            destination,
+            1,
+            1024,
+            UnixMicros::new(1),
+        )?;
+        provider.store_exact(request, &mut Cursor::new(b"bytes"), UnixMicros::new(2))?
+    };
+    let mut provider = DirectoryBackupProvider::open(
+        directory.path(),
+        destination,
+        1,
+        1024,
+        UnixMicros::new(101),
+    )?;
+    assert_eq!(
+        provider.store_exact(request, &mut std::io::empty(), UnixMicros::new(101)),
+        Err(ContractError::DeadlineExceeded)
+    );
+    request.context.deadline = UnixMicros::new(200);
+    request.context.expected_revision = Some(Revision::new(11));
+    assert_eq!(
+        provider.store_exact(request, &mut std::io::empty(), UnixMicros::new(101))?,
+        receipt
+    );
+    request.object.digest = [99; 32];
+    assert_eq!(
+        provider.store_exact(request, &mut std::io::empty(), UnixMicros::new(102)),
+        Err(ContractError::Conflict)
+    );
+    request.object = object;
+    let deletion = BackupDeleteRequest {
+        context: RequestContext {
+            deadline: UnixMicros::new(200),
+            ..context(4, 12)?
+        },
+        object,
+        object_reference: receipt.object_reference,
+        retirement_revision: Revision::new(12),
+    };
+    provider.delete_exact(&deletion, UnixMicros::new(103))?;
+    assert_eq!(
+        provider.store_exact(request, &mut std::io::empty(), UnixMicros::new(104)),
+        Err(ContractError::NotFound)
     );
     Ok(())
 }

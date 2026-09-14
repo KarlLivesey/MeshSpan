@@ -4,6 +4,7 @@
 
 mod authority;
 mod deletion;
+mod discovery;
 
 use meshspan_domain::{AuditEventId, OperationId, PrincipalId, RandomSource, UnixMicros, uuid_v8};
 use meshspan_metadata::{
@@ -18,7 +19,9 @@ pub(crate) use authority::BackupRetentionAuthority;
 /// Only a fairness cursor is volatile; unfinished cleanup remains in replicated metadata.
 #[derive(Default)]
 pub(crate) struct MetadataBackupRetentionWorker {
+    discovery_cursor: Option<BackupReclamationCursor>,
     cursor: Option<BackupReclamationCursor>,
+    staging_cursor: Option<meshspan_domain::BackupId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,6 +39,28 @@ pub(crate) struct BackupRetentionInput {
 }
 
 impl MetadataBackupRetentionWorker {
+    /// Local cleanup is independent of remote provider availability and live backup work.
+    pub(crate) fn reclaim_abandoned_staging(
+        &mut self,
+        authority: &crate::ConsensusAuthenticationAuthority,
+        local: &mut meshspan_metadata::LocalDatabase,
+        state_directory: &std::path::Path,
+    ) -> Result<usize, crate::MetadataBackupPreparationError> {
+        let mut random = crate::OperatingSystemRandom;
+        let result = crate::MetadataBackupPreparationService::open(
+            authority,
+            local,
+            &mut random,
+            state_directory,
+        )?
+        .release_abandoned_page(self.staging_cursor)?;
+        self.staging_cursor = result.next;
+        if result.failed != 0 {
+            return Err(crate::MetadataBackupPreparationError::InvalidProjection);
+        }
+        Ok(result.reclaimed)
+    }
+
     /// One candidate and one bounded cleanup page; a failed provider cannot starve later pages.
     pub(crate) fn run_once(
         &mut self,
@@ -49,13 +74,14 @@ impl MetadataBackupRetentionWorker {
             return Err(BackupRetentionError::Invalid);
         }
         let retired = retire_one(authority, random, &input);
+        let discovered = self.discover(authority, resolver, random, &input, limit)?;
         // Reclaim already retired copies even when a fresh retirement races a policy edit.
         let page = authority.pending(self.cursor, limit)?;
         self.cursor = page.next;
         let mut outcome = BackupRetentionOutcome {
             retired: false,
             reclaimed: 0,
-            failed: 0,
+            failed: discovered.failed,
         };
         for copy in page.items {
             match deletion::reclaim(authority, resolver, random, &input, &copy) {
@@ -63,7 +89,7 @@ impl MetadataBackupRetentionWorker {
                 Err(_) => outcome.failed += 1,
             }
         }
-        outcome.retired = retired?;
+        outcome.retired = retired? || discovered.retired != 0;
         Ok(outcome)
     }
 }

@@ -4,6 +4,8 @@
 
 #[path = "federation_session/authority_page_proof.rs"]
 mod authority_page_proof;
+#[path = "federation_session/backup_capability_proof.rs"]
+mod backup_capability_proof;
 #[path = "federation_session/branch_page_proof.rs"]
 mod branch_page_proof;
 #[path = "federation_session/content_layout_proof.rs"]

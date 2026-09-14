@@ -192,6 +192,11 @@ fn failure(error: BackupExportError, digest: HeaderValue) -> Response<Body> {
             ApiErrorCode::StateConflict,
             "This gateway could not verify an isolated restore of the selected backup",
         ),
+        BackupExportError::RecipientUnavailable => (
+            StatusCode::CONFLICT,
+            ApiErrorCode::StateConflict,
+            "This backup has no recovery envelope for this gateway. Check it on a gateway included when the backup was created, or use the offline recovery bundle.",
+        ),
         BackupExportError::Unavailable => (
             StatusCode::SERVICE_UNAVAILABLE,
             ApiErrorCode::Busy,

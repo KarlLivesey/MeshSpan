@@ -15,7 +15,7 @@ export function renderUpdateClientMethods(routes) {
     throw new TypeError("artifact byte bound is missing");
   return `async getUpdates(rolloutId): Promise<UpdatesResponse> {
       const query = zGetUpdatesQuery.parse(rolloutId === undefined ? {} : { rollout_id: rolloutId });
-      return requestJson(context, appendQuery(${JSON.stringify(routes.getUpdates.route)}, query ?? {}),
+      return requestJson(context, appendQuery(${JSON.stringify(routes.getUpdates.route)}, query),
         { method: ${JSON.stringify(routes.getUpdates.method)} }, zGetUpdatesResponse);
     },
     async manageUpdate(request, csrfToken): Promise<ManageUpdateResponse> {

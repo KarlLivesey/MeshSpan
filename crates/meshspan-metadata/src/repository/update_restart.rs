@@ -35,17 +35,15 @@ pub(super) fn admit(
     if plan.proof_digest() != proof.quorum_plan_digest {
         return Err(RepositoryError::StaleRevision);
     }
-    let applied: i64 = tx.query_row(
-        "SELECT last_log_index FROM applied_state WHERE singleton=1",
-        [],
-        |row| row.get(0),
-    )?;
+    let barrier = super::update_rollout_queries::node(tx, command.rollout_id, command.node_id)?
+        .and_then(|node| node.preparation_log_index)
+        .ok_or(RepositoryError::InvalidCommand)?;
     let mut ready = BTreeSet::new();
     let mut gateway_available = false;
     for node in &proof.ready_nodes {
         if node.node_id == command.node_id
             || node.incarnation == 0
-            || to_i64(node.applied_index)? < applied
+            || to_i64(node.applied_index)? < to_i64(barrier)?
         {
             return Err(RepositoryError::StaleRevision);
         }

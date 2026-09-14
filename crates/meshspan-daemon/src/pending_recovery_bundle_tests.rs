@@ -21,6 +21,13 @@ fn pending_bundle_reopens_exactly_and_never_replaces_conflicting_evidence()
     let first_download = created.download_text()?;
     let first_identity = created.public_identity()?;
     let first_file = std::fs::read(&file)?;
+    let downloaded =
+        crate::pending_recovery_bundle::decode_download_text(&format!("{first_download}\n"))?;
+    assert_eq!(downloaded.encode()?, first_file);
+    assert_eq!(
+        downloaded.open(&code)?.public_wrapping_key(),
+        first_identity.public_wrapping_key()
+    );
     drop(created);
 
     let reopened =

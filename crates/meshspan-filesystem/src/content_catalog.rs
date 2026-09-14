@@ -14,10 +14,16 @@ use crate::{
     WrappedContentKey,
 };
 
+mod availability;
 mod protection;
 mod repository;
+mod reuse;
 mod transfer;
 
+pub use availability::{
+    ReadAvailabilityScopes, VolumeReadAvailabilityError, VolumeReadAvailabilityProbe,
+    VolumeReadAvailabilityProgress,
+};
 pub use protection::{
     CommittedProtectedStripe, PendingProtectedShardPage, PreparedProtectedShard,
     PreparedProtectedStripe, ProtectedShardCursor, ShardRepairCandidate, ShardRepairTransition,
@@ -132,6 +138,12 @@ pub struct DurableContentCatalog {
 }
 
 impl DurableContentCatalog {
+    /// Latest content-catalogue schema understood by this executable's updater probe.
+    #[must_use]
+    pub const fn supported_schema_version() -> usize {
+        repository::SCHEMA_VERSION
+    }
+
     /// Opens, migrates and verifies the content-publication journal.
     ///
     /// # Errors
@@ -561,6 +573,7 @@ impl DurableContentCatalog {
         &self,
         content: PublishedContentReference,
     ) -> Result<CommittedContentLayout, ContentCatalogError> {
+        let content = self.reused_reference(content)?;
         let request = load_request(&self.connection, content.publication_operation_id)?
             .ok_or(ContentCatalogError::Incomplete)?;
         let state: u8 = self.connection.query_row(
@@ -589,6 +602,7 @@ impl DurableContentCatalog {
         &self,
         content: PublishedContentReference,
     ) -> Result<CommittedShardInventory<'_>, ContentCatalogError> {
+        let content = self.reused_reference(content)?;
         self.committed_layout(content)?;
         Ok(CommittedShardInventory {
             catalog: self,
@@ -605,6 +619,15 @@ impl DurableContentCatalog {
         &self,
         content: PublishedContentReference,
     ) -> Result<crate::ContentAcknowledgementEvidence, ContentCatalogError> {
+        let request = load_request(&self.connection, content.publication_operation_id)?
+            .ok_or(ContentCatalogError::Incomplete)?;
+        if let Some(reuse) = self.content_reuse(request)? {
+            return if reuse.content.manifest == content.manifest {
+                Ok(reuse.evidence)
+            } else {
+                Err(ContentCatalogError::Conflict)
+            };
+        }
         let committed = self.committed_layout(content)?;
         if committed.request.format_version != 2 {
             return Err(ContentCatalogError::InvalidInput);
@@ -749,6 +772,9 @@ impl DurableContentCatalog {
         };
         if !stored.same_intent(request) {
             return Err(ContentCatalogError::Conflict);
+        }
+        if let Some(reuse) = self.content_reuse(request)? {
+            return Ok(Some(reuse.content.manifest));
         }
         let state: u8 = self.connection.query_row(
             "SELECT state FROM content_publications WHERE operation_id = ?1",

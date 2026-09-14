@@ -256,7 +256,12 @@ async fn prepare_join_network(
             .ok_or(HeadlessNodeJoinError::PrivateNetwork)?;
         peers.push(ConsensusPeerConfig {
             node_id,
-            incarnation: 1,
+            incarnation: peer
+                .incarnation
+                .parse::<u64>()
+                .ok()
+                .filter(|value| *value != 0)
+                .ok_or(HeadlessNodeJoinError::InvalidAdmissionResponse)?,
             address,
             certificate_der: decode_hex_vec(&peer.certificate_der_hex)?,
             certificate_name: certificate_name(node_id),

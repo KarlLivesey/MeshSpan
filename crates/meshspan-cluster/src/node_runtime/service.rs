@@ -410,6 +410,10 @@ fn apply_committed_entry(
     entry: &meshspan_consensus::LogEntry,
     pending: &mut VecDeque<DriverEffect>,
 ) -> Result<(), NodeRuntimeError> {
+    if entry.is_term_confirmation() {
+        pending.extend(driver.apply_term_confirmation(entry, now())?);
+        return Ok(());
+    }
     if entry.command_version == METADATA_COMMAND_VERSION {
         let decoded = proof_metadata.decode(entry)?;
         driver.persistence_mut().apply_committed(

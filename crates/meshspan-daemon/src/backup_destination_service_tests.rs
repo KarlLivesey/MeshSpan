@@ -74,6 +74,21 @@ async fn backup_destination_service_creates_pauses_pages_and_replays_committed_c
             Err(BackupDestinationError::Conflict)
         );
         assert_inventory(&service, &headers)?;
+        for provider in [
+            meshspan_api_contract::BackupDestinationProvider::FederatedMesh {
+                remote_mesh_id: format_uuid(uuid_v8([80; 16])),
+            },
+            meshspan_api_contract::BackupDestinationProvider::ComponentProvider {
+                instance_id: format_uuid(uuid_v8([81; 16])),
+            },
+        ] {
+            let mut missing_provider = request(24, 34, 0)?;
+            missing_provider.provider = provider;
+            assert_eq!(
+                service.configure(&headers, now, missing_provider),
+                Err(BackupDestinationError::Conflict)
+            );
+        }
         Ok(())
     })?;
     fixture.shutdown().await
@@ -133,7 +148,9 @@ fn assert_inventory(
     Ok(())
 }
 
-async fn register_target(fixture: &RunningAuthority) -> Result<(), Box<dyn std::error::Error>> {
+pub(super) async fn register_target(
+    fixture: &RunningAuthority,
+) -> Result<(), Box<dyn std::error::Error>> {
     fixture
         .handle
         .commit_or_resolve(
@@ -188,8 +205,10 @@ fn request(
         destination_id: format_uuid(uuid_v8([destination; 16])),
         expected_revision: revision,
         name: format!("Recovery {destination}"),
-        target_id: format_uuid(uuid_v8([32; 16])),
-        target_generation: "1".to_owned(),
+        provider: meshspan_api_contract::BackupDestinationProvider::RegisteredTarget {
+            target_id: format_uuid(uuid_v8([32; 16])),
+        },
+        provider_generation: "1".to_owned(),
         enabled: true,
     })
 }

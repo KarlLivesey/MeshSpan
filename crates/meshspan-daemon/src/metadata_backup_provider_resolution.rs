@@ -28,6 +28,22 @@ pub trait MetadataBackupProviderResolver {
         &mut self,
         destination: &BackupDestinationRecord,
     ) -> Result<Box<dyn BackupProvider>, MetadataBackupProviderResolutionError>;
+
+    /// Prepares any durable routing intent before the publisher sends a first copy.
+    /// Existing local providers require no additional route; remote implementations may commit
+    /// one through the supplied publication authority, never through a separate local write.
+    /// # Errors
+    /// Returns preparation/consensus errors before object-byte IO. Remote preparation may
+    /// hold admitted capacity; an unknown store is retried against retained intent rather
+    /// than selecting a different physical namespace.
+    fn resolve_for_publication(
+        &mut self,
+        destination: &BackupDestinationRecord,
+        _request: &BackupPublicationRequest<'_>,
+        _authority: &dyn BackupPublicationAuthority,
+    ) -> Result<Box<dyn BackupProvider>, BackupPublicationError> {
+        self.resolve(destination).map_err(Into::into)
+    }
 }
 
 /// One already opened destination shared with the incoming backup service.
@@ -94,7 +110,7 @@ impl MetadataBackupProviderResolver for RegisteredTargetBackupProviderResolver {
 
 /// Destination writer which composes generic placement with generic provider resolution.
 pub struct ResolvingMetadataBackupDestinationWriter<'a, Authority, Resolver> {
-    publisher: MetadataBackupPublisher<'a, Authority>,
+    authority: &'a Authority,
     resolver: &'a mut Resolver,
 }
 
@@ -103,7 +119,7 @@ impl<'a, Authority, Resolver> ResolvingMetadataBackupDestinationWriter<'a, Autho
     #[must_use]
     pub const fn new(authority: &'a Authority, resolver: &'a mut Resolver) -> Self {
         Self {
-            publisher: MetadataBackupPublisher::new(authority),
+            authority,
             resolver,
         }
     }
@@ -120,13 +136,16 @@ where
         destination: &BackupDestinationRecord,
         request: &BackupPublicationRequest<'_>,
     ) -> Result<BackupPublicationOutcome, BackupPublicationError> {
+        crate::backup_publication::validate_request(request)?;
         if destination.destination_id != request.destination_id
             || destination.binding.provider_generation() == 0
         {
             return Err(BackupPublicationError::InvalidProjection);
         }
-        let mut provider = self.resolver.resolve(destination)?;
-        self.publisher.publish(provider.as_mut(), request)
+        let mut provider =
+            self.resolver
+                .resolve_for_publication(destination, request, self.authority)?;
+        MetadataBackupPublisher::new(self.authority).publish(provider.as_mut(), request)
     }
 }
 

@@ -221,6 +221,15 @@ The provider never sees paths, users, ACLs, volumes-as-shares or placement
 policy. It cannot decide that a shard is authoritative or safe to delete.
 Packfiles, one-file records or a future device backend remain private choices.
 
+Offline disaster recovery is separate from serving access. The storage owner
+holds surviving media exclusively, verifies an independently supplied marker,
+inventories private pack copies and reads exact encrypted identities without
+registering or repairing the source. The filesystem's `RecoveryShardSource`
+boundary consumes those candidate bytes against an archive-selected layout,
+revalidates integrity and reconstructs/decrypts a complete file. The daemon owns
+recovery authorisation, retained-root selection, isolated output publication and
+eventual service admission. A successful salvage read grants none of those rights.
+
 ## Remote shard service
 
 **Owns:** authentication, framing and transport of storage-provider operations.

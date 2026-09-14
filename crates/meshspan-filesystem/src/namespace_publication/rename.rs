@@ -271,7 +271,7 @@ fn load_expected_head(
     if head.namespace_commit_id != publication.expected_namespace_commit_id {
         return Err(PublicationError::StaleHead);
     }
-    let commit = load_commit(transaction, head.namespace_commit_id)?;
+    let commit = super::repository::load_namespace_root(transaction, head.namespace_commit_id)?;
     if commit.volume_id != publication.volume_id
         || commit.root_object_id != publication.root_object_id
     {

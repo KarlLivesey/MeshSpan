@@ -8,18 +8,27 @@ use meshspan_secret_envelope::{
 use super::MetadataCommandCodecError;
 use super::decoder::Decoder;
 use super::encoder::Encoder;
-use crate::CommitSecretGeneration;
+use crate::{AuthoritativeCommand, CommitSecretGeneration};
 
 pub(super) const COMMIT_SECRET_GENERATION: u16 = 14;
+pub(super) const EXTEND_VOLUME_KEY_RECIPIENTS: u16 = 89;
 const MAXIMUM_CIPHERTEXT_BYTES: usize = MAXIMUM_SECRET_BYTES + 16;
 const WRAPPED_KEY_CIPHERTEXT_BYTES: usize = 48;
 
 pub(super) fn encode(
     encoder: &mut Encoder,
-    value: &CommitSecretGeneration,
-) -> Result<(), MetadataCommandCodecError> {
-    encoder.u16(COMMIT_SECRET_GENERATION)?;
-    encode_payload(encoder, value)
+    command: &AuthoritativeCommand,
+) -> Result<bool, MetadataCommandCodecError> {
+    let (tag, value) = match command {
+        AuthoritativeCommand::CommitSecretGeneration(value) => (COMMIT_SECRET_GENERATION, value),
+        AuthoritativeCommand::ExtendVolumeKeyRecipients(value) => {
+            (EXTEND_VOLUME_KEY_RECIPIENTS, value)
+        }
+        _ => return Ok(false),
+    };
+    encoder.u16(tag)?;
+    encode_payload(encoder, value)?;
+    Ok(true)
 }
 
 pub(super) fn encode_payload(

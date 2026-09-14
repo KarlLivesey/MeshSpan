@@ -2,7 +2,11 @@
 
 //! Atomic encrypted secret generations and complete recipient envelopes.
 
-use meshspan_domain::{MeshId, Revision, VolumeId};
+mod recipient_extension;
+pub(super) mod recovery_projection;
+pub(super) use recipient_extension::extend_volume_recipients;
+
+use meshspan_domain::{MeshId, Revision, UnixMicros, VolumeId};
 use meshspan_secret_envelope::{
     EncryptedSecret, EncryptedSecretParts, MAXIMUM_SECRET_RECIPIENTS, RecipientEnvelopeParts,
     RecipientKeyEnvelope, SecretContext, WrappingPublicKey,
@@ -37,7 +41,8 @@ pub struct SecretGenerationRecord {
     pub secret: EncryptedSecret,
     /// Strictly fingerprint-ordered complete recipient set.
     pub recipients: Vec<RecipientKeyEnvelope>,
-    /// Revision which committed ciphertext and recipients atomically.
+    /// Revision which committed the immutable ciphertext and initial recipients. Later
+    /// audited recipient extensions retain that ciphertext revision.
     pub revision: Revision,
 }
 
@@ -79,6 +84,12 @@ pub(super) fn commit(
             | PUBLIC_CERTIFICATE_REQUEST_KEY_SECRET_KIND
     ) {
         require_exact_gateway_recipients(transaction, &recipients)?;
+    }
+    if secret.context().kind() == STORAGE_PERMIT_KEY_SECRET_KIND {
+        require_exact_recipients(
+            &current_node_key_recipients(transaction, true)?,
+            &recipients,
+        )?;
     }
     persist(
         transaction,
@@ -247,22 +258,36 @@ pub(super) fn volume_key_recipients(
     current_volume_key_recipients(database.connection())
 }
 
+pub(super) fn storage_permit_recipients(
+    database: &PartitionDatabase,
+) -> Result<Vec<WrappingPublicKey>, RepositoryError> {
+    current_node_key_recipients(database.connection(), true)
+}
+
 fn current_volume_key_recipients(
     connection: &Connection,
 ) -> Result<Vec<WrappingPublicKey>, RepositoryError> {
-    let active_gateway_count = connection.query_row(
+    current_node_key_recipients(connection, false)
+}
+
+fn current_node_key_recipients(
+    connection: &Connection,
+    include_storage: bool,
+) -> Result<Vec<WrappingPublicKey>, RepositoryError> {
+    let eligible_node_count = connection.query_row(
         "SELECT count(*)
          FROM nodes AS node
-         JOIN node_roles AS role
-           ON role.node_id = node.node_id AND role.role_code = ?1
-         WHERE node.state = ?2 AND node.retired_at IS NULL",
-        params![GATEWAY_ROLE_CODE, ACTIVE_NODE_STATE],
+         WHERE node.retired_at IS NULL AND (
+           (node.state = ?2 AND EXISTS(SELECT 1 FROM node_roles role
+             WHERE role.node_id = node.node_id AND role.role_code = ?1))
+           OR (?3 AND node.state IN (2, 3) AND EXISTS(SELECT 1 FROM node_roles role
+             WHERE role.node_id = node.node_id AND role.role_code = 1)))",
+        params![GATEWAY_ROLE_CODE, ACTIVE_NODE_STATE, include_storage],
         |row| row.get::<_, i64>(0),
     )?;
-    let active_gateway_count =
-        usize::try_from(active_gateway_count).map_err(|_| RepositoryError::CorruptState)?;
-    if active_gateway_count == 0
-        || active_gateway_count.saturating_add(1) > MAXIMUM_SECRET_RECIPIENTS
+    let eligible_node_count =
+        usize::try_from(eligible_node_count).map_err(|_| RepositoryError::CorruptState)?;
+    if eligible_node_count == 0 || eligible_node_count.saturating_add(1) > MAXIMUM_SECRET_RECIPIENTS
     {
         return Err(RepositoryError::CorruptState);
     }
@@ -271,8 +296,6 @@ fn current_volume_key_recipients(
          FROM secret_wrapping_recipients AS recipient
          LEFT JOIN nodes AS node
            ON recipient.recipient_kind = ?1 AND node.node_id = recipient.owner_id
-         LEFT JOIN node_roles AS role
-           ON role.node_id = node.node_id AND role.role_code = ?2
          LEFT JOIN node_wrapping_keys AS node_key
            ON recipient.recipient_kind = ?1
           AND node_key.node_id = recipient.owner_id
@@ -285,8 +308,11 @@ fn current_volume_key_recipients(
           AND recovery.recovery_key_fingerprint = recipient.key_fingerprint
          WHERE recipient.state = ?4 AND recipient.retired_at IS NULL
            AND ((recipient.recipient_kind = ?1
-                 AND node.state = ?5 AND node.retired_at IS NULL
-                 AND role.role_code = ?2
+                 AND node.retired_at IS NULL
+                 AND ((node.state = ?5 AND EXISTS(SELECT 1 FROM node_roles role
+                         WHERE role.node_id = node.node_id AND role.role_code = ?2))
+                   OR (?8 AND node.state IN (2, 3) AND EXISTS(SELECT 1 FROM node_roles role
+                         WHERE role.node_id = node.node_id AND role.role_code = 1)))
                  AND node_key.state = ?4 AND node_key.retired_at IS NULL)
              OR (recipient.recipient_kind = ?3 AND recovery.state = ?6))
          ORDER BY recipient.key_fingerprint
@@ -302,6 +328,7 @@ fn current_volume_key_recipients(
             VERIFIED_RECOVERY_STATE,
             i64::try_from(MAXIMUM_SECRET_RECIPIENTS.saturating_add(1))
                 .map_err(|_| RepositoryError::CorruptState)?,
+            include_storage,
         ],
         |row| {
             Ok((
@@ -331,7 +358,7 @@ fn current_volume_key_recipients(
         recipients.push(public_key);
     }
     if recipients.len() > MAXIMUM_SECRET_RECIPIENTS
-        || node_count != active_gateway_count
+        || node_count != eligible_node_count
         || recovery_count != 1
     {
         return Err(RepositoryError::CorruptState);
@@ -343,7 +370,13 @@ fn require_exact_gateway_recipients(
     connection: &Connection,
     supplied: &[RecipientKeyEnvelope],
 ) -> Result<(), RepositoryError> {
-    let expected = current_volume_key_recipients(connection)?;
+    require_exact_recipients(&current_volume_key_recipients(connection)?, supplied)
+}
+
+fn require_exact_recipients(
+    expected: &[WrappingPublicKey],
+    supplied: &[RecipientKeyEnvelope],
+) -> Result<(), RepositoryError> {
     let supplied = supplied
         .iter()
         .map(RecipientKeyEnvelope::recipient_public_key)
@@ -486,7 +519,7 @@ pub(super) fn latest_reference(
 
 fn insert_secret(
     transaction: &Transaction<'_>,
-    command_context: CommandContext,
+    created_at: UnixMicros,
     command: &CommitSecretGeneration,
     secret_context: SecretContext,
     revision: i64,
@@ -504,7 +537,7 @@ fn insert_secret(
             command.secret.nonce.as_slice(),
             command.secret.ciphertext.as_slice(),
             command.secret.digest.as_slice(),
-            command_context.occurred_at.get(),
+            created_at.get(),
             revision,
         ],
     )?;
@@ -523,7 +556,7 @@ fn persist(
     let stored_revision = to_i64(revision.get())?;
     insert_secret(
         transaction,
-        context,
+        context.occurred_at,
         command,
         secret_context,
         stored_revision,
@@ -531,7 +564,7 @@ fn persist(
     for (envelope, parts) in recipients.iter().zip(&command.recipients) {
         insert_recipient(
             transaction,
-            context,
+            context.occurred_at,
             secret_context,
             envelope,
             parts,
@@ -546,7 +579,7 @@ fn persist(
 
 fn insert_recipient(
     transaction: &Transaction<'_>,
-    command_context: CommandContext,
+    created_at: UnixMicros,
     secret_context: SecretContext,
     envelope: &RecipientKeyEnvelope,
     parts: &RecipientEnvelopeParts,
@@ -573,7 +606,7 @@ fn insert_recipient(
             parts.nonce.as_slice(),
             parts.ciphertext.as_slice(),
             parts.digest.as_slice(),
-            command_context.occurred_at.get(),
+            created_at.get(),
             revision,
         ],
     )?;

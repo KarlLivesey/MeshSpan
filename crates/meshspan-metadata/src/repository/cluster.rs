@@ -96,6 +96,9 @@ pub struct ActiveNodeCertificate {
     pub node_id: meshspan_domain::NodeId,
     /// Current active node incarnation, read atomically with its certificate.
     pub incarnation: u64,
+    /// Admitted service roles read atomically with the active node and certificate.
+    /// Metadata eligibility is not proof of membership in the current quorum plan.
+    pub roles: JoinRoles,
     /// Exact certificate generation selected with this leaf, including after restart.
     pub generation: u64,
     /// Mesh-signed leaf certificate DER.
@@ -308,7 +311,9 @@ pub(super) fn active_node_certificate(
         .query_row(
             "SELECT certificate.certificate_der, certificate.certificate_fingerprint,
                     certificate.valid_until, certificate.revision, node.current_incarnation,
-                    certificate.generation
+                    certificate.generation,
+                    (SELECT COALESCE(SUM(1 << (role_code - 1)), 0)
+                     FROM node_roles WHERE node_id = node.node_id)
              FROM node_certificates AS certificate
              JOIN nodes AS node ON node.node_id = certificate.node_id
              WHERE certificate.node_id = ?1 AND certificate.state = 1 AND node.state = 2
@@ -322,6 +327,7 @@ pub(super) fn active_node_certificate(
                     row.get::<_, i64>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)?,
+                    row.get::<_, u8>(6)?,
                 ))
             },
         )
@@ -333,6 +339,7 @@ pub(super) fn active_node_certificate(
         revision,
         incarnation,
         generation,
+        roles,
     )) = stored
     else {
         return Ok(None);
@@ -343,6 +350,7 @@ pub(super) fn active_node_certificate(
     let record = ActiveNodeCertificate {
         node_id,
         incarnation: u64::try_from(incarnation).map_err(|_| RepositoryError::CorruptState)?,
+        roles: JoinRoles::new(roles).map_err(|_| RepositoryError::CorruptState)?,
         generation: u64::try_from(generation).map_err(|_| RepositoryError::CorruptState)?,
         certificate_fingerprint,
         valid_until: UnixMicros::new(valid_until),
@@ -629,7 +637,7 @@ fn persist_pending_activation(
     Ok(())
 }
 
-fn valid_private_endpoint(value: &str) -> bool {
+pub(crate) fn valid_private_endpoint(value: &str) -> bool {
     (3..=MAXIMUM_PRIVATE_ENDPOINT_BYTES).contains(&value.len())
         && value.bytes().all(|byte| {
             byte.is_ascii_lowercase()

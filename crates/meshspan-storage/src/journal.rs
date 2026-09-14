@@ -18,6 +18,9 @@ mod backup_capacity;
 #[cfg(test)]
 mod backup_capacity_tests;
 mod inventory;
+mod pack_routing;
+#[cfg(test)]
+mod pack_routing_tests;
 mod removal;
 mod scrub;
 
@@ -30,9 +33,12 @@ pub use removal::{
 };
 pub use scrub::ScrubCheckpoint;
 
-const SCHEMA_VERSION: u32 = 2;
+pub(crate) use pack_routing::PackLimits;
+
+const SCHEMA_VERSION: u32 = 3;
 const SCHEMA: &str = include_str!("../schema/001_initial.sql");
 const BACKUP_CAPACITY_SCHEMA: &str = include_str!("../schema/002_backup_capacity.sql");
+const PACK_ROUTING_SCHEMA: &str = include_str!("../schema/003_pack_routing.sql");
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const STATE_SUBDIRECTORY: &str = "storage-targets";
 
@@ -101,9 +107,16 @@ pub struct TargetJournal {
     connection: Connection,
     marker: TargetMarker,
     policy: CapacityPolicy,
+    pack_limits: PackLimits,
 }
 
 impl TargetJournal {
+    /// Target-journal schema understood by this build, for update admission.
+    #[must_use]
+    pub const fn supported_schema_version() -> u32 {
+        SCHEMA_VERSION
+    }
+
     /// Opens, migrates, hardens and identity-binds one target journal.
     ///
     /// # Errors
@@ -119,7 +132,41 @@ impl TargetJournal {
     ) -> Result<Self, TargetJournalError> {
         validate_policy(policy)?;
         let file_path = journal_path(daemon_state_dir, marker.target_id())?;
-        let mut connection = open_connection(&file_path)?;
+        let connection = open_connection(&file_path, true)?;
+        Self::from_connection(connection, marker, policy, opened_at, random)
+    }
+
+    /// Reopens a required existing journal without creating missing state or an empty identity.
+    ///
+    /// # Errors
+    /// Rejects missing journals, absent identity, corruption and marker/policy mismatches.
+    pub fn reopen(
+        daemon_state_dir: &Path,
+        marker: TargetMarker,
+        policy: CapacityPolicy,
+        opened_at: UnixMicros,
+        random: &mut impl RandomSource,
+    ) -> Result<Self, TargetJournalError> {
+        validate_policy(policy)?;
+        let file_path = daemon_state_dir
+            .join(STATE_SUBDIRECTORY)
+            .join(format!("{}.sqlite3", marker.target_id()));
+        let connection = open_connection(&file_path, false)?;
+        let identities: i64 =
+            connection.query_row("SELECT COUNT(*) FROM target_state", [], |row| row.get(0))?;
+        if identities != 1 {
+            return Err(TargetJournalError::InvalidInput);
+        }
+        Self::from_connection(connection, marker, policy, opened_at, random)
+    }
+
+    fn from_connection(
+        mut connection: Connection,
+        marker: TargetMarker,
+        policy: CapacityPolicy,
+        opened_at: UnixMicros,
+        random: &mut impl RandomSource,
+    ) -> Result<Self, TargetJournalError> {
         migrate(&mut connection, opened_at)?;
         bind_identity(&mut connection, marker, policy, opened_at, random)?;
         check_integrity(&connection)?;
@@ -127,6 +174,7 @@ impl TargetJournal {
             connection,
             marker,
             policy,
+            pack_limits: PackLimits::default(),
         })
     }
 
@@ -280,10 +328,11 @@ fn journal_path(state_dir: &Path, target_id: TargetId) -> Result<PathBuf, Target
     Ok(target_dir.join(format!("{target_id}.sqlite3")))
 }
 
-fn open_connection(file_path: &Path) -> Result<Connection, TargetJournalError> {
-    let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
-        | OpenFlags::SQLITE_OPEN_CREATE
-        | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+fn open_connection(file_path: &Path, create: bool) -> Result<Connection, TargetJournalError> {
+    let mut flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    if create {
+        flags |= OpenFlags::SQLITE_OPEN_CREATE;
+    }
     let connection = Connection::open_with_flags(file_path, flags)?;
     connection.busy_timeout(BUSY_TIMEOUT)?;
     connection.execute_batch(
@@ -304,7 +353,11 @@ fn migrate(connection: &mut Connection, applied_at: UnixMicros) -> Result<(), Ta
         return Err(TargetJournalError::UnsupportedSchema);
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    for (migration, schema) in [(1_u32, SCHEMA), (2, BACKUP_CAPACITY_SCHEMA)] {
+    for (migration, schema) in [
+        (1_u32, SCHEMA),
+        (2, BACKUP_CAPACITY_SCHEMA),
+        (3, PACK_ROUTING_SCHEMA),
+    ] {
         let expected = blake3::hash(schema.as_bytes());
         if migration > version {
             transaction.execute_batch(schema)?;

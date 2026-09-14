@@ -2,7 +2,8 @@
 
 //! Private shard-stream control-message validation.
 
-mod backup;
+pub(super) mod backup;
+mod federation_relay;
 
 use crate::framing::{WireContractError, WireLimits};
 use crate::v1::data_control_envelope::Message;
@@ -18,6 +19,11 @@ use super::{
 
 pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireContractError> {
     match value {
+        Message::FetchMetadataReplicaPage(value) => crate::metadata_replica::request(value),
+        Message::MetadataReplicaPageHeader(value) => crate::metadata_replica::header(value, limits),
+        Message::ForwardFederatedBackupRequest(value) => federation_relay::request(value, limits),
+        Message::ForwardFederatedBackupReady(value) => federation_relay::ready(value, limits),
+        Message::ForwardFederatedBackupResult(value) => federation_relay::result(value, limits),
         Message::PutShardBegin(value) => put_begin(value, limits),
         Message::PutShardReady(value) => put_ready(value, limits),
         Message::PutShardFinish(value) => {
@@ -59,6 +65,8 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
         | Message::ReadBackupResult(_)
         | Message::VerifyBackupRequest(_)
         | Message::VerifyBackupResult(_)
+        | Message::LookupBackupRequest(_)
+        | Message::LookupBackupResult(_)
         | Message::DeleteBackupRequest(_)
         | Message::DeleteBackupResult(_) => backup::message(value, limits),
     }

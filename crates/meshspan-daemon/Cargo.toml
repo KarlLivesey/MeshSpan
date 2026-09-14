@@ -45,6 +45,7 @@ meshspan-smb = { path = "../meshspan-smb" }
 meshspan-storage = { path = "../meshspan-storage" }
 meshspan-transport = { path = "../meshspan-transport" }
 meshspan-work = { path = "../meshspan-work" }
+quinn.workspace = true
 rustls.workspace = true
 rustls-native-certs.workspace = true
 serde_json.workspace = true
@@ -55,6 +56,7 @@ tokio-rustls.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+ed25519-dalek.workspace = true
 meshspan-test-certificates = { path = "../meshspan-test-certificates" }
 p256.workspace = true
 rusqlite.workspace = true

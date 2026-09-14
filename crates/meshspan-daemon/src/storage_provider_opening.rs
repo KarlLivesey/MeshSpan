@@ -29,6 +29,18 @@ pub struct StorageProviderOpeningService<A, D, R> {
 }
 
 impl<A, D, R> StorageProviderOpeningService<A, D, R> {
+    /// Updates future openings only; existing providers retain their original immutable fence.
+    pub(crate) fn advance_removal_epoch(
+        &mut self,
+        epoch: u64,
+    ) -> Result<(), StorageProviderOpeningError> {
+        if epoch < self.removal_authority_epoch || epoch == 0 {
+            return Err(StorageProviderOpeningError::InvalidConfiguration);
+        }
+        self.removal_authority_epoch = epoch;
+        Ok(())
+    }
+
     /// Binds one daemon state directory and current consensus authority epoch.
     ///
     /// # Errors
@@ -70,7 +82,7 @@ where
         target: RegisteredStorageTarget,
         now: UnixMicros,
     ) -> Result<LocalFolderStorageProvider, StorageProviderOpeningError> {
-        let (folder, context) = target.into_parts();
+        let (folder, context, existing_journal) = target.into_parts();
         let marker = folder.marker();
         if marker.mesh_id() != context.mesh_id
             || marker.target_id() != context.target_id
@@ -87,9 +99,16 @@ where
             context.catalogue_revision,
             permit_key,
         )?;
-        let provider = FolderShardStore::open(
+        let open = if existing_journal.is_some() {
+            FolderShardStore::reopen
+        } else {
+            FolderShardStore::open
+        };
+        let provider = open(
             folder,
-            &self.daemon_state_directory,
+            existing_journal
+                .as_deref()
+                .unwrap_or(&self.daemon_state_directory),
             CapacityPolicy {
                 usage_limit,
                 repair_reserve_bytes: 0,

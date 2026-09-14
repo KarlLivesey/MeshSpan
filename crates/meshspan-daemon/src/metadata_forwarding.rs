@@ -6,11 +6,13 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use meshspan_cluster::{ConsensusNetwork, MetadataAuthorityHandle, MetadataAuthorityRequestError};
-use meshspan_domain::{NodeId, OperationId, Revision};
+use meshspan_cluster::{
+    ConsensusNetwork, MetadataAuthorityHandle, MetadataAuthorityRequestError, PeerControlRequest,
+};
+use meshspan_domain::{Clock as _, NodeId, OperationId, Revision, UnixMicros};
 use meshspan_metadata::{
     AuthoritativeCommand, AuthoritativeRepository, CommandContext, CommandReceipt,
-    METADATA_COMMAND_VERSION, decode_authoritative_command, encode_authoritative_command,
+    METADATA_COMMAND_VERSION, encode_authoritative_command,
 };
 use meshspan_protocol::v1::control_envelope::Message;
 use meshspan_protocol::v1::metadata_command::Command;
@@ -23,13 +25,37 @@ use crate::private_consensus_runtime::PrivateConsensusRuntime;
 
 const FORWARD_TIMEOUT_MICROS: i64 = 30 * 1_000_000;
 const LOCAL_APPLY_ATTEMPTS: usize = 200;
-const LEADER_HINT_GRACE: Duration = Duration::from_millis(250);
-const AUTHORITY_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[path = "metadata_authority_discovery.rs"]
+pub(crate) mod discovery;
+
+#[path = "metadata_command_admission.rs"]
+mod admission;
 
 pub(crate) async fn forward_to_authority(
     runtime: &Arc<PrivateConsensusRuntime>,
     reader: &AuthoritativeRepository,
-    leader_hint: Option<NodeId>,
+    authority: &MetadataAuthorityHandle,
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
+    forward(runtime, reader, Some(authority), context, command).await
+}
+
+/// A non-voting service forwards directly; it cannot win an election or submit locally.
+pub(crate) async fn forward_from_replica(
+    runtime: &Arc<PrivateConsensusRuntime>,
+    reader: &AuthoritativeRepository,
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
+    forward(runtime, reader, None, context, command).await
+}
+
+async fn forward(
+    runtime: &Arc<PrivateConsensusRuntime>,
+    reader: &AuthoritativeRepository,
+    authority: Option<&MetadataAuthorityHandle>,
     context: CommandContext,
     command: &AuthoritativeCommand,
 ) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
@@ -40,111 +66,88 @@ pub(crate) async fn forward_to_authority(
         .load_active_consensus_quorum_plan()
         .map_err(|_| MetadataAuthorityRequestError::Failed)?
         .ok_or(MetadataAuthorityRequestError::Unavailable)?;
-    let candidates = forwarding_candidates(network.local_node_id(), leader_hint, plan.voters());
-    if candidates.is_empty() {
-        return Err(MetadataAuthorityRequestError::NotLeader {
-            leader_id: leader_hint,
-        });
+    let local_node = network.local_node_id();
+    let leader_hint = match authority {
+        Some(authority) => authority
+            .observe()
+            .await?
+            .known_leader
+            .filter(|id| *id != local_node),
+        None => None,
+    };
+    let mut candidates = forwarding_candidates(local_node, leader_hint, plan.voters());
+    // The forwarding gateway may itself win the election while remote requests are in flight.
+    if authority.is_some() {
+        candidates.push(local_node);
     }
-    let encoded = encode_authoritative_command(context, command).map_err(|error| match error {
-        meshspan_metadata::MetadataCommandCodecError::Unsupported => {
-            MetadataAuthorityRequestError::Unsupported
-        }
-        _ => MetadataAuthorityRequestError::Failed,
-    })?;
     let request_digest = command.request_digest(context);
-    let deadline = context
-        .occurred_at
-        .get()
-        .checked_add(FORWARD_TIMEOUT_MICROS)
-        .ok_or(MetadataAuthorityRequestError::Unavailable)?;
+    let (metadata, deadline) =
+        prepare_request(context, command, crate::OperatingSystemClock.now())?;
     let request = ControlEnvelope {
         header: Some(
             network
                 .control_header(context.operation_id, deadline)
                 .map_err(|_| MetadataAuthorityRequestError::Unavailable)?,
         ),
-        message: Some(Message::MetadataCommand(MetadataCommand {
+        message: Some(Message::MetadataCommand(metadata)),
+    };
+    let local = authority.cloned();
+    let command = command.clone();
+    let committed_digest = discovery::discover(candidates, leader_hint, move |candidate| {
+        let network = network.clone();
+        let request = request.clone();
+        let local = local.clone();
+        let command = command.clone();
+        async move {
+            if candidate == local_node {
+                local
+                    .ok_or(MetadataAuthorityRequestError::Unavailable)?
+                    .commit_or_resolve(context, command)
+                    .await
+                    .map(|receipt| receipt.result_digest)
+                    .map_err(|error| match error {
+                        MetadataAuthorityRequestError::NotLeader { .. } => {
+                            MetadataAuthorityRequestError::Unavailable
+                        }
+                        error => error,
+                    })
+            } else {
+                request_durable_result(&network, candidate, &request).await
+            }
+        }
+    })
+    .await?;
+    resolve_local_receipt(reader, context, request_digest, committed_digest).await
+}
+
+/// Prepare the immutable operation payload separately from its delivery lifetime.
+fn prepare_request(
+    context: CommandContext,
+    command: &AuthoritativeCommand,
+    now: UnixMicros,
+) -> Result<(MetadataCommand, i64), MetadataAuthorityRequestError> {
+    let encoded = encode_authoritative_command(context, command).map_err(|error| match error {
+        meshspan_metadata::MetadataCommandCodecError::Unsupported => {
+            MetadataAuthorityRequestError::Unsupported
+        }
+        _ => MetadataAuthorityRequestError::Failed,
+    })?;
+    // The durable timestamp/id/digest survive outages; only this delivery lifetime renews.
+    let deadline = now
+        .get()
+        .checked_add(FORWARD_TIMEOUT_MICROS)
+        .ok_or(MetadataAuthorityRequestError::Unavailable)?;
+    Ok((
+        MetadataCommand {
             expected_revision: context.expected_revision.map(Revision::get),
-            request_digest: request_digest.to_vec(),
+            request_digest: command.request_digest(context).to_vec(),
             command: Some(Command::ClusterControl(VersionedPayload {
                 format_version: u32::from(METADATA_COMMAND_VERSION),
                 canonical_bytes: encoded,
             })),
-        })),
-    };
-    let committed_digest =
-        discover_durable_result(&network, leader_hint, candidates, &request).await?;
-    resolve_local_receipt(reader, context, request_digest, committed_digest).await
-}
-
-async fn discover_durable_result(
-    network: &ConsensusNetwork,
-    leader_hint: Option<NodeId>,
-    candidates: Vec<NodeId>,
-    request: &ControlEnvelope,
-) -> Result<[u8; 32], MetadataAuthorityRequestError> {
-    let mut requests = tokio::task::JoinSet::new();
-    let hinted = leader_hint.filter(|node_id| *node_id != network.local_node_id());
-    let mut remaining = candidates.into_iter();
-    if let Some(hinted) = hinted {
-        let first = remaining.next();
-        if first != Some(hinted) {
-            return Err(MetadataAuthorityRequestError::Failed);
-        }
-        spawn_candidate_request(&mut requests, network, hinted, request);
-        if let Ok(Some(result)) =
-            tokio::time::timeout(LEADER_HINT_GRACE, requests.join_next()).await
-            && let Some(digest) = candidate_result(&result)?
-        {
-            return Ok(digest);
-        }
-    }
-    for candidate in remaining {
-        spawn_candidate_request(&mut requests, network, candidate, request);
-    }
-    if requests.is_empty() {
-        return Err(MetadataAuthorityRequestError::Unavailable);
-    }
-    tokio::time::timeout(AUTHORITY_RESPONSE_TIMEOUT, async move {
-        while let Some(result) = requests.join_next().await {
-            if let Some(digest) = candidate_result(&result)? {
-                return Ok(digest);
-            }
-        }
-        Err(MetadataAuthorityRequestError::Unavailable)
-    })
-    .await
-    .unwrap_or(Err(MetadataAuthorityRequestError::Unavailable))
-}
-
-fn spawn_candidate_request(
-    requests: &mut tokio::task::JoinSet<Result<[u8; 32], MetadataAuthorityRequestError>>,
-    network: &ConsensusNetwork,
-    candidate: NodeId,
-    request: &ControlEnvelope,
-) {
-    let network = network.clone();
-    let request = request.clone();
-    requests.spawn(async move {
-        tokio::time::timeout(
-            AUTHORITY_RESPONSE_TIMEOUT,
-            request_durable_result(&network, candidate, &request),
-        )
-        .await
-        .unwrap_or(Err(MetadataAuthorityRequestError::Unavailable))
-    });
-}
-
-fn candidate_result(
-    result: &Result<Result<[u8; 32], MetadataAuthorityRequestError>, tokio::task::JoinError>,
-) -> Result<Option<[u8; 32]>, MetadataAuthorityRequestError> {
-    match result {
-        Ok(Ok(digest)) => Ok(Some(*digest)),
-        Ok(Err(MetadataAuthorityRequestError::Unavailable)) => Ok(None),
-        Ok(Err(error)) => Err(*error),
-        Err(_) => Err(MetadataAuthorityRequestError::Failed),
-    }
+        },
+        deadline,
+    ))
 }
 
 async fn resolve_local_receipt(
@@ -217,46 +220,64 @@ async fn request_durable_result(
 pub(crate) async fn handle(
     network: &ConsensusNetwork,
     authority: &MetadataAuthorityHandle,
-    operation_id: OperationId,
-    request_deadline: i64,
-    request: &MetadataCommand,
+    directory: &std::path::Path,
+    request: &PeerControlRequest,
 ) -> Result<ControlEnvelope, MetadataAuthorityRequestError> {
-    let Some(
-        Command::Topology(payload)
-        | Command::IdentityAccess(payload)
-        | Command::Namespace(payload)
-        | Command::Policy(payload)
-        | Command::Lifecycle(payload)
-        | Command::ClusterControl(payload),
-    ) = request.command.as_ref()
-    else {
-        return Err(MetadataAuthorityRequestError::Rejected);
+    let envelope = request.envelope.as_inner().clone();
+    let header = envelope
+        .header
+        .as_ref()
+        .ok_or(MetadataAuthorityRequestError::Rejected)?;
+    let operation_id = OperationId::from_bytes(
+        header
+            .operation_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| MetadataAuthorityRequestError::Rejected)?,
+    )
+    .map_err(|_| MetadataAuthorityRequestError::Rejected)?;
+    let request_deadline = header.deadline_unix_micros;
+    let peer = meshspan_transport::PeerBinding {
+        node_id: request.from,
+        incarnation: request.sender_incarnation,
+        certificate_fingerprint: request.certificate_fingerprint,
     };
-    if payload.format_version != u32::from(METADATA_COMMAND_VERSION) {
-        return Err(MetadataAuthorityRequestError::Unsupported);
-    }
-    let decoded = decode_authoritative_command(&payload.canonical_bytes)
-        .map_err(|_| MetadataAuthorityRequestError::Rejected)?;
-    let expected_digest = decoded.command.request_digest(decoded.context);
-    if decoded.context.operation_id != operation_id
-        || decoded.context.expected_revision.map(Revision::get) != request.expected_revision
-        || decoded.context.occurred_at.get() > request_deadline
-        || request.request_digest.as_slice() != expected_digest
-    {
-        return Err(MetadataAuthorityRequestError::Rejected);
-    }
-    let result = match authority
-        .commit_or_resolve(decoded.context, decoded.command)
-        .await
-    {
-        Ok(receipt) => OperationResult {
-            outcome: OperationOutcome::Durable.into(),
-            committed_revision: Some(receipt.committed_revision.get()),
-            error: None,
-            result: None,
-            result_digest: receipt.result_digest.to_vec(),
+    let directory = directory.to_path_buf();
+    // Certificate lookup and canonical decoding are bounded blocking work owned by this request.
+    let admitted =
+        tokio::task::spawn_blocking(move || admission::prepare(&directory, peer, &envelope))
+            .await
+            .map_err(|_| MetadataAuthorityRequestError::Failed)?;
+    let result = match admitted {
+        Ok(decoded) => match authority
+            .commit_or_resolve(decoded.context, decoded.command)
+            .await
+        {
+            Ok(receipt) => OperationResult {
+                outcome: OperationOutcome::Durable.into(),
+                committed_revision: Some(receipt.committed_revision.get()),
+                error: None,
+                result: None,
+                result_digest: receipt.result_digest.to_vec(),
+            },
+            Err(error) => authority_error_result(error),
         },
-        Err(error) => authority_error_result(error),
+        Err(code) => OperationResult {
+            outcome: if code == ErrorCode::Unavailable {
+                OperationOutcome::Failed
+            } else {
+                OperationOutcome::Rejected
+            }
+            .into(),
+            committed_revision: None,
+            error: Some(WireError {
+                code: code.into(),
+                diagnostic_code: 7,
+                retry_after_micros: None,
+            }),
+            result: None,
+            result_digest: Vec::new(),
+        },
     };
     Ok(ControlEnvelope {
         header: Some(
@@ -333,7 +354,44 @@ mod forwarding_candidate_tests {
     use super::*;
 
     #[test]
-    fn tries_authenticated_hint_then_each_other_voter_once()
+    fn forwarding_retry_renews_delivery_without_rewriting_the_durable_operation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use meshspan_domain::{AuditEventId, GroupId, PrincipalId};
+        let context = CommandContext {
+            operation_id: OperationId::from_bytes([1; 16])?,
+            actor_principal_id: PrincipalId::from_bytes([2; 16])?,
+            audit_event_id: AuditEventId::from_bytes([3; 16])?,
+            occurred_at: UnixMicros::new(100),
+            expected_revision: None,
+        };
+        let command = AuthoritativeCommand::CreateGroup(meshspan_metadata::CreateGroup {
+            group_id: GroupId::from_bytes([4; 16])?,
+            name: meshspan_metadata::RecordName::new("delayed group")?,
+            activation_policy_id: None,
+        });
+        let (first, first_deadline) =
+            prepare_request(context, &command, UnixMicros::new(60_000_000))?;
+        let (retry, retry_deadline) =
+            prepare_request(context, &command, UnixMicros::new(120_000_000))?;
+        assert_eq!(first_deadline, 90_000_000);
+        assert_eq!(retry_deadline, 150_000_000);
+        assert_eq!(first, retry);
+        let Some(Command::ClusterControl(payload)) = retry.command else {
+            return Err("missing canonical command".into());
+        };
+        assert_eq!(
+            meshspan_metadata::decode_authoritative_command(&payload.canonical_bytes)?.context,
+            context
+        );
+        assert_eq!(
+            prepare_request(context, &command, UnixMicros::new(i64::MAX)),
+            Err(MetadataAuthorityRequestError::Unavailable)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lists_authenticated_hint_then_each_other_voter_without_duplicates()
     -> Result<(), Box<dyn std::error::Error>> {
         let local = node(1)?;
         let hinted = node(3)?;

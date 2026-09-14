@@ -29,11 +29,19 @@ pub(crate) struct ObservationOwner {
 
 #[derive(Clone, Default)]
 struct ObservationState {
+    inventory: inventory::InventoryMeasurements,
+    lifecycle: [lifecycle::LifecycleMeasurements; 5],
+    filesystem: filesystem::FilesystemMeasurements,
+    coding: [coding::CodingMeasurements; 2],
+    io: [io::IoMeasurements; 3],
+    protection: Option<protection::ObservedProtection>,
+    protection_failures: u64,
     consensus: Option<consensus::ObservedConsensus>,
     consensus_failures: u64,
     storage: storage::StorageMeasurements,
     https: gateway::GatewayMeasurements,
     smb: gateway::GatewayMeasurements,
+    smb_authentication_rejections: u64,
     sequence: u64,
     target_evictions: u64,
     event_evictions: u64,
@@ -50,9 +58,22 @@ struct ObservationState {
 
 #[path = "runtime_observations_consensus.rs"]
 mod consensus;
+#[path = "runtime_observations_inventory.rs"]
+mod inventory;
+pub(crate) use inventory::{CertificateInventory, InventoryKind, InventorySample, UpdateInventory};
+#[path = "runtime_observations_lifecycle.rs"]
+mod lifecycle;
+#[path = "runtime_observations_protection.rs"]
+mod protection;
+pub(crate) use protection::ProtectionCounts;
+#[path = "runtime_observations_io.rs"]
+mod io;
+#[path = "runtime_observations_progress.rs"]
+mod progress;
 #[path = "runtime_observations_storage.rs"]
 mod storage;
-pub(crate) use storage::StorageUsagePass;
+pub(crate) use progress::MaintenanceProgressCounts;
+pub(crate) use storage::{MaintenanceJobCounts, StorageUsagePass};
 
 pub(crate) struct RuntimeSnapshot {
     pub captured: Instant,
@@ -284,9 +305,17 @@ mod projection;
 #[path = "runtime_observations_metrics.rs"]
 mod metrics;
 
+#[path = "runtime_observations_coding.rs"]
+mod coding;
+#[path = "runtime_observations_filesystem.rs"]
+mod filesystem;
 #[path = "runtime_observations_gateway.rs"]
 mod gateway;
+pub(crate) use coding::CodingObservation;
 
+#[cfg(test)]
+#[path = "runtime_observations_protection_tests.rs"]
+mod protection_tests;
 #[cfg(test)]
 #[path = "runtime_observations_tests.rs"]
 mod tests;

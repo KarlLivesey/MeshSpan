@@ -79,6 +79,16 @@ pub struct BackupStoreRequest {
     pub object: BackupObjectIdentity,
 }
 
+/// Recovers provider catalogue evidence for an exact intended upload without its locator.
+/// This reads no object bytes and is not a fresh integrity check or deletion authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BackupLookupRequest {
+    /// Current authorised request, operation correlation and bounded attempt deadline.
+    pub context: RequestContext,
+    /// Exact immutable identity retained before upload IO.
+    pub object: BackupObjectIdentity,
+}
+
 /// Request to read one exact previously stored encrypted container.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BackupReadRequest {
@@ -117,9 +127,9 @@ pub struct BackupDeleteRequest {
 /// Durable provider evidence for one exact encrypted backup object.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BackupObjectReceipt {
-    /// Idempotency identity of the store or verify operation.
+    /// Identity of the store, verify or catalogue-lookup operation.
     pub operation_id: OperationId,
-    /// Exact object stored and independently digested by the provider.
+    /// Exact stored object; a catalogue lookup does not freshly verify its bytes.
     pub object: BackupObjectIdentity,
     /// Opaque bounded provider locator.
     pub object_reference: BackupObjectReference,
@@ -151,6 +161,16 @@ pub struct BackupDeleteReceipt {
 pub trait BackupProvider {
     /// Describes the compiled provider implementation and explicit bounds.
     fn describe(&self) -> ImplementationDescriptor;
+
+    /// Returns retained exact-object evidence without requiring the lost opaque reference.
+    /// Missing/retired objects return `NotFound`; absence never completes cleanup.
+    /// # Errors
+    /// Rejects stale binding/authority, malformed input, changed identity or unavailable state.
+    fn lookup_exact(
+        &self,
+        request: &BackupLookupRequest,
+        observed_at: UnixMicros,
+    ) -> Result<BackupObjectReceipt, ContractError>;
 
     /// Atomically persists exactly the declared stream or publishes no object.
     ///
@@ -209,6 +229,17 @@ pub trait BackupProvider {
 /// object identity.
 pub fn validate_backup_store_request(
     request: BackupStoreRequest,
+    observed_at: UnixMicros,
+) -> Result<(), ContractError> {
+    validate_context(request.context, observed_at)?;
+    request.object.validate()
+}
+
+/// Checks lookup shape and deadline, not caller permissions or object availability.
+/// # Errors
+/// Rejects unsupported versions, absent authority or malformed immutable identity.
+pub fn validate_backup_lookup_request(
+    request: &BackupLookupRequest,
     observed_at: UnixMicros,
 ) -> Result<(), ContractError> {
     validate_context(request.context, observed_at)?;

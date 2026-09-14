@@ -85,7 +85,21 @@ pub async fn open_stream(
 ///
 /// Rejects closed streams and unknown stream-kind bytes.
 pub async fn accept_stream(connection: &Connection) -> Result<AcceptedStream, TransportError> {
-    let (send, mut receive) = connection.accept_bi().await?;
+    let (send, receive) = connection.accept_bi().await?;
+    classify_stream(send, receive).await
+}
+
+/// Reads the kind of an already accepted stream after its dispatcher admitted a worker.
+///
+/// Keeping acceptance separate lets another stream progress while this peer stalls its prefix.
+/// The caller must bound the prefix read with a deadline.
+///
+/// # Errors
+/// Rejects a missing or unknown kind byte and transport failure.
+pub async fn classify_stream(
+    send: SendStream,
+    mut receive: RecvStream,
+) -> Result<AcceptedStream, TransportError> {
     let mut kind = [0_u8; 1];
     receive.read_exact(&mut kind).await?;
     Ok(AcceptedStream {

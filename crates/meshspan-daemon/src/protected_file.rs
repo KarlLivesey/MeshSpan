@@ -91,6 +91,20 @@ pub(crate) fn read_bounded(
     Ok(bytes)
 }
 
+/// Opens an owner-only regular file for bounded streaming by its typed format reader.
+/// The reader must validate framing and reject trailing bytes; this does not bound its format.
+pub(crate) fn open_read(path: &Path) -> Result<File, ProtectedFileError> {
+    let before = fs::symlink_metadata(path).map_err(map_read_error)?;
+    validate_metadata(&before)?;
+    let file = OpenOptions::new().read(true).open(path)?;
+    let opened = file.metadata()?;
+    validate_metadata(&opened)?;
+    if !same_file(&before, &opened) {
+        return Err(ProtectedFileError::Changed);
+    }
+    Ok(file)
+}
+
 pub(crate) fn remove(path: &Path) -> Result<(), ProtectedFileError> {
     fs::remove_file(path)?;
     sync_parent(path)
@@ -168,7 +182,7 @@ fn same_file(before: &Metadata, opened: &Metadata) -> bool {
     before.dev() == opened.dev() && before.ino() == opened.ino()
 }
 
-fn sync_parent(path: &Path) -> Result<(), ProtectedFileError> {
+pub(crate) fn sync_parent(path: &Path) -> Result<(), ProtectedFileError> {
     let parent = path.parent().ok_or(ProtectedFileError::Unsafe)?;
     File::open(parent)?.sync_all()?;
     Ok(())

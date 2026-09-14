@@ -10,8 +10,9 @@ use crate::{
 };
 use meshspan_domain::{FederationRelationshipId, Revision, UnixMicros};
 use meshspan_transport::{
-    AuthenticatedFederationAuthorityPage, FederationExchangeContext, FederationReplayGuard,
-    StreamKind, TransportError, accept_stream, open_stream, receive_federation, send_federation,
+    AuthenticatedFederationAuthorityFetch, AuthenticatedFederationAuthorityPage,
+    FederationExchangeContext, FederationReplayGuard, OutboundFederationAuthorityPage, StreamKind,
+    TransportError, accept_stream, open_stream, receive_federation, send_federation,
     signed_federation_authority_fetch, signed_federation_authority_page,
 };
 
@@ -120,10 +121,47 @@ impl FederationSessionRuntime<'_> {
             receive_federation(&mut stream.receive, self.negotiation_config.wire_limits()).await?;
         let relationship_id = envelope_relationship(&envelope)?;
         let current = load_authority(authority, relationship_id, request.now)?;
-        let local_identity = self.local_identity(&current, request.now)?;
         let peers = meshspan_transport::FederationPeerRegistry::new([current.peer])?;
         let fetch =
             peers.authenticate_authority_fetch(connection, &envelope, request.now, replay)?;
+        let (response, summary) =
+            self.prepare_authority_page(authority, source, &fetch, request)?;
+        send_federation(
+            &mut stream.send,
+            response.envelope(),
+            self.negotiation_config.wire_limits(),
+        )
+        .await?;
+        stream.send.finish().map_err(TransportError::from)?;
+        Ok(summary)
+    }
+
+    /// Builds a signed page for an authenticated request without performing network IO.
+    ///
+    /// Native dispatchers call this on their metadata worker after short replay admission.
+    /// The returned summary describes prepared output, not successful network delivery.
+    ///
+    /// # Errors
+    /// Rejects changed peer identity, unavailable authority or contradictory page records.
+    pub fn prepare_authority_page(
+        &self,
+        authority: &impl FederationAuthoritySource,
+        source: &impl FederationAuthorityPageSource,
+        fetch: &AuthenticatedFederationAuthorityFetch,
+        request: FederationAuthorityPageServeRequest,
+    ) -> Result<
+        (
+            OutboundFederationAuthorityPage,
+            ServedFederationAuthorityPage,
+        ),
+        FederationSessionError,
+    > {
+        let relationship_id = fetch.relationship_id();
+        let current = load_authority(authority, relationship_id, request.now)?;
+        if current.peer != fetch.peer_binding() {
+            return Err(FederationSessionError::AuthorityUnavailable);
+        }
+        let local_identity = self.local_identity(&current, request.now)?;
         let page = source.authority_page(FederationAuthorityPageQuery {
             relationship_id,
             after_revision: fetch.after_revision(),
@@ -148,19 +186,15 @@ impl FederationSessionRuntime<'_> {
         )?;
         let record_count = response_record_count(response.envelope())?;
         let has_next_page = response_has_next_page(response.envelope())?;
-        send_federation(
-            &mut stream.send,
-            response.envelope(),
-            self.negotiation_config.wire_limits(),
-        )
-        .await?;
-        stream.send.finish().map_err(TransportError::from)?;
-        Ok(ServedFederationAuthorityPage {
-            relationship_id,
-            authority_revision: page.authority_revision,
-            record_count,
-            has_next_page,
-        })
+        Ok((
+            response,
+            ServedFederationAuthorityPage {
+                relationship_id,
+                authority_revision: page.authority_revision,
+                record_count,
+                has_next_page,
+            },
+        ))
     }
 }
 

@@ -130,6 +130,15 @@ Federation grants carry an offline-validity interval. The simple UI supplies a
 safe default and offers shorter, longer or indefinite access; advanced policy may
 set an exact duration. Connected swarms renew automatically.
 
+Storage allocation identity and existing byte charges are independent of the
+renewable permission grant (D-084). Explicit grant succession atomically advances
+the allocation's current authority without moving its bytes or starting a fresh
+capacity budget. Lowering a quota retains existing charges and limits new
+reservations; it does not silently remove stored content. Access still requires
+current permission, including after renewal or restart. Grant-bound allocation
+expiry may follow renewal; an independently configured allocation deadline does
+not automatically extend.
+
 Known revocation stops new access immediately. A disconnected swarm cannot learn
 about a revocation until reconnection or expiry, so it may have acknowledged later
 local work under the previously valid grant. When authoritative history proves

@@ -17,15 +17,178 @@ use crate::{
 
 const DAY_MICROS: u64 = 86_400_000_000;
 
+#[path = "federated_backup_route_tests.rs"]
+mod federated_routes;
 #[path = "backup_history_tests.rs"]
 mod history;
 
 struct Fixture {
-    _directory: TempDir,
+    directory: TempDir,
     repository: AuthoritativeRepository,
     administrator: PrincipalId,
     partition: PartitionId,
     node: NodeId,
+}
+
+#[test]
+fn abandonment_fences_only_expired_unrecorded_claim_and_makes_new_capture_due()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture()?;
+    let backup = BackupId::from_bytes([20; 16])?;
+    queue_run(&mut fixture, backup)?;
+    let expected_claim = claim(1, fixture.node, 21);
+    apply_claim(&mut fixture, backup, expected_claim, 150, 4)?;
+    let value = crate::AbandonUnrecordedMetadataBackupRun {
+        backup_id: backup,
+        expected_claim,
+    };
+    let command = AuthoritativeCommand::AbandonUnrecordedMetadataBackupRun(value);
+    for (now, changed) in [
+        (149, value),
+        (
+            150,
+            crate::AbandonUnrecordedMetadataBackupRun {
+                expected_claim: claim(2, fixture.node, 22),
+                ..value
+            },
+        ),
+    ] {
+        assert!(matches!(
+            fixture.repository.apply_committed(
+                LogPosition { index: 5, term: 1 },
+                context(30, fixture.administrator, 31, now, 4)?,
+                &AuthoritativeCommand::AbandonUnrecordedMetadataBackupRun(changed)
+            ),
+            Err(RepositoryError::InvalidCommand)
+        ));
+    }
+    let context = context(32, fixture.administrator, 33, 150, 4)?;
+    let receipt =
+        fixture
+            .repository
+            .apply_committed(LogPosition { index: 5, term: 1 }, context, &command)?;
+    assert_eq!(
+        fixture
+            .repository
+            .metadata_backup_run(backup)?
+            .ok_or("run")?
+            .state,
+        MetadataBackupRunState::Incomplete
+    );
+    assert!(
+        fixture
+            .repository
+            .unfinished_metadata_backup_run()?
+            .is_none()
+    );
+    assert!(fixture.repository.metadata_backup(backup)?.is_none());
+    let due = fixture
+        .repository
+        .due_metadata_backup_schedule(UnixMicros::new(150))?
+        .ok_or("replacement not due")?;
+    assert_eq!(due.next_due_at, UnixMicros::new(150));
+    fixture.repository = AuthoritativeRepository::new(PartitionDatabase::open(
+        &fixture.directory.path().join("backup-run.sqlite3"),
+        fixture.partition,
+        UnixMicros::new(151),
+    )?);
+    let replay =
+        fixture
+            .repository
+            .apply_committed(LogPosition { index: 6, term: 1 }, context, &command)?;
+    assert_eq!(receipt.request_digest, replay.request_digest);
+    assert_eq!(receipt.committed_revision, replay.committed_revision);
+    assert!(
+        fixture
+            .repository
+            .unfinished_metadata_backup_run()?
+            .is_none()
+    );
+    let replacement = BackupId::from_bytes([40; 16])?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 7, term: 1 },
+        CommandContext {
+            operation_id: OperationId::from_bytes([34; 16])?,
+            audit_event_id: AuditEventId::from_bytes([35; 16])?,
+            occurred_at: UnixMicros::new(151),
+            expected_revision: Some(Revision::new(5)),
+            ..context
+        },
+        &AuthoritativeCommand::QueueMetadataBackupRun(QueueMetadataBackupRun {
+            backup_id: replacement,
+            partition_id: fixture.partition,
+            expected_schedule_sequence: due.sequence,
+            scheduled_for: due.next_due_at,
+        }),
+    )?;
+    let fresh = fixture
+        .repository
+        .unfinished_metadata_backup_run()?
+        .ok_or("fresh occurrence")?;
+    assert_eq!(fresh.backup_id, replacement);
+    assert_eq!(fresh.run_sequence, 2);
+    Ok(())
+}
+
+#[test]
+fn unrecorded_abandonment_rolls_back_terminal_state_and_schedule_together()
+-> Result<(), Box<dyn std::error::Error>> {
+    use super::apply::{ApplyFaultPoint, apply_committed_with_fault};
+    for fault in [
+        ApplyFaultPoint::AfterCommand,
+        ApplyFaultPoint::AfterOperation,
+        ApplyFaultPoint::AfterAudit,
+        ApplyFaultPoint::BeforeCommit,
+    ] {
+        let mut fixture = fixture()?;
+        let backup = BackupId::from_bytes([20; 16])?;
+        queue_run(&mut fixture, backup)?;
+        let expected_claim = claim(1, fixture.node, 21);
+        apply_claim(&mut fixture, backup, expected_claim, 150, 4)?;
+        let before = fixture.repository.metadata_backup_run(backup)?;
+        let schedule_before = fixture.repository.metadata_backup_schedule()?;
+        let command = AuthoritativeCommand::AbandonUnrecordedMetadataBackupRun(
+            crate::AbandonUnrecordedMetadataBackupRun {
+                backup_id: backup,
+                expected_claim,
+            },
+        );
+        let context = context(32, fixture.administrator, 33, 150, 4)?;
+        assert!(matches!(
+            apply_committed_with_fault(
+                &mut fixture.repository.database,
+                LogPosition { index: 5, term: 1 },
+                context,
+                &command,
+                fault
+            ),
+            Err(RepositoryError::InjectedFault)
+        ));
+        assert_eq!(fixture.repository.metadata_backup_run(backup)?, before);
+        assert_eq!(
+            fixture.repository.metadata_backup_schedule()?,
+            schedule_before
+        );
+        assert_eq!(fixture.repository.current_revision()?, Revision::new(4));
+        assert_eq!(
+            fixture
+                .repository
+                .metadata_backup_run_claim(backup)?
+                .ok_or("claim")?
+                .claim,
+            expected_claim
+        );
+        fixture
+            .repository
+            .apply_committed(LogPosition { index: 5, term: 1 }, context, &command)?;
+        assert!(
+            fixture
+                .repository
+                .unfinished_metadata_backup_run()?
+                .is_none()
+        );
+    }
+    Ok(())
 }
 
 #[test]
@@ -252,7 +415,7 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
     )?;
     mark_test_recovery_verified(&mut repository, mesh, administrator)?;
     Ok(Fixture {
-        _directory: directory,
+        directory,
         repository,
         administrator,
         partition,

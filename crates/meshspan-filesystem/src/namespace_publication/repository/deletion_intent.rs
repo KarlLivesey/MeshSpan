@@ -5,7 +5,7 @@
 use meshspan_domain::NamespaceCommitId;
 use rusqlite::{Connection, Transaction};
 
-use super::{StoredCommit, load_commit, load_object_revision};
+use super::{StoredCommit, load_namespace_root, load_object_revision};
 use crate::{BranchMutation, BranchMutationIntent, PublicationError};
 
 pub(super) fn validate_shape(intent: &BranchMutationIntent) -> Result<(), PublicationError> {
@@ -51,7 +51,7 @@ pub(super) fn validate_loaded(
     if !is_deletion(intent.mutation) {
         return Ok(());
     }
-    let parent = load_commit(
+    let parent = load_namespace_root(
         connection,
         commit.parent_id.ok_or(PublicationError::Corrupt)?,
     )?;

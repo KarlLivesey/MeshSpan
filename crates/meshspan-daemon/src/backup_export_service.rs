@@ -20,7 +20,8 @@ use meshspan_metadata::{
 };
 use std::{
     io::Write,
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
+    time::Duration,
 };
 use thiserror::Error;
 
@@ -65,7 +66,48 @@ pub trait BackupExportController: Send + Sync + 'static {
 }
 
 pub(crate) trait BackupExportProviders: Send + Sync {
+    fn wait_until_initialised(&self, deadline: UnixMicros) -> Result<(), BackupExportError>;
     fn snapshot(&self) -> Result<Vec<RegisteredBackupTarget>, BackupExportError>;
+}
+
+/// Completion of the first local provider scan, not successful repair or remote readiness.
+/// Waiters release this lock; neither provider IO nor the maintenance lock is involved.
+#[derive(Default)]
+pub(crate) struct BackupProviderStartup {
+    scanned: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl BackupProviderStartup {
+    pub(crate) fn finish_scan(&self) -> Result<(), BackupExportError> {
+        *self.scanned.lock().map_err(|_| BackupExportError::Failed)? = true;
+        self.changed.notify_all();
+        Ok(())
+    }
+
+    pub(crate) fn wait(&self, deadline: UnixMicros) -> Result<(), BackupExportError> {
+        let now = crate::api_http::current_time().ok_or(BackupExportError::Unavailable)?;
+        let remaining = deadline
+            .get()
+            .checked_sub(now.get())
+            .filter(|remaining| *remaining > 0)
+            .and_then(|remaining| u64::try_from(remaining).ok())
+            .ok_or(BackupExportError::Unavailable)?;
+        let scanned = self.scanned.lock().map_err(|_| BackupExportError::Failed)?;
+        // Condvar's timeout is monotonic, so a backwards host-clock adjustment cannot
+        // extend this blocking worker's admission wait indefinitely.
+        let (scanned, _) = self
+            .changed
+            .wait_timeout_while(scanned, Duration::from_micros(remaining), |scanned| {
+                !*scanned
+            })
+            .map_err(|_| BackupExportError::Failed)?;
+        if *scanned {
+            Ok(())
+        } else {
+            Err(BackupExportError::Unavailable)
+        }
+    }
 }
 
 impl<C: BackupExportController> BackupExportController for Arc<C> {
@@ -95,6 +137,7 @@ pub(crate) struct BackupExportService {
     providers: Arc<dyn BackupExportProviders>,
     network: Arc<PrivateConsensusRuntime>,
     runtime: tokio::runtime::Handle,
+    federation: crate::federation_sessions::FederationBackupConsumer,
 }
 
 impl BackupExportService {
@@ -103,6 +146,7 @@ impl BackupExportService {
         gateway: GatewaySessionIdentity,
         providers: Arc<dyn BackupExportProviders>,
         network: Arc<PrivateConsensusRuntime>,
+        federation: crate::federation_sessions::FederationBackupConsumer,
     ) -> Self {
         Self {
             authority: Mutex::new(authority),
@@ -110,6 +154,7 @@ impl BackupExportService {
             providers,
             network,
             runtime: tokio::runtime::Handle::current(),
+            federation,
         }
     }
 
@@ -164,7 +209,8 @@ impl BackupExportService {
                 local,
                 Arc::clone(&self.network),
                 self.runtime.clone(),
-            );
+            )
+            .with_federation(self.federation.clone());
             match resolver.resolve(&destination) {
                 Ok(provider) => provider,
                 Err(_) => return Ok(None),
@@ -259,6 +305,9 @@ impl BackupExportController for BackupExportService {
         request: &BackupExportRequest,
         sink: &mut VerifiedBackupExport<&mut dyn Write>,
     ) -> Result<BackupReadReceipt, BackupExportError> {
+        let now = crate::api_http::current_time().ok_or(BackupExportError::Unavailable)?;
+        self.authenticate(&request.headers, now)?;
+        self.providers.wait_until_initialised(request.deadline)?;
         let mut after = None;
         loop {
             let now = crate::api_http::current_time().ok_or(BackupExportError::Unavailable)?;
@@ -343,6 +392,9 @@ pub enum BackupExportError {
     /// The selected generation is absent or not exportable.
     #[error("backup export generation is not ready")]
     NotReady,
+    /// This immutable backup was not encrypted for the checking gateway's wrapping key.
+    #[error("backup has no recovery envelope for this gateway")]
+    RecipientUnavailable,
     /// A required provider or authority is unavailable.
     #[error("backup export is unavailable")]
     Unavailable,

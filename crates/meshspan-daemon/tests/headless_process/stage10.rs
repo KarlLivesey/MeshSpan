@@ -38,7 +38,7 @@ pub(super) async fn backup_destination_controls(
         "operation_id": "00000000-0000-4000-8000-000000000081",
         "destination_id": "00000000-0000-4000-8000-000000000082",
         "expected_revision": 0, "name": "Recovery folder",
-        "target_id": folder["target_id"], "target_generation": folder["generation"], "enabled": true
+        "provider": {"kind":"registered_target", "target_id": folder["target_id"]}, "provider_generation": folder["generation"], "enabled": true
     });
     let first = configure(address, client, &authorization, &request).await?;
     let mut pause = request.clone();
@@ -113,8 +113,8 @@ async fn automatic_backup_configuration(
                 .as_array()
                 .ok_or("destinations missing")?;
             assert!(!destinations.is_empty());
-            // Both joined nodes hold partition replicas. Their own folders
-            // therefore share a source-machine boundary, regardless of drive.
+            // A gateway's own folders share its partition replica's
+            // source-machine boundary, regardless of drive.
             assert!(
                 destinations
                     .iter()
@@ -130,7 +130,7 @@ async fn automatic_backup_configuration(
     }
 }
 
-async fn configure(
+pub(super) async fn configure(
     address: SocketAddr,
     client: &ClientConfig,
     authorization: &str,
@@ -148,4 +148,51 @@ async fn configure(
     .await?;
     require_status(&response, "200 OK", "configure backup destination")?;
     Ok(serde_json::from_str(response_body(&response)?)?)
+}
+
+pub(super) async fn request_post_enrolment_backup(
+    address: SocketAddr,
+    client: &ClientConfig,
+    authorization: &str,
+) -> Result<u64, Box<dyn Error>> {
+    let endpoint = "/api/latest/admin/backups/schedule";
+    let response = request_with_headers(
+        address,
+        client,
+        "GET",
+        endpoint,
+        None,
+        &[("Authorization", authorization)],
+    )
+    .await?;
+    require_status(
+        &response,
+        "200 OK",
+        "read backup policy before post-enrolment capture",
+    )?;
+    let response: meshspan_api_contract::BackupScheduleResponse =
+        serde_json::from_str(response_body(&response)?)?;
+    let schedule = response
+        .schedule
+        .ok_or("automatic backup schedule missing")?;
+    // Policy replacement schedules an immediate occurrence. Its new sequence fences the
+    // earlier automatic backup, which deliberately predates the peer's wrapping key.
+    let request = json!({
+        "operation_id": "00000000-0000-4000-8000-000000000088",
+        "expected_sequence": schedule.sequence, "policy": schedule.policy,
+    });
+    let response = request_with_headers(
+        address,
+        client,
+        "PUT",
+        endpoint,
+        Some(&serde_json::to_vec(&request)?),
+        &[("Authorization", authorization)],
+    )
+    .await?;
+    require_status(&response, "200 OK", "schedule a backup after enrolment")?;
+    let configured: meshspan_api_contract::ConfigureBackupScheduleResponse =
+        serde_json::from_str(response_body(&response)?)?;
+    assert!(configured.sequence > schedule.sequence);
+    Ok(configured.sequence)
 }
