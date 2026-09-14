@@ -47,6 +47,16 @@ integration gate has not run on this slice. Stage 10/11 estimates remain 81/126;
 physical, interoperability, soak and independent-review gates are not claimed.
 The publication hold remains in force.
 
+### ACC-02 follow-up — replacement-session logout
+
+Integration review reproduced an uncertain logout being retained after a different
+session signed in: the second logout incorrectly stayed `revocation_unknown`.
+The new regression failed before the fix (**1 failed, 4 passed; 2.14 s**).
+Retried revocations now belong to the exact session, and late outcomes cannot
+clear a replacement login. The final two focused suites passed **9 tests in
+0.991 s**; full web lint, typecheck and formatting passed under NVM. No public
+contract or dependency changed. The assembled integration gate remains pending.
+
 ### DATA-05 — Stage 10 task 17, retiring fully reclaimed packs
 
 The first pack retirement slice was integrated from the isolated worktree based

@@ -68,6 +68,68 @@ describe("browser session provider", () => {
   });
 });
 
+describe("browser session replacement", () => {
+  it("does not reuse an uncertain revocation after a different session signs in", async () => {
+    denyBrowserStorage();
+    const nextOperation = "00000000-0000-4000-8000-000000000052";
+    const nextSession = "00000000-0000-4000-8000-000000000008";
+    vi.spyOn(crypto, "randomUUID")
+      .mockReturnValueOnce("00000000-0000-4000-8000-000000000061")
+      .mockReturnValueOnce(OPERATION_ID)
+      .mockReturnValueOnce("00000000-0000-4000-8000-000000000062")
+      .mockReturnValueOnce(nextOperation);
+    let reads = 0;
+    const revocations: string[] = [];
+    const client = createMeshSpanFetchClient({
+      baseUrl: "https://node.example/api/latest/",
+      fetch: async (input, init) => {
+        const url = requestUrl(input);
+        if (url.endsWith("/sessions/current")) {
+          reads += 1;
+          if (reads === 1 || reads === 3) return jsonResponse({}, 401);
+          return jsonResponse({
+            ...currentSession(),
+            session_id: reads >= 4 ? nextSession : currentSession().session_id,
+          });
+        }
+        if (url.endsWith("/revocations")) {
+          revocations.push(readStringBody(init?.body));
+          if (revocations.length === 1) throw new Error("response lost");
+          return jsonResponse({
+            operation_id: nextOperation,
+            session_id: nextSession,
+            revoked_at_epoch_micros: 50,
+          });
+        }
+        return jsonResponse(
+          {
+            ...createdSession(),
+            session_id: reads >= 3 ? nextSession : currentSession().session_id,
+          },
+          201,
+          { "MeshSpan-CSRF-Token": CSRF_TOKEN },
+        );
+      },
+    });
+    mountSessionProbe(client);
+    await waitForPhase("anonymous");
+    clickButton("Sign in fixture");
+    await waitForPhase("authenticated");
+    clickButton("Sign out fixture");
+    await waitForPhase("revocation_unknown");
+    clickButton("Refresh fixture");
+    await waitForPhase("anonymous");
+    clickButton("Sign in fixture");
+    await waitForPhase("authenticated");
+    clickButton("Sign out fixture");
+    await waitForPhase("anonymous");
+    expect(revocations).toEqual([
+      JSON.stringify({ operation_id: OPERATION_ID }),
+      JSON.stringify({ operation_id: nextOperation }),
+    ]);
+  });
+});
+
 describe("browser session revocation", () => {
   it("does not claim logout when a cookie session has no CSRF token", async () => {
     denyBrowserStorage();
@@ -178,6 +240,9 @@ function SessionProbe(): JSX.Element {
   const session = useSession();
   return (
     <div>
+      <button onClick={() => void session.refresh()} type="button">
+        Refresh fixture
+      </button>
       <button onClick={() => void session.signOut()} type="button">
         Sign out fixture
       </button>

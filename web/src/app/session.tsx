@@ -176,6 +176,27 @@ function createSignOut(
   client: MeshSpanFetchClient,
   store: SessionStore,
 ): () => Promise<void> {
+  let sessionId: string | undefined;
+  let signOut = createSessionSignOut(client, store, sessionId);
+  return async () => {
+    const current = store.state();
+    if (
+      current.phase === "authenticated" &&
+      current.session.session_id !== sessionId
+    ) {
+      sessionId = current.session.session_id;
+      signOut = createSessionSignOut(client, store, sessionId);
+    }
+    await signOut();
+  };
+}
+
+function createSessionSignOut(
+  client: MeshSpanFetchClient,
+  store: SessionStore,
+  sessionId: string | undefined,
+): () => Promise<void> {
+  const ownerToken = store.csrfToken();
   const mutation = createExactMutation(
     async (request: {
       operation_id: string;
@@ -197,7 +218,15 @@ function createSignOut(
       }
     },
     async () => {
-      store.clear();
+      const current = store.state();
+      // A late receipt only revokes its own session, never a replacement login.
+      if (
+        store.csrfToken() === ownerToken &&
+        (current.phase !== "authenticated" ||
+          current.session.session_id === sessionId)
+      ) {
+        store.clear();
+      }
       return Promise.resolve();
     },
   );
@@ -212,6 +241,13 @@ function createSignOut(
         token,
       });
     }
+    const latest = store.state();
+    if (
+      store.csrfToken() !== ownerToken ||
+      (latest.phase === "authenticated" &&
+        latest.session.session_id !== sessionId)
+    )
+      return;
     if (mutation.state().phase !== "committed") {
       store.setState({
         phase: "revocation_unknown",
