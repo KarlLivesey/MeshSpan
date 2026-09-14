@@ -13,6 +13,7 @@ use super::{
 };
 use crate::{JointQuorumPlan, compile_plan, flat_plan};
 
+mod append_proof;
 mod membership_loss;
 
 #[test]

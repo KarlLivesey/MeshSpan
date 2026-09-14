@@ -10,6 +10,43 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Viability pack adoption and CORE-01 prefix proof
+
+The owner adopted the pack on 2026-09-14. Archive SHA-256:
+`55c28d1ea794a7b9611413f1d48a0c88402e383dae665c69a5f0f4e94ee86564`.
+All 2,293 tracked checkout files matched its original source snapshot. The
+baseline is signed progress commit `47da63689ca295b05d127d1f5ab0120bb953258c`
+plus the preserved uncommitted headless status-request diagnostic and evidence.
+It is not a clean integrated candidate: PR #270 is still draft, and fetched
+remote main remains PR #269's `fcd65853fc9fbd54112859a7188231b4b1abf4d2`.
+The failed complete gate and interrupted diagnostic recorded above remain open.
+
+One integrator owns consensus, daemon composition, generated contracts and stage
+evidence. Separate worktrees own ACC-02 browser outcomes, DATA-05 storage pack
+retirement and NET-01 external TLS. Cargo validation has one owner at a time;
+web validation uses bounded workers and NVM. Their worktrees start from the
+unmerged signed checkpoint, not a claimed passing main. No existing stage task
+or requirement is discarded; Stage 9 exit still needs integrated reconciliation,
+Stage 10 remains incomplete and Stage 11 candidate acceptance has not started.
+
+CORE-01's two new focused prefix regressions failed before the correction:
+expected commit index **64**, actual **100** (build **2.09 s**, tests **0.01 s**).
+The follower now retains its request-scoped reply through persistence, commits
+only through that proven prefix and preserves an already higher commit on a
+delayed heartbeat. Empty appends prove only their checked previous position.
+Conflicts return a hint below the rejected probe, and current-term leader
+contact steps a candidate down even when the prefix conflicts.
+`cargo test -p meshspan-consensus -- --test-threads=4` then passed all **34 tests**
+in **3.67 s**, build **1.28 s**; affected all-target/all-feature Clippy with
+warnings denied passed in **0.55 s**. Cargo used four build workers. No dependency,
+persisted schema or wire shape changed in this slice.
+
+CORE-01 remains open for correlated, bounded append probes, delayed-response
+and finite-backtracking regressions, and real transport validation. The full
+integration gate has not run on this slice. Stage 10/11 estimates remain 81/126;
+physical, interoperability, soak and independent-review gates are not claimed.
+The publication hold remains in force.
+
 ## Tasks 10/27 — Linux directory durability prerequisite
 
 On 2026-09-14 the provided clean Linux checkout was fast-forwarded from
@@ -543,6 +580,37 @@ passed in **32.86 s**, warnings denied. Rust/document formatting and diff checks
 passed before the signed progress commit.
 No schema, wire, dependency or production behaviour changed in these two fixes.
 The complete integration gate is still failed; nothing has merged or published.
+
+### Task 27 — musl opt-in failures retained for focused transport diagnosis
+
+Signed commit **47da63689ca295b05d127d1f5ab0120bb953258c** contains the two
+metadata-fixture corrections and evidence. Local SSH verification, remote branch
+identity and GitHub signature verification all passed. PR #270 remains draft.
+
+The 13-case musl/all-feature opt-in run finished **5 passed / 8 failed in
+737.82 s**, build **67 s**, with four harness workers. Log:
+`/tmp/meshspan-musl-final-opt-in-acceptance.log`. Passing cases were successor
+SMB IO, SMB authentication metrics, exact uninterrupted preparation, keeping the
+only file copy online, and real executable staging/restart. Six failures reached
+the unchanged 15-second setup HTTP deadline: backup takeover, three-gateway SMB,
+six-process protection (joining node 5), offline recovery, two-process executable
+replacement, and three-daemon artifact distribution. Failed directories were
+retained; inspected backup-takeover databases pass SQLite integrity checks.
+Both slow ACME cases reached certificate issuance at the test CA but failed the
+gateway TLS-installation deadline. These remain separate open findings.
+
+One remaining artifact upload was observed progressing from 612 MB to 639 MB of
+the 654,325,096-byte executable before its successful completion; it was not
+aborted or treated as hung. The host reports 20 CPUs and observed daemon thread
+counts were 22–25; no thread limit or timeout was changed to obtain a pass.
+
+A focused four-workflow run now adds temporary cancellation-safe transport
+observations to setup-status requests: TCP connect, TLS handshake, request write,
+and response/EOF, with byte counts and bounded framing metadata only. It keeps
+the original deadlines and failure outcome, and must be removed before final
+checks. This tests whether the shared failure precedes the HTTP response or waits
+for TLS closure after a complete response. No diagnosis is claimed yet; no full
+gate rerun, merge or publication has occurred.
 
 ### Full local gate — failed; no integration
 

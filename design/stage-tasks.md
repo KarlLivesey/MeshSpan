@@ -6,6 +6,17 @@ append new tasks rather than renumbering existing ones, and explain scope change
 The [roadmap](roadmap.md) defines stage order; [requirements](requirements.md) and
 [accepted decisions](stage-6-11-decisions.md) define acceptance, not this inventory.
 
+The owner adopted the MeshSpan Viability Pack on 2026-09-14 as the implementation
+breakdown. Its ticket IDs cross-reference these stable stage tasks; they do not
+replace accepted requirements or count as completed acceptance. The first active
+slice is CORE-01 (Stage 3 / Stage 11 task 4), ACC-02 (truthful browser outcomes),
+DATA-05 (Stage 10 task 17, pack lifecycle) and NET-01 (external TLS). Daemon
+lifecycle, first-credential onboarding and SMB lease renewal follow their
+dependency-ready boundaries. The first integrated checkpoint requires two users
+to sign in independently, share exact bytes over HTTPS and SMB, retain an open
+beyond 60 seconds, restart and recover exact outcomes. Snapshot provenance and
+focused results are recorded in [the existing evidence log](stage-10-evidence.md#viability-pack-adoption-and-core-01-prefix-proof).
+
 Status baseline: 2026-09-06, after merge `f27acad`. This is a reconciliation of
 recorded evidence and implementation entry points, not a new test run or a full
 code audit. **Recorded complete** means the stated task has linked implementation

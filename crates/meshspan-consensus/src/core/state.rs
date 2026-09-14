@@ -55,8 +55,7 @@ enum AfterPersistence {
         to: NodeId,
         leader: NodeId,
         leader_commit_index: u64,
-        accepted: bool,
-        read_barrier_id: Option<ReadBarrierId>,
+        reply: AppendResponse,
     },
     Proposal {
         proposal_id: ProposalId,
@@ -516,16 +515,14 @@ impl ConsensusCore {
                         to: from,
                         leader: from,
                         leader_commit_index: 0,
-                        accepted: false,
-                        read_barrier_id: request.read_barrier_id,
+                        reply: self.append_reply(request, false),
                     },
                 );
             }
-            return Ok(vec![self.append_response_effect(
-                from,
-                false,
-                request.read_barrier_id,
-            )]);
+            self.follow_leader(Some(from));
+            return Ok(vec![
+                self.append_reply_effect(from, self.append_reply(request, false)),
+            ]);
         }
         let (truncate_from, append) = self.log_delta(&request.entries)?;
         let changes_term = request.term > self.current_term;
@@ -542,14 +539,15 @@ impl ConsensusCore {
                     to: from,
                     leader: from,
                     leader_commit_index: request.leader_commit_index,
-                    accepted: true,
-                    read_barrier_id: request.read_barrier_id,
+                    reply: self.append_reply(request, true),
                 },
             );
         }
         self.follow_leader(Some(from));
-        let mut effects = self.advance_follower_commit(request.leader_commit_index)?;
-        effects.push(self.append_response_effect(from, true, request.read_barrier_id));
+        let reply = self.append_reply(request, true);
+        let mut effects =
+            self.advance_follower_commit(request.leader_commit_index.min(reply.matched_index))?;
+        effects.push(self.append_reply_effect(from, reply));
         Ok(effects)
     }
 
@@ -887,16 +885,15 @@ impl ConsensusCore {
                 to,
                 leader,
                 leader_commit_index,
-                accepted,
-                read_barrier_id,
+                reply,
             } => {
                 self.follow_leader(Some(leader));
-                let mut effects = if accepted {
-                    self.advance_follower_commit(leader_commit_index)?
+                let mut effects = if reply.accepted {
+                    self.advance_follower_commit(leader_commit_index.min(reply.matched_index))?
                 } else {
                     Vec::new()
                 };
-                effects.push(self.append_response_effect(to, accepted, read_barrier_id));
+                effects.push(self.append_reply_effect(to, reply));
                 Ok(effects)
             }
             AfterPersistence::Proposal {
@@ -1221,10 +1218,7 @@ impl ConsensusCore {
     ) -> Result<Vec<CoreEffect>, CoreError> {
         let old_commit = self.commit_index;
         let next_commit = leader_commit_index.min(self.last_position().index);
-        if next_commit < old_commit {
-            return Err(CoreError::InvalidInput);
-        }
-        self.commit_index = next_commit;
+        self.commit_index = next_commit.max(old_commit);
         self.commit_effects(old_commit)
     }
 
@@ -1265,6 +1259,41 @@ impl ConsensusCore {
                 membership_epoch: self.active_membership_epoch(),
                 plan_digest: self.active_plan_digest(),
             }),
+        }
+    }
+
+    fn append_reply(&self, request: &AppendRequest, accepted: bool) -> AppendResponse {
+        let proven_index = request
+            .entries
+            .last()
+            .map_or(request.previous.index, |entry| entry.position.index);
+        AppendResponse {
+            term: self.current_term,
+            accepted,
+            matched_index: if accepted { proven_index } else { 0 },
+            next_index_hint: if accepted {
+                proven_index.saturating_add(1).max(1)
+            } else {
+                // Retrying the rejected previous position cannot establish a match. A shorter
+                // follower can skip directly to its tail; a divergent one backs up at least once.
+                request
+                    .previous
+                    .index
+                    .min(self.last_position().index.saturating_add(1))
+                    .max(1)
+            },
+            read_barrier_id: request.read_barrier_id,
+            membership_epoch: self.active_membership_epoch(),
+            plan_digest: self.active_plan_digest(),
+        }
+    }
+
+    fn append_reply_effect(&self, to: NodeId, mut reply: AppendResponse) -> CoreEffect {
+        // A higher term is only visible after its durable mutation has been confirmed.
+        reply.term = self.current_term;
+        CoreEffect::Send {
+            to,
+            message: CoreMessage::AppendResponse(reply),
         }
     }
 
