@@ -11,6 +11,10 @@ mod acme;
 #[cfg(test)]
 mod acme_tests;
 mod apply;
+mod user_enrollment;
+#[cfg(test)]
+mod user_enrollment_tests;
+pub use user_enrollment::{UserEnrollmentRecord, UserEnrollmentRedemption, UserEnrollmentState};
 mod authentication_method;
 mod authentication_method_creation;
 #[cfg(test)]
@@ -434,6 +438,18 @@ impl AuthoritativeMetadataKernel for AuthoritativeRepository {
 }
 
 impl AuthoritativeRepository {
+    /// Reads validated consent and lifecycle for one first-credential invitation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects corrupt stored identity, digest, lifecycle or lifetime evidence.
+    pub fn user_enrollment(
+        &self,
+        operation_id: meshspan_domain::OperationId,
+    ) -> Result<Option<UserEnrollmentRecord>, RepositoryError> {
+        user_enrollment::read(&self.database, operation_id)
+    }
+
     /// Runs synchronous metadata reads against one consistent committed database view.
     ///
     /// The callback must only read this repository and return owned observations. It must

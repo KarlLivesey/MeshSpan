@@ -814,7 +814,7 @@ mod tests {
         ));
         let recovered = load_state(&database, 1)?;
         assert_eq!(recovered.current_term, 1);
-        assert_eq!(recovered.log[0].command, b"old");
+        assert_eq!(recovered.log[0].command.as_ref(), b"old");
         Ok(())
     }
 

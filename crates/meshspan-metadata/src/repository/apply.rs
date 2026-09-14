@@ -20,7 +20,7 @@ use super::{
     namespace, node_certificate, node_wrapping_key, notification, notification_delivery,
     protection_policy, recovery_authority, retention, root_delegation, routing, secret_generation,
     session, smb_export_configuration, snapshot_schedule, storage_target, tags, topology,
-    update_rollout, user_snapshot, version_cleanup, volume_head,
+    update_rollout, user_enrollment, user_snapshot, version_cleanup, volume_head,
 };
 use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
 
@@ -372,6 +372,7 @@ fn authorise(
         AuthoritativeCommand::ActivateGroup(value) => Some(value.principal_id),
         AuthoritativeCommand::ActivateFederationGrantAssignment(value) => Some(value.principal_id),
         AuthoritativeCommand::CreateAuthenticationMethod(value) => Some(value.principal_id),
+        AuthoritativeCommand::RedeemUserEnrollment(value) => Some(value.method.principal_id),
         AuthoritativeCommand::IssueAuthenticationSession(value) => Some(value.principal_id),
         AuthoritativeCommand::StepUpAuthenticationSession(value) => Some(value.principal_id),
         _ => None,
@@ -419,7 +420,7 @@ fn authorise(
     )
 }
 
-fn require_system_administrator(
+pub(super) fn require_system_administrator(
     transaction: &Transaction<'_>,
     principal_id: PrincipalId,
     now: i64,
@@ -1045,6 +1046,9 @@ fn is_identity_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::ActivateGrant(_)
             | AuthoritativeCommand::ActivateGroup(_)
             | AuthoritativeCommand::RevokeAccessActivation(_)
+            | AuthoritativeCommand::IssueUserEnrollment(_)
+            | AuthoritativeCommand::RevokeUserEnrollment(_)
+            | AuthoritativeCommand::RedeemUserEnrollment(_)
             | AuthoritativeCommand::CreateAuthenticationMethod(_)
             | AuthoritativeCommand::ConfigureAuthenticationPolicy(_)
             | AuthoritativeCommand::RevokeAuthenticationMethod(_)
@@ -1100,6 +1104,15 @@ fn execute_identity_command(
         }
         AuthoritativeCommand::RevokeAccessActivation(value) => {
             identity::revoke_access_activation(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::IssueUserEnrollment(value) => {
+            user_enrollment::issue(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::RevokeUserEnrollment(value) => {
+            user_enrollment::revoke(transaction, context, value, revision)
+        }
+        AuthoritativeCommand::RedeemUserEnrollment(value) => {
+            user_enrollment::redeem(transaction, context, value, revision)
         }
         AuthoritativeCommand::CreateAuthenticationMethod(value) => {
             authentication_method_creation::create(transaction, context, value, revision)
@@ -1409,6 +1422,9 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::RevokeAuthenticationSession(_) => 46,
         AuthoritativeCommand::StepUpAuthenticationSession(_) => 81,
         AuthoritativeCommand::CreateAuthenticationMethod(_) => 74,
+        AuthoritativeCommand::IssueUserEnrollment(_) => 163,
+        AuthoritativeCommand::RevokeUserEnrollment(_) => 164,
+        AuthoritativeCommand::RedeemUserEnrollment(_) => 165,
         AuthoritativeCommand::RevokeAuthenticationMethod(_) => 75,
         AuthoritativeCommand::ConfigureAuthenticationPolicy(_) => 76,
         AuthoritativeCommand::SetObjectGrantInheritance(_) => 47,

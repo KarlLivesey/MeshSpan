@@ -11,6 +11,10 @@ pub use backup_publication_intent::{
 };
 mod federated_backup_route;
 pub use federated_backup_route::{BindFederatedBackupRoute, FederatedBackupRouteRecord};
+mod user_enrollment_command;
+pub use user_enrollment_command::{
+    IssueUserEnrollment, RedeemUserEnrollment, RevokeUserEnrollment,
+};
 mod command;
 mod command_codec;
 mod database;
@@ -358,3 +362,5 @@ pub use repository::{
     run_repository_conformance,
 };
 pub use repository::{FederationPairingInvitationRecord, FederationPairingInvitationState};
+
+pub use repository::{UserEnrollmentRecord, UserEnrollmentRedemption, UserEnrollmentState};

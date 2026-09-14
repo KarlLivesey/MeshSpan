@@ -14,10 +14,10 @@ mod http01;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 117;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 118;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 16;
 
-const PARTITION_MIGRATIONS: [Migration; 117] = [
+const PARTITION_MIGRATIONS: [Migration; 118] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -483,8 +483,12 @@ const PARTITION_MIGRATIONS: [Migration; 117] = [
         sql: include_str!("../schema/partition/116_recovery_consensus_permission.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 117,
         sql: include_str!("../schema/partition/117_recovery_consensus_activation.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/118_user_enrollments.sql"),
     },
 ];
 

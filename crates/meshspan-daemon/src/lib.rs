@@ -953,3 +953,11 @@ impl RandomSource for OperatingSystemRandom {
 }
 #[cfg(test)]
 mod bootstrap_test_support;
+
+mod user_enrollment;
+pub use user_enrollment::{
+    ProtectedUserEnrollmentController, UserEnrollmentAuthority, UserEnrollmentController,
+    UserEnrollmentError, UserEnrollmentService,
+};
+
+pub use user_enrollment::{UserEnrollmentApiError, user_enrollment_api_router};

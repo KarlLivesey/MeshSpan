@@ -54,6 +54,12 @@ function readSessionRoutes(operations) {
 
 function readAuthenticationRoutes(operations) {
   return {
+    issueUserEnrollment: requireOperation(operations, "issueUserEnrollment"),
+    revokeUserEnrollment: requireOperation(operations, "revokeUserEnrollment"),
+    redeemUserEnrollmentApiKey: requireOperation(
+      operations,
+      "redeemUserEnrollmentApiKey",
+    ),
     createCurrentUserApiKey: requireOperation(
       operations,
       "createCurrentUserApiKey",

@@ -1708,6 +1708,24 @@ fn credential_management_routes(
     private_network: &Arc<PrivateConsensusRuntime>,
 ) -> Result<Router, DaemonProcessError> {
     Ok(Router::new()
+        .merge(crate::user_enrollment_api_router(
+            crate::ProtectedUserEnrollmentController::new(
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                open_authentication_authority(
+                    local_state,
+                    authority,
+                    Arc::clone(private_network),
+                    now,
+                )?,
+                local_state.open_wrapping_key()?,
+                gateway,
+            ),
+        )?)
         .merge(api_key_issuance_api_router(
             ProtectedApiKeyIssuanceController::new(
                 open_authentication_authority(
@@ -4406,6 +4424,9 @@ pub enum DaemonProcessError {
     /// Session step-up API construction failed.
     #[error("daemon session step-up API failed")]
     StepUpSessionApi(#[from] StepUpCurrentSessionApiError),
+    /// First-credential enrollment API construction failed.
+    #[error("daemon user enrollment API failed")]
+    UserEnrollmentApi(#[from] crate::UserEnrollmentApiError),
     /// Current-user API-key issuance construction failed.
     #[error("daemon API-key issuance API failed")]
     ApiKeyIssuanceApi(#[from] ApiKeyIssuanceApiError),

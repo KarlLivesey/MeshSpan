@@ -55,6 +55,7 @@ use crate::{
     RevokeFederationGrantAssignmentActivation,
 };
 use crate::{IssueFederationStorageAllocation, RevokeFederationStorageAllocation};
+use crate::{IssueUserEnrollment, RedeemUserEnrollment, RevokeUserEnrollment};
 use crate::{
     ResolveFederatedMutationQuarantine, RetainFederatedMutationQuarantine,
     SurfaceFederatedMutationQuarantine,
@@ -184,6 +185,12 @@ pub enum AuthoritativeCommand {
     RevokeAccessActivation(RevokeAccessActivation),
     /// Creates one typed authentication method without persisting plaintext credentials.
     CreateAuthenticationMethod(CreateAuthenticationMethod),
+    /// Manager-issued capability for the first primary user credential.
+    IssueUserEnrollment(IssueUserEnrollment),
+    /// Revocation of invitation use, including secret-bearing exact replay.
+    RevokeUserEnrollment(RevokeUserEnrollment),
+    /// Atomic invitation consumption and ordinary primary credential creation.
+    RedeemUserEnrollment(RedeemUserEnrollment),
     /// Appends and selects one immutable service/operation authentication policy.
     ConfigureAuthenticationPolicy(ConfigureAuthenticationPolicy),
     /// Revokes one exact authentication method immediately.
@@ -466,6 +473,9 @@ impl AuthoritativeCommand {
             Self::ActivateGroup(value) => value.update_digest(digest),
             Self::RevokeAccessActivation(value) => value.update_digest(digest),
             Self::CreateAuthenticationMethod(value) => value.update_digest(digest),
+            Self::IssueUserEnrollment(value) => value.update_digest(digest),
+            Self::RevokeUserEnrollment(value) => value.update_digest(digest),
+            Self::RedeemUserEnrollment(value) => value.update_digest(digest),
             Self::ConfigureAuthenticationPolicy(value) => value.update_digest(digest),
             Self::RevokeAuthenticationMethod(value) => value.update_digest(digest),
             Self::IssueAuthenticationSession(value) => value.update_digest(digest),
@@ -2736,6 +2746,16 @@ macro_rules! digest_simple_record {
         }
     };
 }
+
+digest_simple_record!(
+    RedeemUserEnrollment,
+    b"redeem-user-enrollment-v1",
+    |value, digest| {
+        digest.identifier(value.enrollment_operation_id.as_bytes());
+        digest.bytes(&value.token_digest);
+        value.method.update_digest(digest);
+    }
+);
 
 digest_simple_record!(
     crate::StageNodeCertificate,

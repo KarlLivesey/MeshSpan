@@ -15,6 +15,11 @@ import type {
   CommitUploadResponse,
   CreateApiKeyRequest,
   CreateApiKeyResponse,
+  IssueUserEnrollmentRequest,
+  IssueUserEnrollmentResponse,
+  RevokeUserEnrollmentRequest,
+  RevokeUserEnrollmentResponse,
+  RedeemUserEnrollmentApiKeyRequestWritable,
   CreateDirectoryRequest,
   CreateDirectoryResponse,
   CreateFaultGroupRequest,
@@ -132,6 +137,14 @@ import type {
   WriteUploadRangeResponse,
 } from "./types.gen";
 import {
+  zIssueUserEnrollmentBody,
+  zIssueUserEnrollmentPath,
+  zIssueUserEnrollmentResponse2,
+  zRevokeUserEnrollmentBody,
+  zRevokeUserEnrollmentPath,
+  zRevokeUserEnrollmentResponse2,
+  zRedeemUserEnrollmentApiKeyBody,
+  zRedeemUserEnrollmentApiKeyResponse,
   zAbortUploadBody,
   zAbortUploadPath,
   zAbortUploadResponse2,
@@ -488,6 +501,19 @@ export interface MeshSpanFetchClient {
     request: StepUpCurrentSessionRequestWritable,
     csrfToken: string,
   ): Promise<CreateSessionResult>;
+  issueUserEnrollment(
+    principalId: string,
+    request: IssueUserEnrollmentRequest,
+    csrfToken: string,
+  ): Promise<IssueUserEnrollmentResponse>;
+  revokeUserEnrollment(
+    enrollmentOperationId: string,
+    request: RevokeUserEnrollmentRequest,
+    csrfToken: string,
+  ): Promise<RevokeUserEnrollmentResponse>;
+  redeemUserEnrollmentApiKey(
+    request: RedeemUserEnrollmentApiKeyRequestWritable,
+  ): Promise<CreateApiKeyResponse>;
   getCertificateStatus(): Promise<CertificateStatusResponse>;
   listManualDnsTasks(
     request?: ListManualDnsTasksRequest,
@@ -989,6 +1015,67 @@ export function createMeshSpanFetchClient(
         csrfToken: readCsrfToken(response.headers),
         session: response.body,
       };
+    },
+    async issueUserEnrollment(
+      principalId,
+      request,
+      csrfToken,
+    ): Promise<IssueUserEnrollmentResponse> {
+      const path = zIssueUserEnrollmentPath.parse({
+        principal_id: principalId,
+      });
+      const body = zIssueUserEnrollmentBody.parse(request);
+      return requestJson(
+        context,
+        substitutePathParameter(
+          "/admin/identities/users/{principal_id}/enrollments",
+          "principal_id",
+          path.principal_id,
+        ),
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zIssueUserEnrollmentResponse2,
+      );
+    },
+    async revokeUserEnrollment(
+      enrollmentOperationId,
+      request,
+      csrfToken,
+    ): Promise<RevokeUserEnrollmentResponse> {
+      const path = zRevokeUserEnrollmentPath.parse({
+        enrollment_operation_id: enrollmentOperationId,
+      });
+      const body = zRevokeUserEnrollmentBody.parse(request);
+      return requestJson(
+        context,
+        substitutePathParameter(
+          "/admin/identities/user-enrollments/{enrollment_operation_id}/revocations",
+          "enrollment_operation_id",
+          path.enrollment_operation_id,
+        ),
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zRevokeUserEnrollmentResponse2,
+      );
+    },
+    async redeemUserEnrollmentApiKey(request): Promise<CreateApiKeyResponse> {
+      const body = zRedeemUserEnrollmentApiKeyBody.parse(request);
+      return requestJson(
+        context,
+        "/user-enrollments/api-keys",
+        {
+          body: JSON.stringify(body),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+        zRedeemUserEnrollmentApiKeyResponse,
+      );
     },
     async getCertificateStatus(): Promise<CertificateStatusResponse> {
       return requestJson(

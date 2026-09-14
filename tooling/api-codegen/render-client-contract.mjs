@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+import { renderUserEnrollmentClientInterface } from "./render-user-enrollment-client.mjs";
 import { renderAuthenticationClientInterface } from "./render-authentication-client.mjs";
 import { renderBackupScheduleClientInterface } from "./render-backup-schedule-client.mjs";
 import { renderFederationClientInterface } from "./render-federation-client.mjs";
@@ -125,6 +126,7 @@ export type CreateSessionResult = Readonly<{
 function renderClientInterface() {
   return `export interface MeshSpanFetchClient {
   ${renderAuthenticationClientInterface()}
+  ${renderUserEnrollmentClientInterface()}
   ${renderCertificateClientInterface()}
   ${renderBackupScheduleClientInterface()}
   ${renderFederationClientInterface()}

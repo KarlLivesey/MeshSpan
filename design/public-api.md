@@ -138,6 +138,21 @@ Credentials never appear in URLs. Additional authentication handlers may be
 added later without changing endpoint domain semantics. Passwords, user client
 certificates and service-specific duplicate credential kinds are absent.
 
+A manager can grant short-lived consent for an existing active user's first
+primary credential. Issuance and revocation require current manager authority,
+recent step-up and browser CSRF. The distinct enrollment token is supplied only
+in an anonymous JSON redemption body; it is never a login credential or URL
+parameter. Redemption atomically consumes that consent and creates the recipient's
+ordinary API-key method. It grants no manager role or file permissions.
+
+Only the same operation and canonical request may recover the secret-bearing
+result. Fresh authoritative reads and current time are required before returning
+an invitation or credential, including replay: expiry, revocation, suspended
+identity or unavailable freshness prevent secret release. Invitation revocation
+stops further use and recovery; a method already created has its separate
+revocation lifecycle. These API-key enrollment routes do not yet establish the
+first-passkey or complete browser onboarding acceptance.
+
 Processing rejects cheap failures before expensive work:
 
 1. connection/header/declared-body bounds;

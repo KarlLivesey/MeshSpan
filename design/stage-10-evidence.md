@@ -47,6 +47,41 @@ integration gate has not run on this slice. Stage 10/11 estimates remain 81/126;
 physical, interoperability, soak and independent-review gates are not claimed.
 The publication hold remains in force.
 
+### ACC-01 — native first API-key enrollment and generated client
+
+A recent-step-up manager can issue and revoke short-lived consent for an active
+user's first primary credential. Anonymous JSON redemption creates that user's
+ordinary API key and consumes the invitation atomically. Partition migration
+**118** persists digest-only consent. Exact replay is bound to the operation,
+recipient, credential request and live consent; a second operation is rejected.
+The public API and generated Zod/Fetch client expose all three operations.
+
+Review found two secret-release defects before integration: a locally retained
+receipt could bypass authoritative revocation during isolation, and a capability
+could expire while its command committed. Both new regressions failed before the
+fix (**2 failed, 2 passed; 2.70 s**, daemon build **71 s**). Enrollment now obtains
+fresh quorum read fences and checks exact local applied history before secret
+release, sampling time after synchronization. Final file-backed daemon service
+tests: **4 passed, 2.67 s**, consumer build **72 s**. Migration compatibility through
+118: **1 passed, 49.07 s**, build **15.56 s**. Earlier focused domain/metadata/API
+checks passed **1/7/2 tests**. Rejection, unavailable authority and corrupt evidence
+retain their distinct error classifications.
+
+The client regressions initially found all three methods absent (**4 failed,
+0.714 s**). The final enrollment and existing authentication suites passed
+**13 tests, 0.473 s**, with two Vitest workers under NVM. Typecheck passed.
+Full web lint initially found one oversized test group; separating manager and
+recipient cases resolved it, and the affected-file lint passed. Generated API
+artifacts were regenerated from Rust; the native Fetch generator was extended.
+
+This is a progress checkpoint, not completed onboarding acceptance. The real
+HTTPS two-user/restart test is authored but not yet run; browser and first-passkey
+flows remain. Integration review also identified the need to accept existing
+version-18 log entries alongside newly written version 19; its driver regression
+and fix are in progress. That issue and the complete dependency-update gate must
+be resolved before integration. No migration, hardware or full-suite result is
+inferred from these focused checks.
+
 ### CORE-02 — bounded batches and shared immutable log payloads
 
 The two new core regressions failed before the fix: two legal 9 MiB entries

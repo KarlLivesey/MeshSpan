@@ -2,6 +2,18 @@
 
 //! Authoritative public API models, schemas, and trust-boundary validation.
 
+mod user_enrollment;
+mod user_enrollment_validation;
+pub use user_enrollment::{
+    EnrollmentApiKeyScope, IssueUserEnrollmentRequest, IssueUserEnrollmentResponse,
+    RedeemUserEnrollmentApiKeyRequest, RevokeUserEnrollmentRequest, RevokeUserEnrollmentResponse,
+};
+pub use user_enrollment_validation::{
+    MAX_USER_ENROLLMENT_REQUEST_BYTES, decode_issue_user_enrollment_request,
+    decode_redeem_user_enrollment_api_key_request, decode_revoke_user_enrollment_request,
+    encode_issue_user_enrollment_response, encode_revoke_user_enrollment_response,
+};
+
 mod recovery_installation;
 mod recovery_state_installation;
 pub use recovery_state_installation::decode_recovery_state_installation_signature;

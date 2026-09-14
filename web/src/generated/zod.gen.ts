@@ -4009,6 +4009,53 @@ export const zHealthResponse = z
   .strict();
 
 /**
+ * IssueUserEnrollmentRequest
+ *
+ * Recent-step-up manager consent for one active user's first primary method.
+ */
+export const zIssueUserEnrollmentRequest = z
+  .strictObject({
+    expected_principal_revision: z.int().gte(1).lte(9007199254740991),
+    expires_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * IssueUserEnrollmentResponse
+ *
+ * Secret-bearing committed invitation, recoverable only during its live capability window.
+ */
+export const zIssueUserEnrollmentResponse = z
+  .strictObject({
+    committed_revision: z.int().gte(1).lte(9007199254740991),
+    expires_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    principal_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    token: z
+      .string()
+      .length(125)
+      .regex(/^meshspan-user-enrollment-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .readonly(),
+  })
+  .strict();
+
+/**
  * JoinMeshSetupRequest
  *
  * One exact request to join an existing mesh from an unclaimed daemon.
@@ -6567,6 +6614,32 @@ export const zPublishSmbExportResponse = z
   .strict();
 
 /**
+ * RedeemUserEnrollmentApiKeyRequest
+ *
+ * Anonymous capability redemption into a normal independently revocable API key.
+ */
+export const zRedeemUserEnrollmentApiKeyRequest = z
+  .strictObject({
+    expires_at_epoch_micros: z.int().gte(0).lte(9007199254740991).nullable(),
+    label: z
+      .string()
+      .min(1)
+      .max(80)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    scopes: z
+      .array(z.union([z.literal("https_session"), z.literal("headless_api")]))
+      .min(1)
+      .max(2),
+  })
+  .strict();
+
+/**
  * RegisterStorageFolderRequest
  *
  * Exact-retry manager request to register one existing local folder.
@@ -6924,6 +6997,46 @@ export const zRevokePermissionGrantResponse = z
       ),
     revision: z.int().gte(1).lte(9007199254740991),
     revoked_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+  })
+  .strict();
+
+/**
+ * RevokeUserEnrollmentRequest
+ *
+ * Exact manager request to stop invitation use and secret-bearing replay.
+ */
+export const zRevokeUserEnrollmentRequest = z
+  .strictObject({
+    expected_revision: z.int().gte(1).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * RevokeUserEnrollmentResponse
+ *
+ * Committed cancellation; an already-created method remains separately revocable.
+ */
+export const zRevokeUserEnrollmentResponse = z
+  .strictObject({
+    committed_revision: z.int().gte(1).lte(9007199254740991),
+    enrollment_operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
   })
   .strict();
 
@@ -7806,6 +7919,30 @@ export const zEnrolNodeRequestWritable = z
   .strict();
 
 /**
+ * IssueUserEnrollmentResponse
+ *
+ * Secret-bearing committed invitation, recoverable only during its live capability window.
+ */
+export const zIssueUserEnrollmentResponseWritable = z
+  .strictObject({
+    committed_revision: z.int().gte(1).lte(9007199254740991),
+    expires_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    principal_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * JoinMeshSetupRequest
  *
  * One exact request to join an existing mesh from an unclaimed daemon.
@@ -7837,6 +7974,36 @@ export const zJoinMeshSetupRequestWritable = z
       .regex(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       ),
+  })
+  .strict();
+
+/**
+ * RedeemUserEnrollmentApiKeyRequest
+ *
+ * Anonymous capability redemption into a normal independently revocable API key.
+ */
+export const zRedeemUserEnrollmentApiKeyRequestWritable = z
+  .strictObject({
+    expires_at_epoch_micros: z.int().gte(0).lte(9007199254740991).nullable(),
+    label: z
+      .string()
+      .min(1)
+      .max(80)
+      .regex(/^[^\x00-\x1f\x7f]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    scopes: z
+      .array(z.union([z.literal("https_session"), z.literal("headless_api")]))
+      .min(1)
+      .max(2),
+    token: z
+      .string()
+      .length(125)
+      .regex(/^meshspan-user-enrollment-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/),
   })
   .strict();
 
@@ -8324,6 +8491,66 @@ export const zRemoveGroupMemberPath = z
  * Membership durably removed or exactly replayed
  */
 export const zRemoveGroupMemberResponse2 = zRemoveGroupMemberResponse;
+
+/**
+ * Exact manager consent mutation
+ */
+export const zRevokeUserEnrollmentBody = zRevokeUserEnrollmentRequest;
+
+export const zRevokeUserEnrollmentHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+export const zRevokeUserEnrollmentPath = z
+  .object({
+    enrollment_operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Verified committed result
+ */
+export const zRevokeUserEnrollmentResponse2 = zRevokeUserEnrollmentResponse;
+
+/**
+ * Exact manager consent mutation
+ */
+export const zIssueUserEnrollmentBody = zIssueUserEnrollmentRequest;
+
+export const zIssueUserEnrollmentHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+export const zIssueUserEnrollmentPath = z
+  .object({
+    principal_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Verified committed result
+ */
+export const zIssueUserEnrollmentResponse2 = zIssueUserEnrollmentResponse;
 
 export const zListLocalityPoliciesQuery = z
   .object({
@@ -9492,6 +9719,17 @@ export const zWriteUploadRangePath = z
  * Durable range acknowledgement and exact resulting checkpoint
  */
 export const zWriteUploadRangeResponse2 = zWriteUploadRangeResponse;
+
+/**
+ * Exact one-use capability redemption
+ */
+export const zRedeemUserEnrollmentApiKeyBody =
+  zRedeemUserEnrollmentApiKeyRequestWritable;
+
+/**
+ * Verified committed result
+ */
+export const zRedeemUserEnrollmentApiKeyResponse = zCreateApiKeyResponse;
 
 export const zListCurrentUserAuthenticationMethodsQuery = z
   .object({

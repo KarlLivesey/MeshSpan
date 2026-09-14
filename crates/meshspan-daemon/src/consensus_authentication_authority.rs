@@ -69,6 +69,15 @@ impl ConsensusAuthenticationAuthority {
         }
     }
 
+    pub(crate) fn refresh_enrollment_read(&self) -> Result<UnixMicros, crate::UserEnrollmentError> {
+        crate::user_enrollment::refresh_enrollment_read(
+            &self.reader,
+            &self.authority,
+            self.network.as_deref(),
+            &self.runtime,
+        )
+    }
+
     pub(crate) const fn reader(&self) -> &AuthoritativeRepository {
         &self.reader
     }

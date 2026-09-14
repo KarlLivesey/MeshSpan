@@ -20,6 +20,7 @@ mod external_certificate;
 mod fault_group;
 mod federation;
 mod federation_peer;
+mod user_enrollment;
 pub use federation_peer::{decode_federation_pairing_peer, encode_federation_pairing_peer};
 mod identity;
 mod locality_policy;
@@ -50,7 +51,7 @@ use self::encoder::Encoder;
 use crate::{AuthoritativeCommand, CommandContext};
 
 /// Current closed metadata-command wire format.
-pub const METADATA_COMMAND_VERSION: u16 = 18;
+pub const METADATA_COMMAND_VERSION: u16 = 19;
 
 const MAGIC: [u8; 4] = *b"MSC\x04";
 const MAXIMUM_COMMAND_BYTES: usize = 1024 * 1024;
@@ -155,6 +156,15 @@ fn encode_command(
         }
         AuthoritativeCommand::RevokePermissionGrant(value) => {
             identity::encode_revoke_permission(encoder, value)
+        }
+        AuthoritativeCommand::IssueUserEnrollment(value) => {
+            user_enrollment::encode_issue(encoder, value)
+        }
+        AuthoritativeCommand::RevokeUserEnrollment(value) => {
+            user_enrollment::encode_revoke(encoder, value)
+        }
+        AuthoritativeCommand::RedeemUserEnrollment(value) => {
+            user_enrollment::encode_redeem(encoder, value)
         }
         AuthoritativeCommand::CreateAuthenticationMethod(value) => {
             authentication::encode_create(encoder, value)
@@ -294,6 +304,7 @@ fn decode_command(
         return Ok(command);
     }
     match kind {
+        user_enrollment::ISSUE..=user_enrollment::REDEEM => user_enrollment::decode(kind, decoder),
         update::CONFIGURE..=update::PUBLISH_ARTIFACT => update::decode(kind, decoder),
         notification::CONFIGURE..=notification::COMPLETE => notification::decode(kind, decoder),
         metrics_exporter::CONFIGURE_METRICS_EXPORTER => {
