@@ -244,7 +244,9 @@ fn capacity_seal_migrates_v14_without_discarding_pending_backup_charges() -> Tes
     drop(connection);
 
     let mut migrated = LocalDatabase::open_existing(&legacy_path, UnixMicros::new(16))?;
-    assert_eq!(migrated.check_integrity()?.schema_version, 15);
+    // Opening the v14 fixture also applies v16 recovered-target metadata;
+    // the v15 capacity seal must preserve the existing reservation through both.
+    assert_eq!(migrated.check_integrity()?.schema_version, 16);
     let sealed = migrated.seal_federated_storage_capacity(authority)?;
     assert_eq!((sealed.ceiling_bytes, sealed.sequence), (20, 1));
     assert_eq!(

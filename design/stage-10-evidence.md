@@ -515,6 +515,35 @@ Workspace Rust formatting and diff checks passed. These checks include removal
 of the temporary diagnostic; no production edit followed the successful paired
 proof. The complete local integration gate is still required before merge.
 
+### Tasks 10/27 — complete gate reaches two stale metadata fixtures
+
+Signed commit **bc581f7d23f39cb92be11b3642a32090156162fa** was pushed and
+verified locally and by GitHub (`verified: true`, `valid`). PR #270 remains draft.
+Its complete NVM local gate failed in **1283.52 s**, with four workers and
+private disk-backed temporary storage. Log:
+`/tmp/meshspan-stage10-publication-confirmation-integration.log`.
+
+The gate passed generated drift, embedded web, workspace formatting, Rust and
+web lint, TypeScript, both dependency licence checks, tooling and web tests.
+All **440 daemon library tests passed in 44.77 s**, all **30 enabled headless
+tests passed in 492.20 s** (11 ignored), and all **225 filesystem tests passed in 46.23 s**.
+The later metadata library reached **560 passes / 2 failures in 417.03 s**;
+subsequent Rust targets were not reached. Earlier unexplained timing failures
+remain recorded; this pass is not their explanation.
+
+Both metadata failures reproduced together in **3.52 s**. The backup-root
+fixture claimed schema 109 while retaining recovery objects from migrations
+116–117. Its existing downgrade now removes those two tables and the activation
+column before reopening; production migrations are unchanged. The v14 quota
+fixture expected schema 15 although the current reader also applies migration 16. Its explicit expectation now includes that recovered-target migration,
+while retaining exact pending charge, seal, replay and committed-usage checks.
+Both corrected tests passed in **2.90 s**, build **7.12 s**. All **22 neighbouring
+backup-root/quota tests passed in 22.67 s**; metadata all-target/all-feature Clippy
+passed in **32.86 s**, warnings denied. Rust/document formatting and diff checks
+passed before the signed progress commit.
+No schema, wire, dependency or production behaviour changed in these two fixes.
+The complete integration gate is still failed; nothing has merged or published.
+
 ### Full local gate — failed; no integration
 
 `MESHSPAN_CHECK_WORKERS=4 CARGO_BUILD_JOBS=4 pnpm check`, under the configured NVM
