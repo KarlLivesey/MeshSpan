@@ -69,6 +69,7 @@ fn leadership_loss_redirects_pending_and_queued_waiters_without_erasing_durable_
         from: peer,
         sender_incarnation: 1,
         message: CoreMessage::AppendRequest(AppendRequest {
+            probe_id: meshspan_consensus::AppendProbeId(1),
             term: 2,
             leader: peer,
             leader_incarnation: 1,

@@ -7,11 +7,11 @@ use std::io;
 use meshspan_domain::{NodeId, OperationId, PartitionId, QuorumPlanId};
 
 use super::{
-    AppendRequest, AppendResponse, ConsensusCore, CoreConfig, CoreEffect, CoreError, CoreInput,
-    CoreMessage, LogEntry, LogPosition, MemberIncarnations, PersistenceId, ProposalId,
+    AppendProbeId, AppendRequest, AppendResponse, ConsensusCore, CoreConfig, CoreEffect, CoreError,
+    CoreInput, CoreMessage, LogEntry, LogPosition, MemberIncarnations, PersistenceId, ProposalId,
     ReadBarrierId, Role, VoteResponse,
 };
-use crate::{JointQuorumPlan, compile_plan, flat_plan};
+use crate::{DurableCoreState, JointQuorumPlan, compile_plan, flat_plan};
 
 mod append_proof;
 mod membership_loss;
@@ -29,6 +29,8 @@ fn cancelled_read_barriers_release_core_capacity_without_success() -> Result<(),
     let effects = core.step(message(
         2,
         CoreMessage::AppendResponse(AppendResponse {
+            probe_id: Some(AppendProbeId(1)),
+            matched_digest: [0; 32],
             term: 1,
             accepted: false,
             matched_index: 0,
@@ -80,18 +82,10 @@ fn term_confirmation_is_a_fixed_durable_log_entry_not_arbitrary_metadata()
 fn newly_elected_leader_cannot_complete_read_before_committing_its_term()
 -> Result<(), Box<dyn Error>> {
     let mut core = elected_core(3, 2)?;
-    core.step(CoreInput::BeginReadBarrier(ReadBarrierId(99)))?;
+    let effects = core.step(CoreInput::BeginReadBarrier(ReadBarrierId(99)))?;
     let effects = core.step(message(
         2,
-        CoreMessage::AppendResponse(AppendResponse {
-            term: 1,
-            accepted: false,
-            matched_index: 0,
-            next_index_hint: 1,
-            read_barrier_id: Some(ReadBarrierId(99)),
-            membership_epoch: 1,
-            plan_digest: fixture_plan_digest()?,
-        }),
+        CoreMessage::AppendResponse(reply_to(&effects, 2, false)?),
     )?)?;
     assert!(
         !effects
@@ -101,18 +95,7 @@ fn newly_elected_leader_cannot_complete_read_before_committing_its_term()
     let persistence =
         only_persistence_id(&core.step(proposal(1, b"term confirmation".to_vec())?)?)?;
     core.step(CoreInput::Persisted(persistence))?;
-    let effects = core.step(message(
-        2,
-        CoreMessage::AppendResponse(AppendResponse {
-            term: 1,
-            accepted: true,
-            matched_index: 1,
-            next_index_hint: 2,
-            read_barrier_id: None,
-            membership_epoch: 1,
-            plan_digest: fixture_plan_digest()?,
-        }),
-    )?)?;
+    let effects = acknowledge(&mut core, 2)?;
     assert!(
         !effects
             .iter()
@@ -202,18 +185,7 @@ fn three_voters_require_peer_election_and_commit_acknowledgements() -> Result<()
             .any(|effect| matches!(effect, CoreEffect::CommitReady { .. }))
     );
 
-    let effects = core.step(message(
-        2,
-        CoreMessage::AppendResponse(AppendResponse {
-            term: 1,
-            accepted: true,
-            matched_index: 1,
-            next_index_hint: 2,
-            read_barrier_id: None,
-            membership_epoch: 1,
-            plan_digest: fixture_plan_digest()?,
-        }),
-    )?)?;
+    let effects = acknowledge(&mut core, 2)?;
     assert_eq!(core.commit_index(), 1);
     assert!(matches!(
         effects.as_slice(),
@@ -235,18 +207,7 @@ fn four_voters_elect_with_three_and_commit_with_two() -> Result<(), Box<dyn Erro
     let persistence_id = only_persistence_id(&core.step(proposal(1, b"write".to_vec())?)?)?;
     core.step(CoreInput::Persisted(persistence_id))?;
     assert_eq!(core.commit_index(), 0);
-    core.step(message(
-        4,
-        CoreMessage::AppendResponse(AppendResponse {
-            term: 1,
-            accepted: true,
-            matched_index: 1,
-            next_index_hint: 2,
-            read_barrier_id: None,
-            membership_epoch: 1,
-            plan_digest,
-        }),
-    )?)?;
+    acknowledge(&mut core, 4)?;
     assert_eq!(core.commit_index(), 1);
     Ok(())
 }
@@ -295,6 +256,8 @@ fn higher_term_is_persisted_before_step_down() -> Result<(), Box<dyn Error>> {
     let effects = core.step(message(
         2,
         CoreMessage::AppendResponse(AppendResponse {
+            probe_id: Some(AppendProbeId(1)),
+            matched_digest: [0; 32],
             term: 2,
             accepted: false,
             matched_index: 0,
@@ -327,18 +290,7 @@ fn read_barrier_requires_current_read_quorum_response() -> Result<(), Box<dyn Er
     let persistence =
         only_persistence_id(&core.step(proposal(1, b"term confirmation".to_vec())?)?)?;
     core.step(CoreInput::Persisted(persistence))?;
-    core.step(message(
-        2,
-        CoreMessage::AppendResponse(AppendResponse {
-            term: 1,
-            accepted: true,
-            matched_index: 1,
-            next_index_hint: 2,
-            read_barrier_id: None,
-            membership_epoch: 1,
-            plan_digest: fixture_plan_digest()?,
-        }),
-    )?)?;
+    acknowledge(&mut core, 2)?;
     core.step(CoreInput::AppliedThrough(1))?;
     let read_barrier_id = ReadBarrierId(41);
     let effects = core.step(CoreInput::BeginReadBarrier(read_barrier_id))?;
@@ -356,15 +308,7 @@ fn read_barrier_requires_current_read_quorum_response() -> Result<(), Box<dyn Er
 
     let effects = core.step(message(
         2,
-        CoreMessage::AppendResponse(AppendResponse {
-            term: 1,
-            accepted: false,
-            matched_index: 0,
-            next_index_hint: 2,
-            read_barrier_id: Some(read_barrier_id),
-            membership_epoch: 1,
-            plan_digest: fixture_plan_digest()?,
-        }),
+        CoreMessage::AppendResponse(reply_to(&effects, 2, false)?),
     )?)?;
     assert!(matches!(
         effects.as_slice(),
@@ -381,32 +325,13 @@ fn read_barrier_waits_for_local_state_machine_application() -> Result<(), Box<dy
     let mut core = elected_core(3, 2)?;
     let persistence_id = only_persistence_id(&core.step(proposal(1, b"write".to_vec())?)?)?;
     core.step(CoreInput::Persisted(persistence_id))?;
-    core.step(message(
-        2,
-        CoreMessage::AppendResponse(AppendResponse {
-            term: 1,
-            accepted: true,
-            matched_index: 1,
-            next_index_hint: 2,
-            read_barrier_id: None,
-            membership_epoch: 1,
-            plan_digest: fixture_plan_digest()?,
-        }),
-    )?)?;
+    acknowledge(&mut core, 2)?;
 
     let read_barrier_id = ReadBarrierId(42);
-    core.step(CoreInput::BeginReadBarrier(read_barrier_id))?;
+    let effects = core.step(CoreInput::BeginReadBarrier(read_barrier_id))?;
     let effects = core.step(message(
         2,
-        CoreMessage::AppendResponse(AppendResponse {
-            term: 1,
-            accepted: true,
-            matched_index: 1,
-            next_index_hint: 2,
-            read_barrier_id: Some(read_barrier_id),
-            membership_epoch: 1,
-            plan_digest: fixture_plan_digest()?,
-        }),
+        CoreMessage::AppendResponse(reply_to(&effects, 2, true)?),
     )?)?;
     assert!(effects.is_empty());
 
@@ -456,18 +381,7 @@ fn conflicting_uncommitted_tail_is_replaced_but_committed_tail_is_protected()
     follower.step(vote_with_term(3, 3, true)?)?;
     let persistence_id = only_persistence_id(&follower.step(proposal(3, b"committed".to_vec())?)?)?;
     follower.step(CoreInput::Persisted(persistence_id))?;
-    follower.step(message(
-        2,
-        CoreMessage::AppendResponse(AppendResponse {
-            term: 3,
-            accepted: true,
-            matched_index: 2,
-            next_index_hint: 3,
-            read_barrier_id: None,
-            membership_epoch: 1,
-            plan_digest: fixture_plan_digest()?,
-        }),
-    )?)?;
+    acknowledge(&mut follower, 2)?;
     assert_eq!(follower.commit_index(), 2);
 
     let invalid = LogEntry::new(
@@ -634,6 +548,18 @@ fn membership_admission_fixture() -> Result<MembershipAdmissionFixture, Box<dyn 
 }
 
 fn core(voter_count: u8) -> Result<ConsensusCore, Box<dyn Error>> {
+    core_for_node(voter_count, 1)
+}
+
+fn core_for_node(voter_count: u8, local: u8) -> Result<ConsensusCore, Box<dyn Error>> {
+    restore_core(voter_count, local, DurableCoreState::default())
+}
+
+fn restore_core(
+    voter_count: u8,
+    local: u8,
+    durable: DurableCoreState,
+) -> Result<ConsensusCore, Box<dyn Error>> {
     let voters = (1..=voter_count)
         .map(node)
         .collect::<Result<BTreeSet<_>, _>>()?;
@@ -647,13 +573,16 @@ fn core(voter_count: u8) -> Result<ConsensusCore, Box<dyn Error>> {
         voters.iter().copied().map(|member| (member, 1)).collect(),
         &plan,
     )?;
-    Ok(ConsensusCore::new(CoreConfig {
-        partition_id: PartitionId::from_bytes([80; 16])?,
-        local_node_id: node(1)?,
-        local_incarnation: 1,
-        plan,
-        member_incarnations,
-    })?)
+    Ok(ConsensusCore::restore(
+        CoreConfig {
+            partition_id: PartitionId::from_bytes([80; 16])?,
+            local_node_id: node(local)?,
+            local_incarnation: 1,
+            plan,
+            member_incarnations,
+        },
+        durable,
+    )?)
 }
 
 fn elected_core(voter_count: u8, peer: u8) -> Result<ConsensusCore, Box<dyn Error>> {
@@ -669,6 +598,46 @@ fn persist_only_effect(
 ) -> Result<Vec<CoreEffect>, Box<dyn Error>> {
     let persistence_id = only_persistence_id(&core.step(input)?)?;
     Ok(core.step(CoreInput::Persisted(persistence_id))?)
+}
+
+fn acknowledge(core: &mut ConsensusCore, peer: u8) -> Result<Vec<CoreEffect>, Box<dyn Error>> {
+    let response = reply_to(&core.step(CoreInput::Heartbeat)?, peer, true)?;
+    Ok(core.step(message(peer, CoreMessage::AppendResponse(response))?)?)
+}
+
+fn reply_to(
+    effects: &[CoreEffect],
+    peer: u8,
+    accepted: bool,
+) -> Result<AppendResponse, Box<dyn Error>> {
+    let peer = node(peer)?;
+    let request = effects
+        .iter()
+        .find_map(|effect| match effect {
+            CoreEffect::Send {
+                to,
+                message: CoreMessage::AppendRequest(request),
+            } if *to == peer => Some(request),
+            _ => None,
+        })
+        .ok_or_else(|| io::Error::other("missing emitted append probe"))?;
+    let (through, digest) = request
+        .entries
+        .last()
+        .map_or((request.previous, request.previous_digest), |entry| {
+            (entry.position, entry.entry_digest())
+        });
+    Ok(AppendResponse {
+        probe_id: Some(request.probe_id),
+        term: request.term,
+        accepted,
+        matched_index: if accepted { through.index } else { 0 },
+        matched_digest: if accepted { digest } else { [0; 32] },
+        next_index_hint: through.index + 1,
+        read_barrier_id: request.read_barrier_id,
+        membership_epoch: request.membership_epoch,
+        plan_digest: request.plan_digest,
+    })
 }
 
 fn only_persistence_id(effects: &[CoreEffect]) -> Result<PersistenceId, Box<dyn Error>> {
@@ -727,6 +696,7 @@ fn append_after(
     message(
         from,
         CoreMessage::AppendRequest(AppendRequest {
+            probe_id: AppendProbeId(1),
             term,
             leader: sender,
             leader_incarnation: 1,

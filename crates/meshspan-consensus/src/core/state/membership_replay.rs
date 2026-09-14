@@ -100,10 +100,10 @@ impl ConsensusCore {
             .is_err()
             || prefix.committed_index <= self.applied_index
         {
-            return Ok(vec![self.append_response_effect(from, false, None)]);
+            return Ok(vec![self.membership_notice_effect(from)]);
         }
         if !self.position_matches(prefix.previous, prefix.previous_digest) {
-            let mut response = self.append_response_effect(from, false, None);
+            let mut response = self.membership_notice_effect(from);
             if let CoreEffect::Send {
                 message: CoreMessage::AppendResponse(reply),
                 ..
@@ -145,7 +145,7 @@ impl ConsensusCore {
         // Historical evidence does not elect its supplier or erase a newer durable vote.
         self.follow_leader(None);
         let mut effects = self.advance_follower_commit(committed_index.max(self.commit_index))?;
-        effects.push(self.append_response_effect(from, false, None));
+        effects.push(self.membership_notice_effect(from));
         Ok(effects)
     }
 }

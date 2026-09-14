@@ -8,11 +8,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use meshspan_domain::{NodeId, OperationId};
 
+use super::append_probes::{AppendProbes, ProbeResult};
 use super::membership_history::MembershipHistory;
 
 use super::types::{
-    AppendRequest, AppendResponse, CoreConfig, CoreEffect, CoreError, CoreInput, CoreMessage,
-    DurableCoreState, DurableMutation, DurableQuorumPlan, LogEntry, LogPosition,
+    AppendProbeId, AppendRequest, AppendResponse, CoreConfig, CoreEffect, CoreError, CoreInput,
+    CoreMessage, DurableCoreState, DurableMutation, DurableQuorumPlan, LogEntry, LogPosition,
     MemberIncarnations, PersistenceId, ProposalId, ReadBarrierId, Role, VoteRequest, VoteResponse,
     validate_append_entries,
 };
@@ -28,6 +29,7 @@ enum RoleState {
 }
 
 struct LeaderState {
+    probes: BTreeMap<NodeId, AppendProbes>,
     matched: BTreeMap<NodeId, u64>,
     next: BTreeMap<NodeId, u64>,
     read_barriers: BTreeMap<ReadBarrierId, ReadBarrierState>,
@@ -85,6 +87,7 @@ pub struct ConsensusCore {
     role: RoleState,
     pending: Option<PendingPersistence>,
     next_persistence_id: u64,
+    next_append_probe_id: u64,
 }
 
 impl ConsensusCore {
@@ -131,6 +134,7 @@ impl ConsensusCore {
             role: RoleState::Follower,
             pending: None,
             next_persistence_id: 1,
+            next_append_probe_id: 1,
         })
     }
 
@@ -344,7 +348,7 @@ impl ConsensusCore {
         )
     }
 
-    fn heartbeat(&self) -> Result<Vec<CoreEffect>, CoreError> {
+    fn heartbeat(&mut self) -> Result<Vec<CoreEffect>, CoreError> {
         if self.role() != Role::Leader {
             return Err(CoreError::NotLeader);
         }
@@ -394,6 +398,8 @@ impl ConsensusCore {
                 return self.replay_membership_prefix(
                     from,
                     AppendResponse {
+                        probe_id: None,
+                        matched_digest: [0; 32],
                         term: request.term,
                         accepted: false,
                         matched_index: 0,
@@ -408,7 +414,7 @@ impl ConsensusCore {
                     },
                 );
             }
-            return Ok(vec![self.append_response_effect(from, false, None)]);
+            return Ok(vec![self.membership_notice_effect(from)]);
         }
         if request.candidate != from
             || request.candidate_incarnation != self.member_incarnation(from)?
@@ -491,14 +497,12 @@ impl ConsensusCore {
         {
             // A mismatch carries no term, leadership, commit or read authority. Tell the
             // authenticated incumbent which exact phase needs its committed prefix replayed.
-            return Ok(vec![self.append_response_effect(from, false, None)]);
+            return Ok(vec![self.membership_notice_effect(from)]);
         }
         if request.term < self.current_term {
-            return Ok(vec![self.append_response_effect(
-                from,
-                false,
-                request.read_barrier_id,
-            )]);
+            return Ok(vec![
+                self.append_reply_effect(from, self.append_reply(request, false)),
+            ]);
         }
         let previous_matches = self.position_matches(request.previous, request.previous_digest);
         if !previous_matches {
@@ -563,6 +567,11 @@ impl ConsensusCore {
             return self.replay_membership_prefix(from, response);
         }
         if response.term == 0
+            || response.probe_id.is_some_and(|id| id.0 == 0)
+            || (response.probe_id.is_none()
+                && (response.accepted || response.read_barrier_id.is_some()))
+            || (!response.accepted
+                && (response.matched_index != 0 || response.matched_digest != [0; 32]))
             || response.next_index_hint == 0
             || response
                 .read_barrier_id
@@ -581,23 +590,47 @@ impl ConsensusCore {
             let RoleState::Leader(leader) = &mut self.role else {
                 return Ok(Vec::new());
             };
-            if response.accepted {
-                if response.matched_index > last_index {
-                    return Err(CoreError::InvalidInput);
+            let Some(probes) = leader.probes.get_mut(&from) else {
+                return Ok(Vec::new());
+            };
+            let Some(proof) = probes.receive(&response)? else {
+                // A phase notice can request a fresh probe but supplies no write/read evidence.
+                return if response.probe_id.is_none() && !response.accepted {
+                    Ok(vec![self.append_effect(from, None)?])
+                } else {
+                    Ok(Vec::new())
+                };
+            };
+            let matched = leader.matched.get(&from).copied().unwrap_or(0);
+            let next = leader.next.get(&from).copied().unwrap_or(1);
+            match proof {
+                ProbeResult::Matched(index) => {
+                    if index > last_index {
+                        return Err(CoreError::InvalidInput);
+                    }
+                    let matched = matched.max(index);
+                    leader.matched.insert(from, matched);
+                    leader.next.insert(
+                        from,
+                        next.max(matched.checked_add(1).ok_or(CoreError::Exhausted)?),
+                    );
                 }
-                leader.matched.insert(from, response.matched_index);
-                leader.next.insert(
-                    from,
-                    response
-                        .matched_index
-                        .checked_add(1)
-                        .ok_or(CoreError::Exhausted)?,
-                );
-            } else {
-                let last_next = last_index.checked_add(1).ok_or(CoreError::Exhausted)?;
-                leader
-                    .next
-                    .insert(from, response.next_index_hint.min(last_next).max(1));
+                ProbeResult::Conflict {
+                    previous_index,
+                    latest,
+                } => {
+                    if latest && previous_index >= matched {
+                        let floor = matched.checked_add(1).ok_or(CoreError::Exhausted)?;
+                        leader.next.insert(
+                            from,
+                            response
+                                .next_index_hint
+                                .min(previous_index)
+                                .min(next.saturating_sub(1))
+                                .max(floor),
+                        );
+                    }
+                }
             }
             leader.next.get(&from).copied().unwrap_or(1)
         };
@@ -952,6 +985,7 @@ impl ConsensusCore {
             .contains(&self.config.local_node_id);
         if let RoleState::Leader(leader) = &mut self.role {
             leader.read_barriers.clear();
+            leader.probes.clear();
             leader.matched.retain(|member, _| members.contains(member));
             leader.next.retain(|member, _| members.contains(member));
             for member in &members {
@@ -1030,6 +1064,7 @@ impl ConsensusCore {
             next.insert(member, next_index);
         }
         self.role = RoleState::Leader(LeaderState {
+            probes: BTreeMap::new(),
             matched,
             next,
             read_barriers: BTreeMap::new(),
@@ -1140,7 +1175,7 @@ impl ConsensusCore {
     }
 
     fn append_effect(
-        &self,
+        &mut self,
         peer: NodeId,
         read_barrier_id: Option<ReadBarrierId>,
     ) -> Result<CoreEffect, CoreError> {
@@ -1170,20 +1205,30 @@ impl ConsensusCore {
             .take(MAXIMUM_APPEND_ENTRIES)
             .cloned()
             .collect();
+        let request = AppendRequest {
+            probe_id: AppendProbeId(self.next_append_probe_id),
+            term: self.current_term,
+            leader: self.config.local_node_id,
+            leader_incarnation: self.config.local_incarnation,
+            previous,
+            previous_digest,
+            entries,
+            leader_commit_index: self.commit_index,
+            read_barrier_id,
+            membership_epoch: self.active_membership_epoch(),
+            plan_digest: self.active_plan_digest(),
+        };
+        self.next_append_probe_id = self
+            .next_append_probe_id
+            .checked_add(1)
+            .ok_or(CoreError::Exhausted)?;
+        let RoleState::Leader(leader) = &mut self.role else {
+            return Err(CoreError::NotLeader);
+        };
+        leader.probes.entry(peer).or_default().sent(&request);
         Ok(CoreEffect::Send {
             to: peer,
-            message: CoreMessage::AppendRequest(AppendRequest {
-                term: self.current_term,
-                leader: self.config.local_node_id,
-                leader_incarnation: self.config.local_incarnation,
-                previous,
-                previous_digest,
-                entries,
-                leader_commit_index: self.commit_index,
-                read_barrier_id,
-                membership_epoch: self.active_membership_epoch(),
-                plan_digest: self.active_plan_digest(),
-            }),
+            message: CoreMessage::AppendRequest(request),
         })
     }
 
@@ -1268,6 +1313,15 @@ impl ConsensusCore {
             .last()
             .map_or(request.previous.index, |entry| entry.position.index);
         AppendResponse {
+            probe_id: Some(request.probe_id),
+            matched_digest: if accepted {
+                request
+                    .entries
+                    .last()
+                    .map_or(request.previous_digest, LogEntry::entry_digest)
+            } else {
+                [0; 32]
+            },
             term: self.current_term,
             accepted,
             matched_index: if accepted { proven_index } else { 0 },
@@ -1297,23 +1351,19 @@ impl ConsensusCore {
         }
     }
 
-    fn append_response_effect(
-        &self,
-        to: NodeId,
-        accepted: bool,
-        read_barrier_id: Option<ReadBarrierId>,
-    ) -> CoreEffect {
+    fn membership_notice_effect(&self, to: NodeId) -> CoreEffect {
         let last_index = self.last_position().index;
-        let matched_index = if accepted { last_index } else { 0 };
         let next_index_hint = last_index.saturating_add(1).max(1);
         CoreEffect::Send {
             to,
             message: CoreMessage::AppendResponse(AppendResponse {
+                probe_id: None,
+                matched_digest: [0; 32],
                 term: self.current_term,
-                accepted,
-                matched_index,
+                accepted: false,
+                matched_index: 0,
                 next_index_hint,
-                read_barrier_id,
+                read_barrier_id: None,
                 membership_epoch: self.active_membership_epoch(),
                 plan_digest: self.active_plan_digest(),
             }),

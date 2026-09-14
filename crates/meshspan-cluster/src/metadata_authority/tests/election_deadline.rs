@@ -22,6 +22,7 @@ async fn only_accepted_leader_contact_resets_the_election_deadline()
     let deadline = Instant::now();
     runtime.election_deadline = deadline;
     let mut append = meshspan_consensus::AppendRequest {
+        probe_id: meshspan_consensus::AppendProbeId(1),
         term: 1,
         leader: peer,
         leader_incarnation: 1,

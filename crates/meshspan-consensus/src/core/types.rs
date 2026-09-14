@@ -265,9 +265,15 @@ pub struct VoteResponse {
     pub plan_digest: [u8; 32],
 }
 
+/// Nonzero append correlation unique within a leader incarnation, term and membership phase.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct AppendProbeId(pub u64);
+
 /// Leader log replication or heartbeat request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppendRequest {
+    /// Exact outstanding replication probe.
+    pub probe_id: AppendProbeId,
     /// Leader term.
     pub term: u64,
     /// Leader identity.
@@ -293,6 +299,10 @@ pub struct AppendRequest {
 /// Follower replication response.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AppendResponse {
+    /// Exact append probe, absent only for a membership-phase notice.
+    pub probe_id: Option<AppendProbeId>,
+    /// Digest binding the matched index to its exact term and bytes; zero for rejection/genesis.
+    pub matched_digest: [u8; 32],
     /// Responder's durable current term.
     pub term: u64,
     /// Whether previous position/digest and all entries were accepted.
@@ -505,6 +515,7 @@ pub enum CoreError {
 
 pub(super) fn validate_append_entries(request: &AppendRequest) -> Result<(), CoreError> {
     if request.term == 0
+        || request.probe_id.0 == 0
         || !request.previous.is_valid()
         || request.entries.len() > MAXIMUM_APPEND_ENTRIES
         || request

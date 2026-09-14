@@ -122,6 +122,59 @@ still required before integration. NET-01 remains open for RSA interoperability,
 real process issuance/installation and the remaining external acceptance. No
 publication, signature-profile weakening or advisory exclusion occurred.
 
+### CORE-01 — correlated replication proof
+
+After the prefix correction, a focused delayed-response regression still failed:
+a proven peer match of **100** retreated to **64**. The leader now retains at most
+64 outstanding append probes per peer. Replies bind the exact request ID and
+entry digest; accepted progress is monotonic, and only the latest conflict may
+backtrack without crossing established proof. Phase changes and leadership loss
+discard correlations. Unknown, duplicate or evicted probes cannot confirm reads
+or writes. Current-term correlated negative contact can still satisfy the read
+predicate without asserting a log match.
+
+Private wire additions are request probe tag **11**, response probe tag **9**
+and matched digest tag **10**. Successful legacy/missing correlation and malformed
+digests fail closed. Uncorrelated negative membership notices carry no read proof.
+No persisted schema or application command encoding changes in this slice.
+
+The consensus suite passed **38 tests** in **3.80 s**, build **0.93 s**, including
+the 64/100 prefix boundary, finite equal-tail backtracking, delayed success/failure,
+forged digest/read contact and expired probes. Affected consensus Clippy passed
+in **0.59 s**. Protocol correlation **4**, cluster wire **8**, read barrier **4**,
+election deadline **2** and leadership waiter **1** tests passed; cluster/protocol
+all-target/all-feature Clippy passed in **13.77 s**. The real three-node Quinn
+leader-loss/re-election/commit test passed in **4.53 s**, build **5.18 s**.
+The first equal-tail fixture incorrectly attempted an election while already
+leader; correcting that setup is not counted as a production defect reproduction.
+An additional synthetic restore/retransmit regression passed in **0.01 s**
+(build **1.10 s**), covering crashes before/after term persistence without
+claiming physical power-loss evidence. Final consensus Clippy passed in **0.31 s**.
+These checks use four Cargo build/test workers. Final assembled acceptance,
+the separate command-size transport defect (CORE-02), and the complete gate remain
+open; these focused results do not close Stage 3/10/11 acceptance by themselves.
+
+### INT-01 — public service and storage-worker shutdown ownership
+
+Two focused regressions reproduced owned-task leaks: the public supervisor
+returned its first error before a blocking writer completed, and failure to bind
+the public HTTP01 listener left metadata authority running. Shutdown now withdraws
+readiness and signals stop before draining every public-service result. The
+storage reconciler belongs to that JoinSet and observes each blocking tick;
+authority is explicitly stopped and joined after public startup/service failure.
+The primary failure survives alongside a bounded count of cleanup failures.
+
+The final lifecycle suite passed **6 tests** in **5.34 s**, build **34.48 s**;
+daemon all-target/all-feature Clippy passed in **30.21 s**. Formatting/diff checks
+passed. Earlier setup failures (missing storage path, invalid port-zero origin)
+and a divergent generated-protocol worktree cache were failed builds/fixtures,
+not behavioral evidence. The regressions ran against the assembled root checkout.
+
+INT-01 is not closed: private network/topology generations, partial composition
+cleanup, repeated configured-cycle restart and aggregate shutdown bounds remain.
+Shutdown now waits for current storage work, including provider budgets up to
+two minutes. No new forced abort, fixed sleep or timeout increase was introduced.
+
 ## Tasks 10/27 — Linux directory durability prerequisite
 
 On 2026-09-14 the provided clean Linux checkout was fast-forwarded from

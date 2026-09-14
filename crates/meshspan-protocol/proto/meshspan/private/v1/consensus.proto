@@ -41,6 +41,8 @@ message AppendRequest {
   uint64 membership_epoch = 8;
   bytes quorum_plan_digest = 9;
   optional uint64 read_barrier_id = 10;
+  // Nonzero correlation for the exact outstanding append request.
+  uint64 probe_id = 11;
 }
 
 message AppendResponse {
@@ -52,6 +54,10 @@ message AppendResponse {
   uint64 membership_epoch = 6;
   bytes quorum_plan_digest = 7;
   optional uint64 read_barrier_id = 8;
+  // Absent only for an uncorrelated negative membership-phase notice.
+  optional uint64 probe_id = 9;
+  // Exact matched-entry digest; 32 zero bytes for rejection or genesis.
+  bytes matched_digest = 10;
 }
 
 // Historical committed bytes. This message carries no leader term or read barrier.

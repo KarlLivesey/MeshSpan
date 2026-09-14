@@ -163,6 +163,23 @@ This follows the two distinct read safeguards described in the
 and fresh leader confirmation. MeshSpan uses its independently proved `W` and `R`
 predicates rather than replacing either with an assumed majority.
 
+Append replies carry a nonzero request correlation and the exact matched entry
+digest, binding its index, term and bytes. A follower acknowledges only the
+request's verified prefix; an empty append proves only its previous position.
+The persistence continuation retains that proof before emitting the reply or
+advancing commit. Delayed commit notices never retreat an established commit.
+
+Each leader keeps at most 64 outstanding probes per peer and clears their
+correlation on membership-phase changes or leadership loss. Accepted proof must
+match the exact sent prefix and cannot reduce a newer match. Only the latest
+conflicting probe can backtrack, never below an established match. Evicted,
+duplicate or unknown probes supply no replication or read evidence. A correlated
+current-term negative reply can confirm read contact independently of log match;
+the current-term commit and local application predicates still apply. Historical
+membership notices have no probe or read identity and only solicit fresh probes
+or bounded committed history. Missing successful correlation fails closed on the
+wire; legacy replies cannot become current match proof.
+
 The core assumes crash, omission, corruption-detection and partition faults, not
 Byzantine voters. Mutual authentication prevents an unauthorised node from being
 counted, but a correctly enrolled malicious voter is outside this consensus

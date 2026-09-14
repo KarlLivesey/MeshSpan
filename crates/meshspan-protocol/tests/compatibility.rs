@@ -18,6 +18,9 @@ use serde::Deserialize;
 
 const FIXTURE: &str = include_str!("../../../contracts/protobuf/v1/node-hello.json");
 
+#[path = "compatibility/consensus.rs"]
+mod consensus;
+
 #[path = "compatibility/updates.rs"]
 mod updates;
 
