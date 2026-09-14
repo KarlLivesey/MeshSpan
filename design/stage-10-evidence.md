@@ -10,6 +10,45 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## ACC-02 — historical strong receipt recovery
+
+The daemon can now distinguish verified immutable publication facts from a
+strictly verified current local head. Exact historical strong confirmation uses
+the existing authoritative `namespace_publication_is_committed` lookup. Only an
+unconfirmed outcome proceeds to the unchanged current-head proof and proposal
+path, including its original deadline. This adds a narrow opaque filesystem
+proof for its daemon consumer; no wire, persistence or public HTTPS schema
+changes are required.
+
+The new daemon regression first ran with the old strict-first ordering and
+failed with `StrongBarrierFailed` (**1.64 s**, build **63 s**). Moving historical
+confirmation before the head check makes it pass (**1.46 s**, build **11.30 s**).
+Both strong-publication tests pass together (**1.70 s**, build **0.26 s**). They
+exercise real local publication storage and a running metadata authority,
+reopen local storage and authority readers, and check exact prior confirmation
+without a new log entry or head/revision change. Substituted receipts and stale
+unconfirmed publications reject. An expired waiting budget does not erase an
+already-confirmed outcome. This is repository reopen evidence; the authority
+process is not restarted by that focused test.
+
+The filesystem immutable-proof regression passes (**0.13 s**, build **6.09 s**),
+including historical proof after later publication/reopen while the strict head
+verifier still returns `StaleHead`.
+
+The extended existing native test
+`real_headless_process_creates_mesh_over_https_and_restarts` passes (**10.20 s**,
+build **37.09 s**). Both different files return explicit strong, globally
+converged, policy-committed receipts without fallback. After the second
+publication advances the namespace, exact replay of the original first request
+returns the same response, object and acknowledgement. The process then stops
+and restarts; exact bytes, the old response and changed-body rejection are
+checked again alongside the existing authentication/range proofs. The request
+and waiting budgets are unchanged. Log: `/tmp/meshspan-native-strong-replay.log`.
+This resolves the previously recorded historical strong-replay gap. Combined
+filesystem/daemon all-target/all-feature Clippy passes with warnings denied
+(**21.29 s**), as do workspace Rustfmt and diff checks. The full integration
+gate remains pending; no stage is declared complete.
+
 ## Integration gate — unresolved three-voter maximum-command failure
 
 The full NVM dependency-update gate on signed/pushed `198e7251` failed after

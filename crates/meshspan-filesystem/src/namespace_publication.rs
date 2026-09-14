@@ -244,6 +244,22 @@ pub(super) fn verify_publication_head(
     connection: &Connection,
     receipt: super::NamespacePublicationReceipt,
 ) -> Result<super::VerifiedPublicationHead, PublicationError> {
+    let publication = verify_publication(connection, receipt)?;
+    let commit = repository::load_commit(connection, receipt.namespace_commit_id)?;
+    let head = repository::load_head(connection, commit.branch_id, commit.volume_id)?
+        .ok_or(PublicationError::Corrupt)?;
+    if head.namespace_commit_id != receipt.namespace_commit_id
+        || head.sequence != receipt.head_sequence
+    {
+        return Err(PublicationError::StaleHead);
+    }
+    Ok(super::VerifiedPublicationHead::new(publication))
+}
+
+pub(super) fn verify_publication(
+    connection: &Connection,
+    receipt: super::NamespacePublicationReceipt,
+) -> Result<super::VerifiedPublication, PublicationError> {
     let durable = repository::load_file_operation(
         connection,
         receipt.operation_id,
@@ -260,13 +276,8 @@ pub(super) fn verify_publication_head(
         return Err(PublicationError::OperationConflict);
     }
     let commit = repository::load_commit(connection, receipt.namespace_commit_id)?;
-    let head = repository::load_head(connection, commit.branch_id, commit.volume_id)?
-        .ok_or(PublicationError::Corrupt)?;
-    if commit.operation_id != receipt.operation_id
-        || head.namespace_commit_id != receipt.namespace_commit_id
-        || head.sequence != receipt.head_sequence
-    {
-        return Err(PublicationError::StaleHead);
+    if commit.operation_id != receipt.operation_id {
+        return Err(PublicationError::OperationConflict);
     }
     let record = transfer::export::load_commit_record(
         connection,
@@ -275,7 +286,7 @@ pub(super) fn verify_publication_head(
     )?;
     let canonical = NamespaceHistoryCommitRecord::from_commit(&record)
         .map_err(|_| PublicationError::Corrupt)?;
-    Ok(super::VerifiedPublicationHead::new(
+    Ok(super::VerifiedPublication::new(
         durable,
         commit.volume_id,
         commit.parent_id,

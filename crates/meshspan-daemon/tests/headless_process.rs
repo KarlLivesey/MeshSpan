@@ -1182,7 +1182,8 @@ fn stop_processes(processes: &mut [Child]) {
 #[tokio::test]
 async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<(), Box<dyn Error>>
 {
-    let fixture = ProcessFixture::new()?;
+    let mut fixture = ProcessFixture::new()?;
+    fixture.temporary.disable_cleanup(true);
     let mut processes = ProcessCleanup(vec![fixture.start()?]);
     let proof = async {
         let claim = wait_for_claim(&fixture.claim_path).await?;
@@ -1242,14 +1243,10 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
             .await?;
         assert_volume_visible(fixture.address, &client, api_key).await?;
         let content = b"headless native file bytes";
-        let committed = upload_file(fixture.address, &client, api_key, &volume_id, content).await?;
-        if committed["acknowledgement"]["configured_consistency"] != "strong"
-            || committed["acknowledgement"]["acknowledged_consistency"] != "strong"
-            || committed["acknowledgement"]["durability_scope"] != "globally_converged"
-            || committed["acknowledgement"]["policy_committed"] != true
-        {
-            return Err("strong upload returned no globally converged acknowledgement".into());
-        }
+        let committed =
+            prepare_strong_upload_replay(fixture.address, &client, api_key, &volume_id, content)
+                .await?;
+        assert_exact_upload_replay(fixture.address, &client, api_key, &committed).await?;
         assert_file_surfaces(fixture.address, &client, api_key, &volume_id, content).await?;
 
         stop_processes(&mut processes.0);
@@ -1270,10 +1267,12 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
         assert_volume_visible(fixture.address, &client, api_key).await?;
         assert_user_visible(fixture.address, &client, api_key).await?;
         assert_file_surfaces(fixture.address, &client, api_key, &volume_id, content).await?;
+        assert_exact_upload_replay(fixture.address, &client, api_key, &committed).await?;
         Ok(())
     }
     .await;
     drop(processes);
+    fixture.temporary.disable_cleanup(false);
     retain_failure_state(proof, [fixture.temporary])
 }
 
@@ -2306,6 +2305,112 @@ async fn upload_named_file_with_receipt(
         request: commit_body,
         response: committed,
     })
+}
+
+async fn prepare_strong_upload_replay(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    volume_id: &str,
+    content: &[u8],
+) -> Result<CommittedUploadProof, Box<dyn Error>> {
+    let first = upload_named_file_with_receipt(
+        address,
+        client,
+        api_key,
+        volume_id,
+        FileUploadProof {
+            path: "process-proof.bin",
+            content,
+            operation_base: 6,
+        },
+    )
+    .await?;
+    let first_response = require_strong_upload_receipt(&first.response)?;
+    let later = upload_named_file(
+        address,
+        client,
+        api_key,
+        volume_id,
+        FileUploadProof {
+            path: "later-publication.bin",
+            content: b"A later strong publication advances the namespace",
+            operation_base: 0x70,
+        },
+    )
+    .await?;
+    let later_response = require_strong_upload_receipt(&later)?;
+    assert_ne!(
+        first_response.object.namespace_commit_id,
+        later_response.object.namespace_commit_id
+    );
+    Ok(first)
+}
+
+fn require_strong_upload_receipt(
+    response: &serde_json::Value,
+) -> Result<meshspan_api_contract::CommitUploadResponse, Box<dyn Error>> {
+    use meshspan_api_contract::{AcknowledgementConsistency, WriteDurabilityScope};
+    let response: meshspan_api_contract::CommitUploadResponse =
+        serde_json::from_value(response.clone())?;
+    let acknowledgement = &response.acknowledgement;
+    assert_eq!(
+        acknowledgement.configured_consistency,
+        AcknowledgementConsistency::Strong
+    );
+    assert_eq!(
+        acknowledgement.acknowledged_consistency,
+        AcknowledgementConsistency::Strong
+    );
+    assert_eq!(
+        acknowledgement.durability_scope,
+        WriteDurabilityScope::GloballyConverged
+    );
+    assert!(acknowledgement.policy_committed);
+    assert!(!acknowledgement.fallback_applied);
+    Ok(response)
+}
+
+async fn assert_exact_upload_replay(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    committed: &CommittedUploadProof,
+) -> Result<(), Box<dyn Error>> {
+    let authorization = format!("Bearer {api_key}");
+    let headers = [("Authorization", authorization.as_str())];
+    let replay = request_with_headers(
+        address,
+        client,
+        "POST",
+        &committed.path,
+        Some(&committed.request),
+        &headers,
+    )
+    .await?;
+    require_status(&replay, "200 OK", "recover earlier strong upload receipt")?;
+    let replay: serde_json::Value = serde_json::from_str(response_body(&replay)?)?;
+    assert_eq!(
+        replay, committed.response,
+        "exact strong upload outcome changed"
+    );
+    let mut changed: meshspan_api_contract::CommitUploadRequest =
+        serde_json::from_slice(&committed.request)?;
+    changed.final_length += 1;
+    let rejected = request_with_headers(
+        address,
+        client,
+        "POST",
+        &committed.path,
+        Some(&serde_json::to_vec(&changed)?),
+        &headers,
+    )
+    .await?;
+    require_status(
+        &rejected,
+        "409 Conflict",
+        "reject substituted strong upload request",
+    )
 }
 
 async fn assign_single_node_strong_acknowledgement(
