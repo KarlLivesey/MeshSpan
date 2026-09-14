@@ -68,6 +68,7 @@ where
             routing_epoch: self.routing_epoch,
             peers: vec![EnrolmentBootstrapPeer {
                 node_id: format_uuid(self.node_id.as_bytes()),
+                incarnation: certificate.incarnation.to_string(),
                 private_endpoint: self.private_endpoint.clone(),
                 certificate_der_hex: encode_hex(&certificate.certificate_der),
             }],

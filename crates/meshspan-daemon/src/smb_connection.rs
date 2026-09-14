@@ -48,7 +48,8 @@ type AccessContextFactory = Box<
         + Send,
 >;
 type FilesystemErrorClassifier = fn(&NativeFilesystemRuntimeError) -> ConnectorFailure;
-type AuthenticationErrorClassifier = fn(&SmbAuthenticationError) -> ConnectorFailure;
+type AuthenticationErrorClassifier =
+    Box<dyn Fn(&SmbAuthenticationError) -> ConnectorFailure + Send>;
 type ProductionProtocolConnection = SmbProtocolConnection<
     SmbAuthenticator,
     NativeFilesystemRuntime,
@@ -59,6 +60,7 @@ type ProductionProtocolConnection = SmbProtocolConnection<
 
 /// Node-local paths and stable identities required by the SMB connection factory.
 pub(crate) struct SmbConnectionFactoryConfiguration {
+    pub(crate) observations: crate::runtime_observations::RuntimeObservations,
     pub(crate) authority_database: PathBuf,
     pub(crate) wrapping_key_path: PathBuf,
     pub(crate) partition_id: PartitionId,
@@ -68,6 +70,7 @@ pub(crate) struct SmbConnectionFactoryConfiguration {
 /// Cloneable daemon state from which each accepted TCP connection is built independently.
 #[derive(Clone)]
 pub(crate) struct SmbConnectionFactory {
+    observations: crate::runtime_observations::RuntimeObservations,
     authority_database: PathBuf,
     wrapping_key_path: PathBuf,
     partition_id: PartitionId,
@@ -88,6 +91,7 @@ impl SmbConnectionFactory {
         filesystem: NativeFilesystemRuntime,
     ) -> Self {
         Self {
+            observations: configuration.observations,
             authority_database: configuration.authority_database,
             wrapping_key_path: configuration.wrapping_key_path,
             partition_id: configuration.partition_id,
@@ -143,13 +147,21 @@ impl SmbConnectionFactory {
         )
         .map_err(|_| SmbConnectionOpeningError::Configuration)?;
         let gateway_node_id = self.node_id;
+        let network = self
+            .network
+            .network()
+            .map_err(|()| SmbConnectionOpeningError::Configuration)?;
+        if network.local_node_id() != gateway_node_id {
+            return Err(SmbConnectionOpeningError::Configuration);
+        }
+        let gateway_incarnation = network.local_incarnation();
         let make_context: AccessContextFactory = Box::new(move |authority, observed_at| {
             Ok(FilesystemAccessContext {
                 authentication_service: AuthenticationService::Smb,
                 credential_digest: authority.credential_digest(),
                 required_assurance: AssuranceLevel::SingleFactor,
                 gateway_node_id,
-                gateway_incarnation: 1,
+                gateway_incarnation,
                 now: observed_at,
             })
         });
@@ -163,7 +175,7 @@ impl SmbConnectionFactory {
                 make_context,
                 classify_filesystem_failure as FilesystemErrorClassifier,
             ),
-            classify_authentication_failure as AuthenticationErrorClassifier,
+            authentication_classifier(self.observations.clone()),
         )?;
         Ok(SmbDaemonConnection {
             protocol: Some(protocol),
@@ -304,6 +316,17 @@ fn classify_authentication_failure(error: &SmbAuthenticationError) -> ConnectorF
     }
 }
 
+fn authentication_classifier(
+    observations: crate::runtime_observations::RuntimeObservations,
+) -> AuthenticationErrorClassifier {
+    Box::new(move |error| {
+        if matches!(error, SmbAuthenticationError::Denied) {
+            observations.record_smb_authentication_rejection();
+        }
+        classify_authentication_failure(error)
+    })
+}
+
 /// Per-connection construction failed without affecting the shared listener.
 #[derive(Debug, Error)]
 pub(crate) enum SmbConnectionOpeningError {
@@ -343,6 +366,52 @@ mod tests {
     use meshspan_domain::{NodeId, UnixMicros};
 
     use super::{netbios_name, server_guid, windows_filetime};
+
+    #[test]
+    fn smb_authentication_metrics_preserve_protocol_outcomes_and_exclude_unavailability()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::{ConnectorFailure, SmbAuthenticationError, authentication_classifier};
+        use meshspan_contracts::{RuntimeMetric, RuntimeMetricSource as _};
+        let observations = crate::runtime_observations::RuntimeObservations::default();
+        let classify = authentication_classifier(observations.clone());
+        for (error, expected) in [
+            (
+                SmbAuthenticationError::Denied,
+                ConnectorFailure::AuthenticationRejected,
+            ),
+            (
+                SmbAuthenticationError::Unavailable,
+                ConnectorFailure::TemporarilyUnavailable,
+            ),
+            (
+                SmbAuthenticationError::State,
+                ConnectorFailure::InternalFailure,
+            ),
+            (
+                SmbAuthenticationError::Denied,
+                ConnectorFailure::AuthenticationRejected,
+            ),
+        ] {
+            assert_eq!(classify(&error), expected);
+        }
+        let snapshot = observations.collect_metrics()?;
+        assert!(
+            snapshot
+                .samples()
+                .contains(&RuntimeMetric::SmbAuthenticationRejections(2))
+        );
+        assert!(
+            snapshot
+                .samples()
+                .contains(&RuntimeMetric::SmbDispatches(0))
+        );
+        let encoded = crate::encode_openmetrics(&snapshot)?;
+        assert!(
+            std::str::from_utf8(&encoded)?
+                .contains("meshspan_v1_smb_authentication_rejections_total 2\n")
+        );
+        Ok(())
+    }
 
     #[test]
     fn stable_server_identity_and_protocol_clock_are_well_formed()

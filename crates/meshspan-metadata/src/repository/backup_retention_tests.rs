@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::{RecordBackupReclamation, RepositoryError, RetireMetadataBackup};
-use meshspan_contracts::{BackupDeleteReceipt, BackupObjectIdentity};
+use meshspan_contracts::BackupDeleteReceipt;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -33,8 +33,7 @@ fn retention_retires_only_excess_generations_and_reclaims_exact_receipts() -> Te
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.next, None);
     let copy = page.items.first().ok_or("copy missing")?;
-    assert_eq!(copy.state, BackupCopyState::Retired);
-    assert_eq!(copy.revision, receipt.committed_revision);
+    assert_eq!(copy.retirement_revision, receipt.committed_revision);
     let deletion = deletion_receipt(copy)?;
     let mut substituted = deletion;
     substituted.object.digest = [99; 32];
@@ -192,7 +191,10 @@ fn retired_copy_debt_pages_and_survives_database_reopen() -> TestResult {
     let second = repository
         .pending_backup_reclamations(Some(first.next.ok_or("next missing")?), PageLimit::new(1)?)?;
     assert_eq!(second.items.len(), 1);
-    assert_ne!(first.items[0].backup_id, second.items[0].backup_id);
+    assert_ne!(
+        first.items[0].object.backup_id,
+        second.items[0].object.backup_id
+    );
     assert_eq!(second.next, None);
     Ok(())
 }
@@ -321,10 +323,6 @@ fn retention_queries_use_ordered_indexes_without_temporary_sorting() -> TestResu
             "EXPLAIN QUERY PLAN SELECT b.backup_id FROM metadata_backups b JOIN metadata_backup_runs r USING(backup_id) WHERE b.state = 1 AND b.state_revision < 30 AND r.state IN (4, 5) ORDER BY b.state_revision, b.backup_id DESC LIMIT 1",
             "metadata_backups_retention",
         ),
-        (
-            "EXPLAIN QUERY PLAN SELECT c.backup_id, c.destination_id FROM backup_copies c WHERE c.state = 4 AND (c.backup_id, c.destination_id) > (x'00', x'00') AND NOT EXISTS (SELECT 1 FROM backup_copy_reclamations r WHERE r.backup_id = c.backup_id AND r.destination_id = c.destination_id) ORDER BY c.backup_id, c.destination_id LIMIT 2",
-            "backup_copies_retired",
-        ),
     ] {
         let mut statement = fixture.repository.database.connection().prepare(sql)?;
         let details = statement
@@ -337,7 +335,34 @@ fn retention_queries_use_ordered_indexes_without_temporary_sorting() -> TestResu
     Ok(())
 }
 
-fn history(count: u8) -> TestResult<(Fixture, BackupDestinationId)> {
+#[test]
+fn combined_reclamation_queue_uses_indexed_keyset_merge() -> TestResult {
+    let (fixture, _) = history(0)?;
+    let sql = format!(
+        "EXPLAIN QUERY PLAN {}",
+        super::super::backup_reclamation::PENDING_RECLAMATIONS_SQL
+    );
+    let mut statement = fixture.repository.database.connection().prepare(&sql)?;
+    let details = statement
+        .query_map(
+            rusqlite::params![[0_u8; 16].as_slice(), [0_u8; 16].as_slice(), 2],
+            |row| row.get::<_, String>(3),
+        )?
+        .collect::<Result<Vec<_>, _>>()?
+        .join("\n");
+    for expected in [
+        "MERGE (UNION ALL)",
+        "backup_copies_retired",
+        "SEARCH a USING PRIMARY KEY",
+        "SEARCH r USING PRIMARY KEY",
+    ] {
+        assert!(details.contains(expected), "{details}");
+    }
+    assert!(!details.contains("TEMP B-TREE"), "{details}");
+    Ok(())
+}
+
+pub(super) fn history(count: u8) -> TestResult<(Fixture, BackupDestinationId)> {
     let mut fixture = fixture()?;
     let destination = BackupDestinationId::from_bytes([30; 16])?;
     configure_destination(&mut fixture, destination)?;
@@ -362,7 +387,7 @@ fn history(count: u8) -> TestResult<(Fixture, BackupDestinationId)> {
     Ok((fixture, destination))
 }
 
-fn add_generation(
+pub(super) fn add_generation(
     fixture: &mut Fixture,
     destination: BackupDestinationId,
     generation: u8,
@@ -478,16 +503,10 @@ fn apply(
     )?)
 }
 
-fn deletion_receipt(copy: &crate::BackupCopyRecord) -> TestResult<BackupDeleteReceipt> {
+fn deletion_receipt(copy: &crate::BackupReclamationCandidate) -> TestResult<BackupDeleteReceipt> {
     Ok(BackupDeleteReceipt {
         operation_id: OperationId::from_bytes([240; 16])?,
-        object: BackupObjectIdentity {
-            backup_id: copy.backup_id,
-            destination_id: copy.destination_id,
-            provider_generation: copy.provider_generation,
-            byte_length: copy.byte_length,
-            digest: copy.copy_digest,
-        },
-        retirement_revision: copy.revision,
+        object: copy.object,
+        retirement_revision: copy.retirement_revision,
     })
 }

@@ -19,6 +19,75 @@ use crate::{CapacityPolicy, FolderRegistration, RegisteredFolder, UsageLimit};
 
 struct FixedRandom;
 
+#[test]
+fn required_journal_reopen_preserves_receipts_and_never_recreates_missing_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let storage = directory.path().join("storage");
+    let state = directory.path().join("state");
+    fs::create_dir(&storage)?;
+    let registration = registration()?;
+    let folder = RegisteredFolder::register_new(&storage, registration, &mut FixedRandom)?;
+    let marker = folder.marker();
+    let mut store = FolderShardStore::open(
+        folder,
+        &state,
+        policy(),
+        verifier(registration.mesh_id)?,
+        UnixMicros::new(1),
+        &mut FixedRandom,
+    )?;
+    let request = put_request(&mut store, registration, 9, 1, b"restored committed bytes")?;
+    let receipt = store.put_exact(&request, UnixMicros::new(20))?;
+    // A second connection observes the committed WAL state while the original writer is open.
+    let journal = crate::TargetJournal::reopen(
+        &state,
+        marker,
+        policy(),
+        UnixMicros::new(21),
+        &mut FixedRandom,
+    )?;
+    assert_eq!(journal.capacity()?.committed_bytes, 24);
+    drop(journal);
+    drop(store);
+    let folder = RegisteredFolder::reopen(&storage, registration, marker.fingerprint())?;
+    let mut store = FolderShardStore::reopen(
+        folder,
+        &state,
+        policy(),
+        verifier(registration.mesh_id)?,
+        UnixMicros::new(22),
+        &mut FixedRandom,
+    )?;
+    assert_eq!(store.put_exact(&request, UnixMicros::new(23))?, receipt);
+    assert_eq!(store.inventory(None, 10)?.entries.len(), 1);
+    assert_eq!(
+        store.pack.get_exact(request.shard)?.as_slice(),
+        b"restored committed bytes"
+    );
+    drop(store);
+    let journal_path = state
+        .join("storage-targets")
+        .join(format!("{}.sqlite3", registration.target_id));
+    let saved = state.join("saved-journal.sqlite3");
+    fs::rename(&journal_path, &saved)?;
+    let folder = RegisteredFolder::reopen(&storage, registration, marker.fingerprint())?;
+    assert!(
+        FolderShardStore::reopen(
+            folder,
+            &state,
+            policy(),
+            verifier(registration.mesh_id)?,
+            UnixMicros::new(24),
+            &mut FixedRandom
+        )
+        .is_err()
+    );
+    assert!(!journal_path.exists());
+    fs::rename(saved, journal_path)?;
+    Ok(())
+}
+
 impl RandomSource for FixedRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
         destination.fill(17);
@@ -101,6 +170,117 @@ fn full_short_and_lost_result_failpoints_recover_exact_outcomes()
             .committed
             .is_empty()
     );
+    Ok(())
+}
+
+#[test]
+fn rollover_routes_old_and_incomplete_shards_across_restart()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let storage_path = directory.path().join("target");
+    let state_path = directory.path().join("state");
+    fs::create_dir(&storage_path)?;
+    let registration = registration()?;
+    let mut random = FixedRandom;
+    let folder = RegisteredFolder::register_new(&storage_path, registration, &mut random)?;
+    let fingerprint = folder.marker().fingerprint();
+    let mut store = FolderShardStore::open(
+        folder,
+        &state_path,
+        policy(),
+        verifier(registration.mesh_id)?,
+        UnixMicros::new(1),
+        &mut random,
+    )?;
+    store.journal.set_pack_limits(crate::journal::PackLimits {
+        payload_bytes: 30,
+        records: 2,
+    });
+    let first = put_request(&mut store, registration, 41, 1, b"older durable bytes")?;
+    store.pack.inject_fault(PackFault::LostResultAfterCommit);
+    assert!(matches!(
+        store.put_exact(&first, UnixMicros::new(20)),
+        Err(FolderShardStoreError::Unavailable)
+    ));
+    let second = put_request(&mut store, registration, 42, 2, b"newer durable bytes")?;
+    store.put_exact(&second, UnixMicros::new(21))?;
+    assert_eq!(store.journal.pack_sequence(first.shard)?, Some(1));
+    assert_eq!(store.journal.pack_sequence(second.shard)?, Some(2));
+    assert!(store.folder.pack_database_path(2)?.is_file());
+    drop(store);
+
+    let folder = RegisteredFolder::reopen(&storage_path, registration, fingerprint)?;
+    let mut store = FolderShardStore::open(
+        folder,
+        &state_path,
+        policy(),
+        verifier(registration.mesh_id)?,
+        UnixMicros::new(30),
+        &mut random,
+    )?;
+    let recovered = store.recover_pending(None, 10, UnixMicros::new(31))?;
+    assert_eq!(recovered.committed.len(), 1);
+    assert_eq!(recovered.committed.as_slice()[0].shard, first.shard);
+    assert_eq!(
+        store.put_exact(&first, UnixMicros::new(32))?,
+        recovered.committed.as_slice()[0]
+    );
+    let page = store.scrub(None, 10, UnixMicros::new(33))?;
+    assert_eq!(page.observations.len(), 2);
+    assert!(
+        page.observations
+            .as_slice()
+            .iter()
+            .all(|item| item.outcome == meshspan_contracts::ScrubOutcome::Healthy)
+    );
+    assert_eq!(store.journal.capacity()?.committed_bytes, 38);
+    verify_routed_read_and_removal(&mut store, registration, &first)?;
+    Ok(())
+}
+
+fn verify_routed_read_and_removal(
+    store: &mut FolderShardStore,
+    registration: FolderRegistration,
+    request: &PutShardRequest,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let key = StoragePermitMacKey::from_bytes([42; 32])?;
+    let mut permit = meshspan_contracts::ShardReadPermit {
+        operation_id: request.context.operation_id,
+        mesh_id: registration.mesh_id,
+        target_id: registration.target_id,
+        target_generation: registration.generation,
+        shard: request.shard,
+        authorization_revision: Revision::new(5),
+        expires_at: UnixMicros::new(1_000),
+        permit_digest: [0; 32],
+    };
+    permit.permit_digest = meshspan_contracts::read_permit_mac(&key, permit);
+    assert_eq!(
+        store
+            .get_exact(request.context, permit, UnixMicros::new(40))?
+            .as_slice(),
+        request.bytes.as_slice()
+    );
+    let mut removal = meshspan_contracts::RemovalPermit {
+        operation_id: OperationId::from_bytes([50; 16])?,
+        mesh_id: registration.mesh_id,
+        target_id: registration.target_id,
+        target_generation: registration.generation,
+        shard: request.shard,
+        authority_epoch: 7,
+        catalogue_revision: Revision::new(5),
+        expires_at: UnixMicros::new(1_000),
+        permit_digest: [0; 32],
+    };
+    removal.permit_digest = meshspan_contracts::removal_permit_mac(&key, removal);
+    let receipt = store.tombstone(removal, UnixMicros::new(41))?;
+    store.unlink_tombstoned(receipt, UnixMicros::new(42))?;
+    assert_eq!(store.journal.capacity()?.committed_bytes, 19);
+    assert!(matches!(
+        store.get_exact(request.context, permit, UnixMicros::new(43)),
+        Err(FolderShardStoreError::NotFound)
+    ));
+    assert_eq!(store.inventory(None, 10)?.entries.len(), 1);
     Ok(())
 }
 

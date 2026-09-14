@@ -17,7 +17,6 @@ use thiserror::Error;
 const WRITE_PERMIT_BYTES: usize = 159;
 const READ_PERMIT_BYTES: usize = 150;
 const RESERVATION_BYTES: usize = 89;
-const SHARD_RECEIPT_BYTES: usize = 126;
 const REMOVAL_PERMIT_BYTES: usize = 158;
 const TOMBSTONE_RECEIPT_BYTES: usize = 150;
 const RECLAMATION_RECEIPT_BYTES: usize = 198;
@@ -215,9 +214,11 @@ pub(crate) fn encode_tombstone_receipt(receipt: TombstoneReceipt) -> Vec<u8> {
     bytes
 }
 
-pub(crate) fn decode_tombstone_receipt(
-    bytes: &[u8],
-) -> Result<TombstoneReceipt, CapabilityCodecError> {
+/// Decodes one exact tombstone receipt; this establishes shape, not committed authority.
+///
+/// # Errors
+/// Rejects non-canonical lengths, reserved identities and missing receipt digests.
+pub fn decode_tombstone_receipt(bytes: &[u8]) -> Result<TombstoneReceipt, CapabilityCodecError> {
     if bytes.len() != TOMBSTONE_RECEIPT_BYTES {
         return Err(CapabilityCodecError::Invalid);
     }
@@ -350,38 +351,19 @@ pub(crate) fn encode_reservation(reservation: StorageReservation) -> Vec<u8> {
     bytes
 }
 
-pub(crate) fn encode_shard_receipt(receipt: ShardReceipt) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(SHARD_RECEIPT_BYTES);
-    bytes.extend_from_slice(&receipt.operation_id.as_bytes());
-    push_shard(&mut bytes, receipt.shard);
-    bytes.extend_from_slice(&receipt.length.to_be_bytes());
-    bytes.extend_from_slice(&receipt.digest);
-    bytes.extend_from_slice(&receipt.target_id.as_bytes());
-    bytes.extend_from_slice(&receipt.target_generation.to_be_bytes());
-    bytes
+/// Encodes the version-one fixed-width shard receipt used by private data frames
+/// and offline recovery receipt streams. The enclosing protocol supplies its version.
+/// Encoding is not validation or evidence of storage durability.
+#[must_use]
+pub fn encode_shard_receipt(receipt: ShardReceipt) -> Vec<u8> {
+    meshspan_contracts::encode_shard_receipt_v1(receipt).to_vec()
 }
 
-pub(crate) fn decode_shard_receipt(bytes: &[u8]) -> Result<ShardReceipt, CapabilityCodecError> {
-    if bytes.len() != SHARD_RECEIPT_BYTES {
-        return Err(CapabilityCodecError::Invalid);
-    }
-    let mut reader = Reader::new(bytes);
-    let receipt = ShardReceipt {
-        operation_id: OperationId::from_bytes(reader.array()?)
-            .map_err(|_| CapabilityCodecError::Invalid)?,
-        shard: reader.shard()?,
-        length: reader.u64()?,
-        digest: reader.array()?,
-        target_id: TargetId::from_bytes(reader.array()?)
-            .map_err(|_| CapabilityCodecError::Invalid)?,
-        target_generation: reader.u64()?,
-    };
-    reader.finish()?;
-    if receipt.length == 0 || receipt.digest == [0; 32] || receipt.target_generation == 0 {
-        Err(CapabilityCodecError::Invalid)
-    } else {
-        Ok(receipt)
-    }
+/// Decodes one complete version-one shard receipt, without trusting its storage claim.
+/// # Errors
+/// Rejects wrong length, malformed identities and invalid generation, size or digest.
+pub fn decode_shard_receipt(bytes: &[u8]) -> Result<ShardReceipt, CapabilityCodecError> {
+    meshspan_contracts::decode_shard_receipt_v1(bytes).map_err(|_| CapabilityCodecError::Invalid)
 }
 
 fn push_common(bytes: &mut Vec<u8>, operation: OperationId, mesh: MeshId, target: TargetId) {

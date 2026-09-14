@@ -233,7 +233,9 @@ fn failure(error: BackupExportError, digest: HeaderValue) -> Response<Body> {
             (StatusCode::UNAUTHORIZED, ApiErrorCode::Unauthenticated)
         }
         BackupExportError::Forbidden => (StatusCode::FORBIDDEN, ApiErrorCode::Forbidden),
-        BackupExportError::NotReady => (StatusCode::CONFLICT, ApiErrorCode::StateConflict),
+        BackupExportError::NotReady | BackupExportError::RecipientUnavailable => {
+            (StatusCode::CONFLICT, ApiErrorCode::StateConflict)
+        }
         BackupExportError::Unavailable => (StatusCode::SERVICE_UNAVAILABLE, ApiErrorCode::Busy),
         BackupExportError::Failed => (
             StatusCode::INTERNAL_SERVER_ERROR,

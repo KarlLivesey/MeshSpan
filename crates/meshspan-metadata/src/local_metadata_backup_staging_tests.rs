@@ -75,6 +75,40 @@ fn staging_rejects_changed_replays_and_unsafe_names() -> Result<(), Box<dyn std:
     Ok(())
 }
 
+#[test]
+fn staging_pages_seek_past_retained_or_deleted_entries() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file_path = directory.path().join("local.sqlite3");
+    let mut database =
+        LocalDatabase::open(&file_path, NodeId::from_bytes([1; 16])?, UnixMicros::new(1))?;
+    let first = staging(2, "backup-02.msbackup")?;
+    let second = staging(3, "backup-03.msbackup")?;
+    let third = staging(4, "backup-04.msbackup")?;
+    for entry in [&third, &first, &second] {
+        database.record_metadata_backup_staging(entry)?;
+    }
+    let page = database.metadata_backup_staging_page(None, 2)?;
+    assert_eq!(page.items, vec![first.clone(), second.clone()]);
+    assert_eq!(page.next, Some(second.evidence.source.backup_id));
+    database.remove_metadata_backup_staging(&second)?;
+    let tail = database.metadata_backup_staging_page(page.next, 2)?;
+    assert_eq!(tail.items, vec![third.clone()]);
+    assert!(tail.next.is_none());
+    drop(database);
+    let reopened = LocalDatabase::open_existing(&file_path, UnixMicros::new(3))?;
+    assert_eq!(
+        reopened.metadata_backup_staging_page(None, 2)?.items,
+        vec![first, third]
+    );
+    for limit in [0, 129, usize::MAX] {
+        assert!(matches!(
+            reopened.metadata_backup_staging_page(None, limit),
+            Err(LocalMetadataBackupStagingError::Invalid)
+        ));
+    }
+    Ok(())
+}
+
 fn staging(
     identity: u8,
     relative_file_name: &str,

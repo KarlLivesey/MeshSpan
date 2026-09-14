@@ -19,6 +19,18 @@ import type {
   CreateDirectoryResponse,
   CreateFaultGroupRequest,
   CreateFaultGroupResponse,
+  CreateFederationPairingInvitationRequest,
+  AcceptFederationPairingRequest,
+  AcceptFederationPairingResponse,
+  ConnectFederationRequest,
+  ConnectFederationResponse,
+  ConfigureFederationStorageGrantRequest,
+  ConfigureFederationStorageGrantResponse,
+  FederationStorageGrantQuery,
+  FederationStorageGrantResponse,
+  CreateFederationPairingInvitationResponse,
+  CancelFederationPairingInvitationRequest,
+  CancelFederationPairingInvitationResponse,
   CreateGroupRequest,
   CreatePasskeyChallengeRequest,
   CreatePasskeyChallengeResponse,
@@ -172,6 +184,19 @@ import {
   zDeleteObjectResponse2,
   zGetCertificateStatusResponse,
   zGetBackupScheduleResponse,
+  zCreateFederationPairingInvitationBody,
+  zAcceptFederationPairingBody,
+  zAcceptFederationPairingHeaders,
+  zAcceptFederationPairingResponse2,
+  zConnectFederationBody,
+  zConnectFederationResponse2,
+  zGetFederationStorageGrantQuery,
+  zGetFederationStorageGrantResponse,
+  zConfigureFederationStorageGrantBody,
+  zConfigureFederationStorageGrantResponse2,
+  zCreateFederationPairingInvitationResponse2,
+  zCancelFederationPairingInvitationBody,
+  zCancelFederationPairingInvitationResponse2,
   zGetMetricsExporterResponse,
   zGetNotificationsResponse,
   zGetUpdatesQuery,
@@ -483,6 +508,29 @@ export interface MeshSpanFetchClient {
     request: ConfigureBackupScheduleRequest,
     csrfToken?: string,
   ): Promise<ConfigureBackupScheduleResponse>;
+  getFederationStorageGrant(
+    query: FederationStorageGrantQuery,
+  ): Promise<FederationStorageGrantResponse>;
+  configureFederationStorageGrant(
+    request: ConfigureFederationStorageGrantRequest,
+    csrfToken?: string,
+  ): Promise<ConfigureFederationStorageGrantResponse>;
+  connectFederation(
+    request: ConnectFederationRequest,
+    csrfToken?: string,
+  ): Promise<ConnectFederationResponse>;
+  acceptFederationPairing(
+    request: AcceptFederationPairingRequest,
+    connectionCode: string,
+  ): Promise<AcceptFederationPairingResponse>;
+  createFederationPairingInvitation(
+    request: CreateFederationPairingInvitationRequest,
+    csrfToken?: string,
+  ): Promise<CreateFederationPairingInvitationResponse>;
+  cancelFederationPairingInvitation(
+    request: CancelFederationPairingInvitationRequest,
+    csrfToken?: string,
+  ): Promise<CancelFederationPairingInvitationResponse>;
   getMetricsExporter(): Promise<MetricsExporterResponse>;
   configureMetricsExporter(
     request: ConfigureMetricsExporterRequest,
@@ -1027,6 +1075,102 @@ export function createMeshSpanFetchClient(
         zConfigureBackupScheduleResponse2,
       );
     },
+    async getFederationStorageGrant(
+      query,
+    ): Promise<FederationStorageGrantResponse> {
+      const input = zGetFederationStorageGrantQuery.parse(query);
+      const parameters = new URLSearchParams({ grant_id: input.grant_id });
+      return requestJson(
+        context,
+        "/admin/federation/storage-grants" + "?" + parameters.toString(),
+        { method: "GET" },
+        zGetFederationStorageGrantResponse,
+      );
+    },
+    async configureFederationStorageGrant(
+      request,
+      csrfToken,
+    ): Promise<ConfigureFederationStorageGrantResponse> {
+      const body = zConfigureFederationStorageGrantBody.parse(request);
+      return requestJson(
+        context,
+        "/admin/federation/storage-grants",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zConfigureFederationStorageGrantResponse2,
+      );
+    },
+    async connectFederation(
+      request,
+      csrfToken,
+    ): Promise<ConnectFederationResponse> {
+      const body = zConnectFederationBody.parse(request);
+      return requestJson(
+        context,
+        "/admin/federation/connections",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zConnectFederationResponse2,
+      );
+    },
+    async acceptFederationPairing(
+      request,
+      connectionCode,
+    ): Promise<AcceptFederationPairingResponse> {
+      const body = zAcceptFederationPairingBody.parse(request);
+      const headers = zAcceptFederationPairingHeaders.parse({
+        Authorization: "MeshSpan-Pairing " + connectionCode,
+      });
+      return requestJson(
+        { ...context, authorization: headers.Authorization },
+        "/federation/pairings/accept",
+        {
+          body: JSON.stringify(body),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+        zAcceptFederationPairingResponse2,
+        26 * 1024,
+      );
+    },
+    async createFederationPairingInvitation(
+      request,
+      csrfToken,
+    ): Promise<CreateFederationPairingInvitationResponse> {
+      const body = zCreateFederationPairingInvitationBody.parse(request);
+      return requestJson(
+        context,
+        "/admin/federation/invitations",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zCreateFederationPairingInvitationResponse2,
+      );
+    },
+    async cancelFederationPairingInvitation(
+      request,
+      csrfToken,
+    ): Promise<CancelFederationPairingInvitationResponse> {
+      const body = zCancelFederationPairingInvitationBody.parse(request);
+      return requestJson(
+        context,
+        "/admin/federation/invitations/cancel",
+        {
+          body: JSON.stringify(body),
+          headers: mutationHeaders("application/json", csrfToken),
+          method: "POST",
+        },
+        zCancelFederationPairingInvitationResponse2,
+      );
+    },
     async getMetricsExporter(): Promise<MetricsExporterResponse> {
       return requestJson(
         context,
@@ -1106,7 +1250,7 @@ export function createMeshSpanFetchClient(
       );
       return requestJson(
         context,
-        appendQuery("/admin/updates", query ?? {}),
+        appendQuery("/admin/updates", query),
         { method: "GET" },
         zGetUpdatesResponse,
       );

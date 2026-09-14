@@ -25,6 +25,7 @@ const MAXIMUM_SLICES: usize = 24;
 const MAXIMUM_SCENARIOS: usize = 16;
 const MAXIMUM_CELLS: usize = 256;
 const MAXIMUM_PROOF_LOSS_SETS: usize = 100_000;
+mod assessment;
 const EXACT_SEARCH_CANDIDATES: usize = 10;
 const DEFAULT_DATA_SLICES: u16 = 4;
 
@@ -169,6 +170,13 @@ impl ComponentLifecycle for FaultAwarePlacement {
 }
 
 impl PlacementPolicy for FaultAwarePlacement {
+    fn assess_recorded(
+        &self,
+        request: meshspan_contracts::PlacementAssessmentRequest<'_>,
+    ) -> Result<meshspan_contracts::PlacementAssessment, ContractError> {
+        self.require_active()?;
+        assessment::assess(request)
+    }
     fn plan_write(&self, request: PlacementRequest<'_>) -> Result<PlacementPlan, ContractError> {
         self.require_active()?;
         validate_request(request)?;
@@ -1171,6 +1179,8 @@ fn hash_optional_u16(digest: &mut blake3::Hasher, value: Option<u16>) {
 
 #[cfg(test)]
 mod tests {
+    #[path = "assessment.rs"]
+    mod assessment;
     use meshspan_contracts::{
         BoundedItems, CodingLayout, ContractError, PlacementCandidate, PlacementCellRequirement,
         PlacementCellRole, PlacementPolicy, PlacementRequest, RebalancePlacementRequest,

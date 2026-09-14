@@ -52,6 +52,13 @@ impl LocalWrappingKey {
         self.key.public_key()
     }
 
+    /// Persists the same node-owned identity locally, without overwriting or exporting it.
+    pub(crate) fn persist_new(&self, destination: &Path) -> Result<(), LocalWrappingKeyError> {
+        let bytes = self.key.expose_for_protected_persistence();
+        protected_file::publish(destination, bytes.as_ref(), PublishMode::Create)?;
+        Ok(())
+    }
+
     /// Decrypts a catalogue-bound backup into a new isolated path without exposing this key.
     pub(crate) fn restore_backup(
         &self,
@@ -60,6 +67,16 @@ impl LocalWrappingKey {
         evidence: meshspan_backup::BackupFileEvidence,
     ) -> Result<(), meshspan_backup::BackupError> {
         meshspan_backup::restore_backup(source, destination, evidence, &self.key)
+    }
+
+    /// Restores the authenticated fixed metadata/history set without exposing the local key.
+    pub(crate) fn restore_backup_files(
+        &self,
+        source: &Path,
+        destinations: meshspan_backup::BackupFiles<'_>,
+        evidence: meshspan_backup::BackupFileEvidence,
+    ) -> Result<Option<meshspan_backup::BackupHistoryEvidence>, meshspan_backup::BackupError> {
+        meshspan_backup::restore_backup_files(source, destinations, evidence, &self.key)
     }
 
     /// Opens one exact recipient envelope and decrypts its bound secret generation.
@@ -90,6 +107,18 @@ impl LocalWrappingKey {
         let bytes = key.expose_for_protected_persistence();
         protected_file::publish(path, bytes.as_ref(), PublishMode::Create)?;
         Ok(Self { key })
+    }
+
+    /// Produces another recipient envelope while retaining the exact immutable ciphertext.
+    pub(crate) fn rewrap_secret(
+        &self,
+        secret: &EncryptedSecret,
+        existing: &RecipientKeyEnvelope,
+        recipient: WrappingPublicKey,
+    ) -> Result<RecipientKeyEnvelope, LocalWrappingKeyError> {
+        existing
+            .rewrap(secret, &self.key, recipient, &mut OperatingSystemRandom)
+            .map_err(|_| LocalWrappingKeyError::Secret)
     }
 
     fn from_protected_bytes(bytes: &[u8]) -> Result<Self, LocalWrappingKeyError> {

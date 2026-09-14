@@ -104,6 +104,7 @@ impl TargetJournal {
             return resolve_provider_operation(existing, request);
         }
         validate_reservation(&transaction, request)?;
+        super::pack_routing::assign_pack(&transaction, request, self.pack_limits)?;
         let operation = request.reservation.operation_id.as_bytes();
         let shard = encode_shard(request.shard);
         transaction.execute(
@@ -151,6 +152,9 @@ impl TargetJournal {
             || i64::try_from(evidence.pack_offset).is_err()
         {
             return Err(TargetJournalError::InvalidInput);
+        }
+        if self.pack_sequence(request.shard)? != Some(evidence.pack_sequence) {
+            return Err(TargetJournalError::OperationConflict);
         }
         let transaction = self
             .connection

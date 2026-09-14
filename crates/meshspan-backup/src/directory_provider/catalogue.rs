@@ -154,7 +154,7 @@ impl Catalogue {
                     && existing.length == request.object.byte_length
                     && existing.digest == request.object.digest
                     && existing.state == ACTIVE_OBJECT => {}
-            None => insert_object(&transaction, request, object_reference, observed_at)?,
+            None => insert_object(&transaction, request.object, object_reference, observed_at)?,
             _ => return Err(DirectoryBackupProviderError::Conflict),
         }
         insert_operation(
@@ -169,6 +169,26 @@ impl Catalogue {
                 retirement_revision: None,
             },
         )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Rebuilds local inventory only; no caller receipt or replicated admission is invented.
+    pub(super) fn record_recovered_object(
+        &mut self,
+        object: BackupObjectIdentity,
+        reference: &BackupObjectReference,
+        observed_at: UnixMicros,
+    ) -> Result<(), DirectoryBackupProviderError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        match load_object(&transaction, object)? {
+            Some(existing)
+                if existing.matches(object, reference) && existing.state == ACTIVE_OBJECT => {}
+            Some(_) => return Err(DirectoryBackupProviderError::Conflict),
+            None => insert_object(&transaction, object, reference.as_str(), observed_at)?,
+        }
         transaction.commit()?;
         Ok(())
     }
@@ -243,24 +263,25 @@ pub(super) fn operation_digest(
     retirement_revision: Option<u64>,
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
-    digest.update(b"meshspan.directory-backup.operation.v1");
+    digest.update(match kind {
+        OperationKind::Store => b"meshspan.directory-backup.operation.v2",
+        OperationKind::Delete => b"meshspan.directory-backup.operation.v1",
+    });
     digest.update((kind as i64).to_be_bytes());
     digest.update(request.context.operation_id.as_bytes());
     digest.update(request.context.contract_version.major.to_be_bytes());
     digest.update(request.context.contract_version.minor.to_be_bytes());
-    // Retirement permanently identifies deletion authority. Its network deadline
-    // belongs to one attempt, not to the durable idempotency key: a restarted
-    // worker must be able to renew that deadline and recover the same receipt.
-    if !matches!(kind, OperationKind::Delete) {
-        digest.update(request.context.deadline.get().to_be_bytes());
+    // Attempt deadlines and current upload authorisation may be renewed. Neither changes
+    // immutable stored bytes. Delete authority still binds the original retirement revision.
+    if matches!(kind, OperationKind::Delete) {
+        digest.update(
+            request
+                .context
+                .expected_revision
+                .map_or(0, meshspan_domain::Revision::get)
+                .to_be_bytes(),
+        );
     }
-    digest.update(
-        request
-            .context
-            .expected_revision
-            .map_or(0, meshspan_domain::Revision::get)
-            .to_be_bytes(),
-    );
     digest.update(request.object.backup_id.as_bytes());
     digest.update(request.object.destination_id.as_bytes());
     digest.update(request.object.provider_generation.to_be_bytes());
@@ -310,7 +331,7 @@ struct NewOperation<'a> {
 
 fn insert_object(
     transaction: &Transaction<'_>,
-    request: BackupStoreRequest,
+    object: BackupObjectIdentity,
     object_reference: &str,
     observed_at: UnixMicros,
 ) -> Result<(), DirectoryBackupProviderError> {
@@ -320,12 +341,12 @@ fn insert_object(
             byte_length, digest, state, stored_at, retired_at, retirement_revision
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, NULL, NULL)",
         params![
-            request.object.backup_id.as_bytes().as_slice(),
-            request.object.destination_id.as_bytes().as_slice(),
-            to_i64(request.object.provider_generation)?,
+            object.backup_id.as_bytes().as_slice(),
+            object.destination_id.as_bytes().as_slice(),
+            to_i64(object.provider_generation)?,
             object_reference,
-            to_i64(request.object.byte_length)?,
-            request.object.digest.as_slice(),
+            to_i64(object.byte_length)?,
+            object.digest.as_slice(),
             observed_at.get(),
         ],
     )?;

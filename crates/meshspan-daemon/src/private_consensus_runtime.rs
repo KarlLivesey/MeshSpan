@@ -13,6 +13,41 @@ use meshspan_domain::{NodeId, UnixMicros};
 use crate::create_mesh_setup::parse_uuid;
 use crate::{NodeEnrolmentController, NodeEnrolmentError};
 
+#[cfg(test)]
+#[path = "private_consensus_runtime_tests.rs"]
+mod tests;
+
+/// Builds the private hello's service roles from admitted roles and actual membership.
+pub(crate) fn advertised_node_roles(
+    node_id: NodeId,
+    roles: meshspan_metadata::JoinRoles,
+    plan: &meshspan_consensus::ActiveQuorumPlan,
+) -> Result<Vec<meshspan_protocol::v1::NodeRole>, ()> {
+    use meshspan_metadata::JoinRoles;
+    use meshspan_protocol::v1::NodeRole;
+    let mut advertised = Vec::with_capacity(3);
+    if roles.bits() & JoinRoles::STORAGE != 0 {
+        advertised.push(NodeRole::Storage);
+    }
+    if roles.bits() & JoinRoles::GATEWAY != 0 {
+        advertised.push(NodeRole::Gateway);
+    }
+    if plan.members().contains(&node_id) {
+        if !roles.metadata_eligible() {
+            return Err(());
+        }
+        advertised.push(if plan.voters().contains(&node_id) {
+            NodeRole::MetadataVoter
+        } else {
+            NodeRole::MetadataLearner
+        });
+    }
+    if advertised.is_empty() {
+        return Err(());
+    }
+    Ok(advertised)
+}
+
 /// One install-once live network used by the already-running metadata authority.
 #[derive(Default)]
 pub(crate) struct PrivateConsensusRuntime {

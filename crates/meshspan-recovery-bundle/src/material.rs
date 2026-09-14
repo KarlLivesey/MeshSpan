@@ -62,11 +62,18 @@ impl OfflineRecoveryIdentity {
 ///
 /// This type implements neither `Clone`, `Debug` nor key export convenience methods.
 pub struct RecoveredAuthority {
+    pub(crate) mesh_id: MeshId,
     recovery_key: WrappingPrivateKey,
-    root_authority: CertificateAuthority,
+    pub(crate) root_authority: CertificateAuthority,
 }
 
 impl RecoveredAuthority {
+    /// Returns the mesh identity authenticated by the opened offline bundle.
+    #[must_use]
+    pub const fn mesh_id(&self) -> MeshId {
+        self.mesh_id
+    }
+
     /// Returns the recovery public key for exact comparison with committed identity.
     #[must_use]
     pub fn public_wrapping_key(&self) -> WrappingPublicKey {
@@ -176,6 +183,7 @@ impl RecoveryBundle {
             return Err(RecoveryBundleError::Corrupt);
         }
         Ok(RecoveredAuthority {
+            mesh_id: self.mesh_id(),
             recovery_key,
             root_authority,
         })

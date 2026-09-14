@@ -36,6 +36,7 @@ pub(crate) struct ClusterBackupProviderResolver<'a> {
     local: RegisteredTargetBackupProviderResolver,
     network: Arc<PrivateConsensusRuntime>,
     runtime: tokio::runtime::Handle,
+    federation: Option<crate::federation_sessions::FederationBackupConsumer>,
 }
 
 impl<'a> ClusterBackupProviderResolver<'a> {
@@ -55,15 +56,53 @@ impl<'a> ClusterBackupProviderResolver<'a> {
             local,
             network,
             runtime,
+            federation: None,
         }
+    }
+
+    pub(crate) fn with_federation(
+        mut self,
+        federation: crate::federation_sessions::FederationBackupConsumer,
+    ) -> Self {
+        self.federation = Some(federation);
+        self
     }
 }
 
 impl MetadataBackupProviderResolver for ClusterBackupProviderResolver<'_> {
+    fn resolve_for_publication(
+        &mut self,
+        destination: &BackupDestinationRecord,
+        request: &crate::BackupPublicationRequest<'_>,
+        authority: &dyn crate::BackupPublicationAuthority,
+    ) -> Result<Box<dyn BackupProvider>, crate::BackupPublicationError> {
+        if matches!(
+            destination.binding,
+            BackupDestinationBinding::FederatedMesh { .. }
+        ) {
+            return self
+                .federation
+                .as_ref()
+                .ok_or(MetadataBackupProviderResolutionError::Unavailable)?
+                .prepare_publication(destination, request, authority, &self.runtime);
+        }
+        self.resolve(destination).map_err(Into::into)
+    }
+
     fn resolve(
         &mut self,
         destination: &BackupDestinationRecord,
     ) -> Result<Box<dyn BackupProvider>, MetadataBackupProviderResolutionError> {
+        if matches!(
+            destination.binding,
+            BackupDestinationBinding::FederatedMesh { .. }
+        ) {
+            return self
+                .federation
+                .as_ref()
+                .ok_or(MetadataBackupProviderResolutionError::Unavailable)?
+                .resolve(destination, self.runtime.clone());
+        }
         let BackupDestinationBinding::RegisteredTarget {
             target_id,
             target_generation,
@@ -150,6 +189,27 @@ impl RemoteBackupProvider {
 }
 
 impl BackupProvider for RemoteBackupProvider {
+    fn lookup_exact(
+        &self,
+        request: &meshspan_contracts::BackupLookupRequest,
+        observed_at: UnixMicros,
+    ) -> Result<BackupObjectReceipt, ContractError> {
+        let (network, header) = self.connection(request.context)?;
+        let connection = self
+            .runtime
+            .block_on(network.connect_data_peer(self.node_id))
+            .map_err(|_| ContractError::Unavailable)?;
+        self.runtime
+            .block_on(meshspan_data_plane::lookup_backup(
+                &connection,
+                header,
+                request,
+                network.wire_limits(),
+                observed_at,
+            ))
+            .map_err(|error| map_backup_plane_error(&error))
+    }
+
     fn describe(&self) -> ImplementationDescriptor {
         ImplementationDescriptor {
             implementation_id: "meshspan-private-quic-backup",
@@ -252,7 +312,7 @@ impl BackupProvider for RemoteBackupProvider {
     }
 }
 
-struct BlockingAsyncReader<'a>(&'a mut dyn Read);
+pub(crate) struct BlockingAsyncReader<'a>(pub(crate) &'a mut dyn Read);
 
 impl AsyncRead for BlockingAsyncReader<'_> {
     fn poll_read(
@@ -266,7 +326,7 @@ impl AsyncRead for BlockingAsyncReader<'_> {
     }
 }
 
-struct BlockingAsyncWriter<'a>(&'a mut dyn Write);
+pub(crate) struct BlockingAsyncWriter<'a>(pub(crate) &'a mut dyn Write);
 
 impl AsyncWrite for BlockingAsyncWriter<'_> {
     fn poll_write(
@@ -292,7 +352,9 @@ impl AsyncWrite for BlockingAsyncWriter<'_> {
     }
 }
 
-fn map_backup_plane_error(error: &meshspan_data_plane::BackupPlaneError) -> ContractError {
+pub(crate) fn map_backup_plane_error(
+    error: &meshspan_data_plane::BackupPlaneError,
+) -> ContractError {
     match error {
         meshspan_data_plane::BackupPlaneError::Remote(code) => match code {
             ErrorCode::Invalid => ContractError::InvalidInput,
@@ -309,6 +371,11 @@ fn map_backup_plane_error(error: &meshspan_data_plane::BackupPlaneError) -> Cont
         },
         meshspan_data_plane::BackupPlaneError::InvalidConfiguration
         | meshspan_data_plane::BackupPlaneError::Transport(_) => ContractError::Unavailable,
+        meshspan_data_plane::BackupPlaneError::Io(error)
+            if error.kind() == std::io::ErrorKind::TimedOut =>
+        {
+            ContractError::DeadlineExceeded
+        }
         meshspan_data_plane::BackupPlaneError::Io(_)
         | meshspan_data_plane::BackupPlaneError::Worker
         | meshspan_data_plane::BackupPlaneError::InvalidMessage => ContractError::InternalContract,
@@ -321,6 +388,18 @@ mod tests {
     use meshspan_metadata::{StorageTargetProviderContext, StorageUsageLimit};
 
     use super::{BackupRoute, classify_route};
+
+    #[test]
+    fn client_deadline_is_reported_as_a_deadline_not_an_internal_contract_failure() {
+        let error = meshspan_data_plane::BackupPlaneError::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "unknown remote outcome",
+        ));
+        assert_eq!(
+            super::map_backup_plane_error(&error),
+            meshspan_contracts::ContractError::DeadlineExceeded
+        );
+    }
 
     #[test]
     fn route_classification_is_exact_about_mesh_generation_and_owner()

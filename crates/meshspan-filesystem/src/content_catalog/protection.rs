@@ -249,7 +249,25 @@ impl DurableContentCatalog {
         after: Option<VolumeStripeCursor>,
         limit: usize,
     ) -> Result<VolumeStripePage, ContentCatalogError> {
-        volume_inventory::page(self, volume_id, after, limit)
+        volume_inventory::page(self, volume_id, after, limit, true)
+    }
+
+    /// Returns committed protected stripes, including unfinished eventual placements.
+    ///
+    /// Availability checks must not omit acknowledged content merely because optional
+    /// replicas are still pending. Each record includes only recorded, validated receipts;
+    /// the caller must verify actual surviving bytes. This local catalogue view is not an
+    /// admission barrier for publications concurrently arriving from other gateways.
+    ///
+    /// # Errors
+    /// Rejects invalid bounds or inconsistent committed manifest, layout or receipt records.
+    pub fn committed_volume_stripes(
+        &self,
+        volume_id: meshspan_domain::VolumeId,
+        after: Option<VolumeStripeCursor>,
+        limit: usize,
+    ) -> Result<VolumeStripePage, ContentCatalogError> {
+        volume_inventory::page(self, volume_id, after, limit, false)
     }
 
     /// Resolves one exact currently active shard route named by provider scrub evidence.
@@ -419,6 +437,53 @@ impl DurableContentCatalog {
         )
     }
 
+    /// Prepares a replacement route in an isolated, root-authorised recovery candidate.
+    ///
+    /// The caller must validate the original archive, selected replacement and exact durable
+    /// receipt, and keep this entire catalogue fenced from live service. The reserved revision
+    /// is the intended recovery activation revision, not a claim that consensus committed it.
+    /// A root-signed package must bind the resulting state before it leaves the coordinator;
+    /// service admission must separately commit/adopt that revision and verify readiness.
+    /// Uses the normal replay-safe route projection so immutable content never changes.
+    /// # Errors
+    /// Rejects unknown content, invalid receipts, conflicting replay or generation overflow.
+    pub fn prepare_recovery_shard_route(
+        &mut self,
+        content: crate::PublishedContentReference,
+        source: ShardRepairCandidate,
+        replacement: ShardReceipt,
+        reserved_revision: meshspan_domain::Revision,
+    ) -> Result<(), ContentCatalogError> {
+        if reserved_revision == meshspan_domain::Revision::ZERO
+            || content.manifest.manifest_id != source.manifest_id
+        {
+            return Err(ContentCatalogError::InvalidInput);
+        }
+        let content = self.reused_reference(content)?;
+        let committed = self.committed_layout(content)?;
+        if committed.request.format_version != 2 || committed.request.volume_id != source.volume_id
+        {
+            return Err(ContentCatalogError::InvalidInput);
+        }
+        let transition = ShardRepairTransition {
+            effect_operation_id: replacement.operation_id,
+            source_layout_generation: source.source_layout_generation,
+            replacement_layout_generation: source
+                .source_layout_generation
+                .checked_add(1)
+                .ok_or(ContentCatalogError::InvalidInput)?,
+            source_receipt: source.source_receipt,
+            replacement_receipt: replacement,
+            committed_revision: reserved_revision,
+        };
+        repair::install(
+            &mut self.connection,
+            committed.request,
+            content,
+            &transition,
+        )
+    }
+
     /// Installs one already-authoritative shard-location transition into the local read route.
     ///
     /// The immutable manifest and coding layout are never changed. Exact replay is a no-op;
@@ -433,6 +498,7 @@ impl DurableContentCatalog {
         content: crate::PublishedContentReference,
         transition: &ShardRepairTransition,
     ) -> Result<(), ContentCatalogError> {
+        let content = self.reused_reference(content)?;
         let committed = self.committed_layout(content)?;
         if committed.request.format_version != 2 {
             return Err(ContentCatalogError::InvalidInput);
@@ -450,6 +516,7 @@ impl DurableContentCatalog {
         content: crate::PublishedContentReference,
         chunk_index: u64,
     ) -> Result<CommittedProtectedStripe, ContentCatalogError> {
+        let content = self.reused_reference(content)?;
         let committed = self.committed_layout(content)?;
         self.active_protected_stripe(committed.request, content, chunk_index)
     }

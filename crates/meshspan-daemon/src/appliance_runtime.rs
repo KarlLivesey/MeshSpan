@@ -6,6 +6,9 @@
 #[path = "appliance_runtime_tests.rs"]
 mod tests;
 
+#[path = "metadata_read_fence_service.rs"]
+mod metadata_read_fence_service;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::future::Future;
@@ -22,11 +25,11 @@ use meshspan_api_contract::{
     CreateMeshSetupRequest, CreateMeshSetupResponse, HealthStatus, SetupState,
 };
 use meshspan_cluster::{
-    ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, ConsensusPeerConfig,
-    MetadataAuthorityConfig, MetadataAuthorityHandle, MetadataAuthorityRequestError,
-    MetadataAuthorityRuntimeError, MetadataAuthorityStartError, OutboundConsensusSnapshot,
-    PartitionConsensusDriver, PeerConsensusMessage, PeerControlRequest, PeerDataStream,
-    restore_member_incarnations, spawn_metadata_authority,
+    ConsensusNetwork, ConsensusNetworkError, ConsensusPeerConfig, MetadataAuthorityConfig,
+    MetadataAuthorityHandle, MetadataAuthorityRequestError, MetadataAuthorityRuntimeError,
+    MetadataAuthorityStartError, OutboundConsensusSnapshot, PartitionConsensusDriver,
+    PeerConsensusMessage, PeerControlRequest, PeerDataStream, restore_member_incarnations,
+    spawn_metadata_authority,
 };
 use meshspan_consensus::{
     ActiveQuorumPlan, ConsensusCore, CoreConfig, CoreError, QuorumPlanError, compile_plan,
@@ -128,7 +131,25 @@ use crate::{
 
 mod storage_folder_backend;
 
-const ROOT_AUTHORITY_DATABASE: &str = "root-authority.sqlite3";
+#[path = "private_network_bootstrap.rs"]
+mod private_network_bootstrap;
+
+#[path = "storage_node_authority.rs"]
+mod storage_node_authority;
+
+#[path = "storage_node_providers.rs"]
+mod storage_node_providers;
+
+#[path = "storage_node_certificates.rs"]
+mod storage_node_certificates;
+
+#[path = "storage_node_runtime.rs"]
+mod storage_node_runtime;
+
+#[path = "storage_node_maintenance.rs"]
+mod storage_node_maintenance;
+
+use crate::daemon_local_state::ROOT_AUTHORITY_DATABASE;
 const INITIAL_MEMBERSHIP_EPOCH: u64 = 1;
 const PRIVATE_CONTROL_CONCURRENCY: usize = 64;
 const UPLOAD_LIFETIME_MICROS: u64 = 24 * 60 * 60 * 1_000_000;
@@ -185,12 +206,16 @@ type BackupDestinationCatalogue =
     Arc<Mutex<BTreeMap<(BackupDestinationId, u64), ActiveBackupDestination>>>;
 
 struct StorageRuntimeComposition {
+    namespace_delivery: crate::native_gateway_sync::NamespaceDeliveryWorker,
     readiness: Arc<RuntimeReadiness>,
     targets: Arc<Mutex<StorageTargetRuntime>>,
     native_filesystem: NativeFilesystemRuntime,
 }
 
 struct ApplianceServiceComposition {
+    storage_targets: Arc<Mutex<StorageTargetRuntime>>,
+    federation: Box<crate::federation_sessions::FederationSessionConfiguration>,
+    namespace_delivery: crate::native_gateway_sync::NamespaceDeliveryWorker,
     update_readiness: crate::update_readiness::UpdateReadiness,
     data_plane: RuntimeDataPlane,
     updates: crate::update_service::distribution::UpdateDistribution,
@@ -201,7 +226,7 @@ struct ApplianceServiceComposition {
     notifications: crate::notification_runtime::NotificationRuntime,
     private_certificates: crate::private_certificate_renewal::PrivateCertificateRenewal,
     https_identity: RotatingHttpsIdentity,
-    gateway_observations: Arc<dyn meshspan_contracts::GatewayDispatchObserver>,
+    gateway_observations: Arc<crate::runtime_observations::RuntimeObservations>,
 }
 
 struct OperationAdministration {
@@ -219,6 +244,23 @@ struct DaemonNodeRuntime {
     received_data_streams: Option<tokio::sync::mpsc::Receiver<PeerDataStream>>,
     joining_peer_messages: Option<tokio::sync::mpsc::Receiver<PeerConsensusMessage>>,
     joining_control_requests: Option<tokio::sync::mpsc::Receiver<PeerControlRequest>>,
+}
+
+impl DaemonNodeRuntime {
+    fn incarnation(&self) -> Result<u64, DaemonProcessError> {
+        if self.setup_state.setup_state() != SetupState::Configured {
+            // First admission starts at one; an already configured node must have live trust.
+            return Ok(1);
+        }
+        let network = self
+            .private_network
+            .network()
+            .map_err(|()| DaemonProcessError::PrivateNetworkState)?;
+        if network.local_node_id() != self.local_state.node_id() {
+            return Err(DaemonProcessError::PrivateNetworkState);
+        }
+        Ok(network.local_incarnation())
+    }
 }
 
 struct PrivateAuthorityRuntime {
@@ -248,51 +290,15 @@ impl PrivateNetworkStarter {
             self.spawn_topology_reconciler(now)?;
             return Ok(());
         }
-        let repository = open_root_repository_at(&self.state_directory, now)?;
-        let mesh_id = repository
-            .local_mesh_id()?
-            .ok_or(DaemonProcessError::PrivateNetworkState)?;
-        let local_certificate = repository
-            .active_node_certificate(self.local_node_id)?
-            .ok_or(DaemonProcessError::PrivateNetworkState)?;
-        let online_authority = repository
-            .online_certificate_authority(mesh_id)?
-            .ok_or(DaemonProcessError::PrivateNetworkState)?;
-        let recovery = repository
-            .mesh_recovery_authority(mesh_id)?
-            .ok_or(DaemonProcessError::PrivateNetworkState)?;
-        let partition_id = repository.partition_id();
-        let client_address = if self.listen_address.is_ipv4() {
-            SocketAddr::from(([0, 0, 0, 0], 0))
-        } else {
-            SocketAddr::from(([0_u16; 8], 0))
-        };
         let (peer_messages, mut received_peer_messages) = tokio::sync::mpsc::channel(256);
         let (control_requests, received_control_requests) = tokio::sync::mpsc::channel(64);
-        let config = ConsensusNetworkConfig {
-            local_node_id: self.local_node_id,
-            local_incarnation: 1,
-            mesh_id,
-            partition_id,
-            routing_epoch: 1,
-            roles: vec![
-                NodeRole::Storage,
-                NodeRole::Gateway,
-                NodeRole::MetadataVoter,
-            ],
-            listen_address: self.listen_address,
-            client_address,
-            certificate_chain_der: vec![
-                local_certificate.certificate_der,
-                online_authority.certificate_der,
-            ],
-            certificate_generation: local_certificate.generation,
-            certificate_name: certificate_name(self.local_node_id),
-            private_key_pkcs8: Zeroizing::new(self.local_private_key_pkcs8.to_vec()),
-            trust_anchors: vec![recovery.root_certificate_der],
-            peers: Vec::new(),
-            snapshot_staging_path: None,
-        };
+        let config = private_network_bootstrap::configuration(
+            &self.state_directory,
+            self.local_node_id,
+            &self.local_private_key_pkcs8,
+            self.listen_address,
+            now,
+        )?;
         let network = {
             let _entered = self.runtime.enter();
             ConsensusNetwork::start_with_control_and_data(
@@ -365,6 +371,7 @@ impl PrivateNetworkStarter {
         let mutations = Arc::new(tokio::sync::Semaphore::new(1));
         let http01 = crate::http01_gateway::Http01PeerReader::new(&state_directory);
         let update_readiness = self.update_readiness.clone();
+        let history = crate::native_gateway_sync::NativeGatewayHistory::new(&state_directory);
         self.runtime.spawn(async move {
             while let Some(request) = requests.recv().await {
                 let Ok(permit) = Arc::clone(&permits).acquire_owned().await else {
@@ -376,6 +383,7 @@ impl PrivateNetworkStarter {
                 let runtime = runtime.clone();
                 let http01 = http01.clone();
                 let update_readiness = update_readiness.clone();
+                let history = history.clone();
                 let mutation_permit = (!private_control_is_fetch(&request))
                     .then(|| Arc::clone(&mutations).acquire_owned())
                     .map(|permit| async move { permit.await.ok() });
@@ -409,6 +417,7 @@ impl PrivateNetworkStarter {
                             &network,
                             &authority,
                             &state_directory,
+                            &history,
                             &runtime,
                             &request,
                         )
@@ -432,6 +441,7 @@ fn private_control_is_fetch(request: &PeerControlRequest) -> bool {
                 | Message::FetchNativeContentLayout(_)
                 | Message::FetchHttp01Challenge(_)
                 | Message::ProbeUpdateReadiness(_)
+                | Message::FetchMetadataReadFence(_)
         )
     )
 }
@@ -480,6 +490,45 @@ where
     let mut arguments = arguments.into_iter().peekable();
     if arguments
         .peek()
+        .is_some_and(|value| crate::recovery_preparation::recognises_command(value))
+    {
+        // Preserve repeated target attachments and one overflow item for closed parser rejection.
+        let values: Vec<_> = arguments
+            .take(crate::recovery_preparation::MAXIMUM_COMMAND_ARGUMENTS + 1)
+            .collect();
+        return tokio::task::spawn_blocking(move || {
+            crate::recovery_preparation::run_command(&values)
+        })
+        .await
+        .map_err(|_| crate::RecoveryPreparationError::Worker)?
+        .map_err(Into::into);
+    }
+    if arguments
+        .peek()
+        .is_some_and(|value| value == "install-recovery-keys")
+    {
+        arguments.next();
+        let values: Vec<_> = arguments.take(7).collect();
+        return tokio::task::spawn_blocking(move || {
+            crate::recovery_key_installation::install_command(&values)
+        })
+        .await
+        .map_err(|_| crate::RecoveryKeyInstallationError::Worker)?
+        .map_err(Into::into);
+    }
+    if arguments
+        .peek()
+        .is_some_and(|value| value == "verify-backup")
+    {
+        arguments.next();
+        let values: Vec<_> = arguments.take(6).collect();
+        return tokio::task::spawn_blocking(move || crate::offline_backup::verify_command(&values))
+            .await
+            .map_err(|_| crate::OfflineBackupError::Worker)?
+            .map_err(Into::into);
+    }
+    if arguments
+        .peek()
         .is_some_and(|value| value == "update-runtime-info")
     {
         if arguments.count() != 1 {
@@ -503,9 +552,12 @@ where
     let config = HeadlessDaemonConfig::parse(arguments)?;
     tokio::pin!(shutdown);
     loop {
-        match run_daemon_cycle(&config, shutdown.as_mut()).await? {
+        crate::update_installation::follow_selected(&config)
+            .await
+            .map_err(|_| DaemonProcessError::UpdateInstallation)?;
+        match Box::pin(run_daemon_cycle(&config, shutdown.as_mut())).await? {
             DaemonCycleExit::Shutdown => return Ok(()),
-            DaemonCycleExit::RestartForJoin => {}
+            DaemonCycleExit::RestartRequested => {}
         }
     }
 }
@@ -513,7 +565,7 @@ where
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum DaemonCycleExit {
     Shutdown,
-    RestartForJoin,
+    RestartRequested,
 }
 
 async fn run_daemon_cycle<F>(
@@ -524,7 +576,15 @@ where
     F: Future<Output = ()> + Send,
 {
     let started_at = current_time()?;
-    let mut node = initialise_daemon_node(config, started_at).await?;
+    let node = initialise_daemon_node(config, started_at).await?;
+    let (mut node, storage_only) = tokio::task::spawn_blocking(move || {
+        storage_node_runtime::required(&node, started_at).map(|required| (node, required))
+    })
+    .await
+    .map_err(|_| DaemonProcessError::LocalStateWorker)??;
+    if storage_only {
+        return storage_node_runtime::run(node, config, shutdown).await;
+    }
     let private_authority = start_private_authority(&mut node, config, started_at).await?;
     let (restart, restart_requests) = tokio::sync::mpsc::unbounded_channel();
     let services =
@@ -544,9 +604,15 @@ async fn initialise_daemon_node(
     config: &HeadlessDaemonConfig,
     started_at: UnixMicros,
 ) -> Result<DaemonNodeRuntime, DaemonProcessError> {
-    let mut local_state = DaemonLocalState::open(config, started_at)?;
+    let storage = config.storage().clone();
+    let claim_output = config.claim_output().map(std::path::Path::to_path_buf);
+    let mut local_state = tokio::task::spawn_blocking(move || {
+        DaemonLocalState::open_paths(&storage, claim_output.as_deref(), started_at)
+    })
+    .await
+    .map_err(|_| DaemonProcessError::LocalStateWorker)??;
     let setup_state = Arc::new(SetupStateSnapshot::new(SetupState::ClaimRequired));
-    let setup_lifecycle = setup_state.reconcile(local_state.local_database())?;
+    let setup_lifecycle = local_state.reconcile_setup(&setup_state)?;
     let private_endpoint = advertised_private_endpoint(config)?;
     let private_network = Arc::new(PrivateConsensusRuntime::default());
     let (data_streams, received_data_streams) = tokio::sync::mpsc::channel(128);
@@ -603,7 +669,7 @@ async fn initialise_daemon_node(
                 .map_err(|()| DaemonProcessError::PrivateNetworkState)?;
             joining_peer_messages = Some(joined.peer_messages);
             joining_control_requests = Some(joined.control_requests);
-            setup_state.reconcile(local_state.local_database())?;
+            local_state.reconcile_setup(&setup_state)?;
             if pending_join.is_some() {
                 remove_pending_join(&local_state.pending_interactive_join_path())
                     .map_err(|_| DaemonProcessError::InteractiveNodeJoin)?;
@@ -688,6 +754,7 @@ fn compose_appliance_services(
     started_at: UnixMicros,
 ) -> Result<ApplianceServiceComposition, DaemonProcessError> {
     let StorageRuntimeComposition {
+        namespace_delivery,
         readiness,
         targets: storage_targets,
         native_filesystem,
@@ -702,40 +769,33 @@ fn compose_appliance_services(
     let data_plane = RuntimeDataPlane::take_receiver(
         Arc::clone(&storage_targets),
         &mut node.received_data_streams,
+        private_authority.authority.clone(),
     )?;
-    spawn_storage_target_reconciler(Arc::clone(&storage_targets));
-    let gateway_observations: Arc<dyn meshspan_contracts::GatewayDispatchObserver> =
-        Arc::new(readiness.observations.clone());
-    let gateway = GatewaySessionIdentity::new(node.local_state.node_id(), 1)?;
+    let gateway_observations = Arc::new(readiness.observations.clone());
+    let gateway = GatewaySessionIdentity::new(node.local_state.node_id(), node.incarnation()?)?;
     let smb_connections = compose_smb_connections(
         node,
         &private_authority.authority,
         native_filesystem.clone(),
+        readiness.observations.clone(),
         started_at,
     )?;
-    let https_identity =
-        RotatingHttpsIdentity::new_bootstrap(node.local_state.bootstrap_certified_key()?)
-            .map_err(|_| DaemonProcessError::Certificate)?;
-    let certificates = compose_certificate_runtime(
-        &node.local_state,
+    let (certificates, https_identity, private_certificates) = compose_certificate_services(
+        node,
         &private_authority.authority,
-        &node.private_network,
-        https_identity.clone(),
+        readiness.observations.clone(),
         started_at,
     )?;
-    let private_certificates = compose_private_certificate_runtime(
-        &node.local_state,
-        &private_authority.authority,
-        &node.private_network,
+    let operations = private_authority.compose_operations(
+        node,
+        gateway,
         started_at,
+        crate::update_service::installation::UpdateProcessControl::new(
+            restart.clone(),
+            private_authority.network_starter.update_readiness.clone(),
+            native_filesystem.clone(),
+        ),
     )?;
-    let operations =
-        compose_operation_administration(node, &private_authority.authority, gateway, started_at)?;
-    let consensus_observations =
-        crate::consensus_observation_worker::ConsensusObservationWorker::new(
-            private_authority.authority.clone(),
-            readiness.observations.clone(),
-        );
     let router = Router::new()
         .merge(operations.routes)
         .merge(public_contract_api_router(readiness)?)
@@ -772,14 +832,20 @@ fn compose_appliance_services(
         )?)
         .fallback(crate::web_assets::serve);
     Ok(ApplianceServiceComposition {
+        federation: compose_federation_sessions(node, &storage_targets, started_at)?,
+        storage_targets,
+        namespace_delivery,
         update_readiness: private_authority.network_starter.update_readiness.clone(),
         data_plane,
-        updates: operations.updates,
-        consensus_observations,
-        router: crate::gateway_measurements::observe_https(
-            router,
-            Arc::clone(&gateway_observations),
-        ),
+        updates: operations
+            .updates
+            .with_observations(gateway_observations.as_ref().clone()),
+        consensus_observations:
+            crate::consensus_observation_worker::ConsensusObservationWorker::new(
+                private_authority.authority.clone(),
+                gateway_observations.as_ref().clone(),
+            ),
+        router: crate::gateway_measurements::observe_https(router, gateway_observations.clone()),
         smb_connections,
         certificates,
         notifications: operations.notifications,
@@ -789,62 +855,154 @@ fn compose_appliance_services(
     })
 }
 
-fn compose_operation_administration(
+/// Retain a dedicated metadata reader and locally protected identity for the federation owner.
+fn compose_federation_sessions(
+    node: &DaemonNodeRuntime,
+    storage: &Arc<Mutex<StorageTargetRuntime>>,
+    now: UnixMicros,
+) -> Result<Box<crate::federation_sessions::FederationSessionConfiguration>, DaemonProcessError> {
+    let state = &node.local_state;
+    Ok(Box::new(
+        crate::federation_sessions::FederationSessionConfiguration {
+            reader: open_root_repository(state, now)?,
+            database_path: state.state_directory().join(ROOT_AUTHORITY_DATABASE),
+            identity: crate::local_federation_identity::LocalFederationIdentity::open_or_create(
+                &state
+                    .state_directory()
+                    .join("secrets/federation-identity.v1"),
+                now,
+            )
+            .map_err(|_| DaemonProcessError::FederationIdentity)?,
+            node: state.node_id(),
+            backups: crate::federation_sessions::FederationBackupProviderConfiguration {
+                targets: storage
+                    .lock()
+                    .map_err(|_| DaemonProcessError::StorageTargetTaskStopped)?
+                    .federation_backup_targets
+                    .clone(),
+                authority_database: state.state_directory().join(ROOT_AUTHORITY_DATABASE),
+                local_database: state.state_directory().join("local.sqlite3"),
+                node: state.node_id(),
+            },
+            private_network: Arc::clone(&node.private_network),
+        },
+    ))
+}
+
+fn bind_federation_service(
+    configuration: crate::federation_sessions::FederationSessionConfiguration,
+    address: std::net::SocketAddr,
+    storage: &Arc<Mutex<StorageTargetRuntime>>,
+) -> Result<Arc<crate::federation_sessions::FederationSessions>, DaemonProcessError> {
+    let federation = Arc::new(
+        configuration
+            .bind(address)
+            .map_err(|_| DaemonProcessError::FederationSessions)?,
+    );
+    let storage = storage
+        .lock()
+        .map_err(|_| DaemonProcessError::StorageTargetTaskStopped)?;
+    storage
+        .federation_backup_consumer
+        .attach(&federation)
+        .map_err(|_| DaemonProcessError::FederationSessions)?;
+    storage
+        .federation_backup_owner
+        .attach(&federation)
+        .map_err(|_| DaemonProcessError::FederationSessions)?;
+    Ok(federation)
+}
+
+/// Compose public and internal certificate lifecycles; public listeners share the rotating owner.
+fn compose_certificate_services(
     node: &DaemonNodeRuntime,
     authority: &MetadataAuthorityHandle,
-    gateway: GatewaySessionIdentity,
+    observations: crate::runtime_observations::RuntimeObservations,
     now: UnixMicros,
-) -> Result<OperationAdministration, DaemonProcessError> {
-    let open = || {
-        open_authentication_authority(
-            &node.local_state,
-            authority,
-            Arc::clone(&node.private_network),
-            now,
+) -> Result<
+    (
+        CertificateRuntime,
+        RotatingHttpsIdentity,
+        crate::private_certificate_renewal::PrivateCertificateRenewal,
+    ),
+    DaemonProcessError,
+> {
+    let identity =
+        RotatingHttpsIdentity::new_bootstrap(node.local_state.bootstrap_certified_key()?)
+            .map_err(|_| DaemonProcessError::Certificate)?;
+    let certificates = compose_certificate_runtime(node, authority, identity.clone(), now)?
+        .with_observations(observations);
+    let private = compose_private_certificate_runtime(
+        &node.local_state,
+        authority,
+        &node.private_network,
+        now,
+    )?;
+    Ok((certificates, identity, private))
+}
+
+impl PrivateAuthorityRuntime {
+    fn compose_operations(
+        &self,
+        node: &DaemonNodeRuntime,
+        gateway: GatewaySessionIdentity,
+        now: UnixMicros,
+        update_control: crate::update_service::installation::UpdateProcessControl,
+    ) -> Result<OperationAdministration, DaemonProcessError> {
+        let open = || {
+            open_authentication_authority(
+                &node.local_state,
+                &self.authority,
+                Arc::clone(&node.private_network),
+                now,
+            )
+        };
+        let tls = crate::certificate_runtime::acme_client_config(
+            crate::certificate_runtime::native_trust_roots()
+                .map_err(|_| DaemonProcessError::Certificate)?,
         )
-    };
-    let tls = crate::certificate_runtime::acme_client_config(
-        crate::certificate_runtime::native_trust_roots()
-            .map_err(|_| DaemonProcessError::Certificate)?,
-    )
-    .map_err(|_| DaemonProcessError::Certificate)?;
-    let runtime = crate::notification_runtime::NotificationRuntime::new(
-        open()?,
-        node.local_state.open_wrapping_key()?,
-        crate::NotificationTransport::new(tls),
-        node.local_state.node_id(),
-        1,
-    );
-    let service = crate::notification_service::NotificationService::new(
-        open()?,
-        gateway,
-        node.local_state.open_wrapping_key()?,
-        runtime.health(),
-    );
-    let routes = crate::notification_api::router(service)?.merge(crate::update_api::router(
-        crate::update_service::UpdateService::new(open()?, gateway),
-        node.local_state.state_directory(),
-    )?);
-    Ok(OperationAdministration {
-        notifications: runtime,
-        updates: crate::update_service::distribution::UpdateDistribution::new(
+        .map_err(|_| DaemonProcessError::Certificate)?;
+        let runtime = crate::notification_runtime::NotificationRuntime::new(
+            open()?,
+            node.local_state.open_wrapping_key()?,
+            crate::NotificationTransport::new(tls),
+            node.local_state.node_id(),
+            node.incarnation()?,
+        );
+        let service = crate::notification_service::NotificationService::new(
             open()?,
             gateway,
-            Arc::clone(&node.private_network),
-            node.local_state.state_directory().to_path_buf(),
-        ),
-        routes,
-    })
+            node.local_state.open_wrapping_key()?,
+            runtime.health(),
+        );
+        let routes = crate::notification_api::router(service)?.merge(crate::update_api::router(
+            crate::update_service::UpdateService::new(open()?, gateway),
+            node.local_state.state_directory(),
+        )?);
+        Ok(OperationAdministration {
+            notifications: runtime,
+            updates: crate::update_service::distribution::UpdateDistribution::new(
+                open()?,
+                gateway,
+                Arc::clone(&node.private_network),
+                node.local_state.state_directory().to_path_buf(),
+                update_control,
+            ),
+            routes,
+        })
+    }
 }
 
 fn compose_smb_connections(
     node: &DaemonNodeRuntime,
     authority: &MetadataAuthorityHandle,
     filesystem: NativeFilesystemRuntime,
+    observations: crate::runtime_observations::RuntimeObservations,
     now: UnixMicros,
 ) -> Result<SmbConnectionFactory, DaemonProcessError> {
     Ok(SmbConnectionFactory::new(
         SmbConnectionFactoryConfiguration {
+            observations,
             authority_database: node
                 .local_state
                 .state_directory()
@@ -861,12 +1019,13 @@ fn compose_smb_connections(
 }
 
 fn compose_certificate_runtime(
-    local_state: &DaemonLocalState,
+    node: &DaemonNodeRuntime,
     authority: &MetadataAuthorityHandle,
-    private_network: &Arc<PrivateConsensusRuntime>,
     https_identity: RotatingHttpsIdentity,
     now: UnixMicros,
 ) -> Result<CertificateRuntime, DaemonProcessError> {
+    let local_state = &node.local_state;
+    let private_network = &node.private_network;
     let open_authority =
         || open_authentication_authority(local_state, authority, Arc::clone(private_network), now);
     CertificateRuntime::new(
@@ -886,7 +1045,7 @@ fn compose_certificate_runtime(
         local_state.open_wrapping_key()?,
         https_identity,
         local_state.node_id(),
-        1,
+        node.incarnation()?,
     )
     .map_err(|_| DaemonProcessError::Certificate)
 }
@@ -1017,7 +1176,7 @@ where
     shutdown_result?;
     authority_result.map_err(|_| DaemonProcessError::AuthorityTaskStopped)??;
     Ok(if restart_requested.load(Ordering::Acquire) {
-        DaemonCycleExit::RestartForJoin
+        DaemonCycleExit::RestartRequested
     } else {
         DaemonCycleExit::Shutdown
     })
@@ -1038,15 +1197,39 @@ where
         services.https_identity.server_config(),
         services.router,
     )
-    .await?;
+    .await?
+    .with_transfer_observer(services.gateway_observations.clone());
+    // Federation owns UDP at the actual HTTPS port, including port-zero test instances.
+    let federation = bind_federation_service(
+        *services.federation,
+        https.local_addr()?,
+        &services.storage_targets,
+    )?;
     let smb = SmbServer::bind(
         config.smb_listen(),
         SmbServerLimits::new(SMB_PACKET_BYTES, SMB_INACTIVITY_TIMEOUT)?,
     )
-    .await?;
+    .await?
+    .with_transfer_observer(services.gateway_observations.clone());
     let (stop, _) = tokio::sync::watch::channel(false);
+    // Composition reads shared catalogue/observation handles. Maintenance may wait
+    // for remote authority with the target lock held, so start it only after binding.
+    spawn_storage_target_reconciler(services.storage_targets);
     let serving = services.update_readiness.serving();
     let mut tasks = tokio::task::JoinSet::new();
+    let federation_stop = stop.subscribe();
+    let federation_observations = services.gateway_observations.as_ref().clone();
+    tasks.spawn(async move {
+        federation
+            .run_until(federation_stop, federation_observations)
+            .await
+            .map_err(|_| DaemonProcessError::FederationSessions)
+    });
+    let namespace_stop = stop.subscribe();
+    tasks.spawn(async move {
+        services.namespace_delivery.run_until(namespace_stop).await;
+        Ok(())
+    });
     let data_stop = stop.subscribe();
     let update_stop = stop.subscribe();
     tasks.spawn(async move {
@@ -1058,24 +1241,13 @@ where
         Ok(())
     });
     spawn_web_listeners(&mut tasks, &stop, https, http01);
-    let smb_stop = stop.subscribe();
-    let connections = services.smb_connections;
-    let observations = services.gateway_observations;
-    tasks.spawn(async move {
-        smb.run_until(
-            move || {
-                connections.open().map(|handler| {
-                    crate::gateway_measurements::ObservedSmbHandler::new(
-                        handler,
-                        Arc::clone(&observations),
-                    )
-                })
-            },
-            wait_for_shutdown(smb_stop),
-        )
-        .await
-        .map_err(DaemonProcessError::from)
-    });
+    spawn_smb_listener(
+        &mut tasks,
+        stop.subscribe(),
+        smb,
+        services.smb_connections,
+        services.gateway_observations,
+    );
     let certificate_stop = stop.subscribe();
     let observation_stop = stop.subscribe();
     tasks.spawn(async move {
@@ -1114,6 +1286,32 @@ where
             })
     });
     supervise_services(tasks, stop, lifecycle, serving).await
+}
+
+/// The SMB task owns its connection factory, per-connection measurements and cancellation.
+fn spawn_smb_listener(
+    tasks: &mut tokio::task::JoinSet<Result<(), DaemonProcessError>>,
+    stop: tokio::sync::watch::Receiver<bool>,
+    server: SmbServer,
+    connections: SmbConnectionFactory,
+    observations: Arc<crate::runtime_observations::RuntimeObservations>,
+) {
+    tasks.spawn(async move {
+        server
+            .run_until(
+                move || {
+                    connections.open().map(|handler| {
+                        crate::gateway_measurements::ObservedSmbHandler::new(
+                            handler,
+                            observations.clone(),
+                        )
+                    })
+                },
+                wait_for_shutdown(stop),
+            )
+            .await
+            .map_err(DaemonProcessError::from)
+    });
 }
 
 /// Own shutdown ordering and result collection independently of listener/worker construction.
@@ -1217,7 +1415,8 @@ fn compose_storage_runtime(
             Arc::clone(private_network),
             runtime.clone(),
         )
-        .map_err(|_| DaemonProcessError::NativeFilesystemConfiguration)?,
+        .map_err(|_| DaemonProcessError::NativeFilesystemConfiguration)?
+        .with_observations(readiness.observations.clone()),
     );
     let services = StorageTargetRuntimeServices {
         wrapping_registration: NodeWrappingKeyRegistrationService::new(
@@ -1260,6 +1459,13 @@ fn compose_storage_runtime(
         Arc::clone(&readiness),
     );
     Ok(StorageRuntimeComposition {
+        namespace_delivery: crate::native_gateway_sync::NamespaceDeliveryWorker::new(
+            local_state.state_directory(),
+            local_state.node_id(),
+            Arc::clone(private_network),
+            native_filesystem.clone(),
+        )
+        .map_err(|_| DaemonProcessError::PrivateNetworkState)?,
         readiness,
         targets: Arc::new(Mutex::new(targets)),
         native_filesystem,
@@ -1287,13 +1493,16 @@ fn start_root_authority(
     let recovery_plan = active_plan.recovery_configuration_plan().clone();
     let incarnations = restore_member_incarnations(&repository, &active_plan)
         .map_err(|_| DaemonProcessError::PrivateNetworkState)?;
+    let local_incarnation = incarnations
+        .incarnation(node_id)
+        .ok_or(DaemonProcessError::PrivateNetworkState)?;
     let durable = repository.load_consensus_state(active_plan.membership_epoch())?;
     let authority_epoch = active_plan.membership_epoch();
     let core = ConsensusCore::restore_active(
         CoreConfig {
             partition_id,
             local_node_id: node_id,
-            local_incarnation: 1,
+            local_incarnation,
             plan: recovery_plan,
             member_incarnations: incarnations,
         },
@@ -1658,6 +1867,11 @@ fn authenticated_administration_routes(
                 .map_err(|_| DaemonProcessError::StorageTargetTaskStopped)?,
         ),
         Arc::clone(private_network),
+        storage_targets
+            .lock()
+            .map_err(|_| DaemonProcessError::StorageTargetTaskStopped)?
+            .federation_backup_consumer
+            .clone(),
     ));
     let readiness = crate::backup_readiness_api::router(
         crate::backup_readiness_service::BackupReadinessService::new(
@@ -1687,7 +1901,10 @@ fn authenticated_administration_routes(
 
 // Share the provider catalogue, not the maintenance runtime's lock. Catalogue guards cover
 // only handle lookup/replacement; provider IO and reconciliation run after they are released.
-struct BackupExportTargetSnapshot(BackupDestinationCatalogue);
+struct BackupExportTargetSnapshot {
+    catalogue: BackupDestinationCatalogue,
+    startup: Arc<crate::backup_export_service::BackupProviderStartup>,
+}
 
 impl BackupExportTargetSnapshot {
     fn from_runtime(
@@ -1696,14 +1913,21 @@ impl BackupExportTargetSnapshot {
         let runtime = runtime
             .lock()
             .map_err(|_| crate::BackupExportError::Unavailable)?;
-        Ok(Self(Arc::clone(&runtime.backup_services)))
+        Ok(Self {
+            catalogue: Arc::clone(&runtime.backup_services),
+            startup: Arc::clone(&runtime.backup_startup),
+        })
     }
 }
 
 impl crate::backup_export_service::BackupExportProviders for BackupExportTargetSnapshot {
+    fn wait_until_initialised(&self, deadline: UnixMicros) -> Result<(), crate::BackupExportError> {
+        self.startup.wait(deadline)
+    }
+
     fn snapshot(&self) -> Result<Vec<crate::RegisteredBackupTarget>, crate::BackupExportError> {
         let catalogue = self
-            .0
+            .catalogue
             .lock()
             .map_err(|_| crate::BackupExportError::Unavailable)?;
         Ok(catalogue
@@ -1728,8 +1952,24 @@ fn join_grant_routes(
     now: UnixMicros,
     https_identity: RotatingHttpsIdentity,
 ) -> Result<Router, DaemonProcessError> {
-    Ok(node_join_grant_api_router(
-        NodeJoinGrantIssuanceService::new(
+    let pairing = crate::federation_pairing_service::FederationPairingService::new(
+        open_authentication_authority(local_state, authority, Arc::clone(private_network), now)?,
+        open_authentication_authority(local_state, authority, Arc::clone(private_network), now)?,
+        local_state.open_wrapping_key()?,
+        crate::federation_pairing_service::PairingGateway {
+            gateway,
+            https: https_identity.clone(),
+            federation: crate::local_federation_identity::LocalFederationIdentity::open_or_create(
+                &local_state
+                    .state_directory()
+                    .join("secrets/federation-identity.v1"),
+                now,
+            )
+            .map_err(|_| DaemonProcessError::FederationIdentity)?,
+        },
+    );
+    Ok(
+        node_join_grant_api_router(NodeJoinGrantIssuanceService::new(
             open_authentication_authority(
                 local_state,
                 authority,
@@ -1745,8 +1985,9 @@ fn join_grant_routes(
             local_state.open_wrapping_key()?,
             gateway,
             https_identity,
-        ),
-    )?)
+        ))?
+        .merge(crate::federation_pairing_api::federation_pairing_api_router(pairing)?),
+    )
 }
 
 fn security_administration_routes(
@@ -1953,6 +2194,7 @@ async fn handle_private_control(
     network: &ConsensusNetwork,
     authority: &MetadataAuthorityHandle,
     state_directory: &std::path::Path,
+    history: &crate::native_gateway_sync::NativeGatewayHistory,
     runtime: &tokio::runtime::Handle,
     request: &PeerControlRequest,
 ) -> Result<ControlEnvelope, DaemonProcessError> {
@@ -1969,20 +2211,19 @@ async fn handle_private_control(
             .map_err(|_| DaemonProcessError::PrivateNetworkState)?,
     )
     .map_err(|_| DaemonProcessError::PrivateNetworkState)?;
-    if let Some(Message::MetadataCommand(command)) = envelope.message.as_ref() {
-        return crate::metadata_forwarding::handle(
-            network,
-            authority,
-            operation_id,
-            header.deadline_unix_micros,
-            command,
-        )
-        .await
-        .map_err(|_| DaemonProcessError::PrivateNetworkState);
+    if let Some(Message::FetchMetadataReadFence(_)) = envelope.message.as_ref() {
+        return metadata_read_fence_service::handle(network, authority, state_directory, request)
+            .await
+            .map_err(|_| DaemonProcessError::PrivateNetworkState);
+    }
+    if let Some(Message::MetadataCommand(_)) = envelope.message.as_ref() {
+        return crate::metadata_forwarding::handle(network, authority, state_directory, request)
+            .await
+            .map_err(|_| DaemonProcessError::PrivateNetworkState);
     }
     if let Some(response) = crate::native_gateway_sync::handle(
         network,
-        state_directory,
+        history,
         request,
         operation_id,
         header,
@@ -2658,6 +2899,8 @@ impl ReadinessSource for RuntimeReadiness {
 }
 
 struct StorageTargetRuntime {
+    protection_observations: crate::protection_observation_worker::ProtectionObservationWorker,
+    maintenance_observations: crate::maintenance_observation_worker::MaintenanceObservationWorker,
     wrapping_registration:
         NodeWrappingKeyRegistrationService<ConsensusAuthenticationAuthority, OperatingSystemRandom>,
     registration:
@@ -2675,6 +2918,13 @@ struct StorageTargetRuntime {
     backup_retention: crate::metadata_backup_retention::MetadataBackupRetentionWorker,
     backup_authority: crate::remote_backup_authority::ConsensusRemoteBackupAuthority,
     backup_services: BackupDestinationCatalogue,
+    federation_backup_targets: crate::federation_sessions::FederationBackupTargets,
+    federation_backup_consumer: crate::federation_sessions::FederationBackupConsumer,
+    federation_backup_owner: crate::federation_sessions::FederationBackupOwner,
+    federation_storage_provisioner:
+        crate::federation_storage_provisioner::FederationStorageProvisioner,
+    federation_storage_sealer: crate::federation_storage_sealer::FederationStorageSealer,
+    backup_startup: Arc<crate::backup_export_service::BackupProviderStartup>,
     private_network: Arc<PrivateConsensusRuntime>,
     runtime: tokio::runtime::Handle,
     state_directory: PathBuf,
@@ -2725,6 +2975,15 @@ impl StorageTargetRuntime {
     ) -> Self {
         Self {
             wrapping_registration: services.wrapping_registration,
+            maintenance_observations:
+                crate::maintenance_observation_worker::MaintenanceObservationWorker::new(
+                    readiness.observations.clone(),
+                ),
+            protection_observations:
+                crate::protection_observation_worker::ProtectionObservationWorker::new(
+                    native_filesystem.clone(),
+                    readiness.observations.clone(),
+                ),
             registration: services.registration,
             opening: services.opening,
             data_permits: services.data_permits,
@@ -2735,6 +2994,20 @@ impl StorageTargetRuntime {
                 crate::metadata_backup_retention::MetadataBackupRetentionWorker::default(),
             backup_authority: services.backup_authority,
             backup_services: Arc::new(Mutex::new(BTreeMap::new())),
+            federation_backup_targets: crate::federation_sessions::FederationBackupTargets::default(
+            ),
+            federation_backup_consumer:
+                crate::federation_sessions::FederationBackupConsumer::default(),
+            federation_backup_owner: crate::federation_sessions::FederationBackupOwner::default(),
+            federation_storage_provisioner:
+                crate::federation_storage_provisioner::FederationStorageProvisioner::default(),
+            federation_storage_sealer:
+                crate::federation_storage_sealer::FederationStorageSealer::new(
+                    services
+                        .state_directory
+                        .join("secrets/federation-identity.v1"),
+                ),
+            backup_startup: Arc::default(),
             private_network: services.private_network,
             runtime: services.runtime,
             state_directory: services.state_directory,
@@ -2806,6 +3079,9 @@ impl StorageTargetRuntime {
     }
 
     fn refresh_backup_services(&mut self, now: UnixMicros) -> Result<(), ()> {
+        self.federation_backup_targets
+            .replace(self.active.iter())
+            .map_err(|_| ())?;
         let page_limit = PageLimit::new(256).map_err(|_| ())?;
         let mut after = None;
         let mut active_routes = BTreeSet::new();
@@ -2938,7 +3214,10 @@ impl StorageTargetRuntime {
         // providers from the resulting projection even when it made no defaults transition.
         self.refresh_backup_services(now)?;
         let local_targets = crate::backup_export_service::BackupExportProviders::snapshot(
-            &BackupExportTargetSnapshot(Arc::clone(&self.backup_services)),
+            &BackupExportTargetSnapshot {
+                catalogue: Arc::clone(&self.backup_services),
+                startup: Arc::clone(&self.backup_startup),
+            },
         )
         .map_err(|_| ())?;
         let local =
@@ -2950,7 +3229,9 @@ impl StorageTargetRuntime {
             local,
             Arc::clone(&self.private_network),
             self.runtime.clone(),
-        );
+        )
+        .with_federation(self.federation_backup_consumer.clone());
+        let (_, worker_incarnation) = self.worker_identity()?;
         let mut cycle = crate::ComposedMetadataBackupCycle {
             authority: &self.maintenance_authority,
             local: &mut self.maintenance_progress,
@@ -2958,22 +3239,23 @@ impl StorageTargetRuntime {
             random: &mut random,
             state_directory: &self.state_directory,
             worker_node_id: self.local_node_id,
-            worker_incarnation: 1,
+            worker_incarnation,
             actor_principal_id,
         };
-        let backup_result = self
-            .backup_worker
-            .run_once(
-                &mut cycle,
-                now,
-                crate::MetadataBackupWorkerLimits {
-                    lease_duration: DurationMicros::new(METADATA_BACKUP_LEASE_MICROS),
-                    provider_timeout: DurationMicros::new(METADATA_BACKUP_PROVIDER_TIMEOUT_MICROS),
-                    destination_page_items: METADATA_BACKUP_DESTINATION_PAGE_ITEMS,
-                },
-            )
-            .map(|_| ())
-            .map_err(|_| ());
+        let started = std::time::Instant::now();
+        let backup_outcome = self.backup_worker.run_once(
+            &mut cycle,
+            now,
+            crate::MetadataBackupWorkerLimits {
+                lease_duration: DurationMicros::new(METADATA_BACKUP_LEASE_MICROS),
+                provider_timeout: DurationMicros::new(METADATA_BACKUP_PROVIDER_TIMEOUT_MICROS),
+                destination_page_items: METADATA_BACKUP_DESTINATION_PAGE_ITEMS,
+            },
+        );
+        self.readiness
+            .observations
+            .record_backup(&backup_outcome, started.elapsed());
+        let backup_result = backup_outcome.map(|_| ()).map_err(|_| ());
         let retention_result = self
             .backup_retention
             .run_once(
@@ -2994,7 +3276,16 @@ impl StorageTargetRuntime {
             )
             .map_err(|_| ())
             .and_then(|outcome| if outcome.failed == 0 { Ok(()) } else { Err(()) });
-        backup_result.and(retention_result)
+        let staging_result = self
+            .backup_retention
+            .reclaim_abandoned_staging(
+                &self.maintenance_authority,
+                &mut self.maintenance_progress,
+                &self.state_directory,
+            )
+            .map(|_| ())
+            .map_err(|_| ());
+        backup_result.and(retention_result).and(staging_result)
     }
 
     fn execute_one_scope_drain(&mut self) -> Result<(), ()> {
@@ -3136,7 +3427,7 @@ impl StorageTargetRuntime {
         let execution = maintenance_verification_execution(
             assignment,
             WorkKind::Scrub,
-            self.local_node_id,
+            self.worker_identity()?,
             actor,
             now,
         )?;
@@ -3192,7 +3483,7 @@ impl StorageTargetRuntime {
         let execution = maintenance_verification_execution(
             assignment,
             WorkKind::Reconcile,
-            self.local_node_id,
+            self.worker_identity()?,
             actor,
             now,
         )?;
@@ -3304,7 +3595,7 @@ impl StorageTargetRuntime {
         let actor = self.maintenance_actor(now)?;
         let execution = maintenance_repair_execution(
             assignment,
-            self.local_node_id,
+            self.worker_identity()?,
             actor,
             now,
             authorization_revision,
@@ -3351,7 +3642,7 @@ impl StorageTargetRuntime {
         let actor = self.maintenance_actor(now)?;
         let execution = maintenance_target_drain_execution(
             assignment,
-            self.local_node_id,
+            self.worker_identity()?,
             actor,
             observed_authority_revision,
             now,
@@ -3390,7 +3681,7 @@ impl StorageTargetRuntime {
             .map_err(|_| ())?;
         let actor = self.maintenance_actor(now)?;
         let execution =
-            maintenance_rebalance_execution(assignment, self.local_node_id, actor, now)?;
+            maintenance_rebalance_execution(assignment, self.worker_identity()?, actor, now)?;
         observation.finish(
             execute_rebalance_step(
                 &self.maintenance_authority,
@@ -3445,6 +3736,7 @@ impl StorageTargetRuntime {
         self.next_target_health_probe_at =
             now.checked_add(DurationMicros::new(TARGET_HEALTH_PROBE_INTERVAL_MICROS));
         let mut usage = crate::runtime_observations::StorageUsagePass::default();
+        let mut compaction_failures = 0_usize;
         let unavailable = self
             .active
             .iter()
@@ -3457,6 +3749,9 @@ impl StorageTargetRuntime {
                     started.elapsed(),
                     current_time().ok(),
                 );
+                if passed && target.maintain_packs(now).is_err() {
+                    compaction_failures = compaction_failures.saturating_add(1);
+                }
                 usage.observe(if passed {
                     meshspan_contracts::StorageUsageSource::observe_usage(&target.provider())
                 } else {
@@ -3467,7 +3762,7 @@ impl StorageTargetRuntime {
             .collect::<Vec<_>>();
         self.readiness.observations.record_storage_usage(usage);
         if unavailable.is_empty() {
-            return Ok(0);
+            return Ok(compaction_failures);
         }
         for canonical_path in &unavailable {
             if let Some(target) = self.active.remove(canonical_path) {
@@ -3478,7 +3773,7 @@ impl StorageTargetRuntime {
         self.native_filesystem
             .invalidate_target_set()
             .map_err(|_| ())?;
-        Ok(unavailable.len())
+        Ok(unavailable.len().saturating_add(compaction_failures))
     }
 
     fn admit_return_scans(&mut self, now: UnixMicros) -> Result<(), ()> {
@@ -3529,6 +3824,14 @@ impl StorageTargetRuntime {
                 failures = failures.saturating_add(1);
                 continue;
             };
+            // A previously absent mount may return at a different symlink destination.
+            // Reject state overlap before registration can write even a target marker.
+            if canonical_path.starts_with(&self.state_directory)
+                || self.state_directory.starts_with(&canonical_path)
+            {
+                failures = failures.saturating_add(1);
+                continue;
+            }
             if self.active.contains_key(&canonical_path) {
                 continue;
             }
@@ -3541,7 +3844,12 @@ impl StorageTargetRuntime {
                                 .insert(context.target_id, (context.generation, now));
                             self.active.insert(
                                 canonical_path,
-                                NativeStorageTarget::new(context, provider),
+                                NativeStorageTarget::new(
+                                    context,
+                                    provider.with_io_observer(Arc::new(
+                                        self.readiness.observations.clone(),
+                                    )),
+                                ),
                             );
                             self.usage_dirty = true;
                         }
@@ -3551,19 +3859,37 @@ impl StorageTargetRuntime {
                 Err(_) => failures = failures.saturating_add(1),
             }
         }
-        if self.admit_return_scans(now).is_err() {
-            failures = failures.saturating_add(1);
-        }
         if !self.active.is_empty() {
             let targets = self.active.values().cloned().collect::<Vec<_>>();
             if self.native_filesystem.ensure_open(&targets, now).is_err() {
                 failures = failures.saturating_add(1);
             }
-            if self.run_maintenance_tick(now).is_err() {
-                failures = failures.saturating_add(1);
-            }
+        }
+        // Restore retained backup routes before a return scan can wait for consensus.
+        // Exports wait for this local scan, never for the maintenance cycle to finish.
+        if self.refresh_backup_services(now).is_err() || self.backup_startup.finish_scan().is_err()
+        {
+            failures = failures.saturating_add(1);
+        }
+        // Existing locally verified content must open before best-effort maintenance
+        // admission can wait for a disconnected consensus owner.
+        if self.admit_return_scans(now).is_err() {
+            failures = failures.saturating_add(1);
+        }
+        failures = failures.saturating_add(self.reconcile_federation_capacity(now));
+        if !self.active.is_empty() && self.run_maintenance_tick(now).is_err() {
+            failures = failures.saturating_add(1);
         }
         self.readiness.store_degraded(failures > 0);
+        self.maintenance_observations.tick(
+            self.maintenance_authority.reader(),
+            &self.maintenance_progress,
+        );
+        self.protection_observations.tick(
+            self.maintenance_authority.reader(),
+            &self.active.values().cloned().collect::<Vec<_>>(),
+            now,
+        );
         if self.usage_dirty {
             self.observe_open_target_usage();
             self.usage_dirty = false;
@@ -3580,6 +3906,33 @@ impl StorageTargetRuntime {
         );
     }
 
+    fn reconcile_federation_capacity(&mut self, now: UnixMicros) -> usize {
+        // A committed withdrawal precedes reuse. Failure in one grant must not prevent
+        // independent grants being provisioned; issuance revalidates all quota evidence.
+        let seal_failed = self
+            .federation_storage_sealer
+            .tick(
+                &self.maintenance_authority,
+                &mut self.maintenance_progress,
+                self.active.values(),
+                now,
+            )
+            .is_err();
+        let allocation_failed = self
+            .federation_storage_provisioner
+            .tick(&self.maintenance_authority, self.active.values(), now)
+            .is_err();
+        usize::from(seal_failed) + usize::from(allocation_failed)
+    }
+
+    fn worker_identity(&self) -> Result<(NodeId, u64), ()> {
+        let network = self.private_network.network()?;
+        if network.local_node_id() != self.local_node_id {
+            return Err(());
+        }
+        Ok((self.local_node_id, network.local_incarnation()))
+    }
+
     fn observe_open_target_usage(&self) {
         let mut usage = crate::runtime_observations::StorageUsagePass::default();
         for target in self.active.values() {
@@ -3594,7 +3947,7 @@ impl StorageTargetRuntime {
 fn maintenance_verification_execution(
     assignment: crate::MaintenanceDispatchAssignment,
     expected_kind: WorkKind,
-    worker_node_id: NodeId,
+    (worker_node_id, worker_incarnation): (NodeId, u64),
     actor_principal_id: PrincipalId,
     now: UnixMicros,
 ) -> Result<ResumableStorageScrubExecution, ()> {
@@ -3637,7 +3990,7 @@ fn maintenance_verification_execution(
             work_id: assignment.work_id,
             claim_generation: assignment.claim_generation,
             worker_node_id,
-            worker_incarnation: 1,
+            worker_incarnation,
             fence,
             lease_expires_at,
         },
@@ -3651,7 +4004,7 @@ fn maintenance_verification_execution(
 
 fn maintenance_target_drain_execution(
     assignment: crate::MaintenanceDispatchAssignment,
-    worker_node_id: NodeId,
+    (worker_node_id, worker_incarnation): (NodeId, u64),
     actor_principal_id: PrincipalId,
     observed_authority_revision: Revision,
     now: UnixMicros,
@@ -3686,7 +4039,7 @@ fn maintenance_target_drain_execution(
             work_id: assignment.work_id,
             claim_generation: assignment.claim_generation,
             worker_node_id,
-            worker_incarnation: 1,
+            worker_incarnation,
             fence,
             lease_expires_at,
         },
@@ -3699,7 +4052,7 @@ fn maintenance_target_drain_execution(
 
 fn maintenance_rebalance_execution(
     assignment: crate::MaintenanceDispatchAssignment,
-    worker_node_id: NodeId,
+    (worker_node_id, worker_incarnation): (NodeId, u64),
     actor_principal_id: PrincipalId,
     now: UnixMicros,
 ) -> Result<RebalanceExecution, ()> {
@@ -3728,7 +4081,7 @@ fn maintenance_rebalance_execution(
             work_id: assignment.work_id,
             claim_generation: assignment.claim_generation,
             worker_node_id,
-            worker_incarnation: 1,
+            worker_incarnation,
             fence,
             lease_expires_at,
         },
@@ -3745,7 +4098,7 @@ fn maintenance_rebalance_execution(
 )]
 fn maintenance_repair_execution(
     assignment: crate::MaintenanceDispatchAssignment,
-    worker_node_id: NodeId,
+    (worker_node_id, worker_incarnation): (NodeId, u64),
     actor_principal_id: PrincipalId,
     now: UnixMicros,
     authorization_revision: Revision,
@@ -3794,7 +4147,7 @@ fn maintenance_repair_execution(
             work_id: assignment.work_id,
             claim_generation: assignment.claim_generation,
             worker_node_id,
-            worker_incarnation: 1,
+            worker_incarnation,
             fence,
             lease_expires_at,
         },
@@ -3918,6 +4271,18 @@ use data_runtime::RuntimeDataPlane;
 /// Closed headless-process failures which never expose claim, key or request material.
 #[derive(Debug, Error)]
 pub enum DaemonProcessError {
+    /// Dedicated federation socket or its owned lifecycle failed.
+    #[error("daemon federation session runtime failed")]
+    FederationSessions,
+    /// Offline backup verification failed without admitting restored state into service.
+    #[error(transparent)]
+    OfflineBackup(#[from] crate::OfflineBackupError),
+    /// Offline preparation refused unsafe input, incomplete work or failed persistence.
+    #[error(transparent)]
+    RecoveryPreparation(#[from] crate::RecoveryPreparationError),
+    /// Isolated recovery-key installation failed without opening service admission.
+    #[error(transparent)]
+    RecoveryKeyInstallation(#[from] crate::RecoveryKeyInstallationError),
     /// Read-only local update candidate verification failed.
     #[error(transparent)]
     UpdateCandidate(#[from] crate::UpdateCandidateError),
@@ -3927,6 +4292,9 @@ pub enum DaemonProcessError {
     /// Daemon-local state could not be opened safely.
     #[error("daemon local state failed")]
     LocalState(#[from] DaemonLocalStateError),
+    /// The owned startup worker stopped before returning validated local state.
+    #[error("daemon local state worker stopped")]
+    LocalStateWorker,
     /// The daemon state directory could not be inspected safely.
     #[error("daemon state path inspection failed")]
     StatePath(#[from] std::io::Error),
@@ -4020,6 +4388,12 @@ pub enum DaemonProcessError {
     /// Manager-only node join-grant API construction failed.
     #[error("daemon node join-grant API failed")]
     NodeJoinGrantIssuanceApi(#[from] NodeJoinGrantIssuanceApiError),
+    /// Federation invitation HTTP routes could not be constructed.
+    #[error("federation pairing API construction failed")]
+    FederationPairingApi(#[from] crate::FederationPairingApiError),
+    /// Node-local federation keys or certificates could not be opened safely.
+    #[error("protected federation identity failed")]
+    FederationIdentity,
     /// Anonymous pre-authorised node-enrolment API construction failed.
     #[error("daemon node-enrolment API failed")]
     NodeEnrolmentApi(#[from] NodeEnrolmentApiError),
@@ -4034,6 +4408,9 @@ pub enum DaemonProcessError {
     /// Interactive admission or its protected restart hand-off failed closed.
     #[error("daemon interactive node join failed")]
     InteractiveNodeJoin,
+    /// An authorised executable selection could not be followed safely.
+    #[error("daemon update installation failed")]
+    UpdateInstallation,
     /// HTTPS admission is durable but private activation and catch-up remain incomplete.
     #[error("daemon node admission is durable but private activation is pending")]
     NodeActivationPending,

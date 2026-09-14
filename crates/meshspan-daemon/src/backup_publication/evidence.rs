@@ -19,7 +19,9 @@ use sha2::{Digest, Sha256};
 use super::BackupPublicationError;
 
 #[derive(Clone, Copy)]
-pub(super) enum PublicationStep {
+pub(crate) enum PublicationStep {
+    BindUploadIntent,
+    BindFederatedRoute,
     RecordBackup,
     RecordCopy,
     StoreProvider,
@@ -30,9 +32,11 @@ pub(super) enum PublicationStep {
 impl PublicationStep {
     const fn domain(self) -> &'static [u8] {
         match self {
+            Self::BindUploadIntent => b"meshspan.backup-publication.bind-upload-intent.v1\0",
+            Self::BindFederatedRoute => b"meshspan.backup-publication.bind-federated-route.v1\0",
             Self::RecordBackup => b"meshspan.backup-publication.record-backup.v1\0",
             Self::RecordCopy => b"meshspan.backup-publication.record-copy.v1\0",
-            Self::StoreProvider => b"meshspan.backup-publication.store-provider.v1\0",
+            Self::StoreProvider => b"meshspan.backup-publication.store-provider.v2\0",
             Self::VerifyProvider => b"meshspan.backup-publication.verify-provider.v1\0",
             Self::VerifyCopy => b"meshspan.backup-publication.verify-copy.v1\0",
         }
@@ -80,7 +84,7 @@ pub(super) fn record_copy(receipt: &BackupObjectReceipt) -> meshspan_metadata::R
     }
 }
 
-pub(super) fn object_identity(
+pub(crate) fn object_identity(
     evidence: BackupFileEvidence,
     destination_id: BackupDestinationId,
     provider_generation: u64,
@@ -145,7 +149,7 @@ pub(super) fn validate_copy(
     }
 }
 
-pub(super) fn command_context(
+pub(crate) fn command_context(
     step: PublicationStep,
     evidence: BackupFileEvidence,
     destination_id: BackupDestinationId,
@@ -161,7 +165,7 @@ pub(super) fn command_context(
     })
 }
 
-pub(super) fn provider_context(
+pub(crate) fn provider_context(
     step: PublicationStep,
     evidence: BackupFileEvidence,
     destination_id: BackupDestinationId,
@@ -221,7 +225,14 @@ fn derived_prefix(
     digest.update(identity_kind);
     digest.update(evidence.source.backup_id.as_bytes());
     digest.update(destination_id.as_bytes());
-    digest.update(now.get().to_be_bytes());
+    // Provider retries retain one operation across worker changes and renewed deadlines.
+    // Consensus mutations still bind their own attempt time and current claim.
+    let identity_time = if matches!(step, PublicationStep::StoreProvider) {
+        evidence.source.created_at
+    } else {
+        now
+    };
+    digest.update(identity_time.get().to_be_bytes());
     let digest = digest.finalize();
     let mut prefix = [0; 16];
     prefix.copy_from_slice(&digest[..16]);

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use super::*;
+use crate::metric_history::{MetricHistoryQuery, MetricHistorySource};
 use meshspan_api_contract::DiagnosticRuntimeEventCode as Code;
 use meshspan_contracts::{
     ConsensusMetric, ContractError, MAX_RUNTIME_METRIC_FAMILIES, RuntimeMetric, RuntimeMetricSource,
@@ -28,6 +29,8 @@ fn consensus_observation()
         persistence_blocked: true,
         pending_operations: 2,
         queued_operations: 3,
+        remote_members: 3,
+        replication: None,
     })
 }
 
@@ -58,6 +61,8 @@ fn consensus_metrics_preserve_exact_observations_without_authority_claims()
         ConsensusMetric::PersistenceBlocked(true),
         ConsensusMetric::LeaderKnown(false),
         ConsensusMetric::ObservationFailures(1),
+        ConsensusMetric::RemoteMembers(3),
+        ConsensusMetric::ApplyGap(1),
     ] {
         assert!(
             metrics
@@ -96,6 +101,62 @@ fn consensus_metrics_preserve_exact_observations_without_authority_claims()
     }
     assert!(!text.contains("quorum_available"));
     assert!(!text.contains("node_id"));
+    assert!(!text.contains("consensus_replication_lagging_members"));
+    Ok(())
+}
+
+#[test]
+fn consensus_replication_metrics_clear_on_step_down_and_reject_inconsistent_counts()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = RuntimeObservations::default();
+    let mut leader = consensus_observation()?;
+    leader.role = meshspan_consensus::Role::Leader;
+    leader.replication = Some(meshspan_cluster::MetadataReplicationObservation {
+        unknown_members: 1,
+        lagging_members: 1,
+        maximum_committed_gap: 4,
+    });
+    store.record_consensus(leader, UnixMicros::new(100));
+    let text = String::from_utf8(crate::encode_openmetrics(&store.collect_metrics()?)?)?;
+    for line in [
+        "meshspan_v1_consensus_remote_members 3",
+        "meshspan_v1_consensus_apply_gap 1",
+        "meshspan_v1_consensus_replication_unknown_members 1",
+        "meshspan_v1_consensus_replication_lagging_members 1",
+        "meshspan_v1_consensus_replication_maximum_committed_gap 4",
+    ] {
+        assert!(text.lines().any(|actual| actual == line), "{line}");
+    }
+    for invalid in [
+        meshspan_cluster::MetadataReplicationObservation {
+            unknown_members: 4,
+            lagging_members: 0,
+            maximum_committed_gap: 0,
+        },
+        meshspan_cluster::MetadataReplicationObservation {
+            unknown_members: 2,
+            lagging_members: 2,
+            maximum_committed_gap: 4,
+        },
+        meshspan_cluster::MetadataReplicationObservation {
+            unknown_members: 0,
+            lagging_members: 1,
+            maximum_committed_gap: 11,
+        },
+    ] {
+        leader.replication = Some(invalid);
+        store.record_consensus(leader, UnixMicros::new(101));
+    }
+    assert!(
+        store
+            .collect_metrics()?
+            .samples()
+            .contains(&RuntimeMetric::DroppedObservations(3))
+    );
+    store.record_consensus(consensus_observation()?, UnixMicros::new(102));
+    let text = String::from_utf8(crate::encode_openmetrics(&store.collect_metrics()?)?)?;
+    assert!(!text.contains("consensus_replication_"));
+    assert!(text.contains("meshspan_v1_consensus_remote_members 3\n"));
     Ok(())
 }
 
@@ -258,8 +319,47 @@ fn runtime_metrics_omit_unobserved_gauges_and_include_all_recorded_families()
 -> Result<(), Box<dyn std::error::Error>> {
     let store = RuntimeObservations::default();
     // Last-cycle and usage gauges are absent until sampled; lifetime counters start at zero.
-    assert_eq!(store.collect_metrics()?.samples().len(), 34);
-    store.record_consensus(consensus_observation()?, UnixMicros::new(100));
+    // Includes both HTTPS rejection counters and the separate SMB credential-rejection counter.
+    assert_eq!(store.collect_metrics()?.samples().len(), 99);
+    store.record_inventory(
+        Instant::now(),
+        InventorySample::Certificate(Some(CertificateInventory {
+            remaining: Duration::from_secs(60),
+            not_yet_valid: false,
+            expired: false,
+            required: 3,
+            installed: 2,
+        })),
+    );
+    store.record_inventory(Instant::now(), InventorySample::Backups([1, 2, 3, 4, 5]));
+    store.record_inventory(
+        Instant::now(),
+        InventorySample::Updates(UpdateInventory {
+            states: [1, 2, 3, 4],
+            active: Some(meshspan_metadata::UpdateProgressCounts::default()),
+        }),
+    );
+    for kind in meshspan_contracts::LifecycleKind::ALL {
+        store.record_lifecycle(
+            kind,
+            meshspan_contracts::LifecycleOutcome::Idle,
+            Duration::from_millis(1),
+        );
+    }
+    store.record_protection(Instant::now(), ProtectionCounts::default());
+    store.record_maintenance_jobs(
+        Instant::now(),
+        [super::MaintenanceJobCounts::default(); 5],
+        super::MaintenanceProgressCounts::default(),
+    );
+    let mut leader = consensus_observation()?;
+    leader.role = meshspan_consensus::Role::Leader;
+    leader.replication = Some(meshspan_cluster::MetadataReplicationObservation {
+        unknown_members: 1,
+        lagging_members: 1,
+        maximum_committed_gap: 4,
+    });
+    store.record_consensus(leader, UnixMicros::new(100));
     store.record_storage_usage(super::StorageUsagePass::default());
     store.record_cycle(
         cycle(2),
@@ -275,6 +375,10 @@ fn runtime_metrics_omit_unobserved_gauges_and_include_all_recorded_families()
         RuntimeMetric::OpenTargets(1),
         RuntimeMetric::PendingReturnScans(1),
         RuntimeMetric::LastReconciliationFailedSteps(2),
+        RuntimeMetric::Lifecycle(
+            meshspan_contracts::LifecycleKind::FederationSessions,
+            meshspan_contracts::LifecycleMetric::Idle(1),
+        ),
     ] {
         assert!(metrics.samples().contains(&sample));
     }
@@ -287,6 +391,18 @@ fn runtime_metrics_omit_unobserved_gauges_and_include_all_recorded_families()
     );
     assert!(text.len() < crate::MAX_OPENMETRICS_BYTES);
     assert!(text.ends_with("# EOF\n"));
+    assert!(text.contains("meshspan_v1_federation_sessions_idle_passes_total 1\n"));
+    store.sample_history(UnixMicros::new(100));
+    let history = store.history(MetricHistoryQuery::parse(None)?)?;
+    assert_eq!(
+        history.points[0]
+            .metrics
+            .as_ref()
+            .ok_or("missing history metrics")?
+            .len(),
+        MAX_RUNTIME_METRIC_FAMILIES
+    );
+    meshspan_api_contract::encode_metric_history_response(&history)?;
     // All labels are finite histogram boundaries; target and event identities never escape.
     assert!(
         text.lines()

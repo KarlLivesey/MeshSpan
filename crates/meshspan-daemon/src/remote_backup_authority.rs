@@ -54,6 +54,9 @@ impl RemoteBackupAuthority for ConsensusRemoteBackupAuthority {
             observed_at,
         )?;
         match request {
+            RemoteBackupAuthorisation::Lookup(request) => {
+                validate_lookup(&repository, self.local_node_id, peer, request, observed_at)
+            }
             RemoteBackupAuthorisation::Store(request) => {
                 validate_destination(
                     &repository,
@@ -80,7 +83,6 @@ impl RemoteBackupAuthority for ConsensusRemoteBackupAuthority {
                 request.context,
                 request.object,
                 &request.object_reference,
-                false,
             ),
             RemoteBackupAuthorisation::Verify(request) => validate_copy(
                 &repository,
@@ -88,23 +90,69 @@ impl RemoteBackupAuthority for ConsensusRemoteBackupAuthority {
                 request.context,
                 request.object,
                 &request.object_reference,
-                false,
             ),
             RemoteBackupAuthorisation::Delete(request) => {
                 if request.context.expected_revision != Some(request.retirement_revision) {
                     return Err(ContractError::Stale);
                 }
-                validate_copy(
+                validate_deletion(
                     &repository,
                     self.local_node_id,
                     request.context,
                     request.object,
                     &request.object_reference,
-                    true,
                 )
             }
         }
     }
+}
+
+fn validate_lookup(
+    repository: &AuthoritativeRepository,
+    local_node_id: NodeId,
+    peer: AuthenticatedPeer,
+    request: &meshspan_contracts::BackupLookupRequest,
+    now: UnixMicros,
+) -> Result<(), ContractError> {
+    repository
+        .with_read_view(|view| {
+            validate_destination_without_revision(view, local_node_id, request.object)?;
+            let intent = view
+                .backup_publication_intent(request.object.backup_id, request.object.destination_id)
+                .map_err(|error| map_repository_error(&error))?
+                .ok_or(ContractError::Unauthorized)?;
+            if intent.binding.object != request.object
+                || request.context.expected_revision != Some(intent.revision)
+            {
+                return Err(ContractError::Stale);
+            }
+            let run = view
+                .metadata_backup_run(request.object.backup_id)
+                .map_err(|error| map_repository_error(&error))?
+                .ok_or(ContractError::Unauthorized)?;
+            let claim = view
+                .metadata_backup_run_claim(request.object.backup_id)
+                .map_err(|error| map_repository_error(&error))?;
+            let active_worker = claim.as_ref().is_some_and(|claim| {
+                claim.claim.worker_node_id == peer.node_id()
+                    && claim.claim.worker_incarnation == peer.incarnation()
+                    && claim.lease_expires_at > now
+            });
+            let abandoned = run.state == meshspan_metadata::MetadataBackupRunState::Incomplete
+                && run.completed_at.is_some()
+                && run.result_digest.is_some_and(|digest| digest != [0; 32])
+                && claim.is_none()
+                && view
+                    .metadata_backup(run.backup_id)
+                    .map_err(|error| map_repository_error(&error))?
+                    .is_none();
+            if active_worker || abandoned {
+                Ok(())
+            } else {
+                Err(ContractError::Unauthorized)
+            }
+        })
+        .map_err(|error| map_repository_error(&error))?
 }
 
 pub(crate) fn validate_peer_identity(
@@ -168,7 +216,6 @@ fn validate_copy(
     context: RequestContext,
     object: BackupObjectIdentity,
     object_reference: &BackupObjectReference,
-    require_retired: bool,
 ) -> Result<(), ContractError> {
     validate_destination_without_revision(repository, local_node_id, object)?;
     let backup = repository
@@ -180,23 +227,41 @@ fn validate_copy(
         .map_err(|error| map_repository_error(&error))?
         .ok_or(ContractError::NotFound)?;
     if copy.revision != required_revision(context)?
-        || !backup_matches(backup, object, require_retired)
+        || !backup_matches(backup, object)
         || !copy_matches(&copy, object, object_reference)
     {
         return Err(ContractError::Stale);
     }
-    let valid_state = if require_retired {
-        copy.state == BackupCopyState::Retired
-    } else {
-        matches!(
-            copy.state,
-            BackupCopyState::Stored | BackupCopyState::Verified
-        )
-    };
+    let valid_state = matches!(
+        copy.state,
+        BackupCopyState::Stored | BackupCopyState::Verified
+    );
     if valid_state {
         Ok(())
     } else {
         Err(ContractError::Unauthorized)
+    }
+}
+
+fn validate_deletion(
+    repository: &AuthoritativeRepository,
+    local_node_id: NodeId,
+    context: RequestContext,
+    object: BackupObjectIdentity,
+    reference: &BackupObjectReference,
+) -> Result<(), ContractError> {
+    validate_destination_without_revision(repository, local_node_id, object)?;
+    let candidate = repository
+        .backup_reclamation_candidate(object.backup_id, object.destination_id)
+        .map_err(|error| map_repository_error(&error))?
+        .ok_or(ContractError::Unauthorized)?;
+    if candidate.object == object
+        && candidate.object_reference == *reference
+        && candidate.retirement_revision == required_revision(context)?
+    {
+        Ok(())
+    } else {
+        Err(ContractError::Stale)
     }
 }
 
@@ -231,19 +296,11 @@ fn validate_destination_without_revision(
     }
 }
 
-fn backup_matches(
-    backup: MetadataBackupRecord,
-    object: BackupObjectIdentity,
-    require_retired: bool,
-) -> bool {
-    let valid_state = if require_retired {
-        backup.state == MetadataBackupState::Retired
-    } else {
-        matches!(
-            backup.state,
-            MetadataBackupState::Recorded | MetadataBackupState::Verified
-        )
-    };
+fn backup_matches(backup: MetadataBackupRecord, object: BackupObjectIdentity) -> bool {
+    let valid_state = matches!(
+        backup.state,
+        MetadataBackupState::Recorded | MetadataBackupState::Verified
+    );
     backup.backup_id == object.backup_id
         && backup.encrypted_byte_length == object.byte_length
         && backup.encrypted_digest == object.digest

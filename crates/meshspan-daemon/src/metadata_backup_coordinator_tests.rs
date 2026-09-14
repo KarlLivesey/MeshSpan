@@ -34,6 +34,7 @@ fn worker_resumes_destination_cursor_then_completes_and_releases()
         placements: 0,
         completions: 0,
         releases: 0,
+        recovery_pages: None,
     };
     let mut worker = MetadataBackupWorker::default();
     let limits = MetadataBackupWorkerLimits {
@@ -76,6 +77,48 @@ fn worker_resumes_destination_cursor_then_completes_and_releases()
     Ok(())
 }
 
+#[test]
+fn worker_recovers_original_source_by_pages_before_publishing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut run = run()?;
+    run.state = MetadataBackupRunState::Recorded;
+    let mut cycle = MemoryCycle {
+        run,
+        claim: claim(run.backup_id)?,
+        prepared: prepared(run)?,
+        dispatches: 0,
+        placements: 0,
+        completions: 0,
+        releases: 0,
+        recovery_pages: Some(0),
+    };
+    let limits = MetadataBackupWorkerLimits {
+        lease_duration: DurationMicros::new(1_000),
+        provider_timeout: DurationMicros::new(100),
+        destination_page_items: 2,
+    };
+    let mut worker = MetadataBackupWorker::default();
+    assert_eq!(
+        worker.run_once(&mut cycle, UnixMicros::new(20), limits)?,
+        MetadataBackupWorkerOutcome::Recovering {
+            backup_id: run.backup_id,
+            next: Some(BackupDestinationCursor {
+                destination_id: BackupDestinationId::from_bytes([7; 16])?
+            }),
+        }
+    );
+    assert_eq!(
+        (cycle.placements, cycle.completions, cycle.releases),
+        (0, 0, 0)
+    );
+    assert!(matches!(
+        worker.run_once(&mut cycle, UnixMicros::new(30), limits)?,
+        MetadataBackupWorkerOutcome::Progress { published: 1, .. }
+    ));
+    assert_eq!(cycle.placements, 1);
+    Ok(())
+}
+
 struct MemoryCycle {
     run: MetadataBackupRun,
     claim: MetadataBackupRunClaimRecord,
@@ -84,6 +127,7 @@ struct MemoryCycle {
     placements: usize,
     completions: usize,
     releases: usize,
+    recovery_pages: Option<usize>,
 }
 
 impl MetadataBackupCycle for MemoryCycle {
@@ -114,7 +158,34 @@ impl MetadataBackupCycle for MemoryCycle {
         _run: MetadataBackupRun,
         _now: UnixMicros,
     ) -> Result<PreparedMetadataBackup, MetadataBackupCycleError> {
+        if self.recovery_pages.is_some() {
+            return Err(crate::MetadataBackupPreparationError::MissingRecordedStaging.into());
+        }
         Ok(self.prepared.clone())
+    }
+
+    fn recover(
+        &mut self,
+        input: crate::MetadataBackupRecoveryInput,
+    ) -> Result<crate::MetadataBackupRecoveryOutcome, MetadataBackupCycleError> {
+        let page = self.recovery_pages.ok_or_else(invalid_cycle_error)?;
+        let next = BackupDestinationCursor {
+            destination_id: BackupDestinationId::from_bytes([7; 16])
+                .map_err(|_| invalid_cycle_error())?,
+        };
+        assert_eq!(input.run.backup_id, self.run.backup_id);
+        assert_eq!(input.deadline.get() - input.now.get(), 100);
+        if page == 0 {
+            assert_eq!(input.after, None);
+            self.recovery_pages = Some(1);
+            Ok(crate::MetadataBackupRecoveryOutcome::Pending { next: Some(next) })
+        } else {
+            assert_eq!(input.after, Some(next));
+            self.recovery_pages = None;
+            Ok(crate::MetadataBackupRecoveryOutcome::Recovered(Box::new(
+                self.prepared.clone(),
+            )))
+        }
     }
 
     fn place(

@@ -38,6 +38,9 @@ pub(crate) fn report() -> Result<Value, UpdateCandidateError> {
         "private_protocol_major":1, "metadata_command_version":meshspan_metadata::METADATA_COMMAND_VERSION,
         "partition_schema_target":PartitionDatabase::supported_schema_version(),
         "local_schema_target":LocalDatabase::supported_schema_version(),
+        "storage_journal_schema_target":meshspan_storage::TargetJournal::supported_schema_version(),
+        "filesystem_branch_schema_target":meshspan_filesystem::VersionPublicationStore::supported_schema_version(),
+        "filesystem_content_schema_target":meshspan_filesystem::DurableContentCatalog::supported_schema_version(),
     }))
 }
 
@@ -128,7 +131,10 @@ fn wait_for_exit(child: &mut Child, deadline: Instant) -> Result<ExitStatus, Upd
     }
 }
 
-fn validate(value: &Value, manifest: &UpdateManifest) -> Result<(), UpdateCandidateError> {
+pub(crate) fn validate(
+    value: &Value,
+    manifest: &UpdateManifest,
+) -> Result<(), UpdateCandidateError> {
     // Until a candidate supplies a tested migration admission path, only unchanged
     // persistence/command formats may stage. A signed range alone is not migration proof.
     let schema = PartitionDatabase::supported_schema_version();

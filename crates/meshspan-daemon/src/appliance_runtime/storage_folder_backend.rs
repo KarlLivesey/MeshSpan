@@ -33,13 +33,24 @@ impl StorageTargetRuntime {
                 self.configured_paths.push(path);
             }
         }
+        for record in self
+            .registration
+            .recovered_targets()
+            .map_err(|error| map_registration_error(&error))?
+        {
+            let path = PathBuf::from(OsString::from_vec(record.canonical_path));
+            if !self.configured_paths.contains(&path) {
+                self.configured_paths.push(path);
+            }
+        }
         Ok(())
     }
 
     fn folder_summaries(
         &self,
     ) -> Result<Vec<StorageFolderSummary>, StorageFolderAdministrationBackendError> {
-        self.registration
+        let mut summaries: Vec<_> = self
+            .registration
             .local_targets()
             .map_err(|error| map_registration_error(&error))?
             .into_iter()
@@ -55,7 +66,27 @@ impl StorageTargetRuntime {
                     state,
                 })
             })
-            .collect()
+            .collect::<Result<_, StorageFolderAdministrationBackendError>>()?;
+        for record in self
+            .registration
+            .recovered_targets()
+            .map_err(|error| map_registration_error(&error))?
+        {
+            let path = PathBuf::from(OsString::from_vec(record.canonical_path));
+            summaries.push(StorageFolderSummary {
+                target_id: format_uuid(record.target_id.as_bytes()),
+                node_id: format_uuid(record.node_id.as_bytes()),
+                state: if self.active.contains_key(&path) {
+                    StorageFolderState::Active
+                } else {
+                    StorageFolderState::Unavailable
+                },
+                path: path.into_os_string().into_string().ok(),
+                generation: record.generation.to_string(),
+                usage_limit: api_usage_limit(record.usage_limit),
+            });
+        }
+        Ok(summaries)
     }
 
     fn register_folder(

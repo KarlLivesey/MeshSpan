@@ -109,8 +109,8 @@ async fn backup_destination_inventory_authenticates_before_query_parsing()
 fn request() -> serde_json::Value {
     serde_json::json!({ "operation_id": "01900000-0000-7000-8000-000000000001",
         "destination_id": "01900000-0000-7000-8000-000000000002", "expected_revision": 0,
-        "name": "Recovery", "target_id": "01900000-0000-7000-8000-000000000003",
-        "target_generation": "1", "enabled": true })
+        "name": "Recovery", "provider": {"kind":"registered_target", "target_id": "01900000-0000-7000-8000-000000000003"},
+        "provider_generation": "1", "enabled": true })
 }
 
 struct Controller {

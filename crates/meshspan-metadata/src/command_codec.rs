@@ -7,25 +7,34 @@ mod acme;
 mod authentication;
 mod availability_cell;
 mod backup;
+pub(crate) mod backup_intent;
 mod backup_retention;
+pub(crate) mod backup_route;
 mod bootstrap;
 mod certificate_name;
+mod cleanup;
 mod decoder;
 mod encoder;
 mod enrolment;
 mod external_certificate;
 mod fault_group;
+mod federation;
+mod federation_peer;
+pub use federation_peer::{decode_federation_pairing_peer, encode_federation_pairing_peer};
 mod identity;
 mod locality_policy;
 mod maintenance_work;
 mod mesh_local_certificate;
 mod metrics_exporter;
 mod namespace;
+mod node_attestation;
 mod node_certificate;
 mod node_wrapping_key;
 mod notification;
 mod protection_policy;
 mod recovery;
+pub(crate) mod recovery_material;
+pub(crate) mod recovery_plan;
 mod secret_generation;
 mod session;
 mod smb_export;
@@ -41,7 +50,7 @@ use self::encoder::Encoder;
 use crate::{AuthoritativeCommand, CommandContext};
 
 /// Current closed metadata-command wire format.
-pub const METADATA_COMMAND_VERSION: u16 = 4;
+pub const METADATA_COMMAND_VERSION: u16 = 18;
 
 const MAGIC: [u8; 4] = *b"MSC\x04";
 const MAXIMUM_COMMAND_BYTES: usize = 1024 * 1024;
@@ -113,8 +122,10 @@ fn encode_command(
     encoder: &mut Encoder,
     command: &AuthoritativeCommand,
 ) -> Result<(), MetadataCommandCodecError> {
-    if notification::encode(encoder, command)?
+    if federation::encode(encoder, command)?
+        || notification::encode(encoder, command)?
         || update::encode(encoder, command)?
+        || secret_generation::encode(encoder, command)?
         || encode_extension_command(encoder, command)?
     {
         return Ok(());
@@ -202,9 +213,6 @@ fn encode_command(
         AuthoritativeCommand::RegisterNodeWrappingKey(value) => {
             node_wrapping_key::encode(encoder, value)
         }
-        AuthoritativeCommand::CommitSecretGeneration(value) => {
-            secret_generation::encode(encoder, value)
-        }
         AuthoritativeCommand::IssueJoinGrant(value) => enrolment::encode_issue(encoder, value),
         AuthoritativeCommand::ConsumeJoinGrant(value) => enrolment::encode_consume(encoder, value),
         AuthoritativeCommand::ActivateNode(value) => enrolment::encode_activate(encoder, value),
@@ -220,6 +228,13 @@ fn encode_extension_command(
     encoder: &mut Encoder,
     command: &AuthoritativeCommand,
 ) -> Result<bool, MetadataCommandCodecError> {
+    if cleanup::encode_command(encoder, command)? {
+        return Ok(true);
+    }
+    if let AuthoritativeCommand::RegisterCleanupAttestationKey(value) = command {
+        node_attestation::encode(encoder, *value)?;
+        return Ok(true);
+    }
     if node_certificate::encode(encoder, command)? {
         return Ok(true);
     }
@@ -248,8 +263,14 @@ fn decode_command(
     decoder: &mut Decoder<'_>,
 ) -> Result<AuthoritativeCommand, MetadataCommandCodecError> {
     let kind = decoder.u16()?;
-    if (node_certificate::STAGE..=node_certificate::RETIRE).contains(&kind) {
-        return node_certificate::decode(kind, decoder);
+    if cleanup::is_kind(kind) {
+        return cleanup::decode_command(kind, decoder);
+    }
+    if let Some(command) = decode_node_identity_command(kind, decoder)? {
+        return Ok(command);
+    }
+    if federation::is_kind(kind) {
+        return federation::decode(kind, decoder);
     }
     if acme::is_command_kind(kind) {
         return acme::decode_command(kind, decoder);
@@ -319,11 +340,11 @@ fn decode_command(
         smb_export::WITHDRAW_SMB_EXPORT => {
             smb_export::decode_withdraw(decoder).map(AuthoritativeCommand::WithdrawSmbExport)
         }
-        node_wrapping_key::REGISTER_NODE_WRAPPING_KEY => {
-            node_wrapping_key::decode(decoder).map(AuthoritativeCommand::RegisterNodeWrappingKey)
-        }
         secret_generation::COMMIT_SECRET_GENERATION => {
             secret_generation::decode(decoder).map(AuthoritativeCommand::CommitSecretGeneration)
+        }
+        secret_generation::EXTEND_VOLUME_KEY_RECIPIENTS => {
+            secret_generation::decode(decoder).map(AuthoritativeCommand::ExtendVolumeKeyRecipients)
         }
         enrolment::ISSUE_JOIN_GRANT => {
             enrolment::decode_issue(decoder).map(AuthoritativeCommand::IssueJoinGrant)
@@ -339,6 +360,25 @@ fn decode_command(
         }
         _ => Err(MetadataCommandCodecError::Unsupported),
     }
+}
+
+/// Node identity evidence is dispatched together; its payload modules retain their own formats.
+fn decode_node_identity_command(
+    kind: u16,
+    decoder: &mut Decoder<'_>,
+) -> Result<Option<AuthoritativeCommand>, MetadataCommandCodecError> {
+    if (node_certificate::STAGE..=node_certificate::RETIRE).contains(&kind) {
+        return node_certificate::decode(kind, decoder).map(Some);
+    }
+    let command = match kind {
+        node_attestation::REGISTER => node_attestation::decode(decoder)
+            .map(AuthoritativeCommand::RegisterCleanupAttestationKey),
+        node_wrapping_key::REGISTER_NODE_WRAPPING_KEY => {
+            node_wrapping_key::decode(decoder).map(AuthoritativeCommand::RegisterNodeWrappingKey)
+        }
+        _ => return Ok(None),
+    }?;
+    Ok(Some(command))
 }
 
 fn decode_storage_policy_command(

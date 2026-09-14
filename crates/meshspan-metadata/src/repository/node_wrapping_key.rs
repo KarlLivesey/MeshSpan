@@ -33,6 +33,16 @@ pub(super) fn register(
     command: RegisterNodeWrappingKey,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
+    register_at(transaction, context.occurred_at, command, revision)
+}
+
+// Recovery supplies an offline-root transition time, not an invented user command actor.
+pub(super) fn register_at(
+    transaction: &Transaction<'_>,
+    registered_at: UnixMicros,
+    command: RegisterNodeWrappingKey,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
     let public_key = validate(command)?;
     transaction.execute(
         "INSERT INTO node_wrapping_keys(
@@ -45,7 +55,7 @@ pub(super) fn register(
             public_key.as_bytes().as_slice(),
             command.key_fingerprint.as_slice(),
             ACTIVE_STATE,
-            context.occurred_at.get(),
+            registered_at.get(),
             to_i64(revision.get())?,
         ],
     )?;
@@ -60,7 +70,7 @@ pub(super) fn register(
             to_i64(command.generation)?,
             public_key.as_bytes().as_slice(),
             ACTIVE_STATE,
-            context.occurred_at.get(),
+            registered_at.get(),
             to_i64(revision.get())?,
         ],
     )?;

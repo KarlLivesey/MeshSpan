@@ -12,6 +12,9 @@ use crate::{
     BackupError, BackupFileEvidence, BackupSourceManifest, encrypt_backup, restore_backup,
 };
 
+#[path = "tests/archive.rs"]
+mod archive;
+
 #[test]
 fn two_recovery_recipients_restore_exact_streamed_bytes() -> Result<(), Box<dyn std::error::Error>>
 {

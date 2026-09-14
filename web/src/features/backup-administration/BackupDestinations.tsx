@@ -44,12 +44,7 @@ export function BackupDestinations(
                   </small>
                 </div>
                 <span class="state-pill">{destination.state}</span>
-                <Show
-                  when={
-                    destination.provider.kind === "registered_target" &&
-                    destination.state !== "retired"
-                  }
-                >
+                <Show when={destination.state !== "retired"}>
                   <button
                     type="button"
                     class="quiet-action"

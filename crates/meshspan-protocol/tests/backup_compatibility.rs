@@ -62,6 +62,19 @@ fn exact_backup_operations_round_trip() -> Result<(), Box<dyn std::error::Error>
                 digest: object.digest.clone(),
             }),
         })),
+        envelope(Message::LookupBackupRequest(
+            meshspan_protocol::v1::LookupBackupRequest {
+                header: Some(header()),
+                object: Some(object.clone()),
+                authority_revision: 9,
+            },
+        )),
+        envelope(Message::LookupBackupResult(
+            meshspan_protocol::v1::LookupBackupResult {
+                result: Some(durable_result()),
+                receipt: Some(object_receipt.clone()),
+            },
+        )),
         envelope(Message::VerifyBackupRequest(VerifyBackupRequest {
             header: Some(header()),
             object: Some(object.clone()),
@@ -195,6 +208,53 @@ fn envelope(message: Message) -> DataControlEnvelope {
     DataControlEnvelope {
         message: Some(message),
     }
+}
+
+#[test]
+fn lookup_rejects_absent_authority_and_false_success() -> Result<(), Box<dyn std::error::Error>> {
+    use meshspan_protocol::v1::{LookupBackupRequest, LookupBackupResult};
+    for value in [
+        LookupBackupRequest {
+            header: None,
+            object: Some(object()),
+            authority_revision: 9,
+        },
+        LookupBackupRequest {
+            header: Some(header()),
+            object: None,
+            authority_revision: 9,
+        },
+        LookupBackupRequest {
+            header: Some(header()),
+            object: Some(object()),
+            authority_revision: 0,
+        },
+    ] {
+        assert_eq!(
+            encode_data_control_frame(&envelope(Message::LookupBackupRequest(value)), limits()?),
+            Err(WireContractError::InvalidMessage)
+        );
+    }
+    for value in [
+        LookupBackupResult {
+            result: Some(durable_result()),
+            receipt: None,
+        },
+        LookupBackupResult {
+            result: Some(rejected_result()),
+            receipt: Some(BackupObjectReceipt {
+                operation_id: vec![5; 16],
+                object: Some(object()),
+                object_reference: "object".to_owned(),
+            }),
+        },
+    ] {
+        assert_eq!(
+            encode_data_control_frame(&envelope(Message::LookupBackupResult(value)), limits()?),
+            Err(WireContractError::InvalidMessage)
+        );
+    }
+    Ok(())
 }
 
 fn object() -> BackupObjectIdentity {

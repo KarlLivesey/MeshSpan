@@ -166,7 +166,11 @@ bases fail closed before any namespace write. Applying the action list and
 creating the durable multi-parent merge receipt use one immediate SQLite
 transaction. Existing immutable source revisions are verified and reused;
 recovered logical copies receive deterministic object, revision, file-version
-and publication identities. Every created directory node/revision, recovered
+and publication identities. Plan-derived immutable objects also use the source
+mutation's creator and timestamp, not the reconciling worker's actor or clock;
+otherwise independent workers would produce different bytes for the same ID.
+The outer merge receipt records its own coordinator and attempt time separately.
+Every created directory node/revision, recovered
 file head/version, multi-parent commit and digest-bound operation receipt either
 commits together or rolls back together. Exact retries return the original
 receipt, and subsequent causal planning validates the stored merge as a marker.
@@ -186,17 +190,17 @@ No generic system can meaningfully combine two concurrent arbitrary binary edits
 to the same bytes. MeshSpan converges the namespace automatically while
 preserving all acknowledged content:
 
-| Concurrent intents | Automatic result |
-| --- | --- |
-| Changes to distinct objects/names | Apply both |
-| Identical operation/request digest | Deduplicate |
-| Create same canonical name | Deterministic winner keeps name; other gets deterministic conflict sibling |
-| Modify same file from common base | Deterministic winner is current; every other version remains in history and gets conflict sibling when needed for ordinary access |
-| Delete versus modify | Original name follows deterministic delete/modify rule; modified bytes are preserved as recovered conflict item |
-| Rename versus rename | Deterministic destination wins; alternative intent is retained in history and represented as conflict sibling without creating an unsafe hard link |
-| Rename versus create at destination | Apply winner by canonical operation order; preserve other object under conflict sibling |
-| Directory delete versus descendant change | Preserve changed descendants in a deterministic recovered directory |
-| Tag/ordinary attribute changes | Merge disjoint keys; deterministic value plus history for same-key collision |
+| Concurrent intents                        | Automatic result                                                                                                                                   |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Changes to distinct objects/names         | Apply both                                                                                                                                         |
+| Identical operation/request digest        | Deduplicate                                                                                                                                        |
+| Create same canonical name                | Deterministic winner keeps name; other gets deterministic conflict sibling                                                                         |
+| Modify same file from common base         | Deterministic winner is current; every other version remains in history and gets conflict sibling when needed for ordinary access                  |
+| Delete versus modify                      | Original name follows deterministic delete/modify rule; modified bytes are preserved as recovered conflict item                                    |
+| Rename versus rename                      | Deterministic destination wins; alternative intent is retained in history and represented as conflict sibling without creating an unsafe hard link |
+| Rename versus create at destination       | Apply winner by canonical operation order; preserve other object under conflict sibling                                                            |
+| Directory delete versus descendant change | Preserve changed descendants in a deterministic recovered directory                                                                                |
+| Tag/ordinary attribute changes            | Merge disjoint keys; deterministic value plus history for same-key collision                                                                       |
 
 Canonical ordering uses causal ancestry first and a stable operation-ID tie-break,
 never wall-clock arrival order. Conflict names include a stable short origin/commit

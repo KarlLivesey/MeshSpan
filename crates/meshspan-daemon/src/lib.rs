@@ -3,7 +3,14 @@
 //! Daemon process composition, configuration and local secret presentation.
 
 mod api_http;
+mod offline_backup;
+mod recovery_preparation;
+pub use offline_backup::OfflineBackupError;
+pub use recovery_preparation::RecoveryPreparationError;
+mod recovery_key_installation;
+pub use recovery_key_installation::RecoveryKeyInstallationError;
 mod update_candidate;
+mod update_installation;
 mod update_readiness;
 mod update_runtime_info;
 pub use update_candidate::UpdateCandidateError;
@@ -87,6 +94,8 @@ mod backup_schedule_api;
 mod backup_schedule_api_tests;
 mod consensus_observation_worker;
 mod gateway_measurements;
+mod gateway_transfer_io;
+mod maintenance_observation_worker;
 mod metadata_diagnostics;
 mod metadata_diagnostics_api;
 #[cfg(test)]
@@ -96,7 +105,10 @@ mod metrics_exporter_api;
 #[cfg(test)]
 mod metrics_exporter_api_tests;
 mod metrics_exporter_service;
+mod observed_coding;
 mod openmetrics;
+mod operational_observation_worker;
+mod protection_observation_worker;
 mod runtime_observations;
 pub use openmetrics::{MAX_OPENMETRICS_BYTES, OPENMETRICS_CONTENT_TYPE, encode_openmetrics};
 
@@ -181,6 +193,11 @@ mod external_certificate_publisher_api;
 mod external_certificate_publisher_api_tests;
 #[cfg(test)]
 mod external_certificate_publisher_tests;
+mod federation_pairing_api;
+mod federation_pairing_service;
+mod federation_sessions;
+mod federation_storage_provisioner;
+mod federation_storage_sealer;
 mod file_read_api;
 #[cfg(test)]
 mod file_read_api_tests;
@@ -202,6 +219,7 @@ mod in_process_certificate_runtime;
 mod join_mesh_setup;
 #[cfg(test)]
 mod join_mesh_setup_tests;
+mod local_federation_identity;
 mod local_node_identity;
 #[cfg(test)]
 mod local_node_identity_tests;
@@ -240,6 +258,8 @@ mod metadata_backup_preparation;
 #[cfg(test)]
 mod metadata_backup_preparation_tests;
 mod metadata_backup_provider_resolution;
+#[cfg(test)]
+mod metadata_backup_recovery_tests;
 mod metadata_backup_retention;
 #[cfg(test)]
 mod metadata_backup_retention_tests;
@@ -262,6 +282,7 @@ mod node_activation;
 mod node_enrolment;
 mod node_enrolment_api;
 mod node_join_grant;
+pub use federation_pairing_api::FederationPairingApiError;
 mod node_join_grant_api;
 mod node_wrapping_key_registration;
 #[cfg(test)]
@@ -658,8 +679,9 @@ pub use metadata_backup_placement::{
     MetadataBackupPlacementService,
 };
 pub use metadata_backup_preparation::{
-    MetadataBackupPreparationAuthority, MetadataBackupPreparationError,
-    MetadataBackupPreparationService, PreparedMetadataBackup,
+    MetadataBackupCapturePaths, MetadataBackupPreparationAuthority, MetadataBackupPreparationError,
+    MetadataBackupPreparationService, MetadataBackupRecoveryAuthority, MetadataBackupRecoveryInput,
+    MetadataBackupRecoveryOutcome, PreparedMetadataBackup,
 };
 pub use metadata_backup_provider_resolution::{
     MetadataBackupProviderResolutionError, MetadataBackupProviderResolver, RegisteredBackupTarget,

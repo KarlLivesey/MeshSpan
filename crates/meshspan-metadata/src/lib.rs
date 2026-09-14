@@ -5,14 +5,39 @@
 mod acme_command;
 mod authentication_integrity;
 mod backup_command;
+mod backup_publication_intent;
+pub use backup_publication_intent::{
+    AbandonedBackupPublication, BackupPublicationIntentRecord, BindBackupPublicationIntent,
+};
+mod federated_backup_route;
+pub use federated_backup_route::{BindFederatedBackupRoute, FederatedBackupRouteRecord};
 mod command;
 mod command_codec;
 mod database;
+mod recovery_key_bundle;
+mod recovery_node_certificate;
+mod recovery_restoration;
+mod recovery_target;
+pub use recovery_key_bundle::{
+    RecoveryKeyBundleError, RecoveryKeyBundleVerification, RecoveryKeyRecipient,
+    read_prepared_recovery_secret, verify_recovery_key_bundle, write_prepared_recovery_secret,
+};
+pub use recovery_node_certificate::RecoveryNodeCertificate;
+pub use recovery_restoration::RecoveryShardRestoration;
+pub use recovery_target::PreparedRecoveryTarget;
 mod external_certificate_command;
 mod federation_actor_attestation_command;
 mod federation_command;
 mod federation_grant_command;
 mod federation_mutation_admission_command;
+mod federation_pairing_command;
+mod federation_pairing_peer;
+pub use federation_pairing_peer::{
+    FederationPairingPeer, SignedFederationPairingPeer, federation_pairing_signing_message,
+};
+mod federation_backup_authority;
+mod federation_backup_budget;
+mod federation_backup_capacity;
 mod federation_quarantine_command;
 mod federation_remote_authority;
 #[cfg(test)]
@@ -20,9 +45,13 @@ mod federation_schema_tests;
 mod federation_storage_admission;
 mod federation_storage_capability_ledger;
 mod federation_storage_command;
+mod federation_storage_seal_command;
+pub use federation_storage_seal_command::RecordFederationStorageSeal;
 mod federation_storage_inventory;
 mod federation_storage_lifecycle;
 mod federation_storage_quota;
+pub use federation_backup_budget::FederatedBackupCapacityBudget;
+pub use federation_backup_capacity::FederatedBackupCapacityState;
 mod federation_storage_scrub;
 mod federation_succession_command;
 mod local_authentication_ceremony;
@@ -34,11 +63,13 @@ mod local_claim_tests;
 mod local_metadata_backup_staging;
 #[cfg(test)]
 mod local_metadata_backup_staging_tests;
+mod local_recovered_target;
 mod local_scrub_progress;
 mod local_setup;
 #[cfg(test)]
 mod local_setup_tests;
 mod local_target;
+pub use local_recovered_target::LocalRecoveredTarget;
 #[cfg(test)]
 mod local_target_tests;
 mod mesh_local_certificate_command;
@@ -47,9 +78,13 @@ mod migration;
 mod name;
 mod node_certificate_command;
 mod notification_command;
+mod recovery_plan;
 mod update_command;
 mod update_manifest;
+pub use recovery_plan::{RecoveryReplacementNode, RecoveryReplacementPlan};
+
 pub use repository::{
+    RecoveryRestorationReceipt, RecoveryStateInstallation, UpdateAdministrationSnapshot,
     UpdateArtifactSource, UpdateNodeRecord, UpdateProgressCounts, UpdateRolloutRecord,
     UpdateRolloutState, UpdateSignerRecord,
 };
@@ -68,6 +103,10 @@ pub use notification_command::{
     NotificationEventKind, QueueNotification,
 };
 mod repository;
+pub use repository::{
+    RecoveryControlKeys, RecoveryCredentialFence, RecoveryKeyInstallation, RecoverySecretInventory,
+    RecoverySecretInventoryBuilder, prepare_authorized_partition_recovery,
+};
 #[cfg(test)]
 mod test_support;
 
@@ -89,12 +128,13 @@ pub use acme_command::{
     RenewCertificateOrder, SecretGenerationReference,
 };
 pub use backup_command::{
-    BackupDestinationBinding, BackupFailureRelationship, ClaimMetadataBackupRun,
-    CompleteMetadataBackupRun, ConfigureBackupDestination, ConfigureMetadataBackupSchedule,
-    InitialBackupCopy, MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES, MAXIMUM_BACKUP_RETENTION_WITNESSES,
-    MetadataBackupRunClaim, MetadataBackupRunCompletion, QueueMetadataBackupRun,
-    ReconcileMetadataBackupDefaults, RecordBackupCopy, RecordBackupReclamation,
-    RecordMetadataBackup, RenewMetadataBackupRun, RetireMetadataBackup, VerifyBackupCopy,
+    AbandonUnrecordedMetadataBackupRun, BackupDestinationBinding, BackupFailureRelationship,
+    ClaimMetadataBackupRun, CompleteMetadataBackupRun, ConfigureBackupDestination,
+    ConfigureMetadataBackupSchedule, InitialBackupCopy, MAXIMUM_BACKUP_OBJECT_REFERENCE_BYTES,
+    MAXIMUM_BACKUP_RETENTION_WITNESSES, MetadataBackupRunClaim, MetadataBackupRunCompletion,
+    QueueMetadataBackupRun, ReconcileMetadataBackupDefaults, RecordBackupCopy,
+    RecordBackupReclamation, RecordMetadataBackup, RenewMetadataBackupRun,
+    RetireAbandonedBackupCopy, RetireMetadataBackup, VerifyBackupCopy,
 };
 pub use command::{
     ACME_ACCOUNT_KEY_SECRET_KIND, ACME_CHALLENGE_SETTINGS_SECRET_KIND,
@@ -140,6 +180,7 @@ pub use command_codec::{
     DecodedAuthoritativeCommand, METADATA_COMMAND_VERSION, MetadataCommandCodecError,
     decode_authoritative_command, encode_authoritative_command,
 };
+pub use command_codec::{decode_federation_pairing_peer, encode_federation_pairing_peer};
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
 pub use external_certificate_command::{
     AcknowledgeExternalCertificateInstallation, MAXIMUM_EXTERNAL_CERTIFICATE_NAMES,
@@ -160,6 +201,10 @@ pub use federation_grant_command::{
     RevokeFederationGrantAssignment, RevokeFederationGrantAssignmentActivation,
 };
 pub use federation_mutation_admission_command::AdmitFederatedMutation;
+pub use federation_pairing_command::{
+    BeginFederationConnection, CancelFederationPairingInvitation, IssueFederationPairingInvitation,
+    PrepareFederationConnection,
+};
 pub use federation_quarantine_command::{
     FederationQuarantineResolution, ResolveFederatedMutationQuarantine,
     RetainFederatedMutationQuarantine, SurfaceFederatedMutationQuarantine,
@@ -187,8 +232,8 @@ pub use federation_storage_lifecycle::{
     FederationStorageReclamationCompletion, FederationStorageRetirementCompletion,
 };
 pub use federation_storage_quota::{
-    FederationStorageQuotaDisposition, FederationStorageQuotaError, FederationStorageUsage,
-    FederationStorageWriteAbsence, FederationStorageWriteCompletion,
+    FederationStorageCapacitySeal, FederationStorageQuotaDisposition, FederationStorageQuotaError,
+    FederationStorageUsage, FederationStorageWriteAbsence, FederationStorageWriteCompletion,
     FederationStorageWriteReservation, FederationStorageWriteReservationRequest,
     FederationStorageWriteState, MAXIMUM_FEDERATED_STORAGE_WRITE_LIFETIME_MICROS,
 };
@@ -234,6 +279,9 @@ pub use metrics_exporter_command::{
 };
 pub use migration::MetadataStoreError;
 pub use name::{RecordName, RecordNameError};
+pub use repository::AbandonedBackupRetirement;
+pub use repository::FederationConnectionIntentRecord;
+pub use repository::FederationPairingConnectionRecord;
 pub use repository::{
     AccessActivationCursor, AccessActivationRecord, AccessAuthentication, AccessCapability,
     AccessDecision, AccessDenial, AccessRequest, AcknowledgementPolicyCursor,
@@ -247,33 +295,36 @@ pub use repository::{
     AuthoritativeOperationState, AuthoritativeOperationStatus, AuthoritativeRepository,
     AvailabilityCellCursor, AvailabilityCellRecord, BackupCopyRecord, BackupCopyState,
     BackupDestinationCursor, BackupDestinationRecord, BackupDestinationState,
-    BackupReclamationCursor, BrowserSessionAccessRequest, BrowserSessionProtection,
-    CertificateOrderCheckpointRecord, CertificateOrderClaim, CertificateOrderRecord,
-    CertificateOrderState, CertificateRenewalCandidate, CommandReceipt, ConsensusStoreError,
-    ConvergedVolumeHead, DueCertificateOrderCursor, DueCertificateRenewalCursor, DueStorageScrub,
-    DueStorageScrubCursor, DueStorageScrubPage, EncryptedBackupPaths,
-    EncryptedPartitionBackupManifest, EncryptedRestorePaths, EntityKind, EntityReference,
-    ExternalCertificateInstallationRecord, ExternalCertificatePublicationRecord, FaultGroupCursor,
-    FaultGroupMembershipCursor, FaultGroupMembershipRecord, FaultGroupRecord,
-    FederatedActorAttestationRecord, FederatedMutationAdmissionReceipt,
-    FederationAuthoritySnapshotError, FederationGrantAssignmentAuthority, FederationGrantCursor,
-    FederationGrantCursorError, FederationGrantRecord, FederationGrantRecordCodecError,
-    FederationGrantState, FederationGrantTermination, FederationGrantTerminationKind,
-    FederationQuarantineRecord, FederationQuarantineState, FederationRelationshipRecord,
-    FederationRelationshipState, FederationStorageAllocationAuthority,
+    BackupReclamationCandidate, BackupReclamationCursor, BrowserSessionAccessRequest,
+    BrowserSessionProtection, CertificateOrderCheckpointRecord, CertificateOrderClaim,
+    CertificateOrderRecord, CertificateOrderState, CertificateRenewalCandidate, CommandReceipt,
+    ConsensusStoreError, ConvergedVolumeHead, DueCertificateOrderCursor,
+    DueCertificateRenewalCursor, DueStorageScrub, DueStorageScrubCursor, DueStorageScrubPage,
+    EncryptedBackupPaths, EncryptedPartitionBackupManifest, EncryptedRestorePaths, EntityKind,
+    EntityReference, ExternalCertificateInstallationRecord, ExternalCertificatePublicationRecord,
+    FaultGroupCursor, FaultGroupMembershipCursor, FaultGroupMembershipRecord, FaultGroupRecord,
+    FederatedActorAttestationRecord, FederatedMutationAdmissionReceipt, FederationAllocationCursor,
+    FederationAllocationQuery, FederationAuthoritySnapshotError,
+    FederationGrantAssignmentAuthority, FederationGrantCursor, FederationGrantCursorError,
+    FederationGrantRecord, FederationGrantRecordCodecError, FederationGrantState,
+    FederationGrantTermination, FederationGrantTerminationKind, FederationQuarantineRecord,
+    FederationQuarantineState, FederationRelationshipRecord, FederationRelationshipState,
+    FederationStorageAllocationAuthority, FederationStorageAllocationProposal,
     FederationStorageAllocationRecord, FederationStorageAllocationState,
-    FederationStorageAuthorityRequest, FederationSuccessionRecord, FederationSuccessionState,
+    FederationStorageAuthorityRequest, FederationStorageMaintenanceCursor,
+    FederationStorageMaintenanceItem, FederationSuccessionRecord, FederationSuccessionState,
     FederationTransportAuthority, FederationTrustIdentityRecord, GroupMemberCursor,
     GroupMembershipEventKind, GroupMembershipEventRecord, GroupMembershipRecord, InvariantFinding,
     InvariantKind, InvariantReport, JoinGrantRecord, LocalityPolicyCursor, LocalityPolicyRecord,
     LocalityRequirementRecord, LogPosition, MAXIMUM_VERSION_CLEANUP_PERMIT_LIFETIME,
-    MaintenanceEffectReference, MaintenanceWorkClaim, MaintenanceWorkCursor, MaintenanceWorkRecord,
-    MaintenanceWorkState, MaintenanceWorkWindow, ManualDnsTaskCursor, ManualDnsTaskRecord,
-    ManualDnsTaskState, MeshLocalCertificateAuthorityRecord, MeshLocalCertificateIssuanceRecord,
-    MeshRecoveryAuthority, MetadataBackupProtectionEvidence, MetadataBackupRecord,
-    MetadataBackupRun, MetadataBackupRunClaimRecord, MetadataBackupRunState,
-    MetadataBackupSchedule, MetadataBackupState, NamespaceCursor, NamespaceRecord,
-    NodeActivationCandidate, NodeActivationRecord, NodeEnrolmentRecord, NodeWrappingKeyRecord,
+    MaintenanceEffectReference, MaintenanceVerificationProgress, MaintenanceWorkClaim,
+    MaintenanceWorkCursor, MaintenanceWorkRecord, MaintenanceWorkState, MaintenanceWorkWindow,
+    ManualDnsTaskCursor, ManualDnsTaskRecord, ManualDnsTaskState,
+    MeshLocalCertificateAuthorityRecord, MeshLocalCertificateIssuanceRecord, MeshRecoveryAuthority,
+    MetadataBackupProtectionEvidence, MetadataBackupRecord, MetadataBackupRun,
+    MetadataBackupRunClaimRecord, MetadataBackupRunState, MetadataBackupSchedule,
+    MetadataBackupState, NamespaceCursor, NamespaceRecord, NodeActivationCandidate,
+    NodeActivationRecord, NodeAttestationContext, NodeEnrolmentRecord, NodeWrappingKeyRecord,
     ObjectOwnerCursor, ObjectOwnerRecord, OnlineCertificateAuthorityRecord, Page, PageLimit,
     PartitionBackupManifest, PartitionConsensusPersistence, PartitionSnapshotManifest,
     PasskeyRegistrationProfile, PasskeyRegistrationReplay, PasskeySessionReplay,
@@ -299,10 +350,11 @@ pub use repository::{
     VersionCleanupInventory, VersionCleanupInventoryState, VersionCleanupItem,
     VersionCleanupItemCompletion, VersionCleanupItemCursor, VersionCleanupItemReclamation,
     VersionCleanupParticipant, VersionCleanupPermitAttempt, VersionCleanupPermitAuthority,
-    VersionCleanupReclamation, VersionCleanupState, VersionRetentionPolicy,
-    VolumeAcknowledgementPolicy, VolumeInventoryCursor, VolumeInventoryRecord,
-    VolumeLocalityPolicy, VolumeProtectionPolicy, VolumeSnapshot,
+    VersionCleanupReclamation, VersionCleanupState, VersionCleanupStorageAuthority,
+    VersionRetentionPolicy, VolumeAcknowledgementPolicy, VolumeInventoryCursor,
+    VolumeInventoryRecord, VolumeLocalityPolicy, VolumeProtectionPolicy, VolumeSnapshot,
     create_encrypted_partition_backup, empty_target_drain_catalogue_digest,
     restore_encrypted_partition_backup, restore_partition_backup, restore_partition_snapshot,
     run_repository_conformance,
 };
+pub use repository::{FederationPairingInvitationRecord, FederationPairingInvitationState};

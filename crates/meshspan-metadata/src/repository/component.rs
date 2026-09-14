@@ -2,7 +2,7 @@
 
 //! Replaceable component instance and configuration persistence.
 
-use meshspan_domain::Revision;
+use meshspan_domain::{PrincipalId, Revision, UnixMicros};
 use rusqlite::{OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
 
@@ -18,16 +18,53 @@ pub(super) fn create(
     command: &CreateComponent,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
+    create_with_origin(
+        transaction,
+        CreationOrigin::Principal(context.actor_principal_id, context.occurred_at),
+        command,
+        revision,
+    )
+}
+
+pub(super) fn create_recovered(
+    transaction: &Transaction<'_>,
+    created_at: UnixMicros,
+    command: &CreateComponent,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    create_with_origin(
+        transaction,
+        CreationOrigin::Recovery(created_at),
+        command,
+        revision,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum CreationOrigin {
+    Principal(PrincipalId, UnixMicros),
+    Recovery(UnixMicros),
+}
+
+fn create_with_origin(
+    transaction: &Transaction<'_>,
+    origin: CreationOrigin,
+    command: &CreateComponent,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
     validate(command)?;
     let instance = command.instance_id.as_bytes();
-    let actor = context.actor_principal_id.as_bytes();
+    let (actor, recovery, created_at) = match origin {
+        CreationOrigin::Principal(actor, at) => (Some(actor.as_bytes()), None, at),
+        CreationOrigin::Recovery(at) => (None, Some(1_u8), at),
+    };
     let stored_revision = to_i64(revision.get())?;
     transaction.execute(
         "INSERT INTO component_instances(
             instance_id, component_kind, display_name, canonical_name, implementation_id,
             contract_major, contract_minor, scope_kind, scope_id, desired_state,
-            active_config_revision, created_by, created_at, retired_at, revision
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, NULL, 1, 1, ?8, ?9, NULL, ?10)",
+            active_config_revision, created_by, created_at, retired_at, revision, recovery_preparation
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, NULL, 1, 1, ?8, ?9, NULL, ?10, ?11)",
         params![
             instance.as_slice(),
             command.component_kind,
@@ -36,23 +73,25 @@ pub(super) fn create(
             command.implementation_id,
             command.contract_major,
             command.contract_minor,
-            actor.as_slice(),
-            context.occurred_at.get(),
-            stored_revision
+            actor.as_ref().map(<[u8; 16]>::as_slice),
+            created_at.get(),
+            stored_revision,
+            recovery
         ],
     )?;
     transaction.execute(
         "INSERT INTO component_configurations(
             instance_id, config_revision, schema_version, canonical_config, config_digest,
-            secret_generation_id, created_by, created_at, state
-         ) VALUES (?1, 1, ?2, ?3, ?4, NULL, ?5, ?6, 2)",
+            secret_generation_id, created_by, created_at, state, recovery_preparation
+         ) VALUES (?1, 1, ?2, ?3, ?4, NULL, ?5, ?6, 2, ?7)",
         params![
             instance.as_slice(),
             command.schema_version,
             command.canonical_configuration,
             command.configuration_digest.as_slice(),
-            actor.as_slice(),
-            context.occurred_at.get()
+            actor.as_ref().map(<[u8; 16]>::as_slice),
+            created_at.get(),
+            recovery
         ],
     )?;
     let updated = transaction.execute(

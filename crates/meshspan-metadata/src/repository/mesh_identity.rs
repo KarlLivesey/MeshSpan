@@ -7,6 +7,24 @@ use meshspan_domain::MeshId;
 use super::RepositoryError;
 use crate::PartitionDatabase;
 
+pub(super) fn local_mesh_name(
+    database: &PartitionDatabase,
+) -> Result<Option<crate::RecordName>, RepositoryError> {
+    let Some(id) = local_mesh_id(database)? else {
+        return Ok(None);
+    };
+    let (display, canonical): (String, String) = database.connection().query_row(
+        "SELECT display_name, canonical_name FROM meshes WHERE mesh_id = ?1",
+        [id.as_bytes().as_slice()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let name = crate::RecordName::new(&display).map_err(|_| RepositoryError::CorruptState)?;
+    if name.canonical() != canonical {
+        return Err(RepositoryError::CorruptState);
+    }
+    Ok(Some(name))
+}
+
 pub(super) fn local_mesh_id(
     database: &PartitionDatabase,
 ) -> Result<Option<MeshId>, RepositoryError> {

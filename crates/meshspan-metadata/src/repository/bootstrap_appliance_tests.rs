@@ -276,6 +276,19 @@ fn active_certificate_tracks_current_incarnation_and_rejects_inactive_nodes()
         .active_node_certificate(node)?
         .ok_or("certificate missing")?;
     assert_eq!(certificate.incarnation, 1);
+    assert_eq!(certificate.roles.bits(), 7);
+    repository.database.connection().execute(
+        "DELETE FROM node_roles WHERE node_id = ?1 AND role_code = 2",
+        [node.as_bytes().as_slice()],
+    )?;
+    assert_eq!(
+        repository
+            .active_node_certificate(node)?
+            .ok_or("certificate missing")?
+            .roles
+            .bits(),
+        crate::JoinRoles::STORAGE | crate::JoinRoles::METADATA_ELIGIBLE,
+    );
     // Corrupt/stale projections are injected only at the persistence boundary.
     for state in [1, 3, 4] {
         repository
@@ -296,6 +309,14 @@ fn active_certificate_tracks_current_incarnation_and_rejects_inactive_nodes()
         restarted.certificate_fingerprint,
         certificate.certificate_fingerprint
     );
+    repository.database.connection().execute(
+        "DELETE FROM node_roles WHERE node_id = ?1",
+        [node.as_bytes().as_slice()],
+    )?;
+    assert!(matches!(
+        repository.active_node_certificate(node),
+        Err(RepositoryError::CorruptState),
+    ));
     repository
         .database
         .connection()

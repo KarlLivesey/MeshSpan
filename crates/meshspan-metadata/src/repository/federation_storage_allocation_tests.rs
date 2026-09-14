@@ -24,7 +24,12 @@ use crate::{
     RevokeFederationRelationship, RevokeFederationStorageAllocation,
 };
 
+mod discovery;
+mod provisioning;
 mod quota_ledger;
+mod read_view;
+mod renewal;
+mod sealed_capacity;
 
 #[test]
 fn bilateral_quota_is_disjoint_fenced_and_durable() -> Result<(), Box<dyn std::error::Error>> {

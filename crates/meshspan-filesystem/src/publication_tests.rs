@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+#[path = "publication_tests/backup_roots.rs"]
+mod backup_roots;
+#[path = "publication_tests/recovery_tree.rs"]
+mod recovery_tree;
+#[path = "publication_tests/snapshot_history.rs"]
+mod snapshot_history;
+
 use meshspan_domain::{
     BranchId, ContentManifestId, DurationMicros, FederatedMutationAcknowledgement,
     FederatedMutationEvidence, FederatedPrincipal, FederationGrantId, FederationRelationshipId,
@@ -591,13 +598,340 @@ fn two_restarted_isolated_stores_exchange_and_converge_without_moving_local_head
         office_store.prepare_namespace_reconciliation(&frontier, ReconciliationLimits::DEFAULT)?;
     assert_eq!(home_prepared, office_prepared);
     let home_receipt = home_store.apply_namespace_reconciliation(application, &home_prepared)?;
-    let office_receipt =
-        office_store.apply_namespace_reconciliation(application, &office_prepared)?;
-    assert_eq!(home_receipt, office_receipt);
-
     drop(home_store);
     drop(office_store);
+    transfer_merged_history(&fixture, home_receipt)?;
     assert_restarted_convergence(&fixture, application.operation_id, home_receipt)?;
+    prove_imported_merge_remains_writable(&fixture, home_receipt)?;
+    Ok(())
+}
+
+#[test]
+fn namespace_convergence_jobs_anchor_merge_and_resume_exactly_after_restart()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = isolated_history_fixture()?;
+    let mut store = fixture.open_home()?;
+    let volume = fixture.first.file.volume_id;
+    let branch = fixture.home.file.branch_id;
+    let remote = fixture.open_office()?.export_namespace_history(
+        volume,
+        &[fixture.office.namespace_commit_id],
+        &[fixture.first.namespace_commit_id],
+        NamespaceHistoryLimits::DEFAULT,
+    )?;
+    store.import_namespace_history(&remote, NamespaceHistoryLimits::DEFAULT)?;
+    store.retain_received_namespace_head(
+        branch,
+        volume,
+        fixture.office.namespace_commit_id,
+        fixture.office.root_object_revision_id,
+    )?;
+    let application = NamespaceReconciliationApplication {
+        operation_id: OperationId::from_bytes([140; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([141; 16])?,
+        created_by: fixture.first.file.created_by,
+        retain_superseded_history: true,
+        retention_policy_sequence: 1,
+        created_at: UnixMicros::new(140),
+    };
+    let anchor = store
+        .prepare_namespace_convergence(volume, None, application)?
+        .ok_or("missing anchor")?;
+    assert_eq!(anchor.selected_head(), fixture.home.namespace_commit_id);
+    assert!(matches!(
+        store.apply_namespace_convergence(&anchor)?.evidence,
+        crate::NamespaceConvergenceEvidence::Publication { .. }
+    ));
+    store.finish_namespace_convergence(&anchor, true)?;
+    // A peer can relay the already-selected authority head while other local work is pending.
+    store.retain_received_namespace_head(
+        branch,
+        volume,
+        anchor.selected_head(),
+        fixture.home.root_object_revision_id,
+    )?;
+    let application = NamespaceReconciliationApplication {
+        operation_id: OperationId::from_bytes([142; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([143; 16])?,
+        ..application
+    };
+    let job = store
+        .prepare_namespace_convergence(volume, Some(anchor.selected_head()), application)?
+        .ok_or("missing merge")?;
+    drop(store);
+    let mut store = fixture.open_home()?;
+    let changed = NamespaceReconciliationApplication {
+        created_at: UnixMicros::new(999),
+        ..application
+    };
+    assert_eq!(
+        store.prepare_namespace_convergence(volume, job.expected_head(), changed)?,
+        Some(job.clone())
+    );
+    let outcome = store.apply_namespace_convergence(&job)?;
+    assert!(matches!(
+        outcome.evidence,
+        crate::NamespaceConvergenceEvidence::Reconciliation(_)
+    ));
+    drop(store);
+    let mut store = fixture.open_home()?;
+    let replay = store.apply_namespace_convergence(&job)?;
+    let crate::NamespaceConvergenceEvidence::Reconciliation(receipt) = replay.evidence else {
+        return Err("missing merge receipt".into());
+    };
+    assert_eq!(receipt.disposition, PublicationDisposition::Replayed);
+    assert_eq!(
+        outcome.root_object_revision_id,
+        replay.root_object_revision_id
+    );
+    assert_eq!(
+        store
+            .namespace_head(branch, volume)?
+            .ok_or("missing head")?
+            .namespace_commit_id,
+        fixture.home.namespace_commit_id
+    );
+    store.adopt_imported_namespace_head(
+        branch,
+        volume,
+        job.selected_head(),
+        outcome.root_object_revision_id,
+    )?;
+    store.finish_namespace_convergence(&job, true)?;
+    assert_eq!(
+        store.prepare_namespace_convergence(volume, Some(job.selected_head()), changed)?,
+        None
+    );
+    Ok(())
+}
+
+#[test]
+fn independent_reconcilers_produce_identical_immutable_objects()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture = isolated_history_fixture()?;
+    let mut home = fixture.open_home()?;
+    let mut office = fixture.open_office()?;
+    let volume = fixture.first.file.volume_id;
+    let limits = NamespaceHistoryLimits::DEFAULT;
+    let home_history = home.export_namespace_history(
+        volume,
+        &[fixture.home.namespace_commit_id],
+        &[fixture.first.namespace_commit_id],
+        limits,
+    )?;
+    let office_history = office.export_namespace_history(
+        volume,
+        &[fixture.office.namespace_commit_id],
+        &[fixture.first.namespace_commit_id],
+        limits,
+    )?;
+    home.import_namespace_history(&office_history, limits)?;
+    office.import_namespace_history(&home_history, limits)?;
+    let heads = vec![
+        fixture.home.namespace_commit_id,
+        fixture.office.namespace_commit_id,
+    ];
+    let frontier = ReconciliationFrontier {
+        converged_head: Some(fixture.first.namespace_commit_id),
+        eligible_heads: heads.clone(),
+    };
+    let first = NamespaceReconciliationApplication {
+        operation_id: OperationId::from_bytes([150; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([151; 16])?,
+        created_by: fixture.first.file.created_by,
+        created_at: UnixMicros::new(150),
+        retain_superseded_history: true,
+        retention_policy_sequence: 1,
+    };
+    let second = NamespaceReconciliationApplication {
+        operation_id: OperationId::from_bytes([152; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([153; 16])?,
+        created_by: PrincipalId::from_bytes([154; 16])?,
+        created_at: UnixMicros::new(900),
+        ..first
+    };
+    let prepared =
+        home.prepare_namespace_reconciliation(&frontier, ReconciliationLimits::DEFAULT)?;
+    assert_eq!(
+        office.prepare_namespace_reconciliation(&frontier, ReconciliationLimits::DEFAULT)?,
+        prepared
+    );
+    let left = home.apply_namespace_reconciliation(first, &prepared)?;
+    let right = office.apply_namespace_reconciliation(second, &prepared)?;
+    assert_eq!(left.root_object_revision_id, right.root_object_revision_id);
+    let left_history =
+        home.export_namespace_history(volume, &[left.namespace_commit_id], &heads, limits)?;
+    let right_history =
+        office.export_namespace_history(volume, &[right.namespace_commit_id], &heads, limits)?;
+    let left_objects = left_history.immutable_records()?;
+    let right_objects = right_history.immutable_records()?;
+    assert_eq!(left_objects.len(), right_objects.len());
+    for (left, right) in left_objects.iter().zip(&right_objects) {
+        assert_eq!(left.digest(), right.digest());
+        assert!(
+            left.canonical_bytes() == right.canonical_bytes(),
+            "immutable replay bytes differ"
+        );
+    }
+    assert_eq!(
+        home.import_namespace_history(&right_history, limits)?
+            .imported_commits,
+        1
+    );
+    assert_eq!(
+        office
+            .import_namespace_history(&left_history, limits)?
+            .imported_commits,
+        1
+    );
+    Ok(())
+}
+
+fn prove_imported_merge_remains_writable(
+    fixture: &IsolatedHistoryFixture,
+    receipt: NamespaceReconciliationReceipt,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut receiver = fixture.open_office()?;
+    let branch_id = fixture.office.file.branch_id;
+    let volume_id = fixture.office.file.volume_id;
+    let adopted = receiver.adopt_imported_namespace_head(
+        branch_id,
+        volume_id,
+        receipt.namespace_commit_id,
+        receipt.root_object_revision_id,
+    )?;
+    assert_eq!(adopted.namespace_commit_id, receipt.namespace_commit_id);
+    assert_eq!(
+        receiver.namespace_commit_root(volume_id, receipt.namespace_commit_id)?,
+        receipt.root_object_revision_id
+    );
+    assert_eq!(
+        receiver.namespace_commit_coordinates(receipt.namespace_commit_id)?,
+        (volume_id, receipt.root_object_revision_id)
+    );
+    let mut directory = initial_directory_publication()?;
+    directory.branch_id = branch_id;
+    directory.volume_id = volume_id;
+    directory.root_object_id = fixture.first.root_object_id;
+    directory.expected_namespace_commit_id = Some(receipt.namespace_commit_id);
+    let created = receiver.create_directory(&directory)?;
+    assert_eq!(created.namespace_commit_id, directory.namespace_commit_id);
+    drop(receiver);
+    let receiver = fixture.open_office()?;
+    assert_eq!(
+        receiver
+            .namespace_head(branch_id, volume_id)?
+            .ok_or("missing continued head")?
+            .namespace_commit_id,
+        directory.namespace_commit_id
+    );
+    assert_eq!(
+        stored_directory_entry(
+            &receiver,
+            directory.root_object_revision_id,
+            &directory.path.path().components()[0]
+        )?
+        .object_revision_id(),
+        directory.directory_object_revision_id
+    );
+    assert!(
+        receiver
+            .export_namespace_history(
+                volume_id,
+                &[directory.namespace_commit_id],
+                &[],
+                NamespaceHistoryLimits::DEFAULT
+            )?
+            .commit_count()
+            >= 5
+    );
+    Ok(())
+}
+
+fn transfer_merged_history(
+    fixture: &IsolatedHistoryFixture,
+    receipt: NamespaceReconciliationReceipt,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut request = history_receive_request(fixture, [211; 32]);
+    request.requested_heads = vec![receipt.namespace_commit_id];
+    fixture
+        .open_office()?
+        .begin_namespace_history_receive(&request)?;
+    let mut cursor = Vec::new();
+    loop {
+        let mut export = history_page_request(fixture, cursor.clone(), 2, 20);
+        export.requested_heads.clone_from(&request.requested_heads);
+        export.known_commits = vec![
+            fixture.home.namespace_commit_id,
+            fixture.office.namespace_commit_id,
+        ];
+        let source = fixture.open_home()?;
+        let page = fixture.open_home()?.namespace_history_page(export)?;
+        let mut receiver = fixture.open_office()?;
+        for commit in &page.commits {
+            // A merge carries history, not a newly signed federation mutation.
+            assert!(commit.mutation_authority().is_err());
+            assert!(commit.mutation_digest().is_err());
+            assert_eq!(commit.federated_acknowledgement()?, None);
+            let mut corrupted = commit.canonical_bytes().to_vec();
+            *corrupted.last_mut().ok_or("missing merge bytes")? ^= 1;
+            assert!(super::NamespaceHistoryCommitRecord::from_canonical_bytes(corrupted).is_err());
+        }
+        let accepted = receiver.receive_namespace_history_page(
+            request.session_id,
+            &cursor,
+            &page,
+            UnixMicros::new(30),
+        )?;
+        for digest in page.immutable_object_digests {
+            let object = source.namespace_history_object(NamespaceHistoryObjectRequest {
+                scope_binding: request.scope_binding,
+                export_token: page.export_token,
+                object_digest: digest,
+                now: UnixMicros::new(30),
+            })?;
+            receiver.receive_namespace_history_object(
+                request.session_id,
+                &object,
+                UnixMicros::new(30),
+            )?;
+        }
+        cursor = accepted.next_cursor;
+        if accepted.terminal {
+            break;
+        }
+    }
+    let mut receiver = fixture.open_office()?;
+    let old_head =
+        receiver.namespace_head(fixture.office.file.branch_id, fixture.office.file.volume_id)?;
+    let completed =
+        receiver.complete_namespace_history_receive(request.session_id, UnixMicros::new(50))?;
+    assert_eq!(completed.import.imported_commits, 1);
+    assert_eq!(
+        receiver.namespace_head(fixture.office.file.branch_id, fixture.office.file.volume_id)?,
+        old_head
+    );
+    assert_eq!(
+        receiver
+            .complete_namespace_history_receive(request.session_id, UnixMicros::new(51))?
+            .disposition,
+        PublicationDisposition::Replayed
+    );
+    let replay = receiver.export_namespace_history(
+        fixture.first.file.volume_id,
+        &[receipt.namespace_commit_id],
+        &[
+            fixture.home.namespace_commit_id,
+            fixture.office.namespace_commit_id,
+        ],
+        NamespaceHistoryLimits::DEFAULT,
+    )?;
+    assert_eq!(
+        receiver
+            .import_namespace_history(&replay, NamespaceHistoryLimits::DEFAULT)?
+            .imported_commits,
+        0
+    );
     Ok(())
 }
 
@@ -1955,6 +2289,253 @@ fn cancelled_cleanup_release_rejects_conflict_retirement_and_corruption()
 }
 
 #[test]
+fn content_reuse_candidates_are_indexed_volume_bound_and_seekable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let mut second = next_root_publication(&first)?;
+    second.file.manifest.content_digest = first.file.manifest.content_digest;
+    second.file.manifest.logical_length = first.file.manifest.logical_length;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+    let completed = crate::CompletedStage {
+        content_digest: first.file.manifest.content_digest,
+        logical_length: first.file.manifest.logical_length,
+    };
+    let batch = store.content_reuse_candidates(first.file.volume_id, completed, None, 1)?;
+    assert_eq!(batch, vec![first.file.manifest]);
+    let next = store.content_reuse_candidates(
+        first.file.volume_id,
+        completed,
+        Some(batch[0].manifest_id),
+        1,
+    )?;
+    assert_eq!(next, vec![second.file.manifest]);
+    assert!(
+        store
+            .content_reuse_candidates(
+                first.file.volume_id,
+                completed,
+                Some(next[0].manifest_id),
+                1
+            )?
+            .is_empty()
+    );
+    assert!(
+        store
+            .content_reuse_candidates(VolumeId::from_bytes([99; 16])?, completed, None, 1)?
+            .is_empty()
+    );
+    assert!(
+        store
+            .content_reuse_candidates(
+                first.file.volume_id,
+                crate::CompletedStage {
+                    logical_length: completed.logical_length + 1,
+                    ..completed
+                },
+                None,
+                1
+            )?
+            .is_empty()
+    );
+    assert!(
+        store
+            .content_reuse_candidates(first.file.volume_id, completed, None, 0)
+            .is_err()
+    );
+    let mut plan = store.connection.prepare(&format!(
+        "EXPLAIN QUERY PLAN {}",
+        super::content_reuse::CANDIDATE_QUERY
+    ))?;
+    let details = plan
+        .query_map(
+            rusqlite::params![
+                completed.content_digest.as_slice(),
+                i64::try_from(completed.logical_length)?,
+                &[] as &[u8],
+                first.file.volume_id.as_bytes().as_slice(),
+                1
+            ],
+            |row| row.get::<_, String>(3),
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(
+        details
+            .iter()
+            .any(|detail| detail.contains("content_manifests_by_plaintext"))
+    );
+    assert!(
+        details
+            .iter()
+            .any(|detail| detail.contains("file_versions_by_volume_manifest"))
+    );
+    Ok(())
+}
+
+#[test]
+fn content_reuse_migration_preserves_existing_namespace_versions()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.connection.execute_batch("DELETE FROM schema_migrations WHERE version = 45;
+        DROP TABLE namespace_convergence_job_heads;
+        DROP TABLE namespace_convergence_jobs; DROP TRIGGER namespace_convergence_enqueue;
+        DROP TABLE namespace_convergence_frontier; DELETE FROM schema_migrations WHERE version = 44;
+        DROP TRIGGER namespace_delivery_insert;
+        DROP TRIGGER namespace_delivery_advance; DROP TABLE namespace_delivery_cursors;
+        DROP TABLE namespace_delivery_journal; DELETE FROM schema_migrations WHERE version = 43;
+        DROP TABLE content_reuse_reservations;
+        DROP INDEX file_versions_by_publication_operation; DROP INDEX content_manifests_by_plaintext;
+        DROP INDEX file_versions_by_volume_manifest; DELETE FROM schema_migrations WHERE version = 42;
+        PRAGMA user_version = 41;")?;
+    drop(store);
+    let store = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    let completed = crate::CompletedStage {
+        content_digest: first.file.manifest.content_digest,
+        logical_length: first.file.manifest.logical_length,
+    };
+    assert_eq!(
+        store.content_reuse_candidates(first.file.volume_id, completed, None, 10)?,
+        vec![first.file.manifest]
+    );
+    assert_eq!(
+        store
+            .next_namespace_delivery(first.file.branch_id, NodeId::from_bytes([97; 16])?)?
+            .ok_or("migration omitted published history")?
+            .namespace_commit_id,
+        first.namespace_commit_id,
+    );
+    Ok(())
+}
+
+#[test]
+fn content_reuse_reservation_survives_restart_and_attaches_with_the_version()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = next_root_publication(&first)?;
+    let mut reused = following_root_publication(&second, 185, 186, 187, 188, 189)?;
+    reused.file.manifest = first.file.manifest;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+    store.reserve_content_reuse(reused.file)?;
+    let policy = eager_retention_policy()?;
+    let candidate = retention_candidate(&store, first.file.volume_id, policy)?;
+    let request = reachability_request(candidate, policy, &[publication_root(&second)], 168)?;
+    assert!(matches!(
+        store.begin_version_reachability_scan(&request),
+        Err(VersionReachabilityError::Conflict)
+    ));
+    drop(store);
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    store.reserve_content_reuse(reused.file)?;
+    store.connection.execute_batch(
+        "CREATE TRIGGER fail_reused_version BEFORE INSERT ON file_versions
+        BEGIN SELECT RAISE(ABORT, 'injected version failure'); END;",
+    )?;
+    assert!(store.publish_root_file(&reused).is_err());
+    let state: i64 =
+        store
+            .connection
+            .query_row("SELECT state FROM content_reuse_reservations", [], |row| {
+                row.get(0)
+            })?;
+    assert_eq!(state, 1);
+    assert!(matches!(
+        store.begin_version_reachability_scan(&request),
+        Err(VersionReachabilityError::Conflict)
+    ));
+    store
+        .connection
+        .execute_batch("DROP TRIGGER fail_reused_version;")?;
+    store.publish_root_file(&reused)?;
+    let state: i64 =
+        store
+            .connection
+            .query_row("SELECT state FROM content_reuse_reservations", [], |row| {
+                row.get(0)
+            })?;
+    assert_eq!(state, 2);
+    assert!(matches!(
+        store.cancel_content_reuse(reused.file),
+        Err(PublicationError::OperationConflict)
+    ));
+    store.reserve_content_reuse(reused.file)?;
+    assert_eq!(
+        store.publish_root_file(&reused)?.disposition,
+        PublicationDisposition::Replayed
+    );
+    Ok(())
+}
+
+#[test]
+fn content_reuse_cancellation_fences_late_and_changed_publication()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let mut reused = next_root_publication(&first)?;
+    reused.file.manifest = first.file.manifest;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.reserve_content_reuse(reused.file)?;
+    let mut changed = reused.file;
+    changed.created_by = PrincipalId::from_bytes([99; 16])?;
+    assert!(matches!(
+        store.reserve_content_reuse(changed),
+        Err(PublicationError::OperationConflict)
+    ));
+    store.cancel_content_reuse(reused.file)?;
+    store.cancel_content_reuse(reused.file)?;
+    assert!(matches!(
+        store.reserve_content_reuse(reused.file),
+        Err(PublicationError::OperationConflict)
+    ));
+    assert!(matches!(
+        store.publish_root_file(&reused),
+        Err(PublicationError::OperationConflict)
+    ));
+    let count: i64 =
+        store
+            .connection
+            .query_row("SELECT count(*) FROM file_versions", [], |row| row.get(0))?;
+    assert_eq!(count, 1);
+    Ok(())
+}
+
+#[test]
+fn content_reuse_cannot_reserve_a_manifest_after_cleanup_admission()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = next_root_publication(&first)?;
+    let mut reused = following_root_publication(&second, 185, 186, 187, 188, 189)?;
+    reused.file.manifest = first.file.manifest;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+    let policy = eager_retention_policy()?;
+    let candidate = retention_candidate(&store, first.file.volume_id, policy)?;
+    let request = reachability_request(candidate, policy, &[publication_root(&second)], 168)?;
+    store.begin_version_reachability_scan(&request)?;
+    assert!(matches!(
+        store.reserve_content_reuse(reused.file),
+        Err(PublicationError::CleanupFenced)
+    ));
+    let count: i64 = store.connection.query_row(
+        "SELECT count(*) FROM content_reuse_reservations",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(count, 0);
+    Ok(())
+}
+
+#[test]
 fn reachable_version_sharing_the_manifest_blocks_physical_cleanup()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
@@ -2656,6 +3237,90 @@ fn real_directory_creates_enable_nested_file_publication_across_restart()
         reopened.branch_mutation_intent(file.namespace_commit_id),
         Err(PublicationError::Corrupt)
     ));
+    Ok(())
+}
+
+#[test]
+fn convergence_digest_retains_validation_without_binding_optional_federation_admission()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let publication = initial_root_publication()?;
+    let expected = VersionPublicationStore::root_file_federated_mutation_digest(&publication)?;
+    let acknowledgement = mutation_acknowledgement(
+        publication.file.operation_id,
+        publication.file.created_by,
+        publication.file.volume_id,
+        publication.file.created_at,
+        Rights::TRAVERSE
+            .union(Rights::CREATE_CHILD)
+            .union(Rights::WRITE_DATA),
+        expected,
+    )?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    let receipt = store.publish_federated_root_file(&publication, &acknowledgement)?;
+    let verified = store.verify_publication_head(receipt)?;
+    let record = store
+        .export_namespace_history(
+            publication.file.volume_id,
+            &[publication.namespace_commit_id],
+            &[],
+            NamespaceHistoryLimits::DEFAULT,
+        )?
+        .commit_records()?
+        .into_iter()
+        .next()
+        .ok_or("history record missing")?;
+    assert_ne!(record.digest(), expected);
+    assert_eq!(record.convergence_digest()?, expected);
+    assert_eq!(verified.convergence_digest(), expected);
+    let mut damaged = record.decoded()?;
+    let super::namespace::transfer::CommitEvidence::Mutation {
+        acknowledgement: Some(proof),
+        ..
+    } = &mut damaged.evidence
+    else {
+        return Err("federation admission missing".into());
+    };
+    proof.payload_digest[0] ^= 1;
+    assert!(super::NamespaceHistoryCommitRecord::from_commit(&damaged).is_err());
+    Ok(())
+}
+
+#[test]
+fn foreground_and_background_publication_use_identical_convergence_evidence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    let receipt = store.publish_root_file(&first)?;
+    let foreground = store.verify_publication_head(receipt)?;
+    let application = NamespaceReconciliationApplication {
+        operation_id: OperationId::from_bytes([140; 16])?,
+        namespace_commit_id: NamespaceCommitId::from_bytes([141; 16])?,
+        created_by: first.file.created_by,
+        retain_superseded_history: true,
+        retention_policy_sequence: 1,
+        created_at: UnixMicros::new(140),
+    };
+    let job = store
+        .prepare_namespace_convergence(first.file.volume_id, None, application)?
+        .ok_or("missing convergence job")?;
+    let background = store.apply_namespace_convergence(&job)?;
+    let crate::NamespaceConvergenceEvidence::Publication {
+        operation_id,
+        request_digest,
+        result_digest,
+    } = background.evidence
+    else {
+        return Err("one publication must not require a merge".into());
+    };
+    assert_eq!(operation_id, foreground.receipt().operation_id);
+    assert_eq!(request_digest, foreground.receipt().request_digest);
+    assert_eq!(
+        background.root_object_revision_id,
+        foreground.root_object_revision_id()
+    );
+    assert_eq!(result_digest, foreground.convergence_digest());
     Ok(())
 }
 
@@ -4145,6 +4810,35 @@ fn directory_commit_records_a_typed_replay_intent() -> Result<(), Box<dyn std::e
 }
 
 #[test]
+fn known_namespace_root_distinguishes_missing_history_from_corruption()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    let volume = first.file.volume_id;
+    let commit = first.namespace_commit_id;
+    assert_eq!(store.known_namespace_commit_root(volume, commit)?, None);
+    store.publish_root_file(&first)?;
+    assert_eq!(
+        store.known_namespace_commit_root(volume, commit)?,
+        Some(first.root_object_revision_id),
+    );
+    assert!(matches!(
+        store.known_namespace_commit_root(VolumeId::from_bytes([222; 16])?, commit),
+        Err(PublicationError::InvalidInput)
+    ));
+    store.connection.execute(
+        "UPDATE namespace_commits SET commit_digest = zeroblob(32)",
+        [],
+    )?;
+    assert!(matches!(
+        store.known_namespace_commit_root(volume, commit),
+        Err(PublicationError::Corrupt)
+    ));
+    Ok(())
+}
+
+#[test]
 fn corrupt_namespace_receipt_commit_and_object_revision_fail_closed()
 -> Result<(), Box<dyn std::error::Error>> {
     for corrupt_sql in [
@@ -4213,10 +4907,82 @@ fn every_namespace_transaction_fault_rolls_back_all_heads_and_nodes()
                 .query_row("SELECT COUNT(*) FROM directory_nodes", [], |row| row.get(0))?;
         assert_eq!(node_count, 0);
         assert_eq!(
+            store.next_namespace_delivery(
+                publication.file.branch_id,
+                NodeId::from_bytes([97; 16])?
+            )?,
+            None
+        );
+        assert_eq!(
             store.publish_root_file(&publication)?.disposition,
             PublicationDisposition::Applied
         );
     }
+    Ok(())
+}
+
+#[test]
+fn namespace_delivery_survives_restart_and_cannot_skip_or_substitute_a_publication()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let second = next_root_publication(&first)?;
+    let branch = first.file.branch_id;
+    let peer = NodeId::from_bytes([97; 16])?;
+    let other = NodeId::from_bytes([98; 16])?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    assert_eq!(store.next_namespace_delivery(branch, peer)?, None);
+    store.publish_root_file(&first)?;
+    store.publish_root_file(&second)?;
+    store.publish_root_file(&first)?; // Exact publication retry must not duplicate work.
+    let pending = store
+        .next_namespace_delivery(branch, peer)?
+        .ok_or("missing first delivery")?;
+    assert_eq!(pending.namespace_commit_id, first.namespace_commit_id);
+    assert_eq!(pending.file_version_id, Some(first.file.version_id));
+    assert_eq!(pending.volume_id, first.file.volume_id);
+    assert_eq!(
+        pending.root_object_revision_id,
+        first.root_object_revision_id
+    );
+    let mut forged = pending;
+    forged.namespace_commit_id = second.namespace_commit_id;
+    assert!(matches!(
+        store.acknowledge_namespace_delivery(branch, peer, forged),
+        Err(PublicationError::OperationConflict)
+    ));
+    drop(store); // Equivalent durable state to a sender dying without a valid receipt.
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(2))?;
+    assert_eq!(store.next_namespace_delivery(branch, peer)?, Some(pending));
+    store.acknowledge_namespace_delivery(branch, peer, pending)?;
+    store.acknowledge_namespace_delivery(branch, peer, pending)?;
+    let next = store
+        .next_namespace_delivery(branch, peer)?
+        .ok_or("missing second delivery")?;
+    assert_eq!(next.namespace_commit_id, second.namespace_commit_id);
+    assert_eq!(next.file_version_id, Some(second.file.version_id));
+    assert!(next.sequence > pending.sequence);
+    assert!(matches!(
+        store.acknowledge_namespace_delivery(branch, other, next),
+        Err(PublicationError::OperationConflict)
+    ));
+    store.acknowledge_namespace_delivery(branch, peer, next)?;
+    assert_eq!(store.next_namespace_delivery(branch, peer)?, None);
+    assert_eq!(store.next_namespace_delivery(branch, other)?, Some(pending));
+    drop(store);
+    let store = VersionPublicationStore::open(directory.path(), UnixMicros::new(3))?;
+    assert_eq!(store.next_namespace_delivery(branch, peer)?, None);
+    assert_eq!(store.next_namespace_delivery(branch, other)?, Some(pending));
+    let plan: String = store.connection.query_row(
+        "EXPLAIN QUERY PLAN SELECT delivery_sequence FROM namespace_delivery_journal
+         WHERE branch_id = ?1 AND delivery_sequence > ?2 ORDER BY delivery_sequence LIMIT 1",
+        rusqlite::params![branch.as_bytes().as_slice(), 0],
+        |row| row.get(3),
+    )?;
+    assert!(
+        plan.contains("USING COVERING INDEX namespace_delivery_by_branch"),
+        "{plan}"
+    );
     Ok(())
 }
 

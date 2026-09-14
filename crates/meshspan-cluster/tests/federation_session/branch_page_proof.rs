@@ -39,7 +39,7 @@ pub(super) async fn prove_branch_page_service(
     prove_authorised_exchange(proof, &fixture).await?;
     prove_filesystem_backed_exchange(proof, &fixture).await?;
     prove_restart_resumable_filesystem_sync(proof, &fixture).await?;
-    prove_federated_content_layout(proof, &fixture).await?;
+    Box::pin(prove_federated_content_layout(proof, &fixture)).await?;
     prove_denied_exchange_skips_source(proof, &fixture).await?;
     prove_excessive_source_page_fails_closed(proof, &fixture).await
 }

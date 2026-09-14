@@ -51,6 +51,18 @@ impl FederationGrantRecord {
     }
 }
 
+pub(crate) fn encode_grant_definition(
+    value: &crate::IssueFederationGrant,
+) -> Result<Vec<u8>, FederationGrantRecordCodecError> {
+    codec::encode_definition(value)
+}
+
+pub(crate) fn decode_grant_definition(
+    bytes: &[u8],
+) -> Result<crate::IssueFederationGrant, FederationGrantRecordCodecError> {
+    codec::decode_definition(bytes)
+}
+
 fn validate_record(record: &FederationGrantRecord) -> Result<(), FederationGrantRecordCodecError> {
     let grant = &record.grant;
     let reconstructed = FederationGrant::new(

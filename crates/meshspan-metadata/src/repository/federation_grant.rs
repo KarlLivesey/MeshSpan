@@ -214,6 +214,7 @@ fn replace(
         context.occurred_at,
         revision,
     )?;
+    super::federation_storage_lease::replace(transaction, command, revision)?;
     Ok(grant_reference(command.grant.grant_id()))
 }
 

@@ -21,6 +21,25 @@ use crate::wire::{
     request_context_without_revision, shard, tombstone_receipt, tombstone_receipt_payload,
 };
 
+/// Returns the normal typed rejection when outer admission denies a maintenance request.
+///
+/// No provider is opened or called. The response closes this request's send stream.
+///
+/// # Errors
+/// Rejects other message kinds or a transport failure while sending the rejection.
+pub async fn reject_shard_maintenance(
+    stream: &mut AcceptedStream,
+    limits: WireLimits,
+    message: &Message,
+    error: ContractError,
+) -> Result<(), DataPlaneError> {
+    match message {
+        Message::DeleteShardRequest(_) => reject_delete(stream, limits, error).await,
+        Message::ReclaimShardRequest(_) => reject_reclaim(stream, limits, error).await,
+        _ => Err(DataPlaneError::InvalidMessage),
+    }
+}
+
 impl<Provider: StorageProvider> RemoteShardService<Provider> {
     pub(super) async fn serve_delete(
         &mut self,

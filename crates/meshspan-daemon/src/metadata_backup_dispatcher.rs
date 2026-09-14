@@ -267,6 +267,9 @@ where
             if claim.lease_expires_at > now {
                 return self.resolve_live_claim(run, claim);
             }
+            if run.state == MetadataBackupRunState::Claimed {
+                return self.abandon_unrecorded(now, run, claim);
+            }
         }
         let generation = current.map_or(Ok(1), |value| {
             value
@@ -276,6 +279,53 @@ where
                 .ok_or(MetadataBackupDispatchError::Capacity)
         })?;
         self.commit_claim(now, lease_duration, run, generation)
+    }
+
+    fn abandon_unrecorded(
+        &mut self,
+        now: UnixMicros,
+        run: MetadataBackupRun,
+        claim: MetadataBackupRunClaimRecord,
+    ) -> Result<MetadataBackupDispatchOutcome, MetadataBackupDispatchError> {
+        let (operation_id, audit_event_id, _) = claim_identities(self.random)?;
+        let context = CommandContext {
+            operation_id,
+            audit_event_id,
+            actor_principal_id: self.actor_principal_id,
+            occurred_at: now,
+            expected_revision: None,
+        };
+        let command = AuthoritativeCommand::AbandonUnrecordedMetadataBackupRun(
+            meshspan_metadata::AbandonUnrecordedMetadataBackupRun {
+                backup_id: run.backup_id,
+                expected_claim: claim.claim,
+            },
+        );
+        match self
+            .authority
+            .commit_metadata_backup_dispatch(context, &command)
+        {
+            Ok(receipt) => validate_receipt(
+                receipt,
+                context,
+                &command,
+                run.backup_id,
+                EntityKind::MetadataBackupRun,
+            )?,
+            // A concurrent renewal, admission or abandonment is observed next pass.
+            Err(
+                MetadataAuthorityRequestError::Rejected | MetadataAuthorityRequestError::Conflict,
+            ) => return Ok(MetadataBackupDispatchOutcome::Idle),
+            Err(error) => return Err(error.into()),
+        }
+        if self
+            .authority
+            .unfinished_metadata_backup_run()?
+            .is_some_and(|current| current.backup_id == run.backup_id)
+        {
+            return Err(MetadataBackupDispatchError::InvalidProjection);
+        }
+        Ok(MetadataBackupDispatchOutcome::Idle)
     }
 
     fn commit_claim(
@@ -468,7 +518,8 @@ fn claim_identities(
     random.fill_bytes(&mut bytes)?;
     let operation = OperationId::from_bytes(uuid_v8(identifier(&bytes[..16])?))?;
     let audit = AuditEventId::from_bytes(uuid_v8(identifier(&bytes[16..32])?))?;
-    let fence = u64::from_be_bytes(identifier8(&bytes[32..])?);
+    // The durable claim uses a positive SQLite INTEGER, not the full u64 domain.
+    let fence = u64::from_be_bytes(identifier8(&bytes[32..])?) >> 1;
     if operation.as_bytes() == audit.as_bytes() || fence == 0 {
         return Err(MetadataBackupDispatchError::InvalidInput);
     }

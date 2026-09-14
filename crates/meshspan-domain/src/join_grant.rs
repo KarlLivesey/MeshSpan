@@ -326,7 +326,7 @@ fn append_hex(destination: &mut String, bytes: &[u8]) {
     }
 }
 
-fn valid_https_origin(value: &str) -> bool {
+pub(crate) fn valid_https_origin(value: &str) -> bool {
     if value.len() > MAXIMUM_ENDPOINT_BYTES
         || !value.is_ascii()
         || value

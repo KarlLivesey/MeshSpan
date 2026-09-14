@@ -116,6 +116,7 @@ fn family(message: &Message) -> Result<DataFamily, RemoteDataRouterError> {
         Message::StoreBackupBegin(_)
         | Message::ReadBackupRequest(_)
         | Message::VerifyBackupRequest(_)
+        | Message::LookupBackupRequest(_)
         | Message::DeleteBackupRequest(_) => Ok(DataFamily::Backup),
         _ => Err(RemoteDataRouterError::InvalidMessage),
     }

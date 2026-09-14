@@ -70,6 +70,8 @@ Current work is **Stage 10: certificates, packaging and operations**. The
 local test results and remaining work. Stage 11 has not started; releases remain on hold.
 The accepted requirements, architecture and implementation order are in the
 [design review pack](design/README.md).
+The Stage 4/5 pack-lifecycle and compatible-content deduplication gaps are tracked
+explicitly in [Stage 10 task 17](design/stage-tasks.md).
 
 ## Development
 
@@ -102,6 +104,21 @@ development build, not a release or publication command.
 
 Dependency and toolchain updates use `pnpm check:dependency-update`: advisory
 scans followed by the complete local gate. It does not publish a release.
+
+The headless [`verify-backup` command](design/flows.md#offline-backup-verification)
+checks an exported encrypted metadata backup using the saved offline recovery
+bundle, without starting a node or modifying live state.
+
+[`prepare-recovery`](design/flows.md#offline-recovery-preparation) creates an isolated,
+signed replacement preparation and per-node installation bundles without starting services.
+
+The node-side [`install-recovery-keys` step](design/flows.md#replacement-node-recovery-key-installation)
+can durably install a root-authorised encrypted key bundle and replacement node certificate. It does not activate
+a recovered cluster; the complete disaster-recovery workflow is still in progress.
+
+[`Recovery state transfer`](design/flows.md#replacement-node-prepared-state-transfer)
+also delivers encrypted metadata/history to a replacement node. Installation
+verifies the package but does not yet admit a recovered cluster into service.
 
 ## GPL-2.0-only
 

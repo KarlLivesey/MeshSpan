@@ -107,7 +107,7 @@ impl PrivateCertificateRenewal {
             && rotation.valid_until > now
             && rotation.incarnation == network.local_incarnation()
         {
-            let acknowledgement = self.install(&network, &rotation)?;
+            let acknowledgement = install(&self.identity, &network, &rotation)?;
             return self.submit(
                 actor,
                 now,
@@ -229,57 +229,13 @@ impl PrivateCertificateRenewal {
         )))
     }
 
-    fn install(
-        &self,
-        network: &ConsensusNetwork,
-        rotation: &NodeCertificateRotation,
-    ) -> Result<AcknowledgeNodeCertificateInstallation, PrivateCertificateRenewalError> {
-        let installed = network.install_local_certificate(
-            rotation.generation,
-            NodeCredentials::new(
-                vec![
-                    CertificateDer::from(rotation.certificate_der.clone()),
-                    CertificateDer::from(rotation.issuer_certificate_der.clone()),
-                ],
-                PrivatePkcs8KeyDer::from(self.identity.private_key_pkcs8().to_vec()).into(),
-            )?,
-        )?;
-        let mut acknowledgement = AcknowledgeNodeCertificateInstallation {
-            node_id: network.local_node_id(),
-            incarnation: network.local_incarnation(),
-            generation: installed.generation,
-            certificate_fingerprint: installed.certificate_fingerprint,
-            staged_revision: rotation.staged_revision,
-            signature: Vec::new(),
-        };
-        acknowledgement.signature = self
-            .identity
-            .sign_enrolment_transcript(&acknowledgement.signing_transcript())?;
-        Ok(acknowledgement)
-    }
-
     fn submit(
         &mut self,
         actor: PrincipalId,
         now: UnixMicros,
         command: AuthoritativeCommand,
     ) -> Result<bool, PrivateCertificateRenewalError> {
-        let mut operation = [0; 16];
-        let mut audit = [0; 16];
-        OperatingSystemRandom
-            .fill_bytes(&mut operation)
-            .map_err(|_| PrivateCertificateRenewalError::InvalidState)?;
-        OperatingSystemRandom
-            .fill_bytes(&mut audit)
-            .map_err(|_| PrivateCertificateRenewalError::InvalidState)?;
-        let context = CommandContext {
-            operation_id: OperationId::from_bytes(uuid_v8(operation))?,
-            actor_principal_id: actor,
-            audit_event_id: AuditEventId::from_bytes(uuid_v8(audit))?,
-            occurred_at: now,
-            expected_revision: None,
-        };
-        self.pending = Some((context, command));
+        self.pending = Some((command_context(actor, now)?, command));
         self.commit_pending()
     }
 
@@ -300,8 +256,7 @@ impl PrivateCertificateRenewal {
                 MetadataAuthorityRequestError::NotLeader { .. }
                 | MetadataAuthorityRequestError::Unavailable,
             ) => Ok(false),
-            // Concurrent eligible workers can stage or retire the same node. The next tick
-            // reloads the committed state; never retry a rejected command with changed bytes.
+            // Concurrent issuers may race. Reload after rejection without changing retry bytes.
             Err(MetadataAuthorityRequestError::Rejected) => {
                 self.pending = None;
                 Ok(false)
@@ -314,6 +269,56 @@ impl PrivateCertificateRenewal {
             ) => Err(PrivateCertificateRenewalError::InvalidState),
         }
     }
+}
+
+/// Install and attest a committed candidate using only this node's private identity key.
+pub(crate) fn install(
+    identity: &NodeIdentityKey,
+    network: &ConsensusNetwork,
+    rotation: &NodeCertificateRotation,
+) -> Result<AcknowledgeNodeCertificateInstallation, PrivateCertificateRenewalError> {
+    let installed = network.install_local_certificate(
+        rotation.generation,
+        NodeCredentials::new(
+            vec![
+                CertificateDer::from(rotation.certificate_der.clone()),
+                CertificateDer::from(rotation.issuer_certificate_der.clone()),
+            ],
+            PrivatePkcs8KeyDer::from(identity.private_key_pkcs8().to_vec()).into(),
+        )?,
+    )?;
+    let mut acknowledgement = AcknowledgeNodeCertificateInstallation {
+        node_id: network.local_node_id(),
+        incarnation: network.local_incarnation(),
+        generation: installed.generation,
+        certificate_fingerprint: installed.certificate_fingerprint,
+        staged_revision: rotation.staged_revision,
+        signature: Vec::new(),
+    };
+    acknowledgement.signature =
+        identity.sign_enrolment_transcript(&acknowledgement.signing_transcript())?;
+    Ok(acknowledgement)
+}
+
+pub(crate) fn command_context(
+    actor: PrincipalId,
+    now: UnixMicros,
+) -> Result<CommandContext, PrivateCertificateRenewalError> {
+    let mut operation = [0; 16];
+    let mut audit = [0; 16];
+    OperatingSystemRandom
+        .fill_bytes(&mut operation)
+        .map_err(|_| PrivateCertificateRenewalError::InvalidState)?;
+    OperatingSystemRandom
+        .fill_bytes(&mut audit)
+        .map_err(|_| PrivateCertificateRenewalError::InvalidState)?;
+    Ok(CommandContext {
+        operation_id: OperationId::from_bytes(uuid_v8(operation))?,
+        actor_principal_id: actor,
+        audit_event_id: AuditEventId::from_bytes(uuid_v8(audit))?,
+        occurred_at: now,
+        expected_revision: None,
+    })
 }
 
 #[derive(Debug, Error)]

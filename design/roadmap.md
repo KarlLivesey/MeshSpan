@@ -206,7 +206,9 @@ SCL-011–014.
 
 **Depends on:** Stage 3.
 
-**Status:** complete, including capability-scoped federated partner capacity. See
+**Status:** core provider and federated-capacity proofs pass; reopened on
+2026-09-07 for DAT-021 bounded pack rollover and CoW compaction. Remaining work
+is tracked once under [Stage 10 task 17](stage-tasks.md). See
 [`stage-4-evidence.md`](stage-4-evidence.md).
 
 Build:
@@ -222,6 +224,8 @@ Build:
   protection-contribution and ordinary-read classifications;
 - encrypted cross-swarm put/get/scrub/repair/retire flows whose signed receipts
   never expose volume keys or namespace/user metadata to storage-only partners.
+- explicit pack byte/record bounds, indexed routing across bounded packs and
+  crash-recoverable CoW compaction with old-pack retirement fenced by live reads.
 
 First vertical proof:
 
@@ -246,8 +250,10 @@ FED-005, FED-016–021, FED-024, FED-025.
 
 **Depends on:** Stages 2–4.
 
-**Status:** complete after the 2026-08-30 local-convergence and autonomous-swarm federation audit.
-All reopened gaps have executable closure evidence.
+**Status:** the 2026-08-30 core/federation proofs remain valid; reopened on
+2026-09-07 for D-058 §5 mesh-wide compatible encrypted-layout reuse. The current
+new-upload path prepares a fresh layout, not a content-index lookup.
+Remaining work is tracked once under [Stage 10 task 17](stage-tasks.md).
 See [`stage-5-evidence.md`](stage-5-evidence.md) and [`federation.md`](federation.md).
 
 Build:
@@ -261,6 +267,9 @@ Build:
 - authoritative opens, share modes, locks, rename, delete-on-close and flush;
 - complete permission evaluation over nested groups, multiple owners,
   inheritance and time windows;
+- mesh-wide content identity and compatible encrypted-layout reuse, preserving
+  independent logical file ownership, rights, quota and retention without a
+  content-existence oracle;
 - sessions, capabilities, audit events and adapter-facing filesystem API;
 - lazily materialised existing-file state on a forked writable branch so offline
   branches can edit existing content, not only create new names;

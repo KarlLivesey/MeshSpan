@@ -20,20 +20,26 @@ async fn manual_dns01_tasks_drive_issuance_and_exact_cleanup() -> Result<(), Box
         .map_err(|error| error.to_string())?;
     let ca =
         authority::TestAuthority::start(ValidationTarget::Dns01("127.0.0.1:53".parse()?)).await?;
+    let mut notifications = crate::notifications::Receiver::start().await?;
     let mut root = ProcessFixture::new()?;
     // The container runner removes successful cases and retains failed private fixture state.
     root.temporary.disable_cleanup(true);
     root.smb_address.set_port(0);
     let trust_file = root.temporary.path().join("test-ca.pem");
-    fs::write(&trust_file, &ca.anchor_pem)?;
+    fs::write(
+        &trust_file,
+        format!("{}{}", ca.anchor_pem, notifications.anchor),
+    )?;
     let mut processes = vec![root.command().env("SSL_CERT_FILE", &trust_file).spawn()?];
-    let proof = manual_lifecycle(&root, &ca, &records, &mut processes[0]).await;
+    let proof = manual_lifecycle(&root, &ca, &records, &mut processes[0], &mut notifications).await;
     stop_processes(&mut processes);
     let ca_result = ca.stop().await;
     let dns_result = dns.stop().await.map_err(|error| error.to_string());
+    let notification_result = notifications.stop().await;
     proof?;
     ca_result?;
     dns_result?;
+    notification_result?;
     Ok(())
 }
 
@@ -42,6 +48,7 @@ async fn manual_lifecycle(
     ca: &authority::TestAuthority,
     records: &SharedRecords,
     process: &mut Child,
+    notifications: &mut crate::notifications::Receiver,
 ) -> Result<(), Box<dyn Error>> {
     let claim = wait_for_claim(&root.claim_path).await?;
     let bootstrap = wait_for_client(&root.identity_path).await?;
@@ -49,6 +56,9 @@ async fn manual_lifecycle(
     let created = create_process_mesh(root, &bootstrap, &claim).await?;
     let key = created["api_key"].as_str().ok_or("missing API key")?;
     save_and_verify_recovery_bundle(root, &bootstrap, key, &created).await?;
+    let mut channel = crate::notifications::configuration(&notifications.endpoint);
+    channel["event_filter"] = json!(4);
+    crate::notifications::configure(root, &bootstrap, key, &channel).await?;
     let authorization = format!("Bearer {key}");
     let body = serde_json::to_vec(&json!({
         "operation_id": "00000000-0000-4000-8000-000000000201",
@@ -83,6 +93,7 @@ async fn manual_lifecycle(
     );
     ca.assert_issued_once()?;
     ca.assert_challenge_removed().await?;
+    crate::notifications::expect_manual_dns_lifecycle(notifications, root).await?;
     Ok(())
 }
 

@@ -125,3 +125,36 @@ fn enrol_response() -> Result<&'static CompiledValidator, BoundaryError> {
         ENROL_RESPONSE.get_or_init(|| compile(&schema::response_schema::<EnrolNodeResponse>())),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn bootstrap_peer_requires_an_exact_positive_incarnation() -> Result<(), String> {
+        let validator = compile(&schema::response_schema::<crate::EnrolmentBootstrapPeer>())?;
+        let mut peer = json!({
+            "node_id": "00000000-0000-4000-8000-000000000001",
+            "incarnation": "7", "private_endpoint": "127.0.0.1:443",
+            "certificate_der_hex": "abcd"
+        });
+        validate(&validator, &peer).map_err(|error| error.to_string())?;
+        for invalid in [
+            json!(null),
+            json!(7),
+            json!("0"),
+            json!("07"),
+            json!("-1"),
+            json!("1.0"),
+        ] {
+            peer["incarnation"] = invalid;
+            assert!(validate(&validator, &peer).is_err());
+        }
+        peer.as_object_mut()
+            .ok_or("fixture is not an object")?
+            .remove("incarnation");
+        assert!(validate(&validator, &peer).is_err());
+        Ok(())
+    }
+}

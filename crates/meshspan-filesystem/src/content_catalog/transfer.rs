@@ -24,6 +24,30 @@ pub struct CommittedContentLayoutTransfer<'a> {
 }
 
 impl CommittedContentLayoutTransfer<'_> {
+    /// Loads one archived stripe and its validated physical receipts for offline restoration.
+    /// This is immutable layout evidence, not permission to read or write a provider.
+    /// # Errors
+    /// Rejects missing, malformed or contradictory committed stripe records.
+    pub fn recovery_stripe(
+        &self,
+        chunk_index: u64,
+    ) -> Result<super::CommittedProtectedStripe, ContentCatalogError> {
+        self.catalog.active_protected_stripe(
+            self.request,
+            PublishedContentReference {
+                publication_operation_id: self.request.operation_id,
+                manifest: self.header.manifest,
+            },
+            chunk_index,
+        )
+    }
+
+    /// Volume bound to the validated committed layout, independent of the peer relaying it.
+    #[must_use]
+    pub const fn volume_id(&self) -> meshspan_domain::VolumeId {
+        self.request.volume_id
+    }
+
     /// Exact manifest, geometry and receiver-wrapped key for the transfer.
     #[must_use]
     pub const fn header(&self) -> ContentLayoutTransferHeader {

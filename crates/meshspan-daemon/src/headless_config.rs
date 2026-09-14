@@ -159,6 +159,41 @@ impl HeadlessDaemonConfig {
     pub const fn join_grant(&self) -> Option<&JoinGrantBundle> {
         self.join_grant.as_ref()
     }
+
+    /// Reconstruct public startup settings after enrolment, without replaying a consumed secret.
+    pub(crate) fn restart_arguments(&self) -> Vec<OsString> {
+        let mut arguments = vec![
+            OsString::from("--daemon-state-dir"),
+            self.storage.daemon_state_dir().as_os_str().to_owned(),
+        ];
+        for folder in self.storage.storage_paths() {
+            arguments.extend([
+                OsString::from("--storage-path"),
+                folder.as_os_str().to_owned(),
+            ]);
+        }
+        for (flag, address) in [
+            ("--https-listen", self.https_listen),
+            ("--http01-listen", self.http01_listen),
+            ("--smb-listen", self.smb_listen),
+            ("--private-listen", self.private_listen),
+        ] {
+            arguments.extend([OsString::from(flag), OsString::from(address.to_string())]);
+        }
+        if let Some(endpoint) = &self.private_endpoint {
+            arguments.extend([
+                OsString::from("--private-endpoint"),
+                OsString::from(endpoint),
+            ]);
+        }
+        if let Some(output) = &self.claim_output {
+            arguments.extend([
+                OsString::from("--claim-output"),
+                output.as_os_str().to_owned(),
+            ]);
+        }
+        arguments
+    }
 }
 
 fn default_https_address() -> SocketAddr {

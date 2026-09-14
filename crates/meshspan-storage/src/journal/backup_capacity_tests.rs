@@ -86,7 +86,10 @@ fn version_one_target_migrates_without_losing_shard_reservations()
     let mut journal = open(directory.path())?;
     journal.reserve(shard_request(9, 400)?)?;
     // Construct the exact prior schema: no new-table contents exist in this fixture.
-    journal.connection.execute_batch("DROP TABLE backup_capacity; DELETE FROM schema_migrations WHERE version = 2; PRAGMA user_version = 1;")?;
+    journal.connection.execute_batch(
+        "DROP TABLE pack_routes; DROP TABLE pack_segments; DROP TABLE backup_capacity;
+         DELETE FROM schema_migrations WHERE version > 1; PRAGMA user_version = 1;",
+    )?;
     drop(journal);
     let mut journal = open(directory.path())?;
     assert_eq!(journal.capacity()?.reserved_bytes, 400);

@@ -19,6 +19,7 @@ meshspan-backup = { path = "../meshspan-backup" }
 meshspan-certificates = { path = "../meshspan-certificates" }
 meshspan-consensus = { path = "../meshspan-consensus" }
 meshspan-domain = { path = "../meshspan-domain" }
+meshspan-recovery-bundle = { path = "../meshspan-recovery-bundle" }
 meshspan-secret-envelope = { path = "../meshspan-secret-envelope" }
 meshspan-work = { path = "../meshspan-work" }
 rusqlite.workspace = true

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-//! Re-encryption of mesh-wide gateway secrets after the gateway set changes.
+//! Re-encryption of mesh-wide secrets for their distinct service-role recipient sets.
+
+mod volume_keys;
 
 use meshspan_cluster::MetadataAuthorityRequestError;
 use meshspan_domain::{AuditEventId, OperationId, PrincipalId, UnixMicros, uuid_v8};
@@ -22,11 +24,12 @@ use crate::{
 const OPERATION_ID_DOMAIN: &[u8] = b"meshspan.cluster-secret-redistribution.operation.v1\0";
 const AUDIT_ID_DOMAIN: &[u8] = b"meshspan.cluster-secret-redistribution.audit.v1\0";
 
-/// Adds every active gateway recipient to each existing mesh-wide secret generation.
+/// Refreshes each mesh-wide secret's complete role-specific recipient set after activation.
 ///
 /// The underlying secret value is preserved. Only its authenticated ciphertext generation and
 /// complete recipient-envelope set change, so already-running capabilities remain valid while a
 /// newly activated gateway can open the same cluster authority.
+/// Storage nodes receive permit keys only, including while they drain retained shards.
 pub(crate) fn redistribute_cluster_secrets(
     authority: &ConsensusAuthenticationAuthority,
     decryptor: &LocalWrappingKey,
@@ -38,6 +41,14 @@ pub(crate) fn redistribute_cluster_secrets(
         .local_mesh_id()?
         .ok_or(ClusterSecretRedistributionError::MissingState)?;
     let recipients = authority.reader().volume_key_recipients()?;
+    let storage_recipients = authority.reader().storage_permit_recipients()?;
+    volume_keys::redistribute(
+        authority,
+        decryptor,
+        actor_principal_id,
+        occurred_at,
+        &recipients,
+    )?;
     let generations = [
         (
             STORAGE_PERMIT_KEY_SECRET_KIND,
@@ -69,7 +80,11 @@ pub(crate) fn redistribute_cluster_secrets(
             kind,
             mesh_id.as_bytes(),
             generation,
-            &recipients,
+            if kind == STORAGE_PERMIT_KEY_SECRET_KIND {
+                &storage_recipients
+            } else {
+                &recipients
+            },
         )?;
     }
     if let Some(local_authority) = authority.reader().mesh_local_certificate_authority()? {
@@ -181,11 +196,19 @@ fn redistribute_generation(
 fn command_identities(
     command: &AuthoritativeCommand,
 ) -> Result<(OperationId, AuditEventId), ClusterSecretRedistributionError> {
-    let AuthoritativeCommand::CommitSecretGeneration(generation) = command else {
-        return Err(ClusterSecretRedistributionError::Conflict);
+    let (generation, operation_domain, audit_domain) = match command {
+        AuthoritativeCommand::CommitSecretGeneration(generation) => {
+            (generation, OPERATION_ID_DOMAIN, AUDIT_ID_DOMAIN)
+        }
+        AuthoritativeCommand::ExtendVolumeKeyRecipients(generation) => (
+            generation,
+            b"meshspan.volume-key-recipient-extension.operation.v1\0".as_slice(),
+            b"meshspan.volume-key-recipient-extension.audit.v1\0".as_slice(),
+        ),
+        _ => return Err(ClusterSecretRedistributionError::Conflict),
     };
-    let operation = identifier(OPERATION_ID_DOMAIN, generation)?;
-    let audit = identifier(AUDIT_ID_DOMAIN, generation)?;
+    let operation = identifier(operation_domain, generation)?;
+    let audit = identifier(audit_domain, generation)?;
     Ok((
         OperationId::from_bytes(operation)?,
         AuditEventId::from_bytes(audit)?,

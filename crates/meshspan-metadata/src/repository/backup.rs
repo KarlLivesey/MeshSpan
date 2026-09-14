@@ -49,6 +49,14 @@ pub struct EncryptedPartitionBackupManifest {
     pub encrypted: BackupFileEvidence,
 }
 
+impl PartitionBackupManifest {
+    /// Converts this exact closed SQLite snapshot into the encrypted container's source claim.
+    #[must_use]
+    pub fn source_manifest(self) -> BackupSourceManifest {
+        source_manifest(self)
+    }
+}
+
 pub(super) fn create_partition_backup(
     database: &PartitionDatabase,
     backup_id: BackupId,
@@ -175,8 +183,10 @@ pub struct EncryptedRestorePaths<'a> {
 ///
 /// # Errors
 ///
-/// Refuses an existing destination and fails for digest, length, identity, schema, integrity or
-/// exact committed-state mismatch. A failed destination remains staged and is never activated.
+/// Refuses an existing destination and fails for digest, length, identity, unsupported schema,
+/// migration, integrity or exact committed-state mismatch. The source is verified before any
+/// migration; only the new destination advances through the supported migration chain. A failed
+/// destination remains staged and is never activated.
 pub fn restore_partition_backup(
     source: &Path,
     destination: &Path,
@@ -189,9 +199,9 @@ pub fn restore_partition_backup(
     drop(source_connection);
     let restored = PartitionDatabase::open(destination, manifest.partition_id, migration_time)?;
     let state = read_state(restored.connection())?;
-    if state != (manifest.applied_position, manifest.state_revision)
-        || restored.schema_version() != manifest.schema_version
-    {
+    // Opening verifies and migrates the copied schema. Comparing its current version to the
+    // historical capture version would reject every successful cross-version restore.
+    if state != (manifest.applied_position, manifest.state_revision) {
         return Err(RepositoryError::BackupMismatch);
     }
     restored.check_integrity()?;

@@ -68,6 +68,75 @@ fn wrong_recipient_and_generation_fail_closed() -> Result<(), Box<dyn std::error
 }
 
 #[test]
+fn recipient_rewrap_preserves_ciphertext_and_rejects_substituted_secret()
+-> Result<(), Box<dyn std::error::Error>> {
+    let owner = WrappingPrivateKey::from_bytes([17; 32])?;
+    let joining = WrappingPrivateKey::from_bytes([19; 32])?;
+    let (secret, envelopes) = encrypt_secret(
+        context(1)?,
+        b"unchanged historical key",
+        &[owner.public_key()],
+        &mut SequentialRandom::new(41),
+    )?;
+    let original = secret.parts();
+    let added = envelopes[0].rewrap(
+        &secret,
+        &owner,
+        joining.public_key(),
+        &mut SequentialRandom::new(61),
+    )?;
+    assert_eq!(secret.parts(), original);
+    assert_eq!(added.context(), context(1)?);
+    assert_eq!(
+        secret.decrypt(&added.open(&joining)?)?.expose(),
+        b"unchanged historical key"
+    );
+    assert!(
+        envelopes[0]
+            .rewrap(
+                &secret,
+                &joining,
+                owner.public_key(),
+                &mut SequentialRandom::new(71)
+            )
+            .is_err()
+    );
+    let (substituted, _) = encrypt_secret(
+        context(1)?,
+        b"different key, same context",
+        &[owner.public_key()],
+        &mut SequentialRandom::new(81),
+    )?;
+    assert!(
+        envelopes[0]
+            .rewrap(
+                &substituted,
+                &owner,
+                joining.public_key(),
+                &mut SequentialRandom::new(91)
+            )
+            .is_err()
+    );
+    let (changed_generation, _) = encrypt_secret(
+        context(2)?,
+        b"next generation",
+        &[owner.public_key()],
+        &mut SequentialRandom::new(101),
+    )?;
+    assert!(
+        envelopes[0]
+            .rewrap(
+                &changed_generation,
+                &owner,
+                joining.public_key(),
+                &mut SequentialRandom::new(111)
+            )
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
 fn every_persisted_envelope_field_is_digest_bound() -> Result<(), Box<dyn std::error::Error>> {
     let recipient = WrappingPrivateKey::from_bytes([5; 32])?;
     let (_, envelopes) = encrypt_secret(

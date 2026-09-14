@@ -11,10 +11,15 @@ use std::{
 };
 use tokio::sync::{Semaphore, mpsc, watch};
 
+#[path = "metadata_replica_source.rs"]
+mod metadata_replica_source;
+use metadata_replica_source::MetadataReplicaSource;
+
 pub(super) struct RuntimeDataPlane {
     targets: Arc<Mutex<StorageTargetRuntime>>,
     streams: mpsc::Receiver<PeerDataStream>,
     update_admission: Arc<Semaphore>,
+    replica_source: MetadataReplicaSource,
 }
 
 impl RuntimeDataPlane {
@@ -22,13 +27,20 @@ impl RuntimeDataPlane {
     pub(super) fn take_receiver(
         targets: Arc<Mutex<StorageTargetRuntime>>,
         streams: &mut Option<mpsc::Receiver<PeerDataStream>>,
+        authority: meshspan_cluster::MetadataAuthorityHandle,
     ) -> Result<Self, super::DaemonProcessError> {
+        let directory = targets
+            .lock()
+            .map_err(|_| super::DaemonProcessError::PrivateNetworkState)?
+            .state_directory
+            .clone();
         Ok(Self {
             targets,
             streams: streams
                 .take()
                 .ok_or(super::DaemonProcessError::PrivateNetworkState)?,
             update_admission: Arc::new(Semaphore::new(2)),
+            replica_source: MetadataReplicaSource::new(directory, authority),
         })
     }
 
@@ -43,7 +55,7 @@ impl RuntimeDataPlane {
                 Some(result) = jobs.join_next(), if !jobs.is_empty() => self.observe(&result),
                 incoming = self.streams.recv() => {
                     let Some(stream) = incoming else { break; };
-                    jobs.spawn(serve(Arc::clone(&self.targets), Arc::clone(&self.update_admission), stream, stop.clone()));
+                    jobs.spawn(serve(Arc::clone(&self.targets), Arc::clone(&self.update_admission), self.replica_source.clone(), stream, stop.clone()));
                 }
             }
         }
@@ -68,6 +80,7 @@ impl RuntimeDataPlane {
 async fn serve(
     targets: Arc<Mutex<StorageTargetRuntime>>,
     admission: Arc<Semaphore>,
+    replica_source: MetadataReplicaSource,
     mut stream: PeerDataStream,
     mut stop: watch::Receiver<bool>,
 ) -> Result<(), ()> {
@@ -76,9 +89,25 @@ async fn serve(
     }
     let envelope = tokio::select! {
         _changed = stop.changed() => return Ok(()),
-        result = tokio::time::timeout(Duration::from_secs(5), meshspan_transport::receive_data_control(&mut stream.stream.receive, stream.limits)) => result.map_err(|_| ())?.map_err(|_| ())?.into_inner(),
+        result = tokio::time::timeout(Duration::from_secs(5), meshspan_transport::receive_data_control(&mut stream.stream.receive, stream.limits)) => result.map_err(|_| ())?.map_err(|_| ())?,
     };
-    let message = envelope.message.ok_or(())?;
+    if matches!(
+        envelope.as_inner().message,
+        Some(Message::ForwardFederatedBackupRequest(_))
+    ) {
+        let owner = targets
+            .lock()
+            .map_err(|_| ())?
+            .federation_backup_owner
+            .clone();
+        // Do not cancel a blocking provider write by dropping its handle. The owned worker
+        // has a bounded deadline and the cycle drains it before replacing folder ownership.
+        return owner.serve(stream, envelope).await.map_err(|_| ());
+    }
+    let message = envelope.into_inner().message.ok_or(())?;
+    if let Message::FetchMetadataReplicaPage(request) = message {
+        return replica_source.serve(stream, request, stop).await;
+    }
     let now = current_time().map_err(|_| ())?;
     if let Message::GetUpdateArtifactRequest(request) = message {
         let remaining = request

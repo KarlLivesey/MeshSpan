@@ -3,6 +3,7 @@
 //! Journal/pack composition for exact local shard durability.
 
 mod backup_capacity;
+mod pack_routing;
 
 use std::path::Path;
 
@@ -26,7 +27,6 @@ use crate::pack::{
 };
 use crate::{RegisteredFolder, StorageFolderError};
 
-const ACTIVE_PACK_SEQUENCE: u64 = 1;
 const PROVIDER_VERSIONS: &[ContractVersion] = &[ContractVersion::V1_0];
 const MAXIMUM_CONTROL_BYTES: usize = 64 * 1024 * 1024;
 const MAXIMUM_PAGE_ITEMS: usize = 1_000;
@@ -53,11 +53,12 @@ pub struct TombstoneRecoveryPage {
     pub next_cursor: Option<BoundedBytes>,
 }
 
-/// Exact local shard store composing one registered folder, journal and active pack segment.
+/// Exact local shard store composing one registered folder, journal and indexed pack segments.
 pub struct FolderShardStore {
     folder: RegisteredFolder,
     journal: TargetJournal,
     pack: PackStore,
+    last_compaction_sequence: u64,
     permits: StoragePermitVerifier,
 }
 
@@ -116,9 +117,13 @@ impl StoragePermitVerifier {
     }
 
     fn authenticates_removal(&self, permit: RemovalPermit) -> bool {
+        self.authenticates_removal_identity(permit)
+            && permit.catalogue_revision >= self.minimum_catalogue_revision
+    }
+
+    fn authenticates_removal_identity(&self, permit: RemovalPermit) -> bool {
         permit.mesh_id == self.mesh_id
             && permit.authority_epoch == self.current_removal_authority_epoch
-            && permit.catalogue_revision >= self.minimum_catalogue_revision
             && verify_removal_permit_mac(&self.key, permit)
     }
 
@@ -155,12 +160,42 @@ impl FolderShardStore {
         }
         let journal =
             TargetJournal::open(daemon_state_dir, folder.marker(), policy, opened_at, random)?;
-        let pack = PackStore::open(&folder, ACTIVE_PACK_SEQUENCE, opened_at)
+        Self::from_journal(folder, journal, permits, opened_at)
+    }
+
+    /// Reopens restored storage using its existing journal; missing state is never recreated.
+    ///
+    /// # Errors
+    /// Rejects missing/corrupt journals and any folder, permit or journal identity mismatch.
+    pub fn reopen(
+        folder: RegisteredFolder,
+        daemon_state_dir: &Path,
+        policy: CapacityPolicy,
+        permits: StoragePermitVerifier,
+        opened_at: UnixMicros,
+        random: &mut impl RandomSource,
+    ) -> Result<Self, FolderShardStoreError> {
+        if permits.mesh_id != folder.marker().mesh_id() {
+            return Err(FolderShardStoreError::InvalidInput);
+        }
+        let journal =
+            TargetJournal::reopen(daemon_state_dir, folder.marker(), policy, opened_at, random)?;
+        Self::from_journal(folder, journal, permits, opened_at)
+    }
+
+    fn from_journal(
+        folder: RegisteredFolder,
+        journal: TargetJournal,
+        permits: StoragePermitVerifier,
+        opened_at: UnixMicros,
+    ) -> Result<Self, FolderShardStoreError> {
+        let pack = PackStore::open(&folder, journal.active_pack_sequence()?, opened_at)
             .map_err(|error| map_pack(&error))?;
         Ok(Self {
             folder,
             journal,
             pack,
+            last_compaction_sequence: 0,
             permits,
         })
     }
@@ -213,6 +248,7 @@ impl FolderShardStore {
         if let PreparePutResult::Committed(receipt) = self.journal.prepare_put(journal_request)? {
             return Ok(receipt);
         }
+        self.select_pack(request.shard, now)?;
         let evidence = self
             .pack
             .put_exact(PackPutRequest {
@@ -244,6 +280,7 @@ impl FolderShardStore {
         let mut committed = Vec::with_capacity(puts.len());
         let mut awaiting_bytes = 0_usize;
         for pending in puts.as_slice() {
+            self.select_pack(pending.shard, now)?;
             match self
                 .pack
                 .recover_put(pending.reservation.operation_id, pending.request_digest)
@@ -279,13 +316,15 @@ impl FolderShardStore {
     ///
     /// Rejects forged, expired, stale-epoch or target-mismatched authority and conflicting replay.
     /// The journal publishes no tombstone until the pack independently proves it durable.
+    /// A newer catalogue fences new effects, not read-only resolution of an exact committed
+    /// receipt. Receipt replay still requires the current MAC key, epoch and unexpired permit.
     pub fn tombstone(
         &mut self,
         permit: RemovalPermit,
         now: UnixMicros,
     ) -> Result<TombstoneReceipt, FolderShardStoreError> {
         validate_removal(permit, self.folder.marker(), now)?;
-        if !self.permits.authenticates_removal(permit) {
+        if !self.permits.authenticates_removal_identity(permit) {
             return Err(FolderShardStoreError::Unauthorized);
         }
         let request_digest = removal_request_digest(permit);
@@ -294,11 +333,18 @@ impl FolderShardStore {
             request_digest,
             now,
         };
+        if let Some(receipt) = self.journal.committed_tombstone(journal_request)? {
+            return Ok(receipt);
+        }
+        if !self.permits.authenticates_removal(permit) {
+            return Err(FolderShardStoreError::Unauthorized);
+        }
         if let PrepareTombstoneResult::Committed(receipt) =
             self.journal.prepare_tombstone(journal_request)?
         {
             return Ok(receipt);
         }
+        self.select_pack(permit.shard, now)?;
         let receipt = self
             .pack
             .tombstone_exact(PackTombstoneRequest {
@@ -330,6 +376,7 @@ impl FolderShardStore {
         let mut committed = Vec::with_capacity(tombstones.len());
         let mut awaiting_pack = 0_usize;
         for pending in tombstones.as_slice() {
+            self.select_pack(pending.permit.shard, now)?;
             match self
                 .pack
                 .recover_tombstone(pending.permit.operation_id, pending.request_digest)
@@ -370,6 +417,7 @@ impl FolderShardStore {
             return Err(FolderShardStoreError::InvalidInput);
         }
         self.journal.verify_committed_tombstone(receipt)?;
+        self.select_pack(receipt.shard, now)?;
         self.pack
             .unlink_tombstoned(receipt, now)
             .map_err(|error| map_pack(&error))?;
@@ -451,6 +499,7 @@ impl FolderShardStore {
         expected: meshspan_contracts::InventoryEntry,
         observed_at: UnixMicros,
     ) -> Result<ScrubObservation, FolderShardStoreError> {
+        self.select_pack(expected.shard, observed_at)?;
         match self
             .pack
             .scrub_exact(expected.shard, expected.length, expected.digest)
@@ -522,9 +571,7 @@ impl FolderShardStore {
         if !self.permits.authenticates_read(permit) {
             return Err(FolderShardStoreError::Unauthorized);
         }
-        self.pack
-            .get_exact(permit.shard)
-            .map_err(|error| map_pack(&error))
+        self.read_pack(permit.shard, |pack| pack.get_exact(permit.shard))
     }
 
     /// Re-runs folder, journal and pack structural health checks.
@@ -561,6 +608,15 @@ impl meshspan_contracts::StorageUsageSource for FolderShardStore {
             .map_err(FolderShardStoreError::from)
             .map_err(contract_error)?;
         Ok(meshspan_contracts::StorageUsageObservation {
+            // Pack observation failure becomes explicit missing coverage without discarding
+            // independently valid quota/filesystem evidence or changing storage admission.
+            pack: self.observe_pack_space().ok(),
+            filesystem: Some(
+                self.folder
+                    .filesystem_observation()
+                    .map_err(FolderShardStoreError::from)
+                    .map_err(contract_error)?,
+            ),
             committed_bytes: capacity.committed_bytes,
             reserved_bytes: capacity.reserved_bytes,
             configured_limit_bytes: self.capacity_ceiling().map_err(contract_error)?,

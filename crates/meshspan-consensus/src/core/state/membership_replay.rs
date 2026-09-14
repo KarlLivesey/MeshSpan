@@ -10,6 +10,25 @@ use super::{
 use crate::CommittedPrefix;
 
 impl ConsensusCore {
+    /// Returns the durable applied limit this node may supply for one exact membership phase.
+    ///
+    /// Only voters in that phase may supply history. Historical phases stop at their applied
+    /// transition; the current phase stops at local application, never a speculative tail.
+    /// This is historical replication evidence, not a leader or linearizable-read assertion.
+    #[must_use]
+    pub fn applied_replication_limit(&self, epoch: u64, digest: [u8; 32]) -> Option<u64> {
+        let (plan, limit) = if self.active_plan.membership_epoch() == epoch
+            && self.active_plan.proof_digest() == digest
+        {
+            (&self.active_plan, self.applied_index)
+        } else {
+            let boundary = self.membership_history.find(epoch, digest)?;
+            (&boundary.plan, boundary.committed_position.index)
+        };
+        (limit <= self.applied_index && plan.voters().contains(&self.config.local_node_id))
+            .then_some(limit)
+    }
+
     pub(super) fn replay_membership_prefix(
         &self,
         peer: NodeId,

@@ -14,6 +14,34 @@ use crate::{
 };
 
 #[test]
+fn interrupted_recovery_is_not_reinitialised_as_a_fresh_appliance()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let state_path = directory.path().join("state");
+    let storage_path = directory.path().join("storage");
+    fs::create_dir(&state_path)?;
+    fs::set_permissions(&state_path, fs::Permissions::from_mode(0o700))?;
+    fs::create_dir(&storage_path)?;
+    // Presence alone is an incomplete-installation fence, never evidence of admission.
+    crate::protected_file::publish(
+        &state_path.join("state.auth"),
+        b"interrupted transfer",
+        crate::protected_file::PublishMode::Create,
+    )?;
+    let config = config(&state_path, &storage_path)?;
+    for instant in [10, 11] {
+        assert!(matches!(
+            DaemonLocalState::open(&config, UnixMicros::new(instant)),
+            Err(DaemonLocalStateError::RecoveryAdmissionRequired)
+        ));
+    }
+    assert!(!state_path.join("local.sqlite3").exists());
+    assert!(!state_path.join("secrets").exists());
+    assert!(!state_path.join("first-boot.claim").exists());
+    Ok(())
+}
+
+#[test]
 fn first_start_and_restart_preserve_one_locked_identity_and_claim()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
@@ -158,6 +186,31 @@ fn consumed_claim_stays_inactive_after_restart() -> Result<(), Box<dyn std::erro
         ClaimEnsureDisposition::Inactive
     );
     assert!(!reopened.claim_output_path().exists());
+    Ok(())
+}
+
+#[test]
+fn missing_data_mount_preserves_control_state_without_creating_storage()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let state_path = directory.path().join("state");
+    let mount = directory.path().join("data-mount");
+    let storage = mount.join("nested/storage");
+    fs::create_dir_all(&storage)?;
+    let configuration = config(&state_path, &storage)?;
+    let initial = DaemonLocalState::open(&configuration, UnixMicros::new(10))?;
+    let node = initial.node_id();
+    drop(initial);
+    fs::rename(&mount, directory.path().join("disconnected"))?;
+    let restarted = DaemonLocalState::open(&configuration, UnixMicros::new(20))?;
+    assert_eq!(restarted.node_id(), node);
+    assert!(!mount.exists());
+    drop(restarted);
+    let overlap = config(&state_path, &state_path.join("missing/storage"))?;
+    assert!(matches!(
+        DaemonLocalState::open(&overlap, UnixMicros::new(30)),
+        Err(DaemonLocalStateError::StateStorageOverlap)
+    ));
     Ok(())
 }
 

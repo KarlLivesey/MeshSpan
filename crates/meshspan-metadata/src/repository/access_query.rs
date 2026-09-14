@@ -326,6 +326,7 @@ pub(super) fn unrevoked_access_activations(
                 activated_at, expires_at, revision
          FROM access_activations INDEXED BY access_activations_live_by_principal_seek
          WHERE principal_id = ?1 AND revoked_at IS NULL AND expires_at > ?2
+           AND revision > COALESCE((SELECT source_revision FROM partition_recovery_credential_fence), 0)
            AND activation_id > ?3
          ORDER BY activation_id LIMIT ?4",
     )?;

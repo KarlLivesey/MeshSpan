@@ -7,6 +7,11 @@ use crate::{
     create_recovery_bundle,
 };
 
+mod authorization;
+mod consensus_admission;
+mod secret_recovery;
+mod state_transfer;
+
 #[test]
 fn encoded_bundle_round_trips_and_restores_exact_authority()
 -> Result<(), Box<dyn std::error::Error>> {

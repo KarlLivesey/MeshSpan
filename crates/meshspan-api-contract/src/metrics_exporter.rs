@@ -5,7 +5,7 @@
 use crate::{OperationId, PrincipalId};
 
 /// Maximum encoded metrics text response, shared by the `OpenAPI` contract and encoder.
-pub const MAX_METRICS_EXPORT_BYTES: usize = 64 * 1024;
+pub const MAX_METRICS_EXPORT_BYTES: usize = 128 * 1024;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

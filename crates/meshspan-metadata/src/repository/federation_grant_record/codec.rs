@@ -20,6 +20,52 @@ const FORMAT_VERSION: u8 = 2;
 const MAXIMUM_RESTRICTIONS: usize = 64;
 const MAXIMUM_REASON_BYTES: usize = 512;
 
+const DEFINITION_DOMAIN: &[u8] = b"meshspan.federation.grant-definition\0\x01";
+
+/// The same grant/policy fields as retained records, without inventing lifecycle evidence.
+pub(super) fn encode_definition(
+    value: &crate::IssueFederationGrant,
+) -> Result<Vec<u8>, FederationGrantRecordCodecError> {
+    if !(2..=MAXIMUM_RESTRICTIONS).contains(&value.restrictions.len()) {
+        return Err(FederationGrantRecordCodecError::Invalid);
+    }
+    let mut bytes = DEFINITION_DOMAIN.to_vec();
+    encode_grant(&mut bytes, &value.grant)?;
+    let count = u16::try_from(value.restrictions.len())
+        .map_err(|_| FederationGrantRecordCodecError::Invalid)?;
+    bytes.extend_from_slice(&count.to_be_bytes());
+    for restriction in value.restrictions.as_slice() {
+        bytes.extend_from_slice(&restriction.imposing_mesh_id.as_bytes());
+        encode_policy(&mut bytes, restriction.policy);
+    }
+    Ok(bytes)
+}
+
+pub(super) fn decode_definition(
+    bytes: &[u8],
+) -> Result<crate::IssueFederationGrant, FederationGrantRecordCodecError> {
+    let mut decoder = Decoder::new(bytes);
+    decoder.expect(DEFINITION_DOMAIN)?;
+    let grant = decode_grant(&mut decoder)?;
+    let count = usize::from(decoder.short()?);
+    if !(2..=MAXIMUM_RESTRICTIONS).contains(&count) {
+        return Err(FederationGrantRecordCodecError::Invalid);
+    }
+    let mut restrictions = Vec::with_capacity(count);
+    for _ in 0..count {
+        restrictions.push(FederationGrantRestriction {
+            imposing_mesh_id: decode_mesh(&mut decoder)?,
+            policy: decode_policy(&mut decoder)?,
+        });
+    }
+    decoder.finish()?;
+    Ok(crate::IssueFederationGrant {
+        grant,
+        restrictions: meshspan_contracts::BoundedItems::new(restrictions, MAXIMUM_RESTRICTIONS)
+            .map_err(|_| FederationGrantRecordCodecError::Invalid)?,
+    })
+}
+
 pub(super) fn encode(
     record: &FederationGrantRecord,
 ) -> Result<Vec<u8>, FederationGrantRecordCodecError> {

@@ -255,7 +255,7 @@ fn decode_scope(decoder: &mut Decoder<'_>) -> Result<PermissionScope, MetadataCo
     }
 }
 
-const fn assurance_code(value: AssuranceLevel) -> u8 {
+pub(super) const fn assurance_code(value: AssuranceLevel) -> u8 {
     match value {
         AssuranceLevel::SingleFactor => 1,
         AssuranceLevel::MultiFactor => 2,
@@ -263,7 +263,9 @@ const fn assurance_code(value: AssuranceLevel) -> u8 {
     }
 }
 
-const fn decode_assurance(value: u8) -> Result<AssuranceLevel, MetadataCommandCodecError> {
+pub(super) const fn decode_assurance(
+    value: u8,
+) -> Result<AssuranceLevel, MetadataCommandCodecError> {
     match value {
         1 => Ok(AssuranceLevel::SingleFactor),
         2 => Ok(AssuranceLevel::MultiFactor),

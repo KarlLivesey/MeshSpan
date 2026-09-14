@@ -2,6 +2,8 @@
 
 //! Bounded, transactional exchange of disconnected mutation history.
 
+#[path = "transfer/commit_import.rs"]
+mod commit_import;
 #[path = "transfer/export.rs"]
 pub(in crate::publication) mod export;
 #[path = "transfer/export_graph.rs"]
@@ -35,13 +37,101 @@ pub(in crate::publication) struct TransferredFileVersion {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::publication) struct TransferredMutationCommit {
+pub(in crate::publication) struct TransferredNamespaceCommit {
     pub(in crate::publication) commit: ReconciliationCommit,
     pub(in crate::publication) created_by: PrincipalId,
     pub(in crate::publication) created_at: UnixMicros,
     pub(in crate::publication) commit_digest: [u8; 32],
-    pub(in crate::publication) intent: BranchMutationIntent,
-    pub(in crate::publication) acknowledgement: Option<FederatedMutationAcknowledgement>,
+    pub(in crate::publication) evidence: CommitEvidence,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::publication) enum CommitEvidence {
+    Mutation {
+        intent: BranchMutationIntent,
+        acknowledgement: Option<Box<FederatedMutationAcknowledgement>>,
+    },
+    Merge {
+        causal_plan_digest: [u8; 32],
+        result_digest: [u8; 32],
+    },
+    Restore {
+        result_digest: [u8; 32],
+    },
+}
+
+impl TransferredNamespaceCommit {
+    pub(in crate::publication) fn acknowledgement(
+        &self,
+    ) -> Option<FederatedMutationAcknowledgement> {
+        match &self.evidence {
+            CommitEvidence::Mutation {
+                acknowledgement, ..
+            } => acknowledgement.as_deref().copied(),
+            CommitEvidence::Merge { .. } | CommitEvidence::Restore { .. } => None,
+        }
+    }
+
+    pub(in crate::publication) fn intent(&self) -> Option<&BranchMutationIntent> {
+        match &self.evidence {
+            CommitEvidence::Mutation { intent, .. } => Some(intent),
+            CommitEvidence::Merge { .. } | CommitEvidence::Restore { .. } => None,
+        }
+    }
+
+    /// Restore sources are immutable dependencies, not additional causal parents.
+    pub(in crate::publication) fn dependencies(
+        &self,
+    ) -> impl Iterator<Item = NamespaceCommitId> + '_ {
+        let snapshot = match self.commit.payload {
+            crate::ReconciliationCommitPayload::Restore {
+                snapshot_namespace_commit_id,
+                ..
+            } => Some(snapshot_namespace_commit_id),
+            crate::ReconciliationCommitPayload::Mutation { .. }
+            | crate::ReconciliationCommitPayload::Merge { .. } => None,
+        };
+        self.commit.parents.iter().copied().chain(snapshot)
+    }
+
+    pub(in crate::publication) fn restore_publication(
+        &self,
+    ) -> Result<crate::SnapshotRestorePublication, crate::PublicationError> {
+        let crate::ReconciliationCommitPayload::Restore {
+            snapshot_id,
+            snapshot_namespace_commit_id,
+        } = self.commit.payload
+        else {
+            return Err(crate::PublicationError::InvalidInput);
+        };
+        let [expected_namespace_commit_id] = self.commit.parents.as_slice() else {
+            return Err(crate::PublicationError::InvalidInput);
+        };
+        Ok(crate::SnapshotRestorePublication {
+            operation_id: self.commit.operation_id,
+            branch_id: self.commit.branch_id,
+            volume_id: self.commit.volume_id,
+            snapshot_id,
+            snapshot_namespace_commit_id,
+            expected_namespace_commit_id: *expected_namespace_commit_id,
+            root_object_id: self.commit.root_object_id,
+            root_object_revision_id: self.commit.root_object_revision_id,
+            namespace_commit_id: self.commit.commit_id,
+            created_by: self.created_by,
+            created_at: self.created_at,
+        })
+    }
+
+    pub(in crate::publication) fn without_acknowledgement(&self) -> Self {
+        let mut bare = self.clone();
+        if let CommitEvidence::Mutation {
+            acknowledgement, ..
+        } = &mut bare.evidence
+        {
+            *acknowledgement = None;
+        }
+        bare
+    }
 }
 
 pub(super) fn imported_evidence_digest(

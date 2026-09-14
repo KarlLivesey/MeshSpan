@@ -68,7 +68,7 @@ export function packageBuildSteps(options, host) {
 }
 
 /** A conservative dependency inventory, not a claim about individual linked symbols. */
-export function dependencyInventory(metadata, javascript) {
+export function dependencyPackages(metadata) {
   const root = metadata.packages.find(
     (item) => item.name === "meshspan-daemon",
   );
@@ -88,15 +88,19 @@ export function dependencyInventory(metadata, javascript) {
         pending.push(dependency.pkg);
     }
   }
-  const rust = metadata.packages
-    .filter((item) => selected.has(item.id))
-    .map((item) => ({
-      name: item.name,
-      version: item.version,
-      licence: item.license,
-      sourceKind: item.source?.split("+")[0] ?? "MeshSpan workspace",
-      features: nodes.get(item.id).features,
-    }));
+  return metadata.packages.filter((item) => selected.has(item.id));
+}
+
+/** Keep the reviewed package closure; never infer linked symbols from manifest metadata. */
+export function dependencyInventory(metadata, javascript) {
+  const nodes = new Map(metadata.resolve.nodes.map((item) => [item.id, item]));
+  const rust = dependencyPackages(metadata).map((item) => ({
+    name: item.name,
+    version: item.version,
+    licence: item.license,
+    sourceKind: item.source?.split("+")[0] ?? "MeshSpan workspace",
+    features: nodes.get(item.id).features,
+  }));
   const web = Object.entries(javascript).flatMap(([licence, records]) =>
     records.flatMap((record) => {
       if (
@@ -140,6 +144,7 @@ export async function assemblePackage({
   binary,
   provenance,
   inventory,
+  compliance,
 }) {
   if (
     !/^[0-9]+\.[0-9]+\.[0-9]+$/.test(provenance.version) ||
@@ -148,6 +153,8 @@ export async function assemblePackage({
   ) {
     throw new Error("Invalid package identity");
   }
+  if (!compliance?.sbom || !compliance?.notices)
+    throw new Error("Package requires dependency SBOM and notices");
   await mkdir(output, { recursive: true });
   const name = `meshspan-${provenance.version}-${provenance.target}-${provenance.profile}`;
   const directory = await mkdtemp(join(output, `${name}-`));
@@ -165,6 +172,10 @@ export async function assemblePackage({
     join(bundle, "Dockerfile"),
   );
   await writeJson(join(bundle, "dependencies.json"), inventory);
+  await writeJson(join(bundle, "sbom.cdx.json"), compliance.sbom);
+  await writeFile(join(bundle, "THIRD-PARTY-NOTICES.txt"), compliance.notices, {
+    flag: "wx",
+  });
   await writeJson(join(bundle, "provenance.json"), {
     ...provenance,
     schema: 1,
@@ -177,9 +188,11 @@ export async function assemblePackage({
     "Dockerfile",
     "LICENSE",
     "RUNNING.md",
+    "THIRD-PARTY-NOTICES.txt",
     "bin/meshspan-daemon",
     "dependencies.json",
     "provenance.json",
+    "sbom.cdx.json",
   ];
   const checksums = await Promise.all(
     names.map(async (file) => `${await sha256(join(bundle, file))}  ${file}\n`),

@@ -35,6 +35,14 @@ metadata commit then makes exactly that receipt set visible or makes none of it
 globally visible. Unpublished bytes remain safe staging/branch data and resolve
 idempotently.
 
+Foreground and background publication use the same verified canonical immutable
+namespace-history digest as convergence evidence. A connector-local receipt hash
+is a different identity and must never occupy that evidence field. Separately
+verified federation admission is excluded from this immutable-content digest;
+it remains mandatory wherever the authority contract requires it. Confirmation
+checks exact retained head history even if another publisher won or a later head
+has advanced, without relaxing authorisation or protection checks.
+
 Strong publication intentionally waits when one of its declared requirements or
 the metadata majority is unavailable. This does not disable normal local work:
 the caller may explicitly permit fallback to an eventual branch receipt, or

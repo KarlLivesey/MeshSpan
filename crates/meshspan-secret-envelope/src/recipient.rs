@@ -47,6 +47,55 @@ pub struct RecipientEnvelopeParts {
 pub struct RecipientKeyEnvelope(RecipientEnvelopeParts);
 
 impl RecipientKeyEnvelope {
+    /// Rewraps one authenticated data key for an exact replacement recipient set.
+    /// The secret ciphertext and generation are unchanged. The key and plaintext are
+    /// authenticated once and never returned; outputs are fingerprint-ordered.
+    /// This supplies envelopes, not permission to commit a changed recipient set.
+    /// # Errors
+    /// Rejects empty, duplicate or excessive recipients, mismatched context, invalid
+    /// owner/ciphertext and unavailable entropy, without returning partial output.
+    pub fn rewrap_recipients(
+        &self,
+        secret: &crate::EncryptedSecret,
+        owner: &WrappingPrivateKey,
+        recipients: &[WrappingPublicKey],
+        random: &mut impl RandomSource,
+    ) -> Result<Vec<Self>, SecretEnvelopeError> {
+        crate::secret::validate_recipients(recipients)?;
+        if self.context() != secret.context() {
+            return Err(SecretEnvelopeError::Corrupt);
+        }
+        let key = self.open(owner)?;
+        drop(secret.decrypt(&key)?);
+        let mut ordered = recipients.to_vec();
+        ordered.sort_by_key(|recipient| recipient.fingerprint());
+        ordered
+            .into_iter()
+            .map(|recipient| Self::wrap(self.context(), recipient, &key, random))
+            .collect()
+    }
+
+    /// Adds a recipient for the same authenticated secret without replacing its generation.
+    /// The existing recipient must decrypt both its envelope and the supplied ciphertext;
+    /// private keys and the recovered data key never leave this operation.
+    ///
+    /// # Errors
+    /// Rejects substituted context, recipient, ciphertext, invalid public keys or entropy.
+    pub fn rewrap(
+        &self,
+        secret: &crate::EncryptedSecret,
+        owner: &WrappingPrivateKey,
+        recipient: WrappingPublicKey,
+        random: &mut impl RandomSource,
+    ) -> Result<Self, SecretEnvelopeError> {
+        if self.context() != secret.context() {
+            return Err(SecretEnvelopeError::Corrupt);
+        }
+        let key = self.open(owner)?;
+        drop(secret.decrypt(&key)?);
+        Self::wrap(self.context(), recipient, &key, random)
+    }
+
     pub(crate) fn wrap(
         context: SecretContext,
         recipient: WrappingPublicKey,

@@ -12,7 +12,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use super::NamespaceIntent;
 use super::history_records::NamespaceHistoryCommitRecord;
 use super::repository::{StoredCommit, stored_commit_digest};
-use super::transfer::TransferredMutationCommit;
+use super::transfer::TransferredNamespaceCommit;
 use super::transfer::export::load_bare_commit_record;
 use crate::{
     BranchMutationIntent, FederatedNamespaceMutationProposal, PublicationError,
@@ -43,7 +43,7 @@ pub(super) fn mutation_proposal(
         operation_id: namespace.operation_id,
         created_at: namespace.created_at,
     };
-    let record = TransferredMutationCommit {
+    let record = TransferredNamespaceCommit {
         commit: ReconciliationCommit {
             commit_id: namespace.commit_id,
             branch_id: namespace.branch_id,
@@ -60,8 +60,10 @@ pub(super) fn mutation_proposal(
         created_by: namespace.created_by,
         created_at: namespace.created_at,
         commit_digest: stored_commit_digest(&stored, request_digest),
-        intent,
-        acknowledgement: None,
+        evidence: super::transfer::CommitEvidence::Mutation {
+            intent,
+            acknowledgement: None,
+        },
     };
     let record = NamespaceHistoryCommitRecord::from_commit(&record)
         .map_err(|_| PublicationError::InvalidInput)?;

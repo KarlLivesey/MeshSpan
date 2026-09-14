@@ -54,7 +54,7 @@ pub(in crate::publication) fn load_head(
                 namespace_commit_id: decode_identifier(&commit, NamespaceCommitId::from_bytes)?,
                 sequence: from_i64(sequence)?,
             };
-            let selected = load_commit(connection, head.namespace_commit_id)?;
+            let selected = load_namespace_root(connection, head.namespace_commit_id)?;
             if selected.volume_id == volume_id {
                 Ok(head)
             } else {
@@ -178,6 +178,39 @@ pub(in crate::publication) struct StoredCommit {
     pub(super) created_by: meshspan_domain::PrincipalId,
     pub(super) operation_id: OperationId,
     pub(super) created_at: meshspan_domain::UnixMicros,
+}
+
+/// A verified namespace root, independent of the number or meaning of its causal parents.
+#[expect(
+    clippy::struct_field_names,
+    reason = "All three fields are distinct typed identities, named consistently with the persisted commit and its callers."
+)]
+pub(in crate::publication) struct NamespaceRoot {
+    pub(in crate::publication) volume_id: VolumeId,
+    pub(in crate::publication) root_object_id: ObjectId,
+    pub(in crate::publication) root_object_revision_id: ObjectRevisionId,
+}
+
+pub(in crate::publication) fn load_namespace_root(
+    connection: &Connection,
+    commit_id: NamespaceCommitId,
+) -> Result<NamespaceRoot, PublicationError> {
+    let parents = load_parents(connection, commit_id)?;
+    if parents.len() >= 2 {
+        let commit = load_merge_reconciliation_commit(connection, commit_id, parents)?;
+        Ok(NamespaceRoot {
+            volume_id: commit.volume_id,
+            root_object_id: commit.root_object_id,
+            root_object_revision_id: commit.root_object_revision_id,
+        })
+    } else {
+        let commit = load_commit(connection, commit_id)?;
+        Ok(NamespaceRoot {
+            volume_id: commit.volume_id,
+            root_object_id: commit.root_object_id,
+            root_object_revision_id: commit.root_object_revision_id,
+        })
+    }
 }
 
 pub(in crate::publication) fn load_commit(

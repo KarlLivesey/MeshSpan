@@ -4,7 +4,10 @@
 //! independent protocol streams.
 
 mod federation;
+mod federation_endpoint;
+pub use federation_endpoint::FederationEndpoint;
 mod federation_authority_page;
+mod federation_backup;
 mod federation_branch_page;
 mod federation_content_layout;
 mod federation_content_shard;
@@ -26,9 +29,9 @@ pub use identity::{
 pub use rotating_tls::{InstalledNodeCertificate, NodeTransportConfig, RotatingNodeTransport};
 pub use snapshot::{SnapshotStager, VerifiedSnapshot};
 pub use stream::{
-    AcceptedStream, StreamKind, accept_stream, open_stream, receive_control, receive_data_control,
-    receive_data_frame, receive_federation, send_control, send_data_control, send_data_frame,
-    send_federation,
+    AcceptedStream, StreamKind, accept_stream, classify_stream, open_stream, receive_control,
+    receive_data_control, receive_data_frame, receive_federation, send_control, send_data_control,
+    send_data_frame, send_federation,
 };
 pub use tls::{
     NodeCredentials, TransportError, TransportLimits, client_endpoint, connect, server_endpoint,
@@ -45,6 +48,12 @@ pub use federation_authority_page::{
     FederationAuthorityPageExpectation, FederationExchangeContext,
     OutboundFederationAuthorityFetch, OutboundFederationAuthorityPage,
     signed_federation_authority_fetch, signed_federation_authority_page,
+};
+pub use federation_backup::{
+    AuthenticatedFederationBackupRelay, AuthenticatedFederationBackupRequest,
+    AuthenticatedFederationBackupResponse, FederationBackupOwnerResponseExpectation,
+    FederationBackupResponseExpectation, OutboundFederationBackupMessage,
+    federation_backup_relay_digest, signed_federation_backup_message,
 };
 pub use federation_branch_page::{
     AuthenticatedFederationBranchFetch, AuthenticatedFederationBranchPage,

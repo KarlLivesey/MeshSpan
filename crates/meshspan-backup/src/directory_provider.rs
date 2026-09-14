@@ -33,6 +33,7 @@ pub struct DirectoryBackupProvider {
     catalogue: Catalogue,
     destination_id: BackupDestinationId,
     provider_generation: u64,
+    opened_at: UnixMicros,
     capacity: Option<Box<dyn BackupCapacityBudget>>,
     _lock: std::fs::File,
 }
@@ -68,6 +69,7 @@ impl DirectoryBackupProvider {
             catalogue,
             destination_id,
             provider_generation,
+            opened_at,
             capacity: None,
             _lock: files.lock,
         })
@@ -94,7 +96,7 @@ impl DirectoryBackupProvider {
             }
         }
         self.capacity = Some(budget);
-        self.recover_pending_capacity()?;
+        self.recover_pending_capacity(self.opened_at)?;
         Ok(self)
     }
 
@@ -124,7 +126,12 @@ impl DirectoryBackupProvider {
             OperationKind::Store,
             request_digest,
         )?;
-        self.recover_pending_capacity()?;
+        if completed {
+            // A retained store receipt must not resurrect an object already retired by deletion.
+            self.catalogue
+                .validate_live_object(request.object, &reference)?;
+        }
+        self.recover_pending_capacity(observed_at)?;
         if !completed {
             self.catalogue.admit_capacity(request.object)?;
         }
@@ -242,6 +249,24 @@ impl DirectoryBackupProvider {
 }
 
 impl BackupProvider for DirectoryBackupProvider {
+    fn lookup_exact(
+        &self,
+        request: &meshspan_contracts::BackupLookupRequest,
+        observed_at: UnixMicros,
+    ) -> Result<BackupObjectReceipt, ContractError> {
+        meshspan_contracts::validate_backup_lookup_request(request, observed_at)?;
+        self.validate_binding(request.object)?;
+        let reference = object_reference(request.object).map_err(|error| contract_error(&error))?;
+        self.catalogue
+            .validate_live_object(request.object, &reference)
+            .map_err(|error| contract_error(&error))?;
+        Ok(BackupObjectReceipt {
+            operation_id: request.context.operation_id,
+            object: request.object,
+            object_reference: reference,
+        })
+    }
+
     fn describe(&self) -> ImplementationDescriptor {
         ImplementationDescriptor {
             implementation_id: "meshspan-directory-backup",

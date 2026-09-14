@@ -151,6 +151,73 @@
         "title": "UploadStatusResponse",
         "type": "object"
       },
+      "AcceptFederationPairingRequest": {
+        "additionalProperties": false,
+        "description": "Connection attempt sent through TLS pinned by the invitation; the code is in Authorization.",
+        "properties": {
+          "operation_id": {
+            "description": "Original accepting administrator's operation identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "peer_record": {
+            "description": "Unpadded base64url of a canonical MSFP-v1 signed public peer record.",
+            "maxLength": 24576,
+            "minLength": 172,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "peer_record"
+        ],
+        "title": "AcceptFederationPairingRequest",
+        "type": "object"
+      },
+      "AcceptFederationPairingResponse": {
+        "additionalProperties": false,
+        "description": "Issuing swarm's durable approval and signed public identity, not user/file access.",
+        "properties": {
+          "committed_revision": {
+            "description": "Original approval revision in the issuing swarm's consensus.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "operation_id": {
+            "description": "Original accepting administrator's operation identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "peer_record": {
+            "description": "Inviter's exact signed public peer record.",
+            "maxLength": 24576,
+            "minLength": 172,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "relationship_id": {
+            "description": "Shared relationship identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "relationship_id",
+          "peer_record",
+          "committed_revision"
+        ],
+        "title": "AcceptFederationPairingResponse",
+        "type": "object"
+      },
       "AddGroupMemberRequest": {
         "additionalProperties": false,
         "description": "Idempotent administrator request to add one direct user or nested-group member.",
@@ -1320,6 +1387,79 @@
         "title": "UploadStatusResponse",
         "type": "object"
       },
+      "CancelFederationPairingInvitationRequest": {
+        "additionalProperties": false,
+        "description": "Cancels unused material without affecting an established relationship.",
+        "properties": {
+          "expected_invitation_revision": {
+            "description": "Revision observed when issuing the material.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "invitation_id": {
+            "description": "Exact reserved relationship to withdraw.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Stable retry identity, distinct from issuance.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Administrator's non-secret audit explanation.",
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "invitation_id",
+          "expected_invitation_revision",
+          "reason"
+        ],
+        "title": "CancelFederationPairingInvitationRequest",
+        "type": "object"
+      },
+      "CancelFederationPairingInvitationResponse": {
+        "additionalProperties": false,
+        "description": "Durable cancellation receipt; no connection secret is returned.",
+        "properties": {
+          "committed_revision": {
+            "description": "Original cancellation revision, preserved on retry.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "invitation_id": {
+            "description": "Withdrawn reserved relationship.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Exact committed cancellation operation.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "invitation_id",
+          "committed_revision"
+        ],
+        "title": "CancelFederationPairingInvitationResponse",
+        "type": "object"
+      },
       "CertificateStatusResponse": {
         "additionalProperties": false,
         "description": "Current certificate status; `certificate` is `null` before a source is configured.",
@@ -1870,7 +2010,7 @@
       },
       "ConfigureBackupDestinationRequest": {
         "additionalProperties": false,
-        "description": "One registered target selected for encrypted recovery copies.",
+        "description": "One exact provider binding selected for encrypted recovery copies.",
         "properties": {
           "destination_id": {
             "description": "Stable destination identity. A different provider requires a new identity.",
@@ -1903,18 +2043,82 @@
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
             "type": "string"
           },
-          "target_generation": {
-            "description": "Observed target generation. A returned or replaced target must match it.",
+          "provider": {
+            "description": "Exact provider identity, never a raw path or a credential.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "Registered storage, local or on another node in this swarm.",
+                "properties": {
+                  "kind": {
+                    "const": "registered_target",
+                    "type": "string"
+                  },
+                  "target_id": {
+                    "description": "Registered target identity.",
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "target_id"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Independently administered remote swarm.",
+                "properties": {
+                  "kind": {
+                    "const": "federated_mesh",
+                    "type": "string"
+                  },
+                  "remote_mesh_id": {
+                    "description": "Remote swarm identity.",
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "remote_mesh_id"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Replaceable installed component.",
+                "properties": {
+                  "instance_id": {
+                    "description": "Component instance identity.",
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "component_provider",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "instance_id"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "provider_generation": {
+            "description": "Observed provider generation. Configuration does not prove delivery support.",
             "maxLength": 20,
             "minLength": 1,
             "pattern": "^[1-9][0-9]{0,19}$",
-            "type": "string"
-          },
-          "target_id": {
-            "description": "Exact registered storage target, never a raw path.",
-            "maxLength": 36,
-            "minLength": 36,
-            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
             "type": "string"
           }
         },
@@ -1923,8 +2127,8 @@
           "destination_id",
           "expected_revision",
           "name",
-          "target_id",
-          "target_generation",
+          "provider",
+          "provider_generation",
           "enabled"
         ],
         "title": "ConfigureBackupDestinationRequest",
@@ -2065,6 +2269,259 @@
           "committed_revision"
         ],
         "title": "ConfigureBackupScheduleResponse",
+        "type": "object"
+      },
+      "ConfigureFederationStorageGrantRequest": {
+        "additionalProperties": false,
+        "description": "Exact-retry mutation against an observed root-metadata revision.",
+        "properties": {
+          "change": {
+            "description": "Exact provider-owned change.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "Offers local capacity to an already paired swarm; does not configure its backups.",
+                "properties": {
+                  "grant_id": {
+                    "description": "Client-chosen unused grant identity.",
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "issue",
+                    "type": "string"
+                  },
+                  "policy": {
+                    "additionalProperties": false,
+                    "description": "This provider's offered upper bound; consumer-local limits remain independent.",
+                    "properties": {
+                      "allow_downstream_delegation": {
+                        "description": "Whether the recipient can re-offer an equal or narrower storage delegation.",
+                        "type": "boolean"
+                      },
+                      "counts_towards_protection": {
+                        "description": "Whether verified placements may count towards protection; this alone proves no copies.",
+                        "type": "boolean"
+                      },
+                      "maximum_bytes": {
+                        "description": "Positive decimal bytes; domain admission also enforces the metadata integer range.",
+                        "maxLength": 19,
+                        "minLength": 1,
+                        "pattern": "^[1-9][0-9]{0,18}$",
+                        "type": "string"
+                      },
+                      "serves_reads": {
+                        "description": "Whether ordinary reads may query this storage, independently of backup/recovery reads.",
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "maximum_bytes",
+                      "counts_towards_protection",
+                      "serves_reads",
+                      "allow_downstream_delegation"
+                    ],
+                    "type": "object"
+                  },
+                  "relationship_id": {
+                    "description": "Existing mutually approved relationship, not a node join grant.",
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  },
+                  "valid_for_seconds": {
+                    "description": "Omitted means 30 days; null explicitly means indefinite authority.",
+                    "format": "uint32",
+                    "maximum": 31536000,
+                    "minimum": 60,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "grant_id",
+                  "relationship_id",
+                  "policy"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Replaces one immutable grant and preserves its existing allocation/storage lineage.",
+                "properties": {
+                  "grant_id": {
+                    "description": "New unused grant identity.",
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "replace",
+                    "type": "string"
+                  },
+                  "policy": {
+                    "additionalProperties": false,
+                    "description": "New provider ceiling, still intersected with every retained peer restriction.",
+                    "properties": {
+                      "allow_downstream_delegation": {
+                        "description": "Whether the recipient can re-offer an equal or narrower storage delegation.",
+                        "type": "boolean"
+                      },
+                      "counts_towards_protection": {
+                        "description": "Whether verified placements may count towards protection; this alone proves no copies.",
+                        "type": "boolean"
+                      },
+                      "maximum_bytes": {
+                        "description": "Positive decimal bytes; domain admission also enforces the metadata integer range.",
+                        "maxLength": 19,
+                        "minLength": 1,
+                        "pattern": "^[1-9][0-9]{0,18}$",
+                        "type": "string"
+                      },
+                      "serves_reads": {
+                        "description": "Whether ordinary reads may query this storage, independently of backup/recovery reads.",
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "maximum_bytes",
+                      "counts_towards_protection",
+                      "serves_reads",
+                      "allow_downstream_delegation"
+                    ],
+                    "type": "object"
+                  },
+                  "predecessor_grant_id": {
+                    "description": "Exact previous grant; its current state is fenced by the request's metadata revision.",
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "description": "Non-secret administrator explanation.",
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "pattern": "^\\P{Cc}+$",
+                    "type": "string"
+                  },
+                  "restricts_authority": {
+                    "description": "True requires an equal or narrower effective policy; false is renewal/reconfiguration.",
+                    "type": "boolean"
+                  },
+                  "valid_for_seconds": {
+                    "description": "Omitted means 30 days; null explicitly means indefinite authority.",
+                    "format": "uint32",
+                    "maximum": 31536000,
+                    "minimum": 60,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "predecessor_grant_id",
+                  "grant_id",
+                  "policy",
+                  "restricts_authority",
+                  "reason"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Withdraws future authority; does not physically delete retained encrypted objects.",
+                "properties": {
+                  "grant_id": {
+                    "description": "Exact grant to withdraw.",
+                    "maxLength": 36,
+                    "minLength": 36,
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "revoke",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "description": "Non-secret administrator explanation.",
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "pattern": "^\\P{Cc}+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "grant_id",
+                  "reason"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "expected_metadata_revision": {
+            "description": "Root revision returned by the grant lookup; concurrent changes return conflict.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "operation_id": {
+            "description": "Stable operation identity, never reused for changed input.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "expected_metadata_revision",
+          "change"
+        ],
+        "title": "ConfigureFederationStorageGrantRequest",
+        "type": "object"
+      },
+      "ConfigureFederationStorageGrantResponse": {
+        "additionalProperties": false,
+        "description": "Durable original mutation receipt, not a claim of transferred or protected bytes.",
+        "properties": {
+          "committed_revision": {
+            "description": "Original commit revision, retained on exact retry.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "grant_id": {
+            "description": "Created, replaced or withdrawn grant identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Original operation identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "grant_id",
+          "committed_revision"
+        ],
+        "title": "ConfigureFederationStorageGrantResponse",
         "type": "object"
       },
       "ConfigureMetricsExporterRequest": {
@@ -2463,6 +2920,73 @@
           "revision"
         ],
         "title": "ConfirmRecoveryBundleResponse",
+        "type": "object"
+      },
+      "ConnectFederationRequest": {
+        "additionalProperties": false,
+        "description": "Local manager intent to connect to the swarm that issued the secret invitation.",
+        "properties": {
+          "connection_code": {
+            "description": "Secret invitation supplied by the other administrator; never a node join grant.",
+            "maxLength": 763,
+            "minLength": 260,
+            "pattern": "^meshspan-federate-v1\\.",
+            "type": "string"
+          },
+          "local_endpoint": {
+            "description": "This gateway's reachable HTTPS origin and corresponding federation UDP endpoint.",
+            "maxLength": 512,
+            "minLength": 9,
+            "pattern": "^https://[a-z0-9.\\-\\[\\]:]+$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Stable retry identity for the whole connection attempt.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "connection_code",
+          "local_endpoint"
+        ],
+        "title": "ConnectFederationRequest",
+        "type": "object"
+      },
+      "ConnectFederationResponse": {
+        "additionalProperties": false,
+        "description": "Both swarms have committed relationship approval; live transport health is separate.",
+        "properties": {
+          "committed_revision": {
+            "description": "Original local approval revision.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "operation_id": {
+            "description": "Exact local operation, resolved to a durable approval receipt.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "relationship_id": {
+            "description": "Shared relationship identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "relationship_id",
+          "committed_revision"
+        ],
+        "title": "ConnectFederationResponse",
         "type": "object"
       },
       "CreateAcknowledgementPolicyRequest": {
@@ -3285,6 +3809,88 @@
           "group"
         ],
         "title": "CreateFaultGroupResponse",
+        "type": "object"
+      },
+      "CreateFederationPairingInvitationRequest": {
+        "additionalProperties": false,
+        "description": "Administrator request to approve one connection attempt by another autonomous swarm.",
+        "properties": {
+          "operation_id": {
+            "description": "Stable retry identity.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "pairing_endpoint": {
+            "description": "HTTPS origin of this gateway, normally supplied from the panel's current origin.",
+            "maxLength": 512,
+            "minLength": 9,
+            "pattern": "^https://[a-z0-9.\\-\\[\\]:]+$",
+            "type": "string"
+          },
+          "valid_for_seconds": {
+            "description": "Short-lived validity; the simple panel uses 900 seconds.",
+            "format": "uint32",
+            "maximum": 3600,
+            "minimum": 60,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "operation_id",
+          "pairing_endpoint",
+          "valid_for_seconds"
+        ],
+        "title": "CreateFederationPairingInvitationRequest",
+        "type": "object"
+      },
+      "CreateFederationPairingInvitationResponse": {
+        "additionalProperties": false,
+        "description": "Secret-bearing original receipt. This does not mean a peer relationship is active.",
+        "properties": {
+          "committed_revision": {
+            "description": "Original committed metadata revision.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "connection_code": {
+            "description": "Share only with the intended other swarm's administrator. Never a node join code.",
+            "maxLength": 763,
+            "minLength": 260,
+            "pattern": "^meshspan-federate-v1\\.[0-9a-f]{32}\\|[0-9a-f]{32}\\|[0-9a-f]{16}\\|[0-9a-f]{16}\\|[0-9a-f]{64}\\|[0-9a-f]{64}\\|https://[a-z0-9.\\-\\[\\]:]+$",
+            "type": "string"
+          },
+          "expires_at_epoch_micros": {
+            "description": "Exclusive original expiry, not extended by retry.",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "invitation_id": {
+            "description": "Reserved relationship identity used to inspect or cancel this material.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "operation_id": {
+            "description": "Exact committed issuance operation.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "invitation_id",
+          "connection_code",
+          "expires_at_epoch_micros",
+          "committed_revision"
+        ],
+        "title": "CreateFederationPairingInvitationResponse",
         "type": "object"
       },
       "CreateGroupRequest": {
@@ -6934,6 +7540,13 @@
                   "pattern": "^[0-9a-f]+$",
                   "type": "string"
                 },
+                "incarnation": {
+                  "description": "Current committed peer incarnation, not its certificate generation.",
+                  "maxLength": 20,
+                  "minLength": 1,
+                  "pattern": "^[1-9][0-9]*$",
+                  "type": "string"
+                },
                 "node_id": {
                   "description": "Permanent peer node identity.",
                   "maxLength": 36,
@@ -6950,6 +7563,7 @@
               },
               "required": [
                 "node_id",
+                "incarnation",
                 "private_endpoint",
                 "certificate_der_hex"
               ],
@@ -7027,6 +7641,159 @@
           "bootstrap_peers"
         ],
         "title": "EnrolNodeResponse",
+        "type": "object"
+      },
+      "FederationStorageGrantQuery": {
+        "additionalProperties": false,
+        "description": "Exact lookup rather than a collection scan; absent grants return null for creation planning.",
+        "properties": {
+          "grant_id": {
+            "description": "Exact identity to inspect.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "grant_id"
+        ],
+        "title": "FederationStorageGrantQuery",
+        "type": "object"
+      },
+      "FederationStorageGrantResponse": {
+        "additionalProperties": false,
+        "description": "Revision-consistent exact lookup; current authentication is applied on every call.",
+        "properties": {
+          "grant": {
+            "additionalProperties": false,
+            "description": "Null means this identity has not been issued in the provider's authority.",
+            "properties": {
+              "grant_id": {
+                "description": "Exact immutable identity.",
+                "maxLength": 36,
+                "minLength": 36,
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              "policy": {
+                "additionalProperties": false,
+                "description": "Effective intersection, not necessarily the provider's original requested maximum.",
+                "properties": {
+                  "allow_downstream_delegation": {
+                    "description": "Whether the recipient can re-offer an equal or narrower storage delegation.",
+                    "type": "boolean"
+                  },
+                  "counts_towards_protection": {
+                    "description": "Whether verified placements may count towards protection; this alone proves no copies.",
+                    "type": "boolean"
+                  },
+                  "maximum_bytes": {
+                    "description": "Positive decimal bytes; domain admission also enforces the metadata integer range.",
+                    "maxLength": 19,
+                    "minLength": 1,
+                    "pattern": "^[1-9][0-9]{0,18}$",
+                    "type": "string"
+                  },
+                  "serves_reads": {
+                    "description": "Whether ordinary reads may query this storage, independently of backup/recovery reads.",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "maximum_bytes",
+                  "counts_towards_protection",
+                  "serves_reads",
+                  "allow_downstream_delegation"
+                ],
+                "type": "object"
+              },
+              "relationship_id": {
+                "description": "Paired swarm relationship.",
+                "maxLength": 36,
+                "minLength": 36,
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              "revision": {
+                "description": "Last change of this grant record.",
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "state": {
+                "description": "Active, superseded or revoked grants remain visible to current managers.",
+                "oneOf": [
+                  {
+                    "const": "active",
+                    "description": "Not terminated; callers must also observe its validity interval.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "superseded",
+                    "description": "Replaced by the exact successor in the response.",
+                    "type": "string"
+                  },
+                  {
+                    "const": "revoked",
+                    "description": "Explicitly withdrawn without a successor.",
+                    "type": "string"
+                  }
+                ]
+              },
+              "successor_grant_id": {
+                "description": "Replacement identity when this historical grant has a successor.",
+                "maxLength": 36,
+                "minLength": 36,
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "valid_from_epoch_micros": {
+                "description": "Original first authorised instant.",
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "valid_until_epoch_micros": {
+                "description": "Null represents explicitly indefinite authority.",
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "grant_id",
+              "relationship_id",
+              "policy",
+              "state",
+              "valid_from_epoch_micros",
+              "valid_until_epoch_micros",
+              "successor_grant_id",
+              "revision"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "metadata_revision": {
+            "description": "Root revision for the next conditional mutation.",
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "metadata_revision",
+          "grant"
+        ],
+        "title": "FederationStorageGrantResponse",
         "type": "object"
       },
       "GetObjectResponse": {
@@ -11606,7 +12373,7 @@
                     ],
                     "type": "object"
                   },
-                  "maxItems": 64,
+                  "maxItems": 250,
                   "type": [
                     "array",
                     "null"
@@ -15321,7 +16088,7 @@
             }
           }
         },
-        "summary": "Select a registered target or change a destination name and eligibility",
+        "summary": "Configure an exact backup provider binding, name and eligibility",
         "x-meshspan-access": "system-manager"
       }
     },
@@ -17761,6 +18528,1287 @@
         "summary": "Collect bounded, redacted local metadata diagnostics",
         "x-meshspan-access": "system-manager",
         "x-meshspan-response-max-bytes": 262144
+      }
+    },
+    "/admin/federation/connections": {
+      "post": {
+        "description": "Current manager authority is checked before body parsing and after pinned HTTPS exchange. Exact public intent is committed before contacting the peer. A successful response means both sides approved the relationship, not that data grants or a live transport session exist. An interrupted exchange has an unknown outcome: retry the exact operation and input before the invitation expires.",
+        "operationId": "connectFederation",
+        "parameters": [
+          {
+            "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+            "in": "header",
+            "name": "MeshSpan-CSRF-Token",
+            "required": false,
+            "schema": {
+              "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "x-meshspan-sensitive": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectFederationRequest"
+              }
+            }
+          },
+          "description": "Invitation and reachable local origin",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectFederationResponse"
+                }
+              }
+            },
+            "description": "Durable local approval following remote approval; no-store",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid input or peer reply",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Current manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Changed intent or relationship state",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Body exceeds its bound",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "JSON required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid retained or outgoing evidence",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authority or peer unavailable; outcome may be unknown",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Connect to another autonomous swarm using its administrator's invitation",
+        "x-meshspan-access": "system-manager",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+        "x-meshspan-max-request-bytes": 26624
+      }
+    },
+    "/admin/federation/invitations": {
+      "post": {
+        "description": "Current system-manager approval before body parsing and again at commit. Exact retries return the original code and expiry. Codes do not enrol local nodes or grant file access. Peer acceptance is a separate operation.",
+        "operationId": "createFederationPairingInvitation",
+        "parameters": [
+          {
+            "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+            "in": "header",
+            "name": "MeshSpan-CSRF-Token",
+            "required": false,
+            "schema": {
+              "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "x-meshspan-sensitive": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFederationPairingInvitationRequest"
+              }
+            }
+          },
+          "description": "Pinned origin and bounded lifetime",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateFederationPairingInvitationResponse"
+                }
+              }
+            },
+            "description": "Original committed secret-bearing invitation; no-store",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Current manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Changed retry or cancelled invitation",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Body exceeds its bound",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "JSON required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid retained or outgoing evidence",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authority unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Issue short-lived connection material for another autonomous swarm",
+        "x-meshspan-access": "system-manager",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+        "x-meshspan-max-request-bytes": 2048
+      }
+    },
+    "/admin/federation/invitations/cancel": {
+      "post": {
+        "description": "Current system-manager authority is required before reading input and again at commit. Exact retries retain the original cancellation receipt. Does not revoke an established relationship.",
+        "operationId": "cancelFederationPairingInvitation",
+        "parameters": [
+          {
+            "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+            "in": "header",
+            "name": "MeshSpan-CSRF-Token",
+            "required": false,
+            "schema": {
+              "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "x-meshspan-sensitive": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelFederationPairingInvitationRequest"
+              }
+            }
+          },
+          "description": "Exact invitation revision and reason",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelFederationPairingInvitationResponse"
+                }
+              }
+            },
+            "description": "Durable original cancellation receipt",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Current manager authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Changed retry or invitation no longer pending",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Body exceeds its bound",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "JSON required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid retained or outgoing evidence",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authority unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Withdraw unused federation connection material",
+        "x-meshspan-access": "system-manager",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+        "x-meshspan-max-request-bytes": 2048
+      }
+    },
+    "/admin/federation/storage-grants": {
+      "get": {
+        "description": "Current manager authority is checked before lookup. This is an exact lookup, not a collection. Null means the identity is unused. A grant's lifecycle is separate from its validity interval, relationship state and actual stored protection.",
+        "operationId": "getFederationStorageGrant",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/FederationStorageGrantQuery/properties/grant_id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FederationStorageGrantResponse"
+                }
+              }
+            },
+            "description": "Current offer or null; no-store",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid query",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Current manager or local provider authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Metadata changed during lookup; retry",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid retained or outgoing evidence",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authority unavailable",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Inspect one provider-owned storage offer and its current metadata revision",
+        "x-meshspan-access": "system-manager",
+        "x-meshspan-max-request-bytes": 4096
+      },
+      "post": {
+        "description": "Current manager authority and CSRF, where applicable, are checked before body parsing and again before commit. The observed root-metadata revision fences new mutations; exact retries retain their original receipt. Issuance offers provider capacity only: it neither configures consumer backups nor grants access to consumer files. Consumer restrictions remain independent. Replacement retains peer restrictions and allocation lineage; revocation does not erase retained encrypted objects. Missing lifetime defaults to 30 days; null explicitly means indefinite.",
+        "operationId": "configureFederationStorageGrant",
+        "parameters": [
+          {
+            "description": "Required for browser-cookie authentication and omitted for API-key authentication.",
+            "in": "header",
+            "name": "MeshSpan-CSRF-Token",
+            "required": false,
+            "schema": {
+              "pattern": "^meshspan-csrf-v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "x-meshspan-sensitive": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigureFederationStorageGrantRequest"
+              }
+            }
+          },
+          "description": "Exact operation, observed revision and storage offer change",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigureFederationStorageGrantResponse"
+                }
+              }
+            },
+            "description": "Original durable mutation receipt",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authentication required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Current manager or local provider authority required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Stale revision, changed retry or conflicting grant",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Body exceeds its bound",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "JSON required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid retained or outgoing evidence",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authority unavailable; outcome may be unknown",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Issue, replace or withdraw a provider-owned storage offer",
+        "x-meshspan-access": "system-manager",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+        "x-meshspan-max-request-bytes": 4096
       }
     },
     "/admin/groups": {
@@ -28617,6 +30665,275 @@
         "x-meshspan-idempotency": "operation-id-and-canonical-request-digest"
       }
     },
+    "/federation/pairings/accept": {
+      "post": {
+        "description": "The short-lived MeshSpan-Pairing Authorization credential is verified before body parsing, including the issuer's current manager authority. Exact retries retain the original peer and approval receipt. This approves only the issuing side: it does not enrol nodes, grant data access or prove a live federation session.",
+        "operationId": "acceptFederationPairing",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "maxLength": 780,
+              "pattern": "^MeshSpan-Pairing meshspan-federate-v1\\.",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptFederationPairingRequest"
+              }
+            }
+          },
+          "description": "Exact operation and signed public peer record",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptFederationPairingResponse"
+                }
+              }
+            },
+            "description": "Original local approval and signed peer; no-store",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid peer or request",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Missing, expired or withdrawn invitation",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Issuer no longer has manager authority",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Changed retry or relationship state",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Body exceeds its bound",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "JSON required",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid retained or outgoing evidence",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Authority unavailable; outcome may be unknown",
+            "headers": {
+              "MeshSpan-API-Schema": {
+                "required": true,
+                "schema": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "MeshSpan-API-Version": {
+                "required": true,
+                "schema": {
+                  "const": "latest",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Consume an administrator's invitation and approve one autonomous peer",
+        "x-meshspan-access": "federation-pairing-invitation",
+        "x-meshspan-idempotency": "operation-id-and-canonical-request-digest",
+        "x-meshspan-max-request-bytes": 26624
+      }
+    },
     "/health": {
       "get": {
         "operationId": "getHealth",
@@ -28687,7 +31004,7 @@
             "content": {
               "application/openmetrics-text; version=1.0.0; charset=utf-8": {
                 "schema": {
-                  "maxLength": 65536,
+                  "maxLength": 131072,
                   "type": "string"
                 }
               }
@@ -28827,7 +31144,7 @@
         },
         "summary": "Scrape explicitly enabled process-local OpenMetrics observations",
         "x-meshspan-access": "metrics-consumer",
-        "x-meshspan-max-response-bytes": 65536
+        "x-meshspan-max-response-bytes": 131072
       }
     },
     "/openapi.json": {

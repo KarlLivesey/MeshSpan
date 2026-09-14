@@ -139,7 +139,7 @@ pub fn decode_consensus_message(
     }
 }
 
-fn wire_entry(entry: &LogEntry) -> WireLogEntry {
+pub(crate) fn wire_entry(entry: &LogEntry) -> WireLogEntry {
     WireLogEntry {
         position: Some(position(entry.position)),
         operation_id: entry.operation_id.as_bytes().to_vec(),
@@ -151,7 +151,7 @@ fn wire_entry(entry: &LogEntry) -> WireLogEntry {
     }
 }
 
-fn core_entry(entry: &WireLogEntry) -> Result<LogEntry, ConsensusWireError> {
+pub(crate) fn core_entry(entry: &WireLogEntry) -> Result<LogEntry, ConsensusWireError> {
     let command = entry
         .command
         .as_ref()

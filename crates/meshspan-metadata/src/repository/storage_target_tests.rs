@@ -60,6 +60,57 @@ struct StoredTargetGeneration {
 }
 
 #[test]
+fn recovery_marker_is_generation_exact_without_reactivating_retired_targets()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture()?;
+    let target = TargetId::from_bytes([40; 16])?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 2, term: 1 },
+        context(30, fixture.administrator, 31, 30, Some(1))?,
+        &target_command(&fixture, StorageUsageLimit::Percent(95))?,
+    )?;
+    let expected = target_value(&fixture, StorageUsageLimit::Percent(95))?.marker_fingerprint;
+    assert_eq!(
+        fixture
+            .repository
+            .recovery_storage_target_marker(target, 1)?,
+        Some(expected)
+    );
+    assert_eq!(
+        fixture
+            .repository
+            .recovery_storage_target_marker(target, 2)?,
+        None
+    );
+    assert_eq!(
+        fixture
+            .repository
+            .recovery_storage_target_marker(TargetId::from_bytes([99; 16])?, 1)?,
+        None
+    );
+    assert!(
+        fixture
+            .repository
+            .recovery_storage_target_marker(target, 0)
+            .is_err()
+    );
+    let database = fixture.repository.into_database();
+    database
+        .connection()
+        .execute("UPDATE storage_targets SET retired_at = 100", [])?;
+    let repository = AuthoritativeRepository::new(database);
+    assert_eq!(
+        repository.storage_target_provider_context_by_target(target)?,
+        None
+    );
+    assert_eq!(
+        repository.recovery_storage_target_marker(target, 1)?,
+        Some(expected)
+    );
+    Ok(())
+}
+
+#[test]
 fn fault_group_drain_fences_writes_and_composes_a_real_target_drain()
 -> Result<(), Box<dyn std::error::Error>> {
     let ActiveFaultGroupScopeDrain {

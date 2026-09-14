@@ -5,6 +5,7 @@ import { createMeshSpanFetchClient } from "../src/generated/fetch.gen";
 import {
   zConfigureMetricsExporterBody,
   zGetMetricsExporterResponse,
+  zGetMetricHistoryResponse,
 } from "../src/generated/zod.gen";
 import type { ConfigureMetricsExporterRequest } from "../src/generated";
 
@@ -54,7 +55,41 @@ describe("generated metrics exporter client", () => {
   });
 });
 
-describe("generated metrics validation", () => {
+describe("generated metric history validation", () => {
+  it("accepts the complete 250-family catalogue and rejects an oversized history point", () => {
+    const metric = {
+      name: "meshspan_v1_test",
+      measurement: { kind: "gauge", value: "1" },
+    };
+    const point = {
+      bucket_start_seconds: "0",
+      sampled_uptime_seconds: "0",
+      observed_at_epoch_micros: null,
+      metrics: Array.from({ length: 250 }, (_, index) => ({
+        ...metric,
+        name: `meshspan_v1_test_${String.fromCodePoint(97 + Math.floor(index / 26))}${String.fromCodePoint(97 + (index % 26))}`,
+      })),
+    };
+    const history = {
+      history_id: "1".repeat(32),
+      resolution: "minute",
+      retention_seconds: "21600",
+      uptime_seconds: "0",
+      older_samples_expired: false,
+      points: [point],
+      next_page_url: null,
+    };
+    expect(zGetMetricHistoryResponse.safeParse(history).success).toBe(true);
+    expect(
+      zGetMetricHistoryResponse.safeParse({
+        ...history,
+        points: [{ ...point, metrics: [...point.metrics, metric] }],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("generated metrics exporter validation", () => {
   it("rejects structural ambiguity and bounds in both directions", () => {
     expect(zConfigureMetricsExporterBody.safeParse(request).success).toBe(true);
     for (const invalid of [

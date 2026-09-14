@@ -5,6 +5,7 @@ syntax = "proto3";
 package meshspan.private.v1;
 
 import "meshspan/private/v1/common.proto";
+import "meshspan/private/v1/data.proto";
 
 message FederationHeader {
   ProtocolVersion version = 1;
@@ -252,6 +253,128 @@ message FederatedStorageInventoryPage {
   bytes signature = 7;
 }
 
+// Backups retain their own exact object identity; they are never fabricated shards.
+message FederatedBackupScope {
+  bytes relationship_id = 1;
+  bytes remote_mesh_id = 2;
+  bytes provider_mesh_id = 3;
+  bytes allocation_id = 4;
+  bytes grant_id = 5;
+  bytes provider_node_id = 6;
+  bytes target_id = 7;
+  uint64 target_generation = 8;
+  uint64 relationship_authority_epoch = 9;
+  uint64 grant_revision = 10;
+  uint64 allocation_revision = 11;
+  // Immutable allocation origin, distinct from current permission in grant_id.
+  bytes namespace_grant_id = 12;
+}
+
+enum RemoteBackupAction {
+  REMOTE_BACKUP_ACTION_UNSPECIFIED = 0;
+  REMOTE_BACKUP_ACTION_STORE = 1;
+  REMOTE_BACKUP_ACTION_READ = 2;
+  REMOTE_BACKUP_ACTION_VERIFY = 3;
+  REMOTE_BACKUP_ACTION_DELETE = 4;
+  REMOTE_BACKUP_ACTION_LOOKUP = 5;
+}
+
+message FederatedBackupOperation {
+  ProtocolVersion contract_version = 1;
+  bytes operation_id = 2;
+  sint64 deadline_unix_micros = 3;
+  optional uint64 authority_revision = 4;
+  BackupObjectIdentity object = 5;
+  RemoteBackupAction action = 6;
+  string object_reference = 7;
+  optional uint64 retirement_revision = 8;
+}
+
+message FederatedBackupPermit {
+  FederatedBackupScope scope = 1;
+  FederatedBackupOperation operation = 2;
+  sint64 issued_at_unix_micros = 3;
+  sint64 expires_at_unix_micros = 4;
+  bytes capability_nonce = 5;
+  bytes permit_digest = 6;
+}
+
+message RequestFederatedBackupCapability {
+  FederatedBackupScope scope = 1;
+  FederatedBackupOperation operation = 2;
+  bytes signature = 3;
+}
+
+message FederatedBackupCapability {
+  bytes request_digest = 1;
+  optional FederatedBackupPermit permit = 2;
+  optional WireError rejection = 3;
+  bytes signature = 4;
+}
+
+message ExecuteFederatedBackup {
+  FederatedBackupPermit permit = 1;
+  bytes signature = 2;
+}
+
+message FederatedBackupReady {
+  bytes permit_digest = 1;
+  uint64 maximum_frame_bytes = 2;
+  optional WireError rejection = 3;
+  bytes signature = 4;
+}
+
+message FederatedBackupResult {
+  bytes permit_digest = 1;
+  sint64 completed_at_unix_micros = 2;
+  oneof outcome {
+    BackupObjectReceipt stored = 10;
+    BackupReadReceipt read = 11;
+    BackupObjectReceipt verified = 12;
+    BackupDeleteReceipt deleted = 13;
+    BackupObjectReceipt looked_up = 15;
+    WireError rejection = 14;
+  }
+  bytes signature = 3;
+}
+
+// Allocation observations confer no capability and reserve no capacity.
+message FetchFederatedBackupAllocations {
+  bytes grant_id = 1;
+  uint64 required_bytes = 2;
+  bytes cursor = 3;
+  uint32 limit = 4;
+  bytes signature = 5;
+}
+
+message FederatedBackupAllocation {
+  FederatedBackupScope scope = 1;
+  uint64 maximum_bytes = 2;
+  sint64 valid_from_unix_micros = 3;
+  sint64 valid_until_unix_micros = 4;
+}
+
+message FederatedBackupAllocationPage {
+  bytes request_digest = 1;
+  uint64 authority_revision = 2;
+  repeated FederatedBackupAllocation allocations = 3;
+  bytes next_cursor = 4;
+  bytes signature = 5;
+}
+
+// Opaque continuation bound to the relationship, epoch, grant, size and snapshot.
+message FederatedBackupAllocationCursor {
+  uint32 format_version = 1;
+  bytes relationship_id = 2;
+  uint64 authority_epoch = 3;
+  bytes grant_id = 4;
+  uint64 required_bytes = 5;
+  uint64 snapshot_revision = 6;
+  sint64 valid_from_unix_micros = 7;
+  sint64 valid_until_unix_micros = 8;
+  bytes allocation_id = 9;
+}
+
 message FederationEnvelope {
   FederationHeader header = 1;
   oneof message {
@@ -274,5 +397,12 @@ message FederationEnvelope {
     FederatedStorageReceipt storage_receipt = 42;
     FetchFederatedStorageInventory fetch_storage_inventory = 43;
     FederatedStorageInventoryPage storage_inventory_page = 44;
+    RequestFederatedBackupCapability request_backup_capability = 50;
+    FederatedBackupCapability backup_capability = 51;
+    ExecuteFederatedBackup execute_backup = 52;
+    FederatedBackupReady backup_ready = 53;
+    FederatedBackupResult backup_result = 54;
+    FetchFederatedBackupAllocations fetch_backup_allocations = 55;
+    FederatedBackupAllocationPage backup_allocation_page = 56;
   }
 }

@@ -69,7 +69,7 @@ pub struct NamespaceHistoryReceiveStatus {
     pub next_cursor: Vec<u8>,
     /// Whether the source has supplied its terminal page.
     pub terminal: bool,
-    /// Number of independently validated mutation commits staged so far.
+    /// Number of independently validated namespace commits staged so far.
     pub commits: usize,
     /// Number of immutable identities advertised so far.
     pub immutable_records: usize,
@@ -147,7 +147,7 @@ pub(super) fn adopt_head(
     root_object_revision_id: ObjectRevisionId,
 ) -> Result<BranchNamespaceHead, PublicationError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let selected = super::repository::load_commit(&transaction, namespace_commit_id)?;
+    let selected = super::repository::load_namespace_root(&transaction, namespace_commit_id)?;
     if selected.volume_id != volume_id
         || selected.root_object_revision_id != root_object_revision_id
     {

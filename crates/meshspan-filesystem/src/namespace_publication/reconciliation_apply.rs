@@ -313,7 +313,7 @@ fn decode_receipt(
     })
 }
 
-fn reject_operation_collision(
+pub(super) fn reject_operation_collision(
     transaction: &Transaction<'_>,
     operation_id: OperationId,
 ) -> Result<(), PublicationError> {

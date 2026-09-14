@@ -2,6 +2,8 @@
 
 //! Cross-swarm federation envelope and message validation.
 
+pub(super) mod backup;
+
 use std::collections::BTreeSet;
 
 use crate::framing::{WireContractError, WireLimits};
@@ -27,12 +29,11 @@ pub(super) fn envelope(
     envelope: &FederationEnvelope,
     limits: WireLimits,
 ) -> Result<(), WireContractError> {
-    header(
-        envelope
-            .header
-            .as_ref()
-            .ok_or(WireContractError::InvalidMessage)?,
-    )?;
+    let context = envelope
+        .header
+        .as_ref()
+        .ok_or(WireContractError::InvalidMessage)?;
+    header(context)?;
     match envelope
         .message
         .as_ref()
@@ -57,6 +58,13 @@ pub(super) fn envelope(
         Message::StorageReceipt(value) => storage_receipt(value, limits),
         Message::FetchStorageInventory(value) => fetch_storage_inventory(value, limits),
         Message::StorageInventoryPage(value) => storage_inventory_page(value, limits),
+        Message::RequestBackupCapability(value) => backup::request(value, context, limits),
+        Message::BackupCapability(value) => backup::capability(value, context, limits),
+        Message::ExecuteBackup(value) => backup::execute(value, context, limits),
+        Message::BackupReady(value) => backup::ready(value, limits),
+        Message::BackupResult(value) => backup::result(value, context, limits),
+        Message::FetchBackupAllocations(value) => backup::allocation_fetch(value, context, limits),
+        Message::BackupAllocationPage(value) => backup::allocation_page(value, context, limits),
     }
 }
 

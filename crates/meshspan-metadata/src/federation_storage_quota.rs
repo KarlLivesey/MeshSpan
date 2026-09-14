@@ -4,6 +4,9 @@
 
 mod persistence;
 mod record;
+mod seal;
+
+pub use seal::FederationStorageCapacitySeal;
 
 use meshspan_contracts::ShardIdentity;
 use meshspan_domain::{
@@ -13,10 +16,11 @@ use rusqlite::{Transaction, TransactionBehavior};
 use thiserror::Error;
 
 use crate::{FederationStorageAllocationAuthority, LocalDatabase};
+pub(crate) use persistence::{hold_capacity, install_or_validate_usage};
 use persistence::{
-    hold_capacity, insert_reservation, install_or_validate_usage, persist_unique_shard,
-    reject_nonce_reuse, release_capacity, replace_reservation_with_committed_usage,
-    validate_completion_replay, validate_release_replay, validate_reservation_replay,
+    insert_reservation, persist_unique_shard, reject_nonce_reuse, release_capacity,
+    replace_reservation_with_committed_usage, validate_completion_replay, validate_release_replay,
+    validate_reservation_replay,
 };
 use record::{load_reservation, load_usage};
 
@@ -143,7 +147,7 @@ pub struct FederationStorageUsage {
     pub allocation_id: FederationStorageAllocationId,
     /// Immutable allocation ceiling.
     pub maximum_bytes: u64,
-    /// Bytes owned by unique durable shard records.
+    /// Bytes owned by unique durable shard and backup records.
     pub committed_bytes: u64,
     /// Maximum bytes held by in-flight reservations.
     pub reserved_bytes: u64,
@@ -381,7 +385,7 @@ fn validate_reservation(
         && request.action.reserves_capacity()
         && valid_time
         && request.issued_at.get() > 0
-        && request.expires_at <= allocation.valid_until()
+        && request.expires_at <= authority.valid_until()
         && lifetime.is_some_and(|value| {
             value > 0 && value <= MAXIMUM_FEDERATED_STORAGE_WRITE_LIFETIME_MICROS
         })

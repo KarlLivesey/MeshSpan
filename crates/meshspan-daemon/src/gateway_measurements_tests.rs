@@ -21,11 +21,15 @@ async fn https_metrics_preserve_responses_and_distinguish_5xx_from_client_reject
     let router = observe_https(
         Router::new()
             .route("/ok", get(|| async { "exact response bytes" }))
+            .route("/signin", get(|| async { StatusCode::UNAUTHORIZED }))
+            .route("/denied", get(|| async { StatusCode::FORBIDDEN }))
             .route("/failed", get(|| async { StatusCode::SERVICE_UNAVAILABLE })),
         Arc::new(observations.clone()),
     );
     for (uri, status, body) in [
         ("/ok", StatusCode::OK, "exact response bytes"),
+        ("/signin", StatusCode::UNAUTHORIZED, ""),
+        ("/denied", StatusCode::FORBIDDEN, ""),
         ("/failed", StatusCode::SERVICE_UNAVAILABLE, ""),
         ("/private-user-path", StatusCode::NOT_FOUND, ""),
     ] {
@@ -48,7 +52,7 @@ async fn https_metrics_preserve_responses_and_distinguish_5xx_from_client_reject
     assert!(
         metrics
             .samples()
-            .contains(&RuntimeMetric::HttpsDispatches(3))
+            .contains(&RuntimeMetric::HttpsDispatches(5))
     );
     assert!(
         metrics
@@ -61,7 +65,9 @@ async fn https_metrics_preserve_responses_and_distinguish_5xx_from_client_reject
             .contains(&RuntimeMetric::HttpsCancelledDispatches(0))
     );
     let encoded = String::from_utf8(crate::encode_openmetrics(&metrics)?)?;
-    assert!(encoded.contains("meshspan_v1_https_dispatch_duration_seconds_count 3\n"));
+    assert!(encoded.contains("meshspan_v1_https_dispatch_duration_seconds_count 5\n"));
+    assert!(encoded.contains("meshspan_v1_https_authentication_required_responses_total 1\n"));
+    assert!(encoded.contains("meshspan_v1_https_forbidden_responses_total 1\n"));
     for private in [
         "private-user-path",
         "should-never-be-a-metric",

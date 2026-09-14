@@ -205,6 +205,8 @@ fn reject_active_collision(
             WHERE manifest_root_digest = ?1 AND state = 1
             UNION ALL
             SELECT 1 FROM retired_manifest_roots WHERE manifest_root_digest = ?1
+            UNION ALL
+            SELECT 1 FROM content_reuse_reservations WHERE manifest_root_digest = ?1 AND state = 1
          )",
         [manifest_root_digest.as_slice()],
         |row| row.get(0),

@@ -137,6 +137,36 @@ struct StoredVolume {
     revision: i64,
 }
 
+pub(super) fn identities(
+    database: &PartitionDatabase,
+    after: Option<VolumeId>,
+    limit: PageLimit,
+) -> Result<Page<VolumeId, VolumeId>, RepositoryError> {
+    let lower = after.map_or([0; 16], VolumeId::as_bytes);
+    let requested =
+        i64::try_from(limit.get() + 1).map_err(|_| RepositoryError::InvalidPageLimit)?;
+    let mut statement = database.connection().prepare(
+        "SELECT volume_id FROM volumes WHERE volume_id > ?1 ORDER BY volume_id LIMIT ?2",
+    )?;
+    let rows = statement.query_map(params![lower.as_slice(), requested], |row| {
+        row.get::<_, Vec<u8>>(0)
+    })?;
+    let mut items = Vec::with_capacity(limit.get() + 1);
+    for row in rows {
+        items.push(
+            VolumeId::from_bytes(row?.try_into().map_err(|_| RepositoryError::CorruptState)?)
+                .map_err(|_| RepositoryError::CorruptState)?,
+        );
+    }
+    let next = if items.len() > limit.get() {
+        items.truncate(limit.get());
+        items.last().copied()
+    } else {
+        None
+    };
+    Ok(Page { items, next })
+}
+
 fn parse_record(stored: StoredVolume) -> Result<VolumeInventoryRecord, RepositoryError> {
     let state = u8::try_from(stored.state).map_err(|_| RepositoryError::CorruptState)?;
     if !(1..=4).contains(&state)

@@ -37,14 +37,24 @@ use crate::{
     StoragePermitLoadingService, VolumeAdministrationAuthority, VolumeKeyLoadingService,
 };
 
+#[path = "backup_abandonment_service_tests.rs"]
+mod backup_abandonment;
 #[path = "backup_destination_service_tests.rs"]
 mod backup_destination_service_tests;
 #[path = "backup_history_service_tests.rs"]
 mod backup_history;
 #[path = "backup_schedule_service_tests.rs"]
 mod backup_schedule;
+#[path = "federation_pairing_service_tests.rs"]
+mod federation_pairing;
+#[path = "federation_relationship_service_tests.rs"]
+mod federation_relationship;
+#[path = "federation_storage_service_tests.rs"]
+mod federation_storage;
 #[path = "remote_backup_identity_tests.rs"]
 mod remote_backup_identity;
+#[path = "strong_publication_tests.rs"]
+mod strong_publication;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn blocking_certificate_worker_can_commit_inside_its_async_transport_context()
@@ -196,6 +206,13 @@ impl RunningAuthority {
     async fn start_with_partition(
         partition_id: PartitionId,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::start_with_mesh(partition_id, MeshId::from_bytes([9; 16])?).await
+    }
+
+    async fn start_with_mesh(
+        partition_id: PartitionId,
+        mesh_id: MeshId,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let database_path = directory.path().join("partition.sqlite3");
         let node_id = NodeId::from_bytes([1; 16])?;
@@ -240,11 +257,12 @@ impl RunningAuthority {
         handle
             .commit_or_resolve(
                 context,
-                bootstrap_command(
+                bootstrap_command_with_mesh(
                     node_id,
                     administrator_id,
                     &api_key,
                     wrapping_key.public_key(),
+                    mesh_id,
                 )?,
             )
             .await?;
@@ -617,16 +635,17 @@ fn api_key_creation(
     })
 }
 
-fn bootstrap_command(
+pub(crate) fn bootstrap_command_with_mesh(
     node_id: NodeId,
     administrator_id: PrincipalId,
     api_key: &ApiKeyBundle,
     wrapping_public_key: WrappingPublicKey,
+    mesh_id: MeshId,
 ) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
     Ok(AuthoritativeCommand::BootstrapAppliance(Box::new(
         crate::bootstrap_test_support::bootstrap_appliance_with_node_key(
             BootstrapMesh {
-                mesh_id: MeshId::from_bytes([9; 16])?,
+                mesh_id,
                 mesh_name: RecordName::new("Test mesh")?,
                 administrator_id,
                 administrator_name: RecordName::new("Administrator")?,

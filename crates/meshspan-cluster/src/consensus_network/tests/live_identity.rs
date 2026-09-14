@@ -49,6 +49,7 @@ async fn network_selects_a_new_local_certificate_without_restarting_its_listener
         controls,
     )?;
     assert_eq!(first.local_certificate()?.generation, 1);
+    let previous_connection = first.control_connection(second_node).await?;
     let identity = NodeIdentityKey::from_pkcs8(first_identity.private_key())?;
     let online = authority.issue_online_authority()?;
     let leaf = online.sign_node_public_identity(
@@ -69,6 +70,15 @@ async fn network_selects_a_new_local_certificate_without_restarting_its_listener
         )?,
     )?;
     assert_eq!(selected.generation, 2);
+    let renewed_connection = first.control_connection(second_node).await?;
+    assert_ne!(
+        renewed_connection.stable_id(),
+        previous_connection.stable_id()
+    );
+    assert!(
+        previous_connection.close_reason().is_none(),
+        "rotation cancelled an in-flight connection"
+    );
     assert_eq!(
         selected.certificate_fingerprint,
         <[u8; 32]>::from(Sha256::digest(&leaf))
@@ -77,20 +87,32 @@ async fn network_selects_a_new_local_certificate_without_restarting_its_listener
         first.transport.server_endpoint().local_addr()?,
         first_address
     );
-    let connection = first.connect_data_peer(second_node).await?;
+    confirm_rotated_control(
+        &first,
+        &second,
+        &mut received,
+        selected.certificate_fingerprint,
+    )
+    .await
+}
+
+/// Verify the selected identity at the remote handler, not merely in local transport state.
+async fn confirm_rotated_control(
+    first: &ConsensusNetwork,
+    second: &ConsensusNetwork,
+    received: &mut mpsc::Receiver<PeerControlRequest>,
+    fingerprint: [u8; 32],
+) -> Result<(), Box<dyn std::error::Error>> {
     let operation = OperationId::from_bytes([55; 16])?;
-    let request = control_request(&first, operation, 55)?;
-    let call = first.request_control_on_connection(second_node, &request, &connection);
+    let request = control_request(first, operation, 55)?;
+    let call = first.request_control(second.local_node_id(), &request);
     let respond = async {
         let incoming = received.recv().await.ok_or("missing rotated request")?;
-        assert_eq!(
-            incoming.certificate_fingerprint,
-            selected.certificate_fingerprint
-        );
-        assert_eq!(incoming.from, first_node);
+        assert_eq!(incoming.certificate_fingerprint, fingerprint);
+        assert_eq!(incoming.from, first.local_node_id());
         incoming
             .respond
-            .send(control_response(&second, operation, 55)?)
+            .send(control_response(second, operation, 55)?)
             .map_err(|_| "response closed")?;
         Ok::<_, Box<dyn std::error::Error>>(())
     };

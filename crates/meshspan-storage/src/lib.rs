@@ -8,6 +8,7 @@ mod journal;
 mod marker;
 mod pack;
 mod provider;
+mod recovery;
 mod shard;
 mod shared_provider;
 
@@ -23,5 +24,10 @@ pub use marker::{MarkerFingerprint, TargetMarker};
 pub use provider::{
     FolderShardStore, FolderShardStoreError, RecoveryPage, StoragePermitVerifier,
     TombstoneRecoveryPage,
+};
+pub use recovery::{
+    RecoveryFolder, RecoveryInventory, RecoveryInventorySummary, RecoveryPack,
+    RecoveryPackSequences, RecoveryShardPage, RecoveryShardRecord, RecoveryShardRetention,
+    RecoveryStorageError,
 };
 pub use shared_provider::SharedStorageProvider;

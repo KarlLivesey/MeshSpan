@@ -6,7 +6,7 @@ mod mutation;
 mod read;
 mod store;
 
-pub use mutation::{delete_backup, verify_backup};
+pub use mutation::{delete_backup, lookup_backup, verify_backup};
 pub use read::read_backup;
 pub use store::store_backup;
 

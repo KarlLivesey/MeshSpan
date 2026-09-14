@@ -78,6 +78,55 @@ export const zAbortUploadResponse = z
   .strict();
 
 /**
+ * AcceptFederationPairingRequest
+ *
+ * Connection attempt sent through TLS pinned by the invitation; the code is in Authorization.
+ */
+export const zAcceptFederationPairingRequest = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    peer_record: z
+      .string()
+      .min(172)
+      .max(24576)
+      .regex(/^[A-Za-z0-9_-]+$/),
+  })
+  .strict();
+
+/**
+ * AcceptFederationPairingResponse
+ *
+ * Issuing swarm's durable approval and signed public identity, not user/file access.
+ */
+export const zAcceptFederationPairingResponse = z
+  .strictObject({
+    committed_revision: z.int().gte(1).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    peer_record: z
+      .string()
+      .min(172)
+      .max(24576)
+      .regex(/^[A-Za-z0-9_-]+$/),
+    relationship_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * AddGroupMemberRequest
  *
  * Idempotent administrator request to add one direct user or nested-group member.
@@ -652,6 +701,53 @@ export const zBeginUploadResponse = z
   .strict();
 
 /**
+ * CancelFederationPairingInvitationRequest
+ *
+ * Cancels unused material without affecting an established relationship.
+ */
+export const zCancelFederationPairingInvitationRequest = z
+  .strictObject({
+    expected_invitation_revision: z.int().gte(1).lte(9007199254740991),
+    invitation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    reason: z.string().min(1).max(512),
+  })
+  .strict();
+
+/**
+ * CancelFederationPairingInvitationResponse
+ *
+ * Durable cancellation receipt; no connection secret is returned.
+ */
+export const zCancelFederationPairingInvitationResponse = z
+  .strictObject({
+    committed_revision: z.int().gte(1).lte(9007199254740991),
+    invitation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
  * CertificateStatusResponse
  *
  * Current certificate status; `certificate` is `null` before a source is configured.
@@ -873,7 +969,7 @@ export const zCommitUploadResponse = z
 /**
  * ConfigureBackupDestinationRequest
  *
- * One registered target selected for encrypted recovery copies.
+ * One exact provider binding selected for encrypted recovery copies.
  */
 export const zConfigureBackupDestinationRequest = z
   .strictObject({
@@ -896,17 +992,46 @@ export const zConfigureBackupDestinationRequest = z
       .regex(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       ),
-    target_generation: z
+    provider: z.union([
+      z
+        .strictObject({
+          kind: z.literal("registered_target"),
+          target_id: z
+            .string()
+            .length(36)
+            .regex(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+            ),
+        })
+        .strict(),
+      z
+        .strictObject({
+          kind: z.literal("federated_mesh"),
+          remote_mesh_id: z
+            .string()
+            .length(36)
+            .regex(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+            ),
+        })
+        .strict(),
+      z
+        .strictObject({
+          instance_id: z
+            .string()
+            .length(36)
+            .regex(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+            ),
+          kind: z.literal("component_provider"),
+        })
+        .strict(),
+    ]),
+    provider_generation: z
       .string()
       .min(1)
       .max(20)
       .regex(/^[1-9][0-9]{0,19}$/),
-    target_id: z
-      .string()
-      .length(36)
-      .regex(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-      ),
   })
   .strict();
 
@@ -974,6 +1099,130 @@ export const zConfigureBackupScheduleResponse = z
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       ),
     sequence: z.int().gte(1).lte(9007199254740991),
+  })
+  .strict();
+
+/**
+ * ConfigureFederationStorageGrantRequest
+ *
+ * Exact-retry mutation against an observed root-metadata revision.
+ */
+export const zConfigureFederationStorageGrantRequest = z
+  .strictObject({
+    change: z.union([
+      z
+        .strictObject({
+          grant_id: z
+            .string()
+            .length(36)
+            .regex(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+            ),
+          kind: z.literal("issue"),
+          policy: z
+            .strictObject({
+              allow_downstream_delegation: z.boolean(),
+              counts_towards_protection: z.boolean(),
+              maximum_bytes: z
+                .string()
+                .min(1)
+                .max(19)
+                .regex(/^[1-9][0-9]{0,18}$/),
+              serves_reads: z.boolean(),
+            })
+            .strict(),
+          relationship_id: z
+            .string()
+            .length(36)
+            .regex(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+            ),
+          valid_for_seconds: z.int().gte(60).lte(31536000).nullish(),
+        })
+        .strict(),
+      z
+        .strictObject({
+          grant_id: z
+            .string()
+            .length(36)
+            .regex(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+            ),
+          kind: z.literal("replace"),
+          policy: z
+            .strictObject({
+              allow_downstream_delegation: z.boolean(),
+              counts_towards_protection: z.boolean(),
+              maximum_bytes: z
+                .string()
+                .min(1)
+                .max(19)
+                .regex(/^[1-9][0-9]{0,18}$/),
+              serves_reads: z.boolean(),
+            })
+            .strict(),
+          predecessor_grant_id: z
+            .string()
+            .length(36)
+            .regex(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+            ),
+          reason: z
+            .string()
+            .min(1)
+            .max(512)
+            .regex(/^\P{Cc}+$/u),
+          restricts_authority: z.boolean(),
+          valid_for_seconds: z.int().gte(60).lte(31536000).nullish(),
+        })
+        .strict(),
+      z
+        .strictObject({
+          grant_id: z
+            .string()
+            .length(36)
+            .regex(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+            ),
+          kind: z.literal("revoke"),
+          reason: z
+            .string()
+            .min(1)
+            .max(512)
+            .regex(/^\P{Cc}+$/u),
+        })
+        .strict(),
+    ]),
+    expected_metadata_revision: z.int().gte(1).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * ConfigureFederationStorageGrantResponse
+ *
+ * Durable original mutation receipt, not a claim of transferred or protected bytes.
+ */
+export const zConfigureFederationStorageGrantResponse = z
+  .strictObject({
+    committed_revision: z.int().gte(1).lte(9007199254740991),
+    grant_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
   })
   .strict();
 
@@ -1196,6 +1445,55 @@ export const zConfirmRecoveryBundleResponse = z
       .max(BigInt("9223372036854775807"), {
         error: "Invalid value: Expected int64 to be <= 9223372036854775807",
       }),
+  })
+  .strict();
+
+/**
+ * ConnectFederationRequest
+ *
+ * Local manager intent to connect to the swarm that issued the secret invitation.
+ */
+export const zConnectFederationRequest = z
+  .strictObject({
+    connection_code: z
+      .string()
+      .min(260)
+      .max(763)
+      .regex(/^meshspan-federate-v1\./),
+    local_endpoint: z
+      .string()
+      .min(9)
+      .max(512)
+      .regex(/^https:\/\/[a-z0-9.\-\[\]:]+$/),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * ConnectFederationResponse
+ *
+ * Both swarms have committed relationship approval; live transport health is separate.
+ */
+export const zConnectFederationResponse = z
+  .strictObject({
+    committed_revision: z.int().gte(1).lte(9007199254740991),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    relationship_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
   })
   .strict();
 
@@ -1589,6 +1887,59 @@ export const zCreateFaultGroupResponse = z
         revision: z.int().gte(1).lte(9007199254740991),
       })
       .strict(),
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * CreateFederationPairingInvitationRequest
+ *
+ * Administrator request to approve one connection attempt by another autonomous swarm.
+ */
+export const zCreateFederationPairingInvitationRequest = z
+  .strictObject({
+    operation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    pairing_endpoint: z
+      .string()
+      .min(9)
+      .max(512)
+      .regex(/^https:\/\/[a-z0-9.\-\[\]:]+$/),
+    valid_for_seconds: z.int().gte(60).lte(3600),
+  })
+  .strict();
+
+/**
+ * CreateFederationPairingInvitationResponse
+ *
+ * Secret-bearing original receipt. This does not mean a peer relationship is active.
+ */
+export const zCreateFederationPairingInvitationResponse = z
+  .strictObject({
+    committed_revision: z.int().gte(1).lte(9007199254740991),
+    connection_code: z
+      .string()
+      .min(260)
+      .max(763)
+      .regex(
+        /^meshspan-federate-v1\.[0-9a-f]{32}\|[0-9a-f]{32}\|[0-9a-f]{16}\|[0-9a-f]{16}\|[0-9a-f]{64}\|[0-9a-f]{64}\|https:\/\/[a-z0-9.\-\[\]:]+$/,
+      ),
+    expires_at_epoch_micros: z.int().gte(0).lte(9007199254740991),
+    invitation_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
     operation_id: z
       .string()
       .length(36)
@@ -3436,6 +3787,11 @@ export const zEnrolNodeResponse = z
               .min(2)
               .max(131072)
               .regex(/^[0-9a-f]+$/),
+            incarnation: z
+              .string()
+              .min(1)
+              .max(20)
+              .regex(/^[1-9][0-9]*$/),
             node_id: z
               .string()
               .length(36)
@@ -3493,6 +3849,81 @@ export const zEnrolNodeResponse = z
       .max(BigInt("18446744073709551615"), {
         error: "Invalid value: Expected uint64 to be <= 18446744073709551615",
       }),
+  })
+  .strict();
+
+/**
+ * FederationStorageGrantQuery
+ *
+ * Exact lookup rather than a collection scan; absent grants return null for creation planning.
+ */
+export const zFederationStorageGrantQuery = z
+  .strictObject({
+    grant_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * FederationStorageGrantResponse
+ *
+ * Revision-consistent exact lookup; current authentication is applied on every call.
+ */
+export const zFederationStorageGrantResponse = z
+  .strictObject({
+    grant: z
+      .strictObject({
+        grant_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        policy: z
+          .strictObject({
+            allow_downstream_delegation: z.boolean(),
+            counts_towards_protection: z.boolean(),
+            maximum_bytes: z
+              .string()
+              .min(1)
+              .max(19)
+              .regex(/^[1-9][0-9]{0,18}$/),
+            serves_reads: z.boolean(),
+          })
+          .strict(),
+        relationship_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          ),
+        revision: z.int().gte(1).lte(9007199254740991),
+        state: z.union([
+          z.literal("active"),
+          z.literal("superseded"),
+          z.literal("revoked"),
+        ]),
+        successor_grant_id: z
+          .string()
+          .length(36)
+          .regex(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          )
+          .nullable(),
+        valid_from_epoch_micros: z.int().gte(1).lte(9007199254740991),
+        valid_until_epoch_micros: z
+          .int()
+          .gte(1)
+          .lte(9007199254740991)
+          .nullable(),
+      })
+      .strict()
+      .nullable(),
+    metadata_revision: z.int().gte(1).lte(9007199254740991),
   })
   .strict();
 
@@ -5597,7 +6028,7 @@ export const zMetricHistoryResponse = z
                   })
                   .strict(),
               )
-              .max(64)
+              .max(250)
               .nullable(),
             observed_at_epoch_micros: z
               .int()
@@ -7674,6 +8105,105 @@ export const zReadDiagnosticsBundleResponse = zDiagnosticsBundleResponse;
  */
 export const zReadMetadataDiagnosticsResponse = zMetadataDiagnosticsResponse;
 
+/**
+ * Invitation and reachable local origin
+ */
+export const zConnectFederationBody = zConnectFederationRequest;
+
+export const zConnectFederationHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Durable local approval following remote approval; no-store
+ */
+export const zConnectFederationResponse2 = zConnectFederationResponse;
+
+/**
+ * Pinned origin and bounded lifetime
+ */
+export const zCreateFederationPairingInvitationBody =
+  zCreateFederationPairingInvitationRequest;
+
+export const zCreateFederationPairingInvitationHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Original committed secret-bearing invitation; no-store
+ */
+export const zCreateFederationPairingInvitationResponse2 =
+  zCreateFederationPairingInvitationResponse;
+
+/**
+ * Exact invitation revision and reason
+ */
+export const zCancelFederationPairingInvitationBody =
+  zCancelFederationPairingInvitationRequest;
+
+export const zCancelFederationPairingInvitationHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Durable original cancellation receipt
+ */
+export const zCancelFederationPairingInvitationResponse2 =
+  zCancelFederationPairingInvitationResponse;
+
+export const zGetFederationStorageGrantQuery = z
+  .object({
+    grant_id: z
+      .string()
+      .length(36)
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+  })
+  .strict();
+
+/**
+ * Current offer or null; no-store
+ */
+export const zGetFederationStorageGrantResponse =
+  zFederationStorageGrantResponse;
+
+/**
+ * Exact operation, observed revision and storage offer change
+ */
+export const zConfigureFederationStorageGrantBody =
+  zConfigureFederationStorageGrantRequest;
+
+export const zConfigureFederationStorageGrantHeaders = z
+  .object({
+    "MeshSpan-CSRF-Token": z
+      .string()
+      .regex(/^meshspan-csrf-v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/)
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Original durable mutation receipt
+ */
+export const zConfigureFederationStorageGrantResponse2 =
+  zConfigureFederationStorageGrantResponse;
+
 export const zListGroupsQuery = z
   .object({
     cursor: z
@@ -8693,6 +9223,26 @@ export const zPublishSmbExportPath = z
 export const zPublishSmbExportResponse2 = zPublishSmbExportResponse;
 
 /**
+ * Exact operation and signed public peer record
+ */
+export const zAcceptFederationPairingBody = zAcceptFederationPairingRequest;
+
+export const zAcceptFederationPairingHeaders = z
+  .object({
+    Authorization: z
+      .string()
+      .max(780)
+      .regex(/^MeshSpan-Pairing meshspan-federate-v1\./),
+  })
+  .strict();
+
+/**
+ * Original local approval and signed peer; no-store
+ */
+export const zAcceptFederationPairingResponse2 =
+  zAcceptFederationPairingResponse;
+
+/**
  * Process readiness
  */
 export const zGetHealthResponse = zHealthResponse;
@@ -8700,7 +9250,7 @@ export const zGetHealthResponse = zHealthResponse;
 /**
  * Bounded OpenMetrics 1.0 text with explicit EOF
  */
-export const zScrapeMetricsResponse = z.string().max(65536);
+export const zScrapeMetricsResponse = z.string().max(131072);
 
 /**
  * This exact OpenAPI 3.1 document

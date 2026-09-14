@@ -3,17 +3,26 @@
 use meshspan_cluster::MetadataAuthorityRequestError;
 use meshspan_domain::BackupDestinationId;
 use meshspan_metadata::{
-    AuthoritativeCommand, BackupCopyRecord, BackupDestinationRecord, BackupReclamationCursor,
-    CommandContext, CommandReceipt, Page, PageLimit, RepositoryError, RetireMetadataBackup,
+    AuthoritativeCommand, BackupDestinationRecord, BackupReclamationCandidate,
+    BackupReclamationCursor, CommandContext, CommandReceipt, Page, PageLimit, RepositoryError,
+    RetireMetadataBackup,
 };
 
 pub(crate) trait BackupRetentionAuthority {
+    fn unadmitted(
+        &self,
+        after: Option<BackupReclamationCursor>,
+        limit: PageLimit,
+    ) -> Result<
+        Page<meshspan_metadata::AbandonedBackupPublication, BackupReclamationCursor>,
+        RepositoryError,
+    >;
     fn candidate(&self) -> Result<Option<RetireMetadataBackup>, RepositoryError>;
     fn pending(
         &self,
         after: Option<BackupReclamationCursor>,
         limit: PageLimit,
-    ) -> Result<Page<BackupCopyRecord, BackupReclamationCursor>, RepositoryError>;
+    ) -> Result<Page<BackupReclamationCandidate, BackupReclamationCursor>, RepositoryError>;
     fn destination(
         &self,
         destination_id: BackupDestinationId,
@@ -26,6 +35,16 @@ pub(crate) trait BackupRetentionAuthority {
 }
 
 impl BackupRetentionAuthority for crate::ConsensusAuthenticationAuthority {
+    fn unadmitted(
+        &self,
+        after: Option<BackupReclamationCursor>,
+        limit: PageLimit,
+    ) -> Result<
+        Page<meshspan_metadata::AbandonedBackupPublication, BackupReclamationCursor>,
+        RepositoryError,
+    > {
+        self.reader().abandoned_backup_publications(after, limit)
+    }
     fn candidate(&self) -> Result<Option<RetireMetadataBackup>, RepositoryError> {
         self.reader().metadata_backup_retirement_candidate()
     }
@@ -33,7 +52,7 @@ impl BackupRetentionAuthority for crate::ConsensusAuthenticationAuthority {
         &self,
         after: Option<BackupReclamationCursor>,
         limit: PageLimit,
-    ) -> Result<Page<BackupCopyRecord, BackupReclamationCursor>, RepositoryError> {
+    ) -> Result<Page<BackupReclamationCandidate, BackupReclamationCursor>, RepositoryError> {
         self.reader().pending_backup_reclamations(after, limit)
     }
     fn destination(

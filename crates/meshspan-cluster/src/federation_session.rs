@@ -12,7 +12,98 @@ use meshspan_transport::{
     TransportError, accept_stream, open_stream, receive_federation, send_federation,
     signed_federation_hello,
 };
+use std::sync::Mutex;
 use thiserror::Error;
+
+/// Shared bounded replay admission for concurrent handshakes. Locks cover only
+/// synchronous authentication, never receiving a hello or sending a welcome.
+pub struct FederationSessionReplay(Mutex<FederationReplayGuard>);
+
+impl FederationSessionReplay {
+    /// Authenticates an original consumer execution received through an enrolled node relay.
+    /// Shares replay ownership with direct requests without holding the guard during IO.
+    ///
+    /// # Errors
+    /// Rejects invalid relay/consumer identity, signature, lifetime or replay evidence.
+    pub fn authenticate_forwarded_backup_request(
+        &self,
+        peers: &FederationPeerRegistry,
+        peer: meshspan_transport::AuthenticatedPeer,
+        envelope: &meshspan_protocol::ValidatedDataControlEnvelope,
+        limits: meshspan_protocol::WireLimits,
+        now: UnixMicros,
+    ) -> Result<meshspan_transport::AuthenticatedFederationBackupRelay, FederationSessionError>
+    {
+        ReplayAdmission::Shared(self).authenticate(|guard| {
+            peers.authenticate_forwarded_backup_request(peer, envelope, limits, now, guard)
+        })
+    }
+
+    /// Owns one replay window shared across all connections of this runtime.
+    #[must_use]
+    pub const fn new(guard: FederationReplayGuard) -> Self {
+        Self(Mutex::new(guard))
+    }
+
+    /// Authenticates one authority fetch using the same bounded replay window as handshakes.
+    /// The guard covers only signature/replay verification, never database or network IO.
+    ///
+    /// # Errors
+    /// Rejects untrusted, malformed or replayed requests and poisoned replay ownership.
+    pub fn authenticate_authority_fetch(
+        &self,
+        peers: &FederationPeerRegistry,
+        connection: &quinn::Connection,
+        envelope: &meshspan_protocol::ValidatedFederationEnvelope,
+        now: UnixMicros,
+    ) -> Result<meshspan_transport::AuthenticatedFederationAuthorityFetch, FederationSessionError>
+    {
+        ReplayAdmission::Shared(self).authenticate(|guard| {
+            peers.authenticate_authority_fetch(connection, envelope, now, guard)
+        })
+    }
+
+    /// Authenticates backup requests in the same bounded replay window as handshakes.
+    /// The lock covers only authentication, never capability issuance or provider IO.
+    ///
+    /// # Errors
+    /// Rejects invalid identity, signature, lifetime or replay evidence.
+    pub fn authenticate_backup_request(
+        &self,
+        peers: &FederationPeerRegistry,
+        connection: &quinn::Connection,
+        envelope: &meshspan_protocol::ValidatedFederationEnvelope,
+        now: UnixMicros,
+    ) -> Result<meshspan_transport::AuthenticatedFederationBackupRequest, FederationSessionError>
+    {
+        ReplayAdmission::Shared(self).authenticate(|guard| {
+            peers.authenticate_backup_request(connection, envelope, now, guard)
+        })
+    }
+}
+
+enum ReplayAdmission<'a> {
+    Exclusive(&'a mut FederationReplayGuard),
+    Shared(&'a FederationSessionReplay),
+}
+
+impl ReplayAdmission<'_> {
+    fn authenticate<T>(
+        self,
+        check: impl FnOnce(&mut FederationReplayGuard) -> Result<T, TransportError>,
+    ) -> Result<T, FederationSessionError> {
+        match self {
+            Self::Exclusive(guard) => check(guard).map_err(Into::into),
+            Self::Shared(shared) => {
+                let mut guard = shared
+                    .0
+                    .lock()
+                    .map_err(|_| FederationSessionError::AuthorityUnavailable)?;
+                check(&mut guard).map_err(Into::into)
+            }
+        }
+    }
+}
 
 use crate::{
     FederationAuthorityError, FederationConnectionAuthority, federation_connection_authority,
@@ -80,6 +171,41 @@ impl<'a> FederationSessionRuntime<'a> {
         request: FederationDialRequest,
         replay: &mut FederationReplayGuard,
     ) -> Result<AuthenticatedFederationSession, FederationSessionError> {
+        self.dial_with_replay(
+            connection,
+            authority,
+            request,
+            ReplayAdmission::Exclusive(replay),
+        )
+        .await
+    }
+
+    /// Authenticates an outbound session using the runtime-wide bounded replay window.
+    /// # Errors
+    /// Rejects the same authority, identity, framing and replay failures as `dial`.
+    pub async fn dial_shared(
+        &self,
+        connection: &quinn::Connection,
+        authority: &impl FederationAuthoritySource,
+        request: FederationDialRequest,
+        replay: &FederationSessionReplay,
+    ) -> Result<AuthenticatedFederationSession, FederationSessionError> {
+        self.dial_with_replay(
+            connection,
+            authority,
+            request,
+            ReplayAdmission::Shared(replay),
+        )
+        .await
+    }
+
+    async fn dial_with_replay(
+        &self,
+        connection: &quinn::Connection,
+        authority: &impl FederationAuthoritySource,
+        request: FederationDialRequest,
+        replay: ReplayAdmission<'_>,
+    ) -> Result<AuthenticatedFederationSession, FederationSessionError> {
         let authority = load_authority(authority, request.relationship_id, request.now)?;
         let local_identity = self.local_identity(&authority, request.now)?;
         let peer_registry = FederationPeerRegistry::new([authority.peer])?;
@@ -98,15 +224,15 @@ impl<'a> FederationSessionRuntime<'a> {
         .await?;
         send.finish().map_err(TransportError::from)?;
         let welcome = receive_federation(&mut receive, self.hello_config.wire_limits()).await?;
-        peer_registry
-            .authenticate_welcome(
+        replay.authenticate(|guard| {
+            peer_registry.authenticate_welcome(
                 connection,
                 &welcome,
                 outbound.expectation(),
                 request.now,
-                replay,
+                guard,
             )
-            .map_err(Into::into)
+        })
     }
 
     /// Accepts one federation-only stream and answers a fully authenticated hello.
@@ -122,6 +248,41 @@ impl<'a> FederationSessionRuntime<'a> {
         request: FederationAcceptRequest,
         replay: &mut FederationReplayGuard,
     ) -> Result<AcceptedFederationSession, FederationSessionError> {
+        self.accept_with_replay(
+            connection,
+            authority,
+            request,
+            ReplayAdmission::Exclusive(replay),
+        )
+        .await
+    }
+
+    /// Accepts an inbound session without holding replay admission across network waits.
+    /// # Errors
+    /// Rejects the same authority, identity, framing and replay failures as `accept`.
+    pub async fn accept_shared(
+        &self,
+        connection: &quinn::Connection,
+        authority: &impl FederationAuthoritySource,
+        request: FederationAcceptRequest,
+        replay: &FederationSessionReplay,
+    ) -> Result<AcceptedFederationSession, FederationSessionError> {
+        self.accept_with_replay(
+            connection,
+            authority,
+            request,
+            ReplayAdmission::Shared(replay),
+        )
+        .await
+    }
+
+    async fn accept_with_replay(
+        &self,
+        connection: &quinn::Connection,
+        authority: &impl FederationAuthoritySource,
+        request: FederationAcceptRequest,
+        replay: ReplayAdmission<'_>,
+    ) -> Result<AcceptedFederationSession, FederationSessionError> {
         let mut stream = accept_stream(connection).await?;
         if stream.kind != StreamKind::Federation {
             return Err(FederationSessionError::WrongStream);
@@ -132,8 +293,9 @@ impl<'a> FederationSessionRuntime<'a> {
         let authority = load_authority(authority, relationship_id, request.now)?;
         let local_identity = self.local_identity(&authority, request.now)?;
         let peer_registry = FederationPeerRegistry::new([authority.peer])?;
-        let authenticated =
-            peer_registry.authenticate_hello(connection, &hello, request.now, replay)?;
+        let authenticated = replay.authenticate(|guard| {
+            peer_registry.authenticate_hello(connection, &hello, request.now, guard)
+        })?;
         let welcome = authenticated.signed_welcome(
             &self.negotiation_config,
             request.nonces,
@@ -150,7 +312,12 @@ impl<'a> FederationSessionRuntime<'a> {
         Ok(welcome.session())
     }
 
-    pub(crate) fn local_identity(
+    /// Binds retained signing material to current metadata for an application service.
+    /// The returned identity borrows the runtime; it never exports the private key.
+    ///
+    /// # Errors
+    /// Rejects a stale, expired or mismatched local certificate/signing-key binding.
+    pub fn local_identity(
         &self,
         authority: &FederationConnectionAuthority,
         now: UnixMicros,

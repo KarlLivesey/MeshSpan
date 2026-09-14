@@ -156,8 +156,11 @@ tombstones and cleanup when it returns.
 6. The storage node validates the permit, current leader epoch, a catalogue
    revision no older than the node's monotonically applied cleanup fence, and
    the local shard identity. Applying a newer catalogue revision permanently
-   rejects older permits. It writes a local tombstone durably before unlinking
-   bytes.
+   rejects older permits for new storage effects. It writes a local tombstone
+   durably before unlinking bytes. An exact already-committed tombstone may still
+   return its original receipt after the catalogue advances: this is a read-only
+   resolution, never preparation or completion of pending work. Current MAC,
+   epoch, expiry, identity and outer metadata admission checks still apply.
 7. The node reports a typed result. The quorum records completion idempotently;
    a missing shard is success only when its identity and prior cleanup intent
    match. A durable tombstone receipt is accepted only when every field and its

@@ -320,6 +320,15 @@ pub struct RebalancePlacementPlan {
 
 /// Fault-aware target selection without shard IO or namespace authority.
 pub trait PlacementPolicy: ComponentLifecycle {
+    /// Assesses recorded slices without choosing moves, probing providers or granting authority.
+    ///
+    /// # Errors
+    /// Rejects malformed, excessive or unknown topology evidence rather than reporting health.
+    fn assess_recorded(
+        &self,
+        request: crate::PlacementAssessmentRequest<'_>,
+    ) -> Result<crate::PlacementAssessment, ContractError>;
+
     /// Selects targets and proves the requested scenario at fixed revisions.
     ///
     /// # Errors

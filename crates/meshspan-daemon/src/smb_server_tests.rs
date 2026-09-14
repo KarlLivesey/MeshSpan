@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+use meshspan_contracts::{
+    GatewayProtocol, GatewayTransferMetric, RuntimeMetric, RuntimeMetricSource,
+};
 use std::convert::Infallible;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
@@ -15,8 +18,10 @@ use super::{SmbConnectionHandler, SmbHandlerFuture, SmbServer, SmbServerLimits};
 async fn real_direct_tcp_listener_isolates_bad_connections_and_frames_responses()
 -> Result<(), Box<dyn std::error::Error>> {
     let limits = SmbServerLimits::new(1_024, Duration::from_secs(2))?;
-    let server =
-        SmbServer::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0), limits).await?;
+    let observations = crate::runtime_observations::RuntimeObservations::default();
+    let server = SmbServer::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0), limits)
+        .await?
+        .with_transfer_observer(std::sync::Arc::new(observations.clone()));
     let address = server.local_addr()?;
     let (stop, stopped) = oneshot::channel();
     let task = tokio::spawn(
@@ -50,6 +55,17 @@ async fn real_direct_tcp_listener_isolates_bad_connections_and_frames_responses(
     drop(client);
     let _ = stop.send(());
     timeout(Duration::from_secs(2), task).await???;
+    let samples = observations.collect_metrics()?;
+    // The rejected connection contributes its four-byte header, not the unread invalid payload.
+    for metric in [
+        GatewayTransferMetric::ReceivedBytes(72),
+        GatewayTransferMetric::SentBytes(68),
+    ] {
+        assert!(samples.samples().contains(&RuntimeMetric::GatewayTransfer(
+            GatewayProtocol::Smb,
+            metric
+        )));
+    }
     Ok(())
 }
 

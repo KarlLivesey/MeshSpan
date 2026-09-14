@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-//! Bounded enumeration of complete protected stripes for one logical volume.
+//! Bounded enumeration of committed protected stripes for one logical volume.
 
 use meshspan_contracts::BoundedItems;
 use meshspan_domain::{ContentManifestId, OperationId, VolumeId};
@@ -21,7 +21,7 @@ pub struct VolumeStripeCursor {
     pub stripe_index: u64,
 }
 
-/// One independently validated complete protected stripe selected for policy re-evaluation.
+/// One independently validated committed protected stripe selected for policy re-evaluation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VolumeStripeRecord {
     /// Stable page position and stripe identity.
@@ -32,7 +32,7 @@ pub struct VolumeStripeRecord {
     pub stripe: CommittedProtectedStripe,
 }
 
-/// One bounded page of complete protected stripes in stable catalogue order.
+/// One bounded page of committed protected stripes in stable catalogue order.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VolumeStripePage {
     /// Validated stripes in publication then stripe order.
@@ -46,6 +46,7 @@ pub(super) fn page(
     volume_id: VolumeId,
     after: Option<VolumeStripeCursor>,
     limit: usize,
+    complete_only: bool,
 ) -> Result<VolumeStripePage, ContentCatalogError> {
     if limit == 0 || limit > MAXIMUM_PAGE_ITEMS {
         return Err(ContentCatalogError::InvalidInput);
@@ -59,12 +60,12 @@ pub(super) fn page(
          WHERE publication.volume_id = ?1 AND publication.state = 2
            AND (?2 IS NULL OR publication.operation_id > ?2
                 OR (publication.operation_id = ?2 AND layout.chunk_index > ?3))
-           AND NOT EXISTS(
+           AND (?5 = 0 OR NOT EXISTS(
                SELECT 1 FROM content_stripe_shards shard
                WHERE shard.operation_id = layout.operation_id
                  AND shard.chunk_index = layout.chunk_index
                  AND shard.receipt_recorded_at IS NULL
-           )
+           ))
          ORDER BY publication.operation_id, layout.chunk_index LIMIT ?4",
     )?;
     let rows = statement.query_map(
@@ -74,6 +75,7 @@ pub(super) fn page(
             i64::try_from(after_stripe).map_err(|_| ContentCatalogError::InvalidInput)?,
             i64::try_from(limit.saturating_add(1))
                 .map_err(|_| ContentCatalogError::InvalidInput)?,
+            complete_only,
         ],
         |row| {
             Ok((
@@ -94,6 +96,14 @@ pub(super) fn page(
         .into_iter()
         .map(|identity| load_record(catalogue, volume_id, identity))
         .collect::<Result<Vec<_>, _>>()?;
+    if complete_only
+        && records.iter().any(|record| {
+            record.stripe.receipts.len()
+                != usize::from(record.stripe.stripe.coding_layout().total_slices())
+        })
+    {
+        return Err(ContentCatalogError::Corrupt);
+    }
     let next = has_more
         .then(|| records.last().map(|record| record.cursor))
         .flatten();
@@ -118,9 +128,6 @@ fn load_record(
         .filter(|content| content.publication_operation_id == publication_operation_id)
         .ok_or(ContentCatalogError::Corrupt)?;
     let stripe = catalogue.committed_protected_stripe(content, stripe_index)?;
-    if stripe.receipts.len() != usize::from(stripe.stripe.coding_layout().total_slices()) {
-        return Err(ContentCatalogError::Corrupt);
-    }
     Ok(VolumeStripeRecord {
         cursor: VolumeStripeCursor {
             publication_operation_id,

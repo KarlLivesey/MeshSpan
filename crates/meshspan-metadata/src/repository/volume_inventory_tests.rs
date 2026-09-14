@@ -8,6 +8,30 @@ use super::{AuthoritativeRepository, PageLimit, VolumeInventoryCursor};
 use crate::PartitionDatabase;
 
 #[test]
+fn observation_volume_pages_are_stable_across_renames() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let database = PartitionDatabase::open(
+        &directory.path().join("stable-volumes.sqlite3"),
+        PartitionId::from_bytes([1; 16])?,
+        UnixMicros::new(1),
+    )?;
+    insert_principal(&database)?;
+    insert_volume(&database, 20, "Zulu", "zulu", 1)?;
+    insert_volume(&database, 21, "Alpha", "alpha", 2)?;
+    let repository = AuthoritativeRepository::new(database);
+    let first = repository.volume_identity_page(None, PageLimit::new(1)?)?;
+    assert_eq!(first.items, [VolumeId::from_bytes(versioned(20))?]);
+    repository.database.connection().execute(
+        "UPDATE volumes SET canonical_name = 'aardvark' WHERE volume_id = ?1",
+        [VolumeId::from_bytes(versioned(21))?.as_bytes().as_slice()],
+    )?;
+    let last = repository.volume_identity_page(first.next, PageLimit::new(1)?)?;
+    assert_eq!(last.items, [VolumeId::from_bytes(versioned(21))?]);
+    assert_eq!(last.next, None);
+    Ok(())
+}
+
+#[test]
 fn volume_candidates_page_by_name_without_permission_assumptions()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;

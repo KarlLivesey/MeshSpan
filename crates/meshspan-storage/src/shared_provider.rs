@@ -13,6 +13,10 @@ use meshspan_contracts::{
 use meshspan_domain::UnixMicros;
 
 use crate::{FolderShardStore, FolderShardStoreError};
+use meshspan_contracts::{StorageIoCounts, StorageIoKind, StorageIoObserver};
+#[path = "io_observation.rs"]
+mod io_observation;
+use io_observation::{IoAttempt, scrub_counts};
 
 impl<P: StorageProvider + meshspan_contracts::BackupCapacityBudget>
     meshspan_contracts::BackupCapacityBudget for SharedStorageProvider<P>
@@ -72,6 +76,7 @@ pub struct SharedStorageProvider<P> {
     inner: Arc<Mutex<P>>,
     descriptor: ImplementationDescriptor,
     removal_fence: RemovalAuthorityFence,
+    observer: Option<Arc<dyn StorageIoObserver>>,
 }
 
 impl<P> SharedStorageProvider<P>
@@ -87,6 +92,7 @@ where
             inner: Arc::new(Mutex::new(provider)),
             descriptor,
             removal_fence,
+            observer: None,
         }
     }
 
@@ -99,6 +105,13 @@ where
     fn lock(&self) -> Result<MutexGuard<'_, P>, ContractError> {
         self.inner.lock().map_err(|_| ContractError::Unavailable)
     }
+
+    /// Attaches the daemon's non-blocking process-lifetime observer before sharing this handle.
+    #[must_use]
+    pub fn with_io_observer(mut self, observer: Arc<dyn StorageIoObserver>) -> Self {
+        self.observer = Some(observer);
+        self
+    }
 }
 
 impl<P> Clone for SharedStorageProvider<P> {
@@ -107,6 +120,7 @@ impl<P> Clone for SharedStorageProvider<P> {
             inner: Arc::clone(&self.inner),
             descriptor: self.descriptor,
             removal_fence: self.removal_fence,
+            observer: self.observer.clone(),
         }
     }
 }
@@ -124,6 +138,21 @@ impl<P: meshspan_contracts::StorageUsageSource> meshspan_contracts::StorageUsage
 }
 
 impl SharedStorageProvider<FolderShardStore> {
+    /// Compacts at most one eligible pack, skipping a target already serving foreground IO.
+    ///
+    /// All borrowed reads finish under this same lock before a physical cutover.
+    /// Returns reclaimed database extent, not filesystem/device free-space attribution.
+    ///
+    /// # Errors
+    /// Reports copy, verification or replacement failure without invalidating sibling targets.
+    pub fn maintain_packs(&self, now: UnixMicros) -> Result<Option<u64>, FolderShardStoreError> {
+        match self.inner.try_lock() {
+            Ok(mut provider) => provider.compact_next_pack(now),
+            Err(std::sync::TryLockError::WouldBlock) => Ok(None),
+            Err(std::sync::TryLockError::Poisoned(_)) => Err(FolderShardStoreError::Unavailable),
+        }
+    }
+
     /// Revalidates the owned folder and both target-local databases under the target lock.
     ///
     /// # Errors
@@ -170,7 +199,19 @@ where
         request: PutShardRequest,
         observed_at: UnixMicros,
     ) -> Result<ShardReceipt, ContractError> {
-        self.lock()?.put_exact(request, observed_at)
+        let attempt = IoAttempt::new(self.observer.clone(), StorageIoKind::Write);
+        let result = self
+            .lock()
+            .and_then(|mut provider| provider.put_exact(request, observed_at));
+        let bytes = result.as_ref().map_or(0, |receipt| receipt.length);
+        attempt.finish(
+            &result,
+            Some(StorageIoCounts {
+                payload_bytes: bytes,
+                corruption_reports: 0,
+            }),
+        );
+        result
     }
 
     fn get_exact(
@@ -179,7 +220,22 @@ where
         permit: ShardReadPermit,
         observed_at: UnixMicros,
     ) -> Result<BoundedBytes, ContractError> {
-        self.lock()?.get_exact(context, permit, observed_at)
+        let attempt = IoAttempt::new(self.observer.clone(), StorageIoKind::Read);
+        let result = self
+            .lock()
+            .and_then(|provider| provider.get_exact(context, permit, observed_at));
+        let bytes = match &result {
+            Ok(bytes) => u64::try_from(bytes.len()).ok(),
+            Err(_) => Some(0),
+        };
+        attempt.finish(
+            &result,
+            bytes.map(|payload_bytes| StorageIoCounts {
+                payload_bytes,
+                corruption_reports: 0,
+            }),
+        );
+        result
     }
 
     fn removal_authority_fence(&self) -> RemovalAuthorityFence {
@@ -222,7 +278,16 @@ where
         expected: InventoryEntry,
         observed_at: UnixMicros,
     ) -> Result<ScrubObservation, ContractError> {
-        self.lock()?.scrub_exact(expected, observed_at)
+        let attempt = IoAttempt::new(self.observer.clone(), StorageIoKind::Scrub);
+        let result = self
+            .lock()
+            .and_then(|mut provider| provider.scrub_exact(expected, observed_at));
+        let counts = match &result {
+            Ok(observation) => scrub_counts(std::slice::from_ref(observation)),
+            Err(_) => Some(StorageIoCounts::default()),
+        };
+        attempt.finish(&result, counts);
+        result
     }
 
     fn scrub(
@@ -231,7 +296,16 @@ where
         limit: usize,
         observed_at: UnixMicros,
     ) -> Result<ScrubPage, ContractError> {
-        self.lock()?.scrub(cursor, limit, observed_at)
+        let attempt = IoAttempt::new(self.observer.clone(), StorageIoKind::Scrub);
+        let result = self
+            .lock()
+            .and_then(|mut provider| provider.scrub(cursor, limit, observed_at));
+        let counts = match &result {
+            Ok(page) => scrub_counts(page.observations.as_slice()),
+            Err(_) => Some(StorageIoCounts::default()),
+        };
+        attempt.finish(&result, counts);
+        result
     }
 }
 
@@ -242,9 +316,11 @@ mod tests {
         ShardIdentity, ShardReadPermit, StoragePermitMacKey, StorageProvider, StorageUsageSource,
         read_permit_mac,
     };
+    use meshspan_contracts::{StorageIoKind, StorageIoObservation, StorageIoObserver};
     use meshspan_domain::{
         EntropyError, MeshId, OperationId, RandomSource, Revision, TargetId, UnixMicros,
     };
+    use std::sync::{Arc, mpsc};
     use tempfile::tempdir;
 
     use crate::{
@@ -256,12 +332,33 @@ mod tests {
 
     const PERMIT_KEY: [u8; 32] = [19; 32];
 
+    struct Observer(mpsc::Sender<StorageIoObservation>);
+    impl StorageIoObserver for Observer {
+        fn observe_storage_io(&self, observation: StorageIoObservation) {
+            assert!(self.0.send(observation).is_ok());
+        }
+    }
+
     #[test]
     fn clones_share_one_target_and_return_exact_verified_bytes()
     -> Result<(), Box<dyn std::error::Error>> {
-        let (_directory, provider, registration) = provider()?;
-        let mut writer = SharedStorageProvider::new(provider);
+        let (directory, store, registration) = provider()?;
+        let (sender, receiver) = mpsc::channel();
+        let mut writer =
+            SharedStorageProvider::new(store).with_io_observer(Arc::new(Observer(sender)));
         let reader = writer.clone();
+        let filesystem = reader
+            .observe_usage()?
+            .filesystem
+            .ok_or("filesystem observation absent")?;
+        assert!(filesystem.total_bytes > 0);
+        assert!(filesystem.available_bytes <= filesystem.total_bytes);
+        let (_other_directory, other_provider, _) = provider()?;
+        let other_filesystem = other_provider
+            .observe_usage()?
+            .filesystem
+            .ok_or("second filesystem observation absent")?;
+        assert_eq!(filesystem.identity, other_filesystem.identity);
         let context = request_context()?;
         let shard = ShardIdentity {
             manifest_digest: [7; 32],
@@ -312,6 +409,61 @@ mod tests {
                 .as_slice(),
             b"shared target"
         );
+        verify_corruption_observations(directory.path(), &mut writer, permit)?;
+        let observed = receiver
+            .try_iter()
+            .map(|value| {
+                let counts = value.counts.ok_or("missing IO counts")?;
+                Ok((
+                    value.kind,
+                    value.failed,
+                    counts.payload_bytes,
+                    counts.corruption_reports,
+                ))
+            })
+            .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+        assert_eq!(
+            observed,
+            vec![
+                (StorageIoKind::Write, false, 13, 0),
+                (StorageIoKind::Read, false, 13, 0),
+                (StorageIoKind::Scrub, false, 13, 0),
+                (StorageIoKind::Read, true, 0, 1),
+                (StorageIoKind::Scrub, false, 13, 1),
+            ]
+        );
+        Ok(())
+    }
+
+    fn verify_corruption_observations(
+        directory: &std::path::Path,
+        provider: &mut SharedStorageProvider<FolderShardStore>,
+        permit: ShardReadPermit,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let healthy = provider.scrub(None, 16, UnixMicros::new(5))?;
+        assert_eq!(
+            healthy.observations.as_slice()[0].outcome,
+            meshspan_contracts::ScrubOutcome::Healthy
+        );
+        let database = rusqlite::Connection::open(
+            directory.join("storage/.meshspan/packs/0000000000000001.sqlite3"),
+        )?;
+        assert_eq!(
+            database.execute(
+                "UPDATE shards SET stored_bytes = ?1",
+                [b"broken target".as_slice()]
+            )?,
+            1
+        );
+        assert!(matches!(
+            provider.get_exact(request_context()?, permit, UnixMicros::new(6)),
+            Err(meshspan_contracts::ContractError::Corrupt)
+        ));
+        let corrupted = provider.scrub(None, 16, UnixMicros::new(7))?;
+        assert_eq!(
+            corrupted.observations.as_slice()[0].outcome,
+            meshspan_contracts::ScrubOutcome::Corrupt
+        );
         Ok(())
     }
 
@@ -338,7 +490,24 @@ mod tests {
             Err(meshspan_contracts::ContractError::Unavailable)
         );
         drop(locked);
-        assert_eq!(shared.observe_usage()?, usage);
+        let mut resumed = shared.observe_usage()?;
+        let mut initial = usage;
+        let before = initial
+            .filesystem
+            .take()
+            .ok_or("missing initial filesystem")?;
+        let after = resumed
+            .filesystem
+            .take()
+            .ok_or("missing resumed filesystem")?;
+        assert_eq!(
+            (after.identity, after.total_bytes),
+            (before.identity, before.total_bytes)
+        );
+        // Other parallel tests/processes can legitimately change filesystem free space.
+        assert!(before.available_bytes <= before.total_bytes);
+        assert!(after.available_bytes <= after.total_bytes);
+        assert_eq!(resumed, initial);
         assert!(shared.shares_owner_with(&shared.clone()));
         Ok(())
     }

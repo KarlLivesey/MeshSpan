@@ -24,6 +24,8 @@ pub enum ClaimEnsureDisposition {
     Existing,
     /// Terminal claim history exists and no active claim remains.
     Inactive,
+    /// Offline-root recovery admission replaces first-boot setup; no claim was created or consumed.
+    RecoveryAuthorized,
 }
 
 /// Non-secret result of ensuring first-boot claim state.

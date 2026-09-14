@@ -45,6 +45,18 @@ pub struct RecordBackupReclamation {
     pub receipt: meshspan_contracts::BackupDeleteReceipt,
 }
 
+/// Retires an exact provider object belonging to a terminal, never-admitted backup run.
+///
+/// This does not claim a recoverable backup exists. Physical removal still requires
+/// the resulting retirement revision and an independently validated provider receipt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RetireAbandonedBackupCopy {
+    /// Exact committed terminal run revision; a lease expiry alone is insufficient.
+    pub expected_run_revision: Revision,
+    /// Exact provider evidence, including object identity, digest and opaque reference.
+    pub receipt: meshspan_contracts::BackupObjectReceipt,
+}
+
 /// Replaceable destination selected for one encrypted backup copy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackupDestinationBinding {
@@ -203,6 +215,15 @@ pub enum MetadataBackupRunCompletion {
         /// Typed, redacted failure and partial-evidence digest.
         result_digest: [u8; 32],
     },
+}
+
+/// Fences an exact expired unadmitted producer and makes a fresh occurrence due, not byte deletion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AbandonUnrecordedMetadataBackupRun {
+    /// Exact unadmitted occurrence whose producer was lost.
+    pub backup_id: BackupId,
+    /// Exact expired producer; replacement or renewal invalidates the request.
+    pub expected_claim: MetadataBackupRunClaim,
 }
 
 /// Terminates one run and advances its schedule without inventing protection.

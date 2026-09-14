@@ -123,8 +123,10 @@ The protocol distinguishes:
   that leader remains valid. `W` is called the consensus-write quorum in APIs to
   distinguish it from an ordinary filesystem write.
 - **Read quorum (`R`)** — may confirm the current leader for a linearizable read
-  barrier. The leader must also wait until its local state machine has applied
-  the returned committed position.
+  barrier. The leader must first establish the committed frontier by committing
+  an entry from its current term, then wait for local application of the returned
+  position. Election proves possession of committed history, not knowledge of
+  which inherited entries were committed; a read quorum alone is insufficient.
 
 The families may differ. Majority quorums are one valid plan, not a baked-in
 algorithm.
@@ -145,6 +147,21 @@ The first release serves linearizable reads only through the current leader and
 waits for its applied index. If a later design permits replicas to assemble a
 linearizable value directly from read responses, every `R` must additionally
 intersect every `W`, and the read algorithm requires a separate proof and model.
+
+The metadata reactor exposes a bounded, request-specific read fence containing
+the partition, leader/term, membership phase, applied position/digest and coherent
+application revision. It is not a cached observation or reusable permission lease.
+If no entry exists in the current term, the first read proposes one fixed term
+confirmation; pending current-term writes can provide that confirmation instead.
+Later reads do not append. Cancelled or expired requests release their volatile
+core barriers without undoing durable history; leadership loss releases waiters
+without returning success. A pending confirmation queues application writes rather
+than treating its non-application log entry as an invalid user command.
+
+This follows the two distinct read safeguards described in the
+[Raft paper, section 8](https://raft.github.io/raft.pdf): current-term commitment
+and fresh leader confirmation. MeshSpan uses its independently proved `W` and `R`
+predicates rather than replacing either with an assumed majority.
 
 The core assumes crash, omission, corruption-detection and partition faults, not
 Byzantine voters. Mutual authentication prevents an unauthorised node from being

@@ -8,8 +8,9 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use meshspan_backup::{DirectoryBackupProvider, SharedBackupProvider};
 use meshspan_contracts::{
-    BackupDeleteRequest, BackupObjectIdentity, BackupProvider, BackupReadRequest,
-    BackupStoreRequest, BackupVerifyRequest, ContractError, ContractVersion, RequestContext,
+    BackupDeleteRequest, BackupObjectIdentity, BackupObjectReceipt, BackupProvider,
+    BackupReadRequest, BackupStoreRequest, BackupVerifyRequest, ContractError, ContractVersion,
+    RequestContext,
 };
 use meshspan_data_plane::{
     BackupPlaneError, RemoteBackupAuthorisation, RemoteBackupAuthority, RemoteBackupRouter,
@@ -113,7 +114,7 @@ async fn serve_lifecycle(
     peer: AuthenticatedPeer,
     limits: WireLimits,
 ) -> Result<(), Box<dyn Error>> {
-    for index in 0..6 {
+    for index in 0..8 {
         router
             .serve_stream(
                 accept_stream(connection).await?,
@@ -133,35 +134,14 @@ async fn prove_client_lifecycle(
     limits: WireLimits,
     mut local_provider: SharedBackupProvider<DirectoryBackupProvider>,
 ) -> Result<(), Box<dyn Error>> {
-    let store = fixture.store_request(1)?;
-    let mut rejected_source = fixture.payload.as_slice();
-    assert!(matches!(
-        store_backup(
-            connection,
-            request_header(fixture.mesh, node(99)?, store.context.operation_id)?,
-            store,
-            &mut rejected_source,
-            limits,
-            UnixMicros::new(10),
-        )
-        .await,
-        Err(BackupPlaneError::Remote(ErrorCode::Unauthorised))
-    ));
-
-    let mut source = fixture.payload.as_slice();
-    let stored = store_backup(
+    let stored = upload_and_recover(
         connection,
-        request_header(fixture.mesh, client_node, store.context.operation_id)?,
-        store,
-        &mut source,
+        fixture,
+        client_node,
         limits,
-        UnixMicros::new(10),
+        &mut local_provider,
     )
     .await?;
-    let local_receipt = tokio::task::block_in_place(|| {
-        local_provider.store_exact(store, &mut fixture.payload.as_slice(), UnixMicros::new(10))
-    })?;
-    assert_eq!(stored, local_receipt);
     let verify = fixture.verify_request(3, stored.object_reference.clone())?;
     let verified = verify_backup(
         connection,
@@ -209,6 +189,21 @@ async fn prove_client_lifecycle(
         Err(ContractError::NotFound)
     );
     let missing = fixture.verify_request(5, delete.object_reference)?;
+    let lookup = meshspan_contracts::BackupLookupRequest {
+        context: fixture.store_request(6)?.context,
+        object: fixture.object,
+    };
+    assert!(matches!(
+        meshspan_data_plane::lookup_backup(
+            connection,
+            request_header(fixture.mesh, client_node, lookup.context.operation_id)?,
+            &lookup,
+            limits,
+            UnixMicros::new(10)
+        )
+        .await,
+        Err(BackupPlaneError::Remote(ErrorCode::NotFound))
+    ));
     assert!(matches!(
         verify_backup(
             connection,
@@ -221,6 +216,59 @@ async fn prove_client_lifecycle(
         Err(BackupPlaneError::Remote(ErrorCode::NotFound))
     ));
     Ok(())
+}
+
+async fn upload_and_recover(
+    connection: &quinn::Connection,
+    fixture: &Fixture,
+    client_node: NodeId,
+    limits: WireLimits,
+    local_provider: &mut SharedBackupProvider<DirectoryBackupProvider>,
+) -> Result<BackupObjectReceipt, Box<dyn Error>> {
+    let store = fixture.store_request(1)?;
+    let mut rejected_source = fixture.payload.as_slice();
+    assert!(matches!(
+        store_backup(
+            connection,
+            request_header(fixture.mesh, node(99)?, store.context.operation_id)?,
+            store,
+            &mut rejected_source,
+            limits,
+            UnixMicros::new(10),
+        )
+        .await,
+        Err(BackupPlaneError::Remote(ErrorCode::Unauthorised))
+    ));
+
+    let mut source = fixture.payload.as_slice();
+    let stored = store_backup(
+        connection,
+        request_header(fixture.mesh, client_node, store.context.operation_id)?,
+        store,
+        &mut source,
+        limits,
+        UnixMicros::new(10),
+    )
+    .await?;
+    let local_receipt = tokio::task::block_in_place(|| {
+        local_provider.store_exact(store, &mut fixture.payload.as_slice(), UnixMicros::new(10))
+    })?;
+    assert_eq!(stored, local_receipt);
+    let lookup = meshspan_contracts::BackupLookupRequest {
+        context: fixture.store_request(6)?.context,
+        object: fixture.object,
+    };
+    let recovered = meshspan_data_plane::lookup_backup(
+        connection,
+        request_header(fixture.mesh, client_node, lookup.context.operation_id)?,
+        &lookup,
+        limits,
+        UnixMicros::new(10),
+    )
+    .await?;
+    assert_eq!(recovered.object, stored.object);
+    assert_eq!(recovered.object_reference, stored.object_reference);
+    Ok(recovered)
 }
 
 struct Fixture {
@@ -322,6 +370,7 @@ impl RemoteBackupAuthority for TestAuthority {
         _observed_at: UnixMicros,
     ) -> Result<(), ContractError> {
         let expected_revision = match request {
+            RemoteBackupAuthorisation::Lookup(request) => request.context.expected_revision,
             RemoteBackupAuthorisation::Store(request) => request.context.expected_revision,
             RemoteBackupAuthorisation::Read(request) => request.context.expected_revision,
             RemoteBackupAuthorisation::Verify(request) => request.context.expected_revision,

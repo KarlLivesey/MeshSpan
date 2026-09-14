@@ -456,6 +456,7 @@ fn load_activation_expiry(
              JOIN access_activation_policies ap ON ap.policy_id = a.policy_id
              WHERE a.assignment_id = ?1 AND a.principal_id = ?2
                AND a.revoked_at IS NULL AND a.activated_at <= ?3 AND a.expires_at > ?3
+               AND a.revision > COALESCE((SELECT source_revision FROM partition_recovery_credential_fence), 0)
                AND a.identity_revision = ?4 AND a.assignment_revision = ?5
                AND a.policy_revision = ap.revision AND fga.activation_policy_id = a.policy_id",
             params![

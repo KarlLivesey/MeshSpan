@@ -74,6 +74,23 @@ impl AuthenticatedFederationPeer {
 }
 
 impl FederationPeerRegistry {
+    /// Looks up the current remote signer; the relay still has to prove the original signature.
+    pub(crate) fn forwarded_backup_binding(
+        &self,
+        header: &FederationHeader,
+        now: UnixMicros,
+    ) -> Result<FederationPeerBinding, TransportError> {
+        self.by_fingerprint
+            .values()
+            .find(|binding| {
+                binding.relationship_id.as_bytes().as_slice() == header.relationship_id
+                    && binding.valid_from <= now
+                    && now < binding.valid_until
+            })
+            .copied()
+            .ok_or(TransportError::UntrustedFederationPeer)
+    }
+
     /// Authenticates the connection certificate against one current federation identity.
     ///
     /// # Errors

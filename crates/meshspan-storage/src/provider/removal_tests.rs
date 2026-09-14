@@ -25,6 +25,61 @@ const REMOVAL_EPOCH: u64 = 7;
 const CATALOGUE_REVISION: Revision = Revision::new(11);
 const PERMIT_KEY: [u8; 32] = [42; 32];
 
+#[test]
+fn tombstone_receipt_replays_after_restart_without_admitting_stale_new_removals()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let storage_path = directory.path().join("target");
+    let state_path = directory.path().join("state");
+    fs::create_dir(&storage_path)?;
+    let registration = registration()?;
+    let mut random = FixedRandom;
+    let folder = RegisteredFolder::register_new(&storage_path, registration, &mut random)?;
+    let fingerprint = folder.marker().fingerprint();
+    let mut store = FolderShardStore::open(
+        folder,
+        &state_path,
+        policy(),
+        verifier(registration.mesh_id)?,
+        UnixMicros::new(1),
+        &mut random,
+    )?;
+    let removed = put_request(&mut store, registration, 8192, 4)?;
+    let retained = put_request(&mut store, registration, 8192, 5)?;
+    store.put_exact(&removed, UnixMicros::new(20))?;
+    store.put_exact(&retained, UnixMicros::new(21))?;
+    let permit = signed_removal(registration, removed.shard)?;
+    let receipt = store.tombstone(permit, UnixMicros::new(30))?;
+    drop(store);
+
+    let folder = RegisteredFolder::reopen(&storage_path, registration, fingerprint)?;
+    let mut newer = verifier(registration.mesh_id)?;
+    newer.advance_minimum_catalogue_revision(Revision::new(12))?;
+    let mut store = FolderShardStore::open(
+        folder,
+        &state_path,
+        policy(),
+        newer,
+        UnixMicros::new(40),
+        &mut random,
+    )?;
+    assert_eq!(store.tombstone(permit, UnixMicros::new(41))?, receipt);
+    reject_forged_and_stale_authority(&mut store, permit)?;
+    let mut stale_new = signed_removal(registration, retained.shard)?;
+    stale_new.operation_id = OperationId::from_bytes([99; 16])?;
+    stale_new.permit_digest =
+        removal_permit_mac(&StoragePermitMacKey::from_bytes(PERMIT_KEY)?, stale_new);
+    assert!(matches!(
+        store.tombstone(stale_new, UnixMicros::new(42)),
+        Err(FolderShardStoreError::Unauthorized)
+    ));
+    assert_eq!(store.journal.capacity()?.committed_bytes, 16384);
+    let inventory = store.inventory(None, 10)?;
+    assert_eq!(inventory.entries.len(), 1);
+    assert_eq!(inventory.entries.as_slice()[0].shard, retained.shard);
+    Ok(())
+}
+
 struct FixedRandom;
 
 impl RandomSource for FixedRandom {
@@ -54,7 +109,7 @@ fn tombstone_crash_recovery_and_guarded_unlink_are_exactly_once()
         UnixMicros::new(1),
         &mut random,
     )?;
-    let put = put_request(&mut store, registration)?;
+    let put = put_request(&mut store, registration, 131_072, 4)?;
     store.put_exact(&put, UnixMicros::new(20))?;
     assert_eq!(store.inventory(None, 10)?.entries.len(), 1);
     assert_eq!(
@@ -201,11 +256,90 @@ fn recover_and_unlink_once(
         meshspan_contracts::reclamation_receipt_digest(receipt, UnixMicros::new(44), stored_length,)
     );
     assert_eq!(store.journal.capacity()?.committed_bytes, 0);
+    let space = store.pack.observe_space()?;
+    assert!(space.database_bytes > 131_072);
+    assert!(space.reusable_bytes >= 122_880);
+    assert!(space.reusable_bytes < space.database_bytes);
     assert_eq!(
         store.unlink_tombstoned(receipt, UnixMicros::new(45))?,
         reclamation
     );
     assert_eq!(store.journal.capacity()?.committed_bytes, 0);
+    Ok(())
+}
+
+#[test]
+fn automatic_cow_reclamation_survives_both_sides_of_publication()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let storage_path = directory.path().join("target");
+    let state_path = directory.path().join("state");
+    fs::create_dir(&storage_path)?;
+    let registration = registration()?;
+    let mut random = FixedRandom;
+    let folder = RegisteredFolder::register_new(&storage_path, registration, &mut random)?;
+    let fingerprint = folder.marker().fingerprint();
+    let mut store = FolderShardStore::open(
+        folder,
+        &state_path,
+        policy(),
+        verifier(registration.mesh_id)?,
+        UnixMicros::new(1),
+        &mut random,
+    )?;
+    let removed = put_request(&mut store, registration, 2 * 1024 * 1024, 4)?;
+    let kept = put_request(&mut store, registration, 4_096, 5)?;
+    store.put_exact(&removed, UnixMicros::new(20))?;
+    let kept_receipt = store.put_exact(&kept, UnixMicros::new(21))?;
+    let permit = signed_removal(registration, removed.shard)?;
+    let tombstone = store.tombstone(permit, UnixMicros::new(22))?;
+    let reclaimed = store.unlink_tombstoned(tombstone, UnixMicros::new(23))?;
+    let before = store.pack.observe_space()?;
+    assert!(before.reusable_bytes >= 1024 * 1024);
+
+    for (fault, now) in [
+        (crate::pack::PackFault::BeforeCompactionPublish, 30),
+        (crate::pack::PackFault::AfterCompactionPublish, 40),
+    ] {
+        store.pack.inject_fault(fault);
+        assert!(matches!(
+            store.compact_next_pack(UnixMicros::new(now)),
+            Err(FolderShardStoreError::Unavailable)
+        ));
+        assert_eq!(
+            store.pack.get_exact(kept.shard)?.as_slice(),
+            kept.bytes.as_slice()
+        );
+        drop(store);
+        let folder = RegisteredFolder::reopen(&storage_path, registration, fingerprint)?;
+        store = FolderShardStore::open(
+            folder,
+            &state_path,
+            policy(),
+            verifier(registration.mesh_id)?,
+            UnixMicros::new(now + 1),
+            &mut random,
+        )?;
+        assert_eq!(
+            store.put_exact(&kept, UnixMicros::new(now + 2))?,
+            kept_receipt
+        );
+        assert_eq!(
+            store.unlink_tombstoned(tombstone, UnixMicros::new(now + 3))?,
+            reclaimed
+        );
+        store.check_health()?;
+    }
+    let after = store.pack.observe_space()?;
+    assert!(before.database_bytes - after.database_bytes >= 1024 * 1024);
+    assert_eq!(after.reusable_bytes, 0);
+    assert_eq!(store.compact_next_pack(UnixMicros::new(50))?, None);
+    assert_eq!(store.journal.capacity()?.committed_bytes, 4_096);
+    assert_eq!(store.inventory(None, 10)?.entries.len(), 1);
+    assert_eq!(
+        store.pack.get_exact(kept.shard)?.as_slice(),
+        kept.bytes.as_slice()
+    );
     Ok(())
 }
 
@@ -238,14 +372,17 @@ fn verifier(mesh_id: MeshId) -> Result<StoragePermitVerifier, Box<dyn std::error
 fn put_request(
     store: &mut FolderShardStore,
     registration: FolderRegistration,
+    length: usize,
+    operation: u8,
 ) -> Result<PutShardRequest, Box<dyn std::error::Error>> {
     let context = RequestContext {
         contract_version: ContractVersion::V1_0,
-        operation_id: OperationId::from_bytes([4; 16])?,
+        operation_id: OperationId::from_bytes([operation; 16])?,
         deadline: UnixMicros::new(1_000),
         expected_revision: Some(Revision::new(5)),
     };
-    let bytes = BoundedBytes::copy_from(b"encrypted shard awaiting guarded cleanup", 1_024)?;
+    // Span many overflow pages so guarded removal also proves reusable pack-space accounting.
+    let bytes = BoundedBytes::from_vec(vec![19; length], length)?;
     let reservation = store.reserve(ReserveStorageRequest {
         context,
         target_id: registration.target_id,
@@ -260,7 +397,7 @@ fn put_request(
         shard: ShardIdentity {
             manifest_digest: [6; 32],
             stripe_index: 7,
-            shard_index: 8,
+            shard_index: u16::from(operation) + 4,
             generation: 9,
         },
         expected_length: u64::try_from(bytes.len())?,

@@ -80,6 +80,9 @@ pub struct UpdateNodeRecord {
     pub evidence_digest: Option<[u8; 32]>,
     /// Committed report instant, not evidence freshness by itself.
     pub observed_at: Option<UnixMicros>,
+    /// Exact log position of restart preparation. Later unrelated writes do not move it.
+    /// Older already-admitted reservations may lack this additive field.
+    pub preparation_log_index: Option<u64>,
 }
 
 /// Bounded aggregate projection over indexed rollout checkpoints, not live readiness.
@@ -99,7 +102,95 @@ pub struct UpdateProgressCounts {
     pub unresolved_restarts: u64,
 }
 
+/// Publisher trust, selected work and progress from one short SQLite read view.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpdateAdministrationSnapshot {
+    /// Bounded independently configured publisher keys.
+    pub signers: Vec<UpdateSignerRecord>,
+    /// Exact candidate/sequence paired with counts from the same committed state.
+    pub rollout: Option<(UpdateRolloutRecord, UpdateProgressCounts)>,
+}
+
 impl AuthoritativeRepository {
+    /// Reads a bounded primary-key page of retained rollout states for background observations.
+    /// This is an inventory, not verification of candidate bytes or permission to restart.
+    ///
+    /// # Errors
+    /// Rejects malformed identities/states and unavailable persistence.
+    pub fn update_rollout_state_page(
+        &self,
+        after: Option<WorkId>,
+        limit: PageLimit,
+    ) -> Result<super::Page<UpdateRolloutState, WorkId>, RepositoryError> {
+        let mut query = self.database.connection().prepare(
+            "SELECT rollout_id, state FROM update_rollouts WHERE rollout_id > ?1
+             ORDER BY rollout_id LIMIT ?2",
+        )?;
+        let rows = query.query_map(
+            params![
+                after.map_or([0; 16], WorkId::as_bytes),
+                i64::try_from(limit.get() + 1).map_err(|_| RepositoryError::InvalidPageLimit)?
+            ],
+            |row| Ok((row.get::<_, [u8; 16]>(0)?, row.get::<_, u8>(1)?)),
+        )?;
+        let mut items = Vec::new();
+        let mut last = None;
+        let mut next = None;
+        for row in rows {
+            let (id, state) = row?;
+            let id = WorkId::from_bytes(id).map_err(|_| RepositoryError::CorruptState)?;
+            let state = match state {
+                1 => UpdateRolloutState::Running,
+                2 => UpdateRolloutState::Paused,
+                3 => UpdateRolloutState::Completed,
+                4 => UpdateRolloutState::Cancelled,
+                _ => return Err(RepositoryError::CorruptState),
+            };
+            if items.len() == limit.get() {
+                next = last;
+                break;
+            }
+            last = Some(id);
+            items.push(state);
+        }
+        Ok(super::Page { items, next })
+    }
+
+    /// Reads update administration without mixing counts and sequences across commits.
+    /// The read view does not hold a writer lock or perform any network IO.
+    ///
+    /// # Errors
+    /// Rejects corrupt signed candidates, progress or unavailable persistence.
+    pub fn update_administration_snapshot(
+        &self,
+        id: Option<WorkId>,
+    ) -> Result<UpdateAdministrationSnapshot, RepositoryError> {
+        self.update_administration_observed(id, || Ok(()))
+    }
+
+    pub(super) fn update_administration_observed(
+        &self,
+        id: Option<WorkId>,
+        after_selection: impl FnOnce() -> Result<(), RepositoryError>,
+    ) -> Result<UpdateAdministrationSnapshot, RepositoryError> {
+        let read_view = self.database.connection().unchecked_transaction()?;
+        let signers = self.update_signers()?;
+        let selected = match id {
+            Some(id) => self.update_rollout(id)?,
+            None => self.active_update_rollout()?,
+        };
+        // Tests commit through a separate connection at the exact former race boundary.
+        after_selection()?;
+        let rollout = selected
+            .map(|record| {
+                let counts = self.update_progress_counts(record.rollout_id)?;
+                Ok::<_, RepositoryError>((record, counts))
+            })
+            .transpose()?;
+        read_view.commit()?;
+        Ok(UpdateAdministrationSnapshot { signers, rollout })
+    }
+
     /// Count checkpoints without materialising every selected member.
     ///
     /// # Errors
@@ -208,6 +299,45 @@ impl AuthoritativeRepository {
         node(self.database.connection(), rollout_id, node_id)
     }
 
+    /// Selects the reserved preparation first, otherwise the first staged member.
+    /// This is scheduling advice; the replicated transition still checks exclusivity,
+    /// current membership, trust and completion of staging across the rollout.
+    ///
+    /// # Errors
+    /// Rejects malformed stored progress or unavailable persistence.
+    pub fn update_restart_candidate(
+        &self,
+        id: WorkId,
+    ) -> Result<Option<UpdateNodeRecord>, RepositoryError> {
+        let tx = self.database.connection();
+        let selected: Option<[u8; 16]> = tx
+            .query_row(
+                "SELECT node_id FROM update_rollout_nodes WHERE rollout_id=?1
+             AND (restart_pending=1 OR (phase=2 AND preparation_log_index IS NOT NULL))",
+                [id.as_bytes().as_slice()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let selected = match selected {
+            Some(id) => Some(id),
+            None => tx
+                .query_row(
+                    "SELECT node_id FROM update_rollout_nodes WHERE rollout_id=?1 AND phase=2
+                 ORDER BY node_id LIMIT 1",
+                    [id.as_bytes().as_slice()],
+                    |row| row.get(0),
+                )
+                .optional()?,
+        };
+        selected
+            .map(|selected| {
+                let selected =
+                    NodeId::from_bytes(selected).map_err(|_| RepositoryError::CorruptState)?;
+                node(tx, id, selected)?.ok_or(RepositoryError::CorruptState)
+            })
+            .transpose()
+    }
+
     /// Pages exact members by stable node identity; no whole-mesh allocation is required.
     ///
     /// # Errors
@@ -219,7 +349,7 @@ impl AuthoritativeRepository {
         limit: PageLimit,
     ) -> Result<Vec<UpdateNodeRecord>, RepositoryError> {
         let mut statement = self.database.connection().prepare(
-            "SELECT node_id,incarnation,phase,restart_pending,sequence,target,evidence_digest,observed_at
+            "SELECT node_id,incarnation,phase,restart_pending,sequence,target,evidence_digest,observed_at,preparation_log_index
              FROM update_rollout_nodes WHERE rollout_id=?1 AND node_id>?2 ORDER BY node_id LIMIT ?3")?;
         let cursor = after.map_or([0; 16], NodeId::as_bytes);
         let rows = statement.query_map(
@@ -338,15 +468,23 @@ pub(super) fn node(
     id: WorkId,
     node_id: NodeId,
 ) -> Result<Option<UpdateNodeRecord>, RepositoryError> {
-    Ok(tx.query_row("SELECT node_id,incarnation,phase,restart_pending,sequence,target,evidence_digest,observed_at
+    Ok(tx.query_row("SELECT node_id,incarnation,phase,restart_pending,sequence,target,evidence_digest,observed_at,preparation_log_index
         FROM update_rollout_nodes WHERE rollout_id=?1 AND node_id=?2",
         params![id.as_bytes().as_slice(),node_id.as_bytes().as_slice()],decode_node).optional()?)
 }
 
 fn decode_node(row: &rusqlite::Row<'_>) -> rusqlite::Result<UpdateNodeRecord> {
     let invalid = || rusqlite::Error::InvalidQuery;
+    let preparation_log_index = row
+        .get::<_, Option<i64>>(8)?
+        .map(|value| u64::try_from(value).map_err(|_| invalid()))
+        .transpose()?;
+    if preparation_log_index == Some(0) {
+        return Err(invalid());
+    }
     let phase = match row.get::<_, u8>(2)? {
         1 => UpdateNodePhase::Pending,
+        2 if preparation_log_index.is_some() => UpdateNodePhase::Preparing,
         2 => UpdateNodePhase::Staged,
         3 => UpdateNodePhase::Restarting,
         4 => UpdateNodePhase::Verified,
@@ -362,6 +500,7 @@ fn decode_node(row: &rusqlite::Row<'_>) -> rusqlite::Result<UpdateNodeRecord> {
         target: row.get(5)?,
         evidence_digest: row.get(6)?,
         observed_at: row.get::<_, Option<i64>>(7)?.map(UnixMicros::new),
+        preparation_log_index,
     };
     if value.incarnation == 0 || value.sequence == 0 {
         return Err(invalid());

@@ -121,6 +121,10 @@ test("assembly preserves exact bytes, hashes every shipped file and never overwr
     binary,
     provenance: { version: "0.1.0", target: host, profile: "dev" },
     inventory: { rust: [], web: [] },
+    compliance: {
+      sbom: { bomFormat: "CycloneDX", specVersion: "1.6" },
+      notices: "independent notice fixture\n",
+    },
   };
   const first = await assemblePackage(inputs);
   const second = await assemblePackage(inputs);
@@ -132,7 +136,7 @@ test("assembly preserves exact bytes, hashes every shipped file and never overwr
   const lines = (await readFile(join(first.bundle, "SHA256SUMS"), "utf8"))
     .trim()
     .split("\n");
-  assert.equal(lines.length, 6);
+  assert.equal(lines.length, 8);
   for (const line of lines) {
     const [expected, file] = line.split("  ");
     const actual = createHash("sha256")

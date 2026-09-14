@@ -3,11 +3,15 @@
 //! Reconcile reservation-only state under the exclusive destination ownership lock.
 
 use meshspan_contracts::MAXIMUM_BACKUP_CAPACITY_PAGE;
+use meshspan_domain::UnixMicros;
 
 use super::{DirectoryBackupProvider, DirectoryBackupProviderError, object_io};
 
 impl DirectoryBackupProvider {
-    pub(super) fn recover_pending_capacity(&mut self) -> Result<(), DirectoryBackupProviderError> {
+    pub(super) fn recover_pending_capacity(
+        &mut self,
+        observed_at: UnixMicros,
+    ) -> Result<(), DirectoryBackupProviderError> {
         let Some(budget) = &mut self.capacity else {
             return Ok(());
         };
@@ -38,6 +42,20 @@ impl DirectoryBackupProvider {
                     Err(DirectoryBackupProviderError::NotFound) => {
                         if object_io::confirm_object_absent(&self.objects, reference.as_str())? {
                             budget.cancel_unpublished(object)?;
+                        } else {
+                            // The durable target reservation, not the pathname, supplies
+                            // identity. Verify all bytes before reconstructing local evidence.
+                            object_io::verify_recoverable_object(
+                                &self.objects,
+                                object,
+                                &reference,
+                            )?;
+                            self.catalogue.record_recovered_object(
+                                object,
+                                &reference,
+                                observed_at,
+                            )?;
+                            budget.commit(object)?;
                         }
                     }
                     Err(error) => return Err(error),

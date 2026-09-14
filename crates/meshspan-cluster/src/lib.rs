@@ -37,6 +37,9 @@ mod federation_mutation_admission;
 mod federation_mutation_relay;
 mod federation_resource_wire;
 mod federation_session;
+mod federation_signing_key;
+pub use federation_signing_key::FederationSigningKey;
+mod federation_backup_capability;
 mod federation_shard_authority;
 mod federation_storage_capability;
 mod federation_storage_exchange;
@@ -46,12 +49,32 @@ mod filesystem_authority;
 mod filesystem_convergence;
 mod membership;
 mod metadata_authority;
+mod metadata_read_fence_transfer;
+mod metadata_replica;
+mod metadata_replica_runtime;
+mod metadata_replica_transfer;
+mod metadata_replica_wire;
 mod native_gateway_wire;
 mod native_protected_wire;
 mod node_runtime;
 mod retention;
 mod status;
 mod wire;
+
+pub use metadata_read_fence_transfer::metadata_read_fence_response;
+pub use metadata_replica::{
+    MAXIMUM_METADATA_REPLICA_BYTES, MAXIMUM_METADATA_REPLICA_ENTRIES, MetadataReplica,
+    MetadataReplicaCursor, MetadataReplicaError, MetadataReplicaPage,
+};
+pub use metadata_replica_runtime::{
+    MetadataReplicaProgress, MetadataReplicaRuntimeConfig, MetadataReplicaRuntimeExit,
+    MetadataReplicaRuntimeHandle, spawn_metadata_replica,
+};
+pub use metadata_replica_transfer::{
+    MAXIMUM_METADATA_REPLICA_TRANSFER_TIME, MetadataReplicaFetch, MetadataReplicaTransfer,
+    MetadataReplicaTransferError, PreparedMetadataReplicaPage, admit_metadata_replica_request,
+    reject_metadata_replica_page, send_metadata_replica_page,
+};
 
 #[cfg(test)]
 mod access_administration_tests;
@@ -116,6 +139,12 @@ pub use federation_authority_receiver::{
 };
 pub use federation_authority_sync::{
     FederationAuthoritySyncError, FederationAuthoritySyncOutcome, FederationAuthoritySyncRequest,
+};
+pub use federation_backup_capability::{
+    AuthorisedFederatedBackup, FederationBackupCapabilityError, FederationBackupCapabilityService,
+    FederationBackupForwardContext, FederationBackupIssueRequest, FederationBackupOwnerService,
+    FederationBackupOwnerStreamContext, FederationBackupStreamContext,
+    IssuedFederationBackupCapability, authorise_forwarded_backup,
 };
 pub use federation_branch_authority::{
     FederationBranchAuthoritySource, MetadataFederationBranchAuthority,
@@ -208,7 +237,7 @@ pub use federation_resource_wire::{
 };
 pub use federation_session::{
     FederationAcceptRequest, FederationAuthoritySource, FederationDialRequest,
-    FederationSessionError, FederationSessionRuntime,
+    FederationSessionError, FederationSessionReplay, FederationSessionRuntime,
 };
 pub use federation_shard_authority::MetadataFederatedShardAuthority;
 pub use federation_storage_capability::{
@@ -239,7 +268,8 @@ pub use meshspan_metadata::FederationRemoteAuthoritySnapshot;
 pub use metadata_authority::{
     ConsensusMessageTransport, MetadataAuthorityConfig, MetadataAuthorityHandle,
     MetadataAuthorityObservation, MetadataAuthorityRequestError, MetadataAuthorityRuntimeError,
-    MetadataAuthorityStartError, PeerConsensusMessage, spawn_metadata_authority,
+    MetadataAuthorityStartError, MetadataReadFence, MetadataReplicationObservation,
+    PeerConsensusMessage, spawn_metadata_authority,
 };
 pub use native_gateway_wire::{
     NativeGatewayWireError, decode_native_content_layout_chunk,

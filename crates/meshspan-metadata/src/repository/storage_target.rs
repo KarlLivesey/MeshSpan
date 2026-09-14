@@ -14,6 +14,37 @@ const ACTIVE_TARGET_STATE: u8 = 1;
 const ACTIVE_GENERATION_STATE: u8 = 1;
 const SYSTEM_MANAGE_RIGHT: i64 = 1;
 
+/// Historical physical identity, not permission to reactivate a retired target or generation.
+pub(super) fn recovery_marker(
+    database: &crate::PartitionDatabase,
+    target: TargetId,
+    generation: u64,
+) -> Result<Option<[u8; 32]>, RepositoryError> {
+    if generation == 0 {
+        return Err(RepositoryError::InvalidCommand);
+    }
+    let stored: Option<Vec<u8>> = database
+        .connection()
+        .query_row(
+            "SELECT CASE WHEN length(marker_fingerprint) = 32 THEN marker_fingerprint END
+         FROM target_generations WHERE target_id = ?1 AND generation = ?2",
+            params![target.as_bytes().as_slice(), to_i64(generation)?],
+            |row| row.get(0),
+        )
+        .optional()?;
+    stored
+        .map(|bytes| {
+            let fingerprint: [u8; 32] = bytes
+                .try_into()
+                .map_err(|_| RepositoryError::CorruptState)?;
+            if fingerprint == [0; 32] {
+                return Err(RepositoryError::CorruptState);
+            }
+            Ok(fingerprint)
+        })
+        .transpose()
+}
+
 /// Current authoritative identities needed to register one node-local storage target.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StorageTargetRegistrationContext {
@@ -219,12 +250,33 @@ pub(super) fn register(
     command: &RegisterStorageTarget,
     revision: Revision,
 ) -> Result<EntityReference, RepositoryError> {
-    let (usage_limit_kind, usage_limit_value) = validate(command)?;
-    reject_draining_scope(transaction, command.node_id, command.host_id)?;
+    let limits = validate_registration(transaction, command)?;
+    component::create(transaction, context, &command.provider, revision)?;
+    persist_registration(transaction, context.occurred_at, command, revision, limits)
+}
+
+pub(super) fn register_recovered(
+    transaction: &Transaction<'_>,
+    created_at: UnixMicros,
+    command: &RegisterStorageTarget,
+    revision: Revision,
+) -> Result<EntityReference, RepositoryError> {
+    let limits = validate_registration(transaction, command)?;
+    component::create_recovered(transaction, created_at, &command.provider, revision)?;
+    persist_registration(transaction, created_at, command, revision, limits)
+}
+
+fn persist_registration(
+    transaction: &Transaction<'_>,
+    created_at: UnixMicros,
+    command: &RegisterStorageTarget,
+    revision: Revision,
+    limits: (u8, i64),
+) -> Result<EntityReference, RepositoryError> {
+    let (usage_limit_kind, usage_limit_value) = limits;
     let target = command.target_id.as_bytes();
     let node = command.node_id.as_bytes();
     let host = command.host_id.as_bytes();
-    component::create(transaction, context, &command.provider, revision)?;
     let provider = command.provider.instance_id.as_bytes();
     let stored_revision = to_i64(revision.get())?;
     transaction.execute(
@@ -244,7 +296,7 @@ pub(super) fn register(
             to_i64(command.generation)?,
             usage_limit_kind,
             usage_limit_value,
-            context.occurred_at.get(),
+            created_at.get(),
             stored_revision,
         ],
     )?;
@@ -265,7 +317,7 @@ pub(super) fn register(
                 .filesystem_fingerprint
                 .as_ref()
                 .map(<[u8; 32]>::as_slice),
-            context.occurred_at.get(),
+            created_at.get(),
             ACTIVE_GENERATION_STATE,
             stored_revision,
         ],
@@ -275,6 +327,15 @@ pub(super) fn register(
         kind: EntityKind::StorageTarget,
         id: target,
     })
+}
+
+fn validate_registration(
+    transaction: &Transaction<'_>,
+    command: &RegisterStorageTarget,
+) -> Result<(u8, i64), RepositoryError> {
+    let limits = validate(command)?;
+    reject_draining_scope(transaction, command.node_id, command.host_id)?;
+    Ok(limits)
 }
 
 fn reject_draining_scope(

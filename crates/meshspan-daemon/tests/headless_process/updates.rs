@@ -18,6 +18,10 @@ const ARTIFACT_DIGEST: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb
 #[path = "update_readiness.rs"]
 mod readiness;
 
+#[path = "update_handoff.rs"]
+#[cfg(any(target_os = "macos", target_env = "musl"))]
+mod handoff;
+
 #[tokio::test]
 async fn update_administration_preserves_trust_selection_and_exact_retry_after_restart()
 -> Result<(), Box<dyn Error>> {
@@ -48,7 +52,7 @@ async fn update_administration_preserves_trust_selection_and_exact_retry_after_r
         assert_eq!(staged["byte_length"], "3");
         assert_eq!(std::fs::read(root.state_path.join("update-artifacts").join(ARTIFACT_DIGEST))?, b"abc");
         let status = api.status(false).await?;
-        assert_eq!(status["installation_available"], false);
+        assert_eq!(status["installation_available"], true);
         assert_eq!(status["rollout"]["state"], "paused");
         assert_eq!(status["rollout"]["progress"], json!({"pending":"1", "staged":"0", "restarting":"0", "verified":"0", "failed":"0", "unresolved_restarts":"0"}));
         processes[0].kill()?;
@@ -123,7 +127,7 @@ async fn signed_candidate_automatically_reaches_three_daemons_and_survives_peer_
         processes[1] = second.command().spawn()?;
         super::wait_for_status(second.address, &second_client, "configured").await?;
         wait_for_sources([&root, &second, &third], &executable, digest).await?;
-        assert_eq!(api.status(false).await?["installation_available"], false);
+        assert_eq!(api.status(false).await?["installation_available"], true);
         Ok::<_, Box<dyn Error>>(())
     }
     .await;
@@ -183,7 +187,8 @@ async fn real_signed_executable_passes_runtime_probe_and_retains_staging_after_r
     for byte in Sha256::digest(&executable) {
         write!(&mut digest, "{byte:02x}")?;
     }
-    let mut processes = vec![root.start()?];
+    let mut owned_processes = super::ProcessCleanup(vec![root.start()?]);
+    let processes = &mut owned_processes.0;
     let proof = async {
         let claim = super::wait_for_claim(&root.claim_path).await?;
         let client = super::wait_for_client(&root.identity_path).await?;
@@ -204,9 +209,7 @@ async fn real_signed_executable_passes_runtime_probe_and_retains_staging_after_r
         }
         let staged = api.wait_for("running", "staged", Some("1")).await?;
         assert_eq!(staged["rollout"]["progress"], json!({"pending":"0", "staged":"1", "restarting":"0", "verified":"0", "failed":"0", "unresolved_restarts":"0"}));
-        let evidence = std::fs::read_dir(root.state_path.join("update-evidence"))?.collect::<Result<Vec<_>,_>>()?;
-        assert_eq!(evidence.len(), 1);
-        let report: Value = serde_json::from_slice(&std::fs::read(evidence[0].path())?)?;
+        let report = staging_report(&root)?;
         assert_eq!(report["accepted"], true);
         assert_eq!(report["runtime"]["licence"], "GPL-2.0-only");
         assert_eq!(report["runtime"]["version"], "0.1.0");
@@ -215,11 +218,86 @@ async fn real_signed_executable_passes_runtime_probe_and_retains_staging_after_r
         processes[0].wait()?;
         processes[0] = root.start()?;
         super::wait_for_status(root.address, &client, "configured").await?;
-        assert_eq!(api.status(false).await?["rollout"], staged["rollout"]);
+        verify_retained_staging(&staged, &api.status(false).await?)?;
+        assert_eq!(staging_report(&root)?, report);
         Ok::<_, Box<dyn Error>>(())
     }.await;
-    super::stop_processes(&mut processes);
+    super::stop_processes(processes);
     super::retain_failure_state(proof, [root.temporary])
+}
+
+fn verify_retained_staging(before: &Value, after: &Value) -> Result<(), Box<dyn Error>> {
+    let mut previous = before["rollout"]
+        .as_object()
+        .ok_or("previous rollout absent")?
+        .clone();
+    let mut current = after["rollout"]
+        .as_object()
+        .ok_or("current rollout absent")?
+        .clone();
+    let previous_sequence = previous
+        .remove("sequence")
+        .and_then(|value| value.as_u64())
+        .ok_or("previous sequence absent")?;
+    let current_sequence = current
+        .remove("sequence")
+        .and_then(|value| value.as_u64())
+        .ok_or("current sequence absent")?;
+    // Preparation may commit between either observation. It preserves staged progress
+    // and cannot restart this single node without explicit interruption permission.
+    assert!((2..=3).contains(&previous_sequence));
+    assert!((previous_sequence..=3).contains(&current_sequence));
+    assert_eq!(current, previous);
+    Ok(())
+}
+
+fn staging_report(root: &ProcessFixture) -> Result<Value, Box<dyn Error>> {
+    let mut selected = None;
+    for report in published_reports(&root.state_path.join("update-evidence"))? {
+        // Coordination and installation retain their own reports in this directory.
+        if report.get("accepted").is_none() {
+            continue;
+        }
+        assert_eq!(report["format"], 1);
+        assert_eq!(report["rollout_id"], ROLLOUT);
+        assert_eq!(report["expected_sequence"], 1);
+        if selected.replace(report).is_some() {
+            return Err("duplicate executable staging evidence".into());
+        }
+    }
+    selected.ok_or_else(|| "executable staging evidence missing".into())
+}
+
+fn published_reports(directory: &std::path::Path) -> Result<Vec<Value>, Box<dyn Error>> {
+    let mut reports = Vec::new();
+    for entry in std::fs::read_dir(directory)? {
+        let file = entry?.path();
+        // Atomic publication keeps an unpublished .tmp sibling which may vanish
+        // between readdir and open. Only immutable final reports are evidence.
+        if file
+            .extension()
+            .is_some_and(|extension| extension == "json")
+        {
+            reports.push(serde_json::from_slice(&std::fs::read(file)?)?);
+        }
+    }
+    Ok(reports)
+}
+
+#[test]
+fn evidence_inventory_ignores_unpublished_atomic_write_files() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    let published = json!({"accepted":true});
+    std::fs::write(
+        directory.path().join("complete.json"),
+        serde_json::to_vec(&published)?,
+    )?;
+    std::fs::write(
+        directory.path().join(".next.json.meshspan-0.tmp"),
+        b"incomplete",
+    )?;
+    assert_eq!(published_reports(directory.path())?, vec![published]);
+    Ok(())
 }
 
 fn pin(signer: &NodeIdentityKey) -> Value {

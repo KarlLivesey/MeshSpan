@@ -6,13 +6,21 @@
 //! mesh root certificate-authority key and recovery X25519 key; only the root certificate and
 //! public wrapping key are admitted to online authoritative metadata.
 
+mod authorization;
 mod bundle;
 mod code;
+mod consensus_admission;
 mod error;
 mod material;
+mod secret_recovery;
+mod state_transfer;
+pub use secret_recovery::RecoveredSecret;
+pub use state_transfer::{RecoveryStateTransfer, RecoveryStateTransferClaims};
 
+pub use authorization::{RecoveryAuthorization, RecoveryAuthorizationClaims};
 pub use bundle::{MAXIMUM_RECOVERY_BUNDLE_BYTES, RecoveryBundle, RecoveryBundleParts};
 pub use code::{RecoveryBundleCode, RecoveryChallenge};
+pub use consensus_admission::{RecoveryConsensusAdmission, RecoveryConsensusAdmissionClaims};
 pub use error::RecoveryBundleError;
 pub use material::{
     OfflineRecoveryIdentity, RecoveredAuthority, create_recovery_bundle,

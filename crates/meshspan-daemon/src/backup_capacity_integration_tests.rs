@@ -78,7 +78,7 @@ fn next_upload_recovers_empty_holds_without_restarting_the_daemon()
 }
 
 #[test]
-fn published_file_without_catalogue_retains_its_hold_and_recovers_by_exact_retry()
+fn published_file_without_catalogue_recovers_before_any_upload_retry()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let mut target = target(directory.path(), PAYLOAD.len() as u64)?;
@@ -108,20 +108,86 @@ fn published_file_without_catalogue_retains_its_hold_and_recovers_by_exact_retry
         StorageProvider::reserve(&mut target, shard_request(47, 1)?),
         Err(ContractError::ResourceExhausted)
     );
-    let stored = recovered.store_exact(request, &mut Cursor::new(PAYLOAD), UnixMicros::new(3))?;
-    assert_eq!(stored.object, request.object);
-    assert_eq!(stored.object_reference.as_str(), reference);
     let mut output = Vec::new();
     recovered.read_exact(
         &meshspan_contracts::BackupReadRequest {
             context: context(48)?,
             object: request.object,
-            object_reference: stored.object_reference,
+            object_reference: meshspan_contracts::BackupObjectReference::new(reference.clone())?,
         },
         &mut output,
         UnixMicros::new(4),
     )?;
     assert_eq!(output, PAYLOAD);
+    let stored = recovered.store_exact(request, &mut Cursor::new([]), UnixMicros::new(5))?;
+    assert_eq!(stored.object, request.object);
+    assert_eq!(stored.object_reference.as_str(), reference);
+    drop(recovered);
+    let reopened = backup(directory.path(), 3)?.with_capacity_budget(Box::new(target.clone()))?;
+    assert!(
+        BackupCapacityBudget::pending_holds(
+            &target,
+            request.object.destination_id,
+            request.object.provider_generation,
+            None
+        )?
+        .is_empty()
+    );
+    reopened.verify_exact(
+        &meshspan_contracts::BackupVerifyRequest {
+            context: context(49)?,
+            object: request.object,
+            object_reference: stored.object_reference,
+        },
+        UnixMicros::new(6),
+    )?;
+    Ok(())
+}
+
+#[test]
+fn unindexed_backup_corruption_keeps_bytes_and_capacity_without_admitting_it()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let mut target = target(directory.path(), PAYLOAD.len() as u64)?;
+    let request = request(3, 50)?;
+    drop(backup(directory.path(), 3)?);
+    BackupCapacityBudget::reserve(&mut target, request.object)?;
+    let reference = meshspan_contracts::BackupObjectReference::new(format!(
+        "backup-{:032x}.msb",
+        u128::from_be_bytes(request.object.backup_id.as_bytes())
+    ))?;
+    let object_path = directory
+        .path()
+        .join("storage/.meshspan-backups")
+        .join(request.object.destination_id.to_string().replace('-', ""))
+        .join("objects")
+        .join(reference.as_str());
+    let corrupted = vec![b'x'; PAYLOAD.len()];
+    std::fs::write(&object_path, &corrupted)?;
+    assert!(matches!(
+        backup(directory.path(), 3)?.with_capacity_budget(Box::new(target.clone())),
+        Err(meshspan_backup::DirectoryBackupProviderError::Corrupt)
+    ));
+    assert_eq!(std::fs::read(object_path)?, corrupted);
+    assert_eq!(
+        BackupCapacityBudget::pending_holds(&target, request.object.destination_id, 1, None)?,
+        vec![request.object]
+    );
+    assert_eq!(
+        StorageProvider::reserve(&mut target, shard_request(51, 1)?),
+        Err(ContractError::ResourceExhausted)
+    );
+    assert_eq!(
+        backup(directory.path(), 3)?.verify_exact(
+            &meshspan_contracts::BackupVerifyRequest {
+                context: context(52)?,
+                object: request.object,
+                object_reference: reference,
+            },
+            UnixMicros::new(6),
+        ),
+        Err(ContractError::NotFound)
+    );
     Ok(())
 }
 

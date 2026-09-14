@@ -7,7 +7,7 @@ use meshspan_domain::{BackupId, MeshId, PartitionId, UnixMicros};
 use rusqlite::{OptionalExtension, Row, TransactionBehavior, params};
 use thiserror::Error;
 
-use crate::LocalDatabase;
+use crate::{LocalDatabase, Page};
 
 const MAXIMUM_RELATIVE_FILE_NAME_BYTES: usize = 128;
 const COLUMNS: &str = "backup_id, partition_id, mesh_id, relative_file_name,
@@ -54,6 +54,38 @@ pub enum LocalMetadataBackupStagingError {
 }
 
 impl LocalDatabase {
+    /// Lists owned staging records in backup-identity order for bounded local cleanup.
+    ///
+    /// # Errors
+    /// Rejects limits outside 1–128 and invalid persisted evidence. The cursor is
+    /// a seek position, never permission to remove the returned files.
+    pub fn metadata_backup_staging_page(
+        &self,
+        after: Option<BackupId>,
+        limit: usize,
+    ) -> Result<Page<LocalMetadataBackupStaging, BackupId>, LocalMetadataBackupStagingError> {
+        if !(1..=128).contains(&limit) {
+            return Err(LocalMetadataBackupStagingError::Invalid);
+        }
+        let after = after.map_or([0; 16], BackupId::as_bytes);
+        let mut statement = self.connection().prepare(&format!(
+            "SELECT {COLUMNS} FROM local_metadata_backup_staging
+             WHERE backup_id > ?1 ORDER BY backup_id LIMIT ?2"
+        ))?;
+        let fetch_limit =
+            i64::try_from(limit + 1).map_err(|_| LocalMetadataBackupStagingError::Invalid)?;
+        let rows = statement.query_map(params![after.as_slice(), fetch_limit], decode)?;
+        let mut items = rows
+            .map(|row| validate_loaded(row?))
+            .collect::<Result<Vec<_>, LocalMetadataBackupStagingError>>()?;
+        let has_more = items.len() > limit;
+        items.truncate(limit);
+        let next = has_more
+            .then(|| items.last().map(|item| item.evidence.source.backup_id))
+            .flatten();
+        Ok(Page { items, next })
+    }
+
     /// Loads one exact encrypted staging record.
     ///
     /// # Errors

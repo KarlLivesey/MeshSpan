@@ -3,11 +3,16 @@
 //! Fresh authenticated process observations. This endpoint does not authorise a restart.
 
 use meshspan_cluster::{ConsensusNetwork, MetadataAuthorityHandle, PeerControlRequest};
-use meshspan_domain::{Clock as _, NodeId, OperationId, WorkId};
-use meshspan_metadata::{AuthoritativeRepository, PartitionDatabase};
-use meshspan_protocol::v1::{
-    ControlEnvelope, RequestHeader, UpdateReadinessResult, control_envelope::Message,
+use meshspan_domain::{Clock as _, NodeId, OperationId, WorkId, uuid_v8};
+use meshspan_metadata::{
+    AuthoritativeRepository, PartitionDatabase, UpdateNodeRecord, UpdateReadyNode,
+    UpdateRestartReadiness,
 };
+use meshspan_protocol::v1::{
+    ControlEnvelope, ProbeUpdateReadiness, RequestHeader, UpdateReadinessResult,
+    UpdateWorkloadObservation, control_envelope::Message,
+};
+use sha2::{Digest as _, Sha256};
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -25,6 +30,7 @@ pub(crate) struct UpdateReadiness {
     listeners: Arc<AtomicBool>,
     admission: Arc<Semaphore>,
     runtime_report: Arc<Vec<u8>>,
+    pub(crate) workload_status: crate::update_service::UpdateWorkloadStatus,
 }
 
 impl UpdateReadiness {
@@ -37,6 +43,7 @@ impl UpdateReadiness {
             listeners: Arc::default(),
             admission: Arc::new(Semaphore::new(2)),
             runtime_report: Arc::new(serde_json::to_vec(&report).map_err(|_| ())?),
+            workload_status: crate::update_service::UpdateWorkloadStatus::default(),
         })
     }
 
@@ -44,6 +51,19 @@ impl UpdateReadiness {
     pub(crate) fn serving(&self) -> ServingGuard {
         self.listeners.store(true, Ordering::Release);
         ServingGuard(Arc::clone(&self.listeners))
+    }
+
+    pub(crate) async fn local_ready(
+        &self,
+    ) -> Result<meshspan_cluster::MetadataAuthorityObservation, ()> {
+        let observation = self.authority.observe().await.map_err(|_| ())?;
+        if !self.listeners.load(Ordering::Acquire)
+            || observation.persistence_blocked
+            || observation.applied_index != observation.commit_index
+        {
+            return Err(());
+        }
+        Ok(observation)
     }
 
     pub(crate) async fn handle(
@@ -69,9 +89,9 @@ impl UpdateReadiness {
         let incarnation = request.sender_incarnation;
         let header = header.clone();
         let read_header = header.clone();
-        let _permit = tokio::task::spawn_blocking(move || {
-            source.admit(&read_header, from, incarnation, rollout)?;
-            Ok(permit)
+        let (_permit, local_content_scan) = tokio::task::spawn_blocking(move || {
+            let scan = source.admit(&read_header, from, incarnation, rollout)?;
+            Ok((permit, scan))
         })
         .await
         .map_err(|_| ())??;
@@ -101,6 +121,7 @@ impl UpdateReadiness {
                 listeners_bound: self.listeners.load(Ordering::Acquire),
                 runtime_report: self.runtime_report.as_ref().clone(),
                 observed_at_unix_micros: crate::OperatingSystemClock.now().get(),
+                local_content_scan,
             })),
         })
     }
@@ -112,7 +133,7 @@ impl UpdateReadiness {
         from: NodeId,
         incarnation: u64,
         rollout: WorkId,
-    ) -> Result<(), ()> {
+    ) -> Result<Option<UpdateWorkloadObservation>, ()> {
         let now = crate::OperatingSystemClock.now();
         let remaining = header
             .deadline_unix_micros
@@ -143,7 +164,17 @@ impl UpdateReadiness {
             return Err(());
         }
         crate::update_peer::candidate(repository, rollout).map_err(|_| ())?;
-        Ok(())
+        let Some(node) = repository
+            .update_restart_candidate(rollout)
+            .map_err(|_| ())?
+        else {
+            return Ok(None);
+        };
+        self.workload_status.for_preparation(
+            rollout,
+            &node,
+            repository.current_revision().map_err(|_| ())?,
+        )
     }
 }
 
@@ -152,4 +183,114 @@ impl Drop for ServingGuard {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
     }
+}
+
+/// Collect a bounded current-voter witness under one local deadline. Failed or
+/// unavailable peers contribute no evidence; only replicated admission decides
+/// whether the resulting witness suffices for the selected interruption policy.
+pub(crate) async fn probe_surviving_voters(
+    network: ConsensusNetwork,
+    rollout: WorkId,
+    candidate: &UpdateNodeRecord,
+    plan: &meshspan_consensus::ActiveQuorumPlan,
+) -> Result<UpdateRestartReadiness, ()> {
+    let observed_at = crate::OperatingSystemClock.now();
+    let deadline = observed_at.get().checked_add(2_000_000).ok_or(())?;
+    let expires = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    let query = ProbeUpdateReadiness {
+        rollout_id: rollout.as_bytes().to_vec(),
+        quorum_plan_digest: plan.proof_digest().to_vec(),
+        minimum_applied_index: candidate.preparation_log_index.ok_or(())?,
+    };
+    let voters = plan.voters();
+    if voters.len() > 18 {
+        return Err(());
+    }
+    let mut probes = tokio::task::JoinSet::new();
+    for peer in voters.into_iter().filter(|peer| *peer != candidate.node_id) {
+        let network = network.clone();
+        let query = query.clone();
+        probes.spawn(async move { probe_peer(&network, peer, query, deadline, expires).await });
+    }
+    let mut ready_nodes = Vec::new();
+    while let Some(result) = probes.join_next().await {
+        // A transport rejection or failed worker is absent evidence, never ready.
+        if let Ok(Ok(node)) = result {
+            ready_nodes.push(node);
+        }
+    }
+    ready_nodes.sort_unstable_by_key(|node| node.node_id);
+    Ok(UpdateRestartReadiness {
+        quorum_plan_digest: plan.proof_digest(),
+        observed_at,
+        ready_nodes,
+    })
+}
+
+async fn probe_peer(
+    network: &ConsensusNetwork,
+    peer: NodeId,
+    query: ProbeUpdateReadiness,
+    deadline: i64,
+    expires: tokio::time::Instant,
+) -> Result<UpdateReadyNode, ()> {
+    let mut digest = Sha256::new();
+    digest.update(b"meshspan.update.readiness.v1\0");
+    digest.update(&query.rollout_id);
+    digest.update(peer.as_bytes());
+    digest.update(deadline.to_be_bytes());
+    let digest: [u8; 32] = digest.finalize().into();
+    let operation = OperationId::from_bytes(uuid_v8(digest[..16].try_into().map_err(|_| ())?))
+        .map_err(|_| ())?;
+    let header = network
+        .control_header(operation, deadline)
+        .map_err(|_| ())?;
+    let request = ControlEnvelope {
+        header: Some(header.clone()),
+        message: Some(Message::ProbeUpdateReadiness(query.clone())),
+    };
+    // Self-exec may leave a cached QUIC connection without a received close.
+    // A cancelled/failed control request evicts that exact connection. Reserve
+    // half the remaining local budget for one fresh retry of this read only.
+    let first_deadline = tokio::time::Instant::now()
+        + expires.saturating_duration_since(tokio::time::Instant::now()) / 2;
+    let response = match tokio::time::timeout_at(
+        first_deadline,
+        network.request_control(peer, &request),
+    )
+    .await
+    {
+        Ok(Ok(response)) => response,
+        Ok(Err(_)) | Err(_) => {
+            tokio::time::timeout_at(expires, network.request_control(peer, &request))
+                .await
+                .map_err(|_| ())?
+                .map_err(|_| ())?
+        }
+    }
+    .into_inner();
+    let response_header = response.header.ok_or(())?;
+    let Some(Message::UpdateReadinessResult(result)) = response.message else {
+        return Err(());
+    };
+    if response_header.operation_id != operation.as_bytes()
+        || response_header.mesh_id != header.mesh_id
+        || response_header.partition_id != header.partition_id
+        || response_header.sender_node_id != peer.as_bytes()
+        || response_header.sender_incarnation != result.incarnation
+        || result.node_id != peer.as_bytes()
+        || result.rollout_id != query.rollout_id
+        || result.quorum_plan_digest != query.quorum_plan_digest
+        || result.applied_index < query.minimum_applied_index
+        || result.applied_index > result.committed_index
+        || result.persistence_blocked
+        || !result.listeners_bound
+    {
+        return Err(());
+    }
+    Ok(UpdateReadyNode {
+        node_id: peer,
+        incarnation: result.incarnation,
+        applied_index: result.applied_index,
+    })
 }

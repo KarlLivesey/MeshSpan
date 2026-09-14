@@ -4,6 +4,8 @@
 
 use serde_json::{Map, Value, json};
 use std::sync::{Arc, OnceLock};
+#[path = "openapi_federation.rs"]
+mod federation;
 #[path = "openapi_metrics.rs"]
 mod metrics;
 #[path = "openapi_notifications.rs"]
@@ -220,6 +222,36 @@ fn components() -> Value {
             schema_request::<CreateMeshSetupRequest>("CreateMeshSetupRequest"),
             schema_response::<CreateMeshSetupResponse>("CreateMeshSetupResponse"),
             schema_request::<CreateNodeJoinGrantRequest>("CreateNodeJoinGrantRequest"),
+            schema_request::<crate::CreateFederationPairingInvitationRequest>(
+                "CreateFederationPairingInvitationRequest",
+            ),
+            schema_request::<crate::AcceptFederationPairingRequest>(
+                "AcceptFederationPairingRequest",
+            ),
+            schema_request::<crate::ConnectFederationRequest>("ConnectFederationRequest"),
+            schema_request::<crate::ConfigureFederationStorageGrantRequest>(
+                "ConfigureFederationStorageGrantRequest",
+            ),
+            schema_response::<crate::ConfigureFederationStorageGrantResponse>(
+                "ConfigureFederationStorageGrantResponse",
+            ),
+            schema_request::<crate::FederationStorageGrantQuery>("FederationStorageGrantQuery"),
+            schema_response::<crate::FederationStorageGrantResponse>(
+                "FederationStorageGrantResponse",
+            ),
+            schema_response::<crate::ConnectFederationResponse>("ConnectFederationResponse"),
+            schema_response::<crate::AcceptFederationPairingResponse>(
+                "AcceptFederationPairingResponse",
+            ),
+            schema_request::<crate::CancelFederationPairingInvitationRequest>(
+                "CancelFederationPairingInvitationRequest",
+            ),
+            schema_response::<crate::CancelFederationPairingInvitationResponse>(
+                "CancelFederationPairingInvitationResponse",
+            ),
+            schema_response::<crate::CreateFederationPairingInvitationResponse>(
+                "CreateFederationPairingInvitationResponse",
+            ),
             schema_response::<CreateNodeJoinGrantResponse>("CreateNodeJoinGrantResponse"),
             schema_request::<CreatePasskeyChallengeRequest>("CreatePasskeyChallengeRequest"),
             schema_response::<CreatePasskeyChallengeResponse>("CreatePasskeyChallengeResponse"),
@@ -380,6 +412,26 @@ fn paths() -> Value {
                 ("/setup/meshes".to_owned(), create_mesh_path()),
                 ("/setup/joins".to_owned(), join_mesh_path()),
                 ("/setup/enrolments".to_owned(), enrol_node_path()),
+                (
+                    "/admin/federation/invitations".to_owned(),
+                    federation::invitation_path(),
+                ),
+                (
+                    "/admin/federation/invitations/cancel".to_owned(),
+                    federation::cancellation_path(),
+                ),
+                (
+                    "/federation/pairings/accept".to_owned(),
+                    federation::acceptance_path(),
+                ),
+                (
+                    "/admin/federation/connections".to_owned(),
+                    federation::connection_path(),
+                ),
+                (
+                    "/admin/federation/storage-grants".to_owned(),
+                    federation::storage::path(),
+                ),
                 (
                     "/admin/node-join-grants".to_owned(),
                     create_node_join_grant_path(),
@@ -748,7 +800,7 @@ fn backup_destinations_path() -> Value {
         },
         "put": {
             "operationId": "configureBackupDestination",
-            "summary": "Select a registered target or change a destination name and eligibility",
+            "summary": "Configure an exact backup provider binding, name and eligibility",
             "description": "Replicated, audited, revision-checked configuration. A destination retains its exact provider binding; choose a new destination identity for another target or generation. Pausing stops new copies and does not delete retained backups. This endpoint records failure independence as unknown; it never treats another folder or node as proof of independence. Exact retries return the original receipt. Inventory pages are live keyset scans, not historical snapshots.",
             "x-meshspan-access": "system-manager",
             "parameters": [optional_csrf_parameter()],

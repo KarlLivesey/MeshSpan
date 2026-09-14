@@ -89,7 +89,7 @@ pub(crate) fn node_wrapping_private_key() -> Result<WrappingPrivateKey, SecretEn
     WrappingPrivateKey::from_bytes([201; 32])
 }
 
-struct SequentialRandom(u8);
+pub(crate) struct SequentialRandom(pub(crate) u8);
 
 impl RandomSource for SequentialRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {

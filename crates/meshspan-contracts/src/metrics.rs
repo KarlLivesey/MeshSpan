@@ -14,7 +14,7 @@ pub const METRIC_LATENCY_BOUNDARIES_MICROS: [u64; 8] = [
 ];
 
 /// Maximum distinct families in a version-one runtime snapshot.
-pub const MAX_RUNTIME_METRIC_FAMILIES: usize = 55;
+pub const MAX_RUNTIME_METRIC_FAMILIES: usize = 250;
 
 /// Observed local reactor role. None of these states proves a current write quorum.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,8 +40,12 @@ pub enum GatewayProtocol {
 /// Handler outcome, not proof of file publication or delivery to a client.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GatewayDispatchOutcome {
-    /// HTTPS returned a non-5xx response, or SMB dispatch returned normally.
+    /// HTTPS returned a response other than 401, 403 or 5xx, or SMB dispatch returned normally.
     Returned,
+    /// HTTPS returned 401; includes missing credentials, not just failed sign-in attempts.
+    AuthenticationRequired,
+    /// HTTPS returned 403; not an assertion about why the access policy refused the request.
+    Forbidden,
     /// HTTPS returned a 5xx response, or the SMB handler returned an error.
     Failed,
     /// Dispatch was dropped before returning, including task cancellation or unwinding.
@@ -144,11 +148,43 @@ pub enum ConsensusMetric {
     PersistenceBlocked(bool),
     /// Whether a leader identity is known; never a reachability assertion.
     LeaderKnown(bool),
+    /// Remote members in the active stable or joint plan, including learners.
+    RemoteMembers(u64),
+    /// Locally committed entries not yet applied by this reactor.
+    ApplyGap(u64),
+    /// Remote members with no leader-local match position; absent on non-leaders.
+    ReplicationUnknownMembers(u64),
+    /// Remote members tracked behind the committed head; not a reachability assertion.
+    ReplicationLaggingMembers(u64),
+    /// Largest committed-entry gap among tracked peers; unknown peers are excluded.
+    ReplicationMaximumCommittedGap(u64),
 }
 
 /// Closed version-one measurement vocabulary; identities and free-text labels are absent.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RuntimeMetric {
+    /// Read-only operational inventory, separate from worker outcome counters.
+    Inventory(crate::InventoryMetric),
+    /// Operational worker-pass outcomes; not unique jobs or global inventory.
+    Lifecycle(crate::LifecycleKind, crate::LifecycleMetric),
+    /// Shared filesystem adapter calls, independent of the access protocol.
+    FilesystemOperation(crate::FileOperationKind, crate::FileOperationMetric),
+    /// Verified logical bytes returned to connectors, not sent to clients.
+    FilesystemReadBytes(u64),
+    /// Bytes accepted by successful stage-range writes, including replay; not published bytes.
+    FilesystemStagedWriteBytes(u64),
+    /// Verified publication acknowledgements returned by the publication barrier, including replay.
+    FilePublications(meshspan_domain::DurabilityScope, u64),
+    /// Actual coding calls, separate from transport and durable publication.
+    Coding(crate::CodingOperation, crate::CodingMetric),
+    /// Transport bytes and IO errors; never a durable file-operation outcome.
+    GatewayTransfer(GatewayProtocol, crate::GatewayTransferMetric),
+    /// Durable progress in the retained maintenance job set, with explicit missing evidence.
+    MaintenanceProgress(crate::MaintenanceProgressMetric),
+    /// Provider IO observations; never physical traffic or file-publication proof.
+    StorageIo(crate::StorageIoKind, crate::StorageIoMetric),
+    /// Paged recorded-location assessments, never current read availability.
+    Protection(crate::ProtectionMetric),
     /// Local reactor observations, never a fresh quorum or write-admission decision.
     Consensus(ConsensusMetric),
     /// Selected maintenance-attempt observations by fixed kind and measurement.
@@ -189,6 +225,10 @@ pub enum RuntimeMetric {
     HttpsDispatches(u64),
     /// HTTP responses with a 5xx status, not all authentication or domain rejections.
     HttpsServerErrors(u64),
+    /// HTTPS responses with status 401, including requests without credentials.
+    HttpsAuthenticationRequired(u64),
+    /// HTTPS responses with status 403; concealed-resource 404 responses are not counted.
+    HttpsForbidden(u64),
     /// HTTPS dispatch futures dropped before producing a response.
     HttpsCancelledDispatches(u64),
     /// HTTPS dispatch lifetime, excluding subsequent response-body streaming.
@@ -197,6 +237,8 @@ pub enum RuntimeMetric {
     SmbDispatches(u64),
     /// SMB handler errors; an ordinary SMB error-status response is not a handler error.
     SmbDispatchErrors(u64),
+    /// Parsed SMB authentication proofs rejected by shared credential authority, not wire errors.
+    SmbAuthenticationRejections(u64),
     /// SMB dispatch futures dropped before returning.
     SmbCancelledDispatches(u64),
     /// SMB payload dispatch lifetime, excluding response socket writes.
@@ -235,6 +277,10 @@ impl RuntimeMetricSnapshot {
     /// Rejects duplicate families or contradictory histograms.
     pub fn validate(&self) -> Result<(), ContractError> {
         for (index, sample) in self.samples().iter().enumerate() {
+            if let RuntimeMetric::Lifecycle(_, crate::LifecycleMetric::Duration(histogram)) = sample
+            {
+                histogram.validate()?;
+            }
             if self.samples()[..index]
                 .iter()
                 .any(|previous| same_family(previous, sample))
@@ -249,6 +295,20 @@ impl RuntimeMetricSnapshot {
                 histogram.validate()?;
             }
             if let RuntimeMetric::Maintenance(_, MaintenanceMetric::Duration(histogram)) = sample {
+                histogram.validate()?;
+            }
+            if let RuntimeMetric::StorageIo(_, crate::StorageIoMetric::Duration(histogram)) = sample
+            {
+                histogram.validate()?;
+            }
+            if let RuntimeMetric::Coding(_, crate::CodingMetric::Duration(histogram)) = sample {
+                histogram.validate()?;
+            }
+            if let RuntimeMetric::FilesystemOperation(
+                _,
+                crate::FileOperationMetric::Duration(histogram),
+            ) = sample
+            {
                 histogram.validate()?;
             }
         }
@@ -271,6 +331,45 @@ impl RuntimeMetricSnapshot {
 
 fn same_family(left: &RuntimeMetric, right: &RuntimeMetric) -> bool {
     match (left, right) {
+        (RuntimeMetric::Inventory(left), RuntimeMetric::Inventory(right)) => {
+            std::mem::discriminant(left) == std::mem::discriminant(right)
+        }
+        (
+            RuntimeMetric::Lifecycle(left_kind, left),
+            RuntimeMetric::Lifecycle(right_kind, right),
+        ) => {
+            left_kind == right_kind && std::mem::discriminant(left) == std::mem::discriminant(right)
+        }
+        (
+            RuntimeMetric::FilesystemOperation(left_kind, left),
+            RuntimeMetric::FilesystemOperation(right_kind, right),
+        ) => {
+            left_kind == right_kind && std::mem::discriminant(left) == std::mem::discriminant(right)
+        }
+        (RuntimeMetric::FilePublications(left, _), RuntimeMetric::FilePublications(right, _)) => {
+            left == right
+        }
+        (RuntimeMetric::Coding(left_kind, left), RuntimeMetric::Coding(right_kind, right)) => {
+            left_kind == right_kind && std::mem::discriminant(left) == std::mem::discriminant(right)
+        }
+        (
+            RuntimeMetric::GatewayTransfer(left_kind, left),
+            RuntimeMetric::GatewayTransfer(right_kind, right),
+        ) => {
+            left_kind == right_kind && std::mem::discriminant(left) == std::mem::discriminant(right)
+        }
+        (RuntimeMetric::MaintenanceProgress(left), RuntimeMetric::MaintenanceProgress(right)) => {
+            std::mem::discriminant(left) == std::mem::discriminant(right)
+        }
+        (
+            RuntimeMetric::StorageIo(left_kind, left),
+            RuntimeMetric::StorageIo(right_kind, right),
+        ) => {
+            left_kind == right_kind && std::mem::discriminant(left) == std::mem::discriminant(right)
+        }
+        (RuntimeMetric::Protection(left), RuntimeMetric::Protection(right)) => {
+            std::mem::discriminant(left) == std::mem::discriminant(right)
+        }
         (RuntimeMetric::Consensus(left), RuntimeMetric::Consensus(right)) => {
             std::mem::discriminant(left) == std::mem::discriminant(right)
         }

@@ -482,7 +482,7 @@ impl SecretGenerationAuthority for ConsensusAuthenticationAuthority {
     ) -> Result<Option<meshspan_metadata::SecretGenerationRecord>, SecretGenerationAuthorityError>
     {
         self.reader()
-            .secret_generation(context)
+            .runtime_secret_generation(context)
             .map_err(|error| map_volume_key_repository_error(&error))
     }
 }

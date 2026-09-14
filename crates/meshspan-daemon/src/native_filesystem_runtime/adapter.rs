@@ -20,6 +20,7 @@ use meshspan_filesystem::{
 };
 
 use super::{NativeFilesystemRuntime, NativeFilesystemRuntimeError};
+use meshspan_contracts::FileOperationKind;
 
 impl FilesystemFileAdapter for NativeFilesystemRuntime {
     type Error = NativeFilesystemRuntimeError;
@@ -29,7 +30,11 @@ impl FilesystemFileAdapter for NativeFilesystemRuntime {
         context: meshspan_filesystem::FilesystemAccessContext,
         request: &AdapterOpenFileRequest,
     ) -> Result<meshspan_filesystem::OpenHandleReceipt, Self::Error> {
-        self.with_mut(|filesystem| filesystem.open_existing_file(context, request))
+        self.observations.measure_filesystem(
+            FileOperationKind::Open,
+            || self.with_mut(|filesystem| filesystem.open_existing_file(context, request)),
+            |_| 0,
+        )
     }
 
     fn read_file(
@@ -37,7 +42,11 @@ impl FilesystemFileAdapter for NativeFilesystemRuntime {
         context: meshspan_filesystem::FilesystemAccessContext,
         request: AdapterReadFileRequest,
     ) -> Result<FilesystemHandleReadReceipt, Self::Error> {
-        self.with_mut(|filesystem| filesystem.read_file(context, request))
+        self.observations.measure_filesystem(
+            FileOperationKind::Read,
+            || self.with_mut(|filesystem| filesystem.read_file(context, request)),
+            |receipt| receipt.bytes.len() as u64,
+        )
     }
 
     fn write_file(
@@ -45,7 +54,11 @@ impl FilesystemFileAdapter for NativeFilesystemRuntime {
         context: meshspan_filesystem::FilesystemAccessContext,
         request: &AdapterWriteFileRequest,
     ) -> Result<FilesystemHandleWriteReceipt, Self::Error> {
-        self.with_mut(|filesystem| filesystem.write_file(context, request))
+        self.observations.measure_filesystem(
+            FileOperationKind::StageWrite,
+            || self.with_mut(|filesystem| filesystem.write_file(context, request)),
+            |_| request.bytes.len() as u64,
+        )
     }
 
     fn flush_file(
@@ -53,9 +66,16 @@ impl FilesystemFileAdapter for NativeFilesystemRuntime {
         context: meshspan_filesystem::FilesystemAccessContext,
         request: AdapterFlushFileRequest,
     ) -> Result<NamespacePublicationReceipt, Self::Error> {
-        let receipt = self.with_mut(|filesystem| filesystem.flush_file(context, request))?;
-        self.publish_file_head(receipt, request.observed_at)?;
-        Ok(receipt)
+        self.observations.measure_filesystem(
+            FileOperationKind::Flush,
+            || {
+                let receipt =
+                    self.with_mut(|filesystem| filesystem.flush_file(context, request))?;
+                self.publish_file_head(receipt, request.observed_at)?;
+                Ok(receipt)
+            },
+            |_| 0,
+        )
     }
 
     fn stat(
@@ -79,9 +99,7 @@ impl FilesystemFileAdapter for NativeFilesystemRuntime {
         context: meshspan_filesystem::FilesystemAccessContext,
         request: &AdapterCreateDirectoryRequest,
     ) -> Result<DirectoryPublicationReceipt, Self::Error> {
-        let receipt = self.with_mut(|filesystem| filesystem.create_directory(context, request))?;
-        self.publish_namespace_head(receipt.namespace_commit_id, None, request.observed_at)?;
-        Ok(receipt)
+        self.with_mut(|filesystem| filesystem.create_directory(context, request))
     }
 
     fn create_file(
@@ -101,9 +119,7 @@ impl FilesystemFileAdapter for NativeFilesystemRuntime {
         context: meshspan_filesystem::FilesystemAccessContext,
         request: &AdapterUnlinkRequest,
     ) -> Result<NamespaceUnlinkReceipt, Self::Error> {
-        let receipt = self.with_mut(|filesystem| filesystem.unlink(context, request))?;
-        self.publish_namespace_head(receipt.namespace_commit_id, None, request.observed_at)?;
-        Ok(receipt)
+        self.with_mut(|filesystem| filesystem.unlink(context, request))
     }
 
     fn rename(
@@ -111,9 +127,7 @@ impl FilesystemFileAdapter for NativeFilesystemRuntime {
         context: meshspan_filesystem::FilesystemAccessContext,
         request: &AdapterRenameRequest,
     ) -> Result<NamespaceRenameReceipt, Self::Error> {
-        let receipt = self.with_mut(|filesystem| filesystem.rename(context, request))?;
-        self.publish_namespace_head(receipt.namespace_commit_id, None, request.observed_at)?;
-        Ok(receipt)
+        self.with_mut(|filesystem| filesystem.rename(context, request))
     }
 
     fn close_file(
@@ -121,14 +135,18 @@ impl FilesystemFileAdapter for NativeFilesystemRuntime {
         context: meshspan_filesystem::FilesystemAccessContext,
         request: AdapterCloseFileRequest,
     ) -> Result<FilesystemHandleCloseReceipt, Self::Error> {
-        let receipt = self.with_mut(|filesystem| filesystem.close_file(context, request))?;
-        if let Some(flush) = receipt.flush {
-            self.publish_file_head(flush, request.observed_at)?;
-        }
-        if let Some(delete) = receipt.delete {
-            self.publish_namespace_head(delete.namespace_commit_id, None, request.observed_at)?;
-        }
-        Ok(receipt)
+        self.observations.measure_filesystem(
+            FileOperationKind::Close,
+            || {
+                let receipt =
+                    self.with_mut(|filesystem| filesystem.close_file(context, request))?;
+                if let Some(flush) = receipt.flush {
+                    self.publish_file_head(flush, request.observed_at)?;
+                }
+                Ok(receipt)
+            },
+            |_| 0,
+        )
     }
 
     fn renew_lease(
@@ -196,7 +214,11 @@ impl FilesystemUploadAdapter for NativeFilesystemRuntime {
         context: meshspan_filesystem::FilesystemAccessContext,
         request: &AdapterUploadWriteRequest,
     ) -> Result<UploadWriteReceipt, Self::Error> {
-        self.with_mut(|filesystem| filesystem.write_upload(context, request))
+        self.observations.measure_filesystem(
+            FileOperationKind::StageWrite,
+            || self.with_mut(|filesystem| filesystem.write_upload(context, request)),
+            |_| request.bytes.len() as u64,
+        )
     }
 
     fn upload_range_page(
@@ -220,22 +242,30 @@ impl FilesystemUploadAdapter for NativeFilesystemRuntime {
         context: meshspan_filesystem::FilesystemAccessContext,
         request: AdapterUploadCommitRequest,
     ) -> Result<UploadCommitReceipt, Self::Error> {
-        let mut receipt = self.with_mut(|filesystem| filesystem.commit_upload(context, request))?;
-        let acknowledgement = self.publish_file_head(receipt.publication, request.observed_at)?;
-        let expected = if receipt.acknowledgement.acknowledged_class
-            == meshspan_filesystem::ContentAcknowledgementClass::Strong
-        {
-            receipt
-                .acknowledgement
-                .globally_converged()
-                .ok_or(NativeFilesystemRuntimeError::StrongBarrierFailed)?
-        } else {
-            receipt.acknowledgement
-        };
-        if acknowledgement != expected {
-            return Err(NativeFilesystemRuntimeError::StrongBarrierFailed);
-        }
-        receipt.acknowledgement = acknowledgement;
-        Ok(receipt)
+        self.observations.measure_filesystem(
+            FileOperationKind::UploadCommit,
+            || {
+                let mut receipt =
+                    self.with_mut(|filesystem| filesystem.commit_upload(context, request))?;
+                let acknowledgement =
+                    self.publish_file_head(receipt.publication, request.observed_at)?;
+                let expected = if receipt.acknowledgement.acknowledged_class
+                    == meshspan_filesystem::ContentAcknowledgementClass::Strong
+                {
+                    receipt
+                        .acknowledgement
+                        .globally_converged()
+                        .ok_or(NativeFilesystemRuntimeError::StrongBarrierFailed)?
+                } else {
+                    receipt.acknowledgement
+                };
+                if acknowledgement != expected {
+                    return Err(NativeFilesystemRuntimeError::StrongBarrierFailed);
+                }
+                receipt.acknowledgement = acknowledgement;
+                Ok(receipt)
+            },
+            |_| 0,
+        )
     }
 }

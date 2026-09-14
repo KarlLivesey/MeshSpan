@@ -31,6 +31,10 @@ fn complete_configuration_preserves_native_paths_and_typed_join_secret()
         OsString::from("127.0.0.1:9080"),
         OsString::from("--smb-listen"),
         OsString::from("127.0.0.1:1445"),
+        OsString::from("--private-listen"),
+        OsString::from("127.0.0.1:9444"),
+        OsString::from("--private-endpoint"),
+        OsString::from("127.0.0.1:9444"),
         OsString::from("--claim-output"),
         OsString::from("/run/meshspan/claim"),
         OsString::from("--storage-path"),
@@ -62,6 +66,24 @@ fn complete_configuration_preserves_native_paths_and_typed_join_secret()
         parsed_grant.enrolment_endpoint(),
         grant.enrolment_endpoint()
     );
+    let arguments = config.restart_arguments();
+    assert!(!arguments.contains(&OsString::from(encoded.as_str())));
+    let restarted = HeadlessDaemonConfig::parse(arguments)?;
+    assert!(restarted.join_grant().is_none());
+    assert_eq!(
+        restarted.storage().daemon_state_dir(),
+        config.storage().daemon_state_dir()
+    );
+    assert_eq!(
+        restarted.storage().storage_paths(),
+        config.storage().storage_paths()
+    );
+    assert_eq!(restarted.https_listen(), config.https_listen());
+    assert_eq!(restarted.http01_listen(), config.http01_listen());
+    assert_eq!(restarted.smb_listen(), config.smb_listen());
+    assert_eq!(restarted.private_listen(), config.private_listen());
+    assert_eq!(restarted.private_endpoint(), config.private_endpoint());
+    assert_eq!(restarted.claim_output(), config.claim_output());
     Ok(())
 }
 

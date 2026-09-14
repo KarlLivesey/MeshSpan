@@ -63,7 +63,7 @@ impl UpdateService {
         self.checkpoint(record, &node, phase, target, digest)
     }
 
-    fn checkpoint(
+    pub(super) fn checkpoint(
         &self,
         record: &UpdateRolloutRecord,
         node: &UpdateNodeRecord,
@@ -103,7 +103,11 @@ impl UpdateService {
     }
 }
 
-fn retain_evidence(directory: &Path, bytes: &[u8], digest: &[u8; 32]) -> Result<(), UpdateError> {
+pub(super) fn retain_evidence(
+    directory: &Path,
+    bytes: &[u8],
+    digest: &[u8; 32],
+) -> Result<(), UpdateError> {
     let directory =
         crate::daemon_local_state::ensure_private_directory(&directory.join("update-evidence"))
             .map_err(|_| UpdateError::Failed)?;

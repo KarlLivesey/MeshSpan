@@ -15,6 +15,7 @@ mod content_key;
 mod content_key_transit;
 mod content_publisher;
 mod content_reader;
+mod content_recovery;
 mod content_repair;
 mod content_transfer;
 mod directory;
@@ -26,6 +27,9 @@ mod namespace_query;
 mod publication;
 mod reachability;
 mod reconciliation;
+mod recovery_snapshot;
+pub use content_recovery::{ContentRecoverySummary, RecoveryShardSource};
+pub use recovery_snapshot::{RecoverySnapshotError, snapshot_recovery_journals};
 mod stage_range_index;
 mod stage_store;
 mod staging;
@@ -64,15 +68,16 @@ pub use cleanup_retirement::{
 };
 pub use commit_service::{
     ContentPublicationError, ContentPublicationRequest, DurableContentPublisher,
-    FilesystemCommitError, FilesystemCommitService, RootFileCommitRequest,
+    FilesystemCommitError, FilesystemCommitService, RootFileCommitRequest, VerifiedContentReuse,
 };
 pub use content_catalog::{
     CommittedContentLayoutTransfer, CommittedProtectedStripe, CommittedShardInventory,
     CommittedShardPage, ContentCatalogError, DurableContentCatalog, PendingContentChunkPage,
     PendingProtectedShardPage, PreparedContentChunk, PreparedContentLayout, PreparedProtectedShard,
-    PreparedProtectedStripe, ProtectedShardCursor, ShardRepairCandidate, ShardRepairTransition,
-    TargetShardCursor, TargetShardPage, TargetShardRoute, VolumeStripeCursor, VolumeStripePage,
-    VolumeStripeRecord,
+    PreparedProtectedStripe, ProtectedShardCursor, ReadAvailabilityScopes, ShardRepairCandidate,
+    ShardRepairTransition, TargetShardCursor, TargetShardPage, TargetShardRoute,
+    VolumeReadAvailabilityError, VolumeReadAvailabilityProbe, VolumeReadAvailabilityProgress,
+    VolumeStripeCursor, VolumeStripePage, VolumeStripeRecord,
 };
 pub use content_crypto::{
     ContentChunkCipher, ContentChunkLimits, ContentCryptoError, ContentEncryptionKey,
@@ -93,7 +98,9 @@ pub use content_publisher::{
 pub use content_reader::{
     ContentReadError, ContentReadRequest, DurableContentReader, PublishedContentReference,
 };
-pub use content_repair::{ProtectedShardRepairer, ShardRepairRequest};
+pub use content_repair::{
+    ProtectedShardRepairer, ShardRepairRequest, StripeReadRequest, restore_recovery_stripe,
+};
 pub use content_transfer::{
     ContentLayoutChunk, ContentLayoutTransferError, ContentLayoutTransferHeader,
     ContentLayoutTransferPage, MAXIMUM_CONTENT_LAYOUT_PAGE_ITEMS, provider_operation_id,
@@ -126,13 +133,15 @@ pub use namespace_query::{
 pub use publication::{
     BranchNamespaceHead, DirectoryPublication, DirectoryPublicationReceipt,
     DirectoryRevisionTransition, FederatedNamespaceMutationProposal, FilePublication,
-    ManifestPublication, NamespaceHistoryBundle, NamespaceHistoryCommitRecord,
-    NamespaceHistoryImmutableKind, NamespaceHistoryImmutableRecord, NamespaceHistoryImport,
-    NamespaceHistoryLimits, NamespaceHistoryMutationAuthority, NamespaceHistoryMutationDecision,
-    NamespaceHistoryObjectRequest, NamespaceHistoryPage, NamespaceHistoryPageRequest,
-    NamespaceHistoryReceiveCompletion, NamespaceHistoryReceivePreparation,
-    NamespaceHistoryReceiveRequest, NamespaceHistoryReceiveStatus, NamespaceHistoryRecordError,
-    NamespacePublicationPath, NamespacePublicationReceipt, NamespaceReconciliationApplication,
+    ManifestPublication, NamespaceConvergenceEvidence, NamespaceConvergenceJob,
+    NamespaceConvergenceOutcome, NamespaceDelivery, NamespaceHistoryBundle,
+    NamespaceHistoryCommitRecord, NamespaceHistoryImmutableKind, NamespaceHistoryImmutableRecord,
+    NamespaceHistoryImport, NamespaceHistoryLimits, NamespaceHistoryMutationAuthority,
+    NamespaceHistoryMutationDecision, NamespaceHistoryObjectRequest, NamespaceHistoryPage,
+    NamespaceHistoryPageRequest, NamespaceHistoryReceiveCompletion,
+    NamespaceHistoryReceivePreparation, NamespaceHistoryReceiveRequest,
+    NamespaceHistoryReceiveStatus, NamespaceHistoryRecordError, NamespacePublicationPath,
+    NamespacePublicationReceipt, NamespaceReconciliationApplication,
     NamespaceReconciliationReceipt, NamespaceRenamePublication, NamespaceRenameReceipt,
     NamespaceUnlinkAuthority, NamespaceUnlinkPublication, NamespaceUnlinkReceipt,
     PublicationDisposition, PublicationError, PublicationPathError, RootFilePublication,

@@ -25,20 +25,23 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 
 use super::identity::certificate_fingerprint;
 use super::{
-    AuthenticatedFederationHello, FederationAuthorityPageExpectation, FederationExchangeContext,
-    FederationHelloConfig, FederationHelloContext, FederationHelloExpectation,
-    FederationLocalIdentity, FederationLocalIdentityBinding, FederationNegotiationConfig,
-    FederationPeerBinding, FederationPeerRegistry, FederationReplayGuard, FederationWelcomeNonces,
-    NegotiationConfig, NodeCredentials, OutboundFederationHello, PeerBinding, PeerRegistry,
-    StreamKind, TransportError, TransportLimits, accept_stream, client_endpoint, connect,
-    open_stream, receive_control, receive_data_control, receive_data_frame, receive_federation,
-    send_control, send_data_control, send_data_frame, send_federation, server_endpoint,
-    signed_federation_authority_fetch, signed_federation_authority_page, signed_federation_hello,
+    AuthenticatedFederationHello, AuthenticatedPeer, FederationAuthorityPageExpectation,
+    FederationExchangeContext, FederationHelloConfig, FederationHelloContext,
+    FederationHelloExpectation, FederationLocalIdentity, FederationLocalIdentityBinding,
+    FederationNegotiationConfig, FederationPeerBinding, FederationPeerRegistry,
+    FederationReplayGuard, FederationWelcomeNonces, NegotiationConfig, NodeCredentials,
+    OutboundFederationHello, PeerBinding, PeerRegistry, StreamKind, TransportError,
+    TransportLimits, accept_stream, client_endpoint, connect, open_stream, receive_control,
+    receive_data_control, receive_data_frame, receive_federation, send_control, send_data_control,
+    send_data_frame, send_federation, server_endpoint, signed_federation_authority_fetch,
+    signed_federation_authority_page, signed_federation_hello,
 };
 
+mod federation_backup;
 mod federation_branch_page;
 mod federation_content_layout;
 mod federation_content_shard;
+mod federation_endpoint;
 mod federation_storage;
 
 const CERTIFICATE_NAME: &str = "meshspan.internal";
@@ -91,35 +94,7 @@ async fn real_quinn_mtls_binds_peers_and_round_trips_an_independent_stream()
     assert_eq!(authenticated_client.node_id(), client_node);
     assert_eq!(authenticated_server.node_id(), server_node);
 
-    let mesh_id = MeshId::from_bytes([9; 16])?;
-    authenticated_client.verify_hello(mesh_id, &hello(mesh_id, client_node, 7))?;
-    assert!(matches!(
-        authenticated_client.verify_hello(mesh_id, &hello(mesh_id, server_node, 7)),
-        Err(TransportError::UntrustedPeer)
-    ));
-    let mut offered = hello(mesh_id, client_node, 7);
-    offered.versions = vec![version(1, 0), version(1, 2), version(2, 0)];
-    offered.maximum_control_bytes = 128 * 1_024;
-    offered.maximum_data_frame_bytes = 2 * 1_024 * 1_024;
-    offered.maximum_streams = 96;
-    let welcome = authenticated_client.negotiate(
-        mesh_id,
-        &offered,
-        &NegotiationConfig {
-            versions: vec![version(1, 0), version(1, 2)],
-            partition_ids: vec![PartitionId::from_bytes([11; 16])?.as_bytes()],
-            leader_node_id: Some(server_node),
-            routing_epoch: 4,
-            maximum_control_bytes: 64 * 1_024,
-            maximum_data_frame_bytes: 4 * 1_024 * 1_024,
-            maximum_streams: 128,
-        },
-    )?;
-    assert_eq!(welcome.selected_version, Some(version(1, 2)));
-    assert_eq!(welcome.maximum_control_bytes, 64 * 1_024);
-    assert_eq!(welcome.maximum_data_frame_bytes, 2 * 1_024 * 1_024);
-    assert_eq!(welcome.maximum_streams, 96);
-    assert_eq!(welcome.peer_node_id, client_node.as_bytes());
+    prove_node_negotiation(authenticated_client, server_node)?;
 
     let (mut client_send, _client_receive) =
         open_stream(&client_connection, StreamKind::Consensus).await?;
@@ -141,11 +116,57 @@ async fn real_quinn_mtls_binds_peers_and_round_trips_an_independent_stream()
     );
 
     prove_data_framing(&client_connection, &server_connection, limits.wire).await?;
+    federation_backup::prove_node_relay(
+        &client_connection,
+        &server_connection,
+        authenticated_client,
+        limits.wire,
+    )
+    .await?;
 
     client_connection.close(0_u32.into(), b"test complete");
     server_connection.close(0_u32.into(), b"test complete");
     client.wait_idle().await;
     server.wait_idle().await;
+    Ok(())
+}
+
+fn prove_node_negotiation(
+    client: AuthenticatedPeer,
+    server_node: NodeId,
+) -> Result<(), Box<dyn Error>> {
+    let mesh_id = MeshId::from_bytes([9; 16])?;
+    client.verify_hello(
+        mesh_id,
+        &hello(mesh_id, client.node_id(), client.incarnation()),
+    )?;
+    assert!(matches!(
+        client.verify_hello(mesh_id, &hello(mesh_id, server_node, client.incarnation())),
+        Err(TransportError::UntrustedPeer)
+    ));
+    let mut offered = hello(mesh_id, client.node_id(), client.incarnation());
+    offered.versions = vec![version(1, 0), version(1, 2), version(2, 0)];
+    offered.maximum_control_bytes = 128 * 1_024;
+    offered.maximum_data_frame_bytes = 2 * 1_024 * 1_024;
+    offered.maximum_streams = 96;
+    let welcome = client.negotiate(
+        mesh_id,
+        &offered,
+        &NegotiationConfig {
+            versions: vec![version(1, 0), version(1, 2)],
+            partition_ids: vec![PartitionId::from_bytes([11; 16])?.as_bytes()],
+            leader_node_id: Some(server_node),
+            routing_epoch: 4,
+            maximum_control_bytes: 64 * 1_024,
+            maximum_data_frame_bytes: 4 * 1_024 * 1_024,
+            maximum_streams: 128,
+        },
+    )?;
+    assert_eq!(welcome.selected_version, Some(version(1, 2)));
+    assert_eq!(welcome.maximum_control_bytes, 64 * 1_024);
+    assert_eq!(welcome.maximum_data_frame_bytes, 2 * 1_024 * 1_024);
+    assert_eq!(welcome.maximum_streams, 96);
+    assert_eq!(welcome.peer_node_id, client.node_id().as_bytes());
     Ok(())
 }
 
@@ -711,6 +732,7 @@ async fn prove_federation_authority_page(
     federation_content_layout::prove_federation_content_layout_page(proof).await?;
     federation_content_shard::prove_federation_content_shard_header(proof).await?;
     federation_storage::prove_storage_capability_response(proof)?;
+    Box::pin(federation_backup::prove_responses(proof)).await?;
     Ok(())
 }
 
@@ -814,6 +836,7 @@ fn prove_hostile_federation_hellos(
         signing_key,
         limits,
     )?;
+    federation_backup::prove_requests(registry, connection, &certificate, signing_key, limits)?;
     Ok(())
 }
 

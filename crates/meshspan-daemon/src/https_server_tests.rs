@@ -7,6 +7,9 @@ use std::sync::Arc;
 use axum::Router;
 use axum::routing::get;
 use meshspan_api_contract::HealthStatus;
+use meshspan_contracts::{
+    GatewayProtocol, GatewayTransferMetric, RuntimeMetric, RuntimeMetricSource,
+};
 use meshspan_test_certificates::CertificateAuthority;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName};
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
@@ -23,12 +26,14 @@ const CERTIFICATE_NAME: &str = "node.meshspan.test";
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_tls13_listener_isolates_plaintext_and_serves_https() -> Result<(), Box<dyn Error>> {
     let certificates = TestCertificates::new()?;
+    let observations = crate::runtime_observations::RuntimeObservations::default();
     let server = HttpsServer::bind(
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         Arc::new(certificates.server_config()?),
         public_contract_api_router(Arc::new(Ready))?,
     )
-    .await?;
+    .await?
+    .with_transfer_observer(Arc::new(observations.clone()));
     let address = server.local_addr()?;
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let server_task = tokio::spawn(server.run_until(async move {
@@ -43,6 +48,18 @@ async fn real_tls13_listener_isolates_plaintext_and_serves_https() -> Result<(),
 
     assert!(shutdown_tx.send(()).is_ok());
     server_task.await??;
+    let request =
+        b"GET /api/latest/health HTTP/1.1\r\nHost: node.meshspan.test\r\nConnection: close\r\n\r\n";
+    let samples = observations.collect_metrics()?;
+    for metric in [
+        GatewayTransferMetric::ReceivedBytes(request.len() as u64),
+        GatewayTransferMetric::SentBytes(response.len() as u64),
+    ] {
+        assert!(samples.samples().contains(&RuntimeMetric::GatewayTransfer(
+            GatewayProtocol::Https,
+            metric
+        )));
+    }
     Ok(())
 }
 

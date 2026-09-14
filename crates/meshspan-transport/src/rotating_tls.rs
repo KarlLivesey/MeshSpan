@@ -96,6 +96,12 @@ impl RotatingNodeTransport {
         self.server.clone()
     }
 
+    /// Closes both directions for every clone during owner shutdown; the transport cannot restart.
+    pub fn close(&self) {
+        self.server.close(0_u32.into(), b"node stopped");
+        self.client.close(0_u32.into(), b"node stopped");
+    }
+
     /// Reports the exact selection for new handshakes without exposing private key material.
     ///
     /// # Errors

@@ -31,7 +31,13 @@ mod backup_catalogue;
 #[cfg(test)]
 mod backup_catalogue_tests;
 mod backup_defaults;
+mod backup_orphan;
+mod backup_roots;
+pub use backup_orphan::AbandonedBackupRetirement;
+mod backup_intent;
 mod backup_reclamation;
+#[cfg(test)]
+mod backup_recovery_tests;
 mod backup_retention;
 mod backup_run;
 #[cfg(test)]
@@ -46,9 +52,12 @@ mod cleanup_attestation;
 mod cleanup_completion;
 mod cleanup_inventory;
 mod cleanup_permit;
+mod cleanup_storage;
+pub use cleanup_storage::VersionCleanupStorageAuthority;
 mod cleanup_reclamation;
 mod cluster;
 mod component;
+mod federated_backup_route;
 mod update_artifact;
 mod update_restart;
 pub use update_artifact::UpdateArtifactSource;
@@ -57,18 +66,20 @@ mod update_rollout_queries;
 #[cfg(test)]
 mod update_rollout_tests;
 pub use update_rollout_queries::{
-    UpdateNodeRecord, UpdateProgressCounts, UpdateRolloutRecord, UpdateRolloutState,
-    UpdateSignerRecord,
+    UpdateAdministrationSnapshot, UpdateNodeRecord, UpdateProgressCounts, UpdateRolloutRecord,
+    UpdateRolloutState, UpdateSignerRecord,
 };
 mod consensus;
 mod external_certificate;
 mod federation_actor_attestation;
 #[cfg(test)]
 mod federation_actor_attestation_tests;
+mod federation_allocation_page;
 mod federation_assignment;
 mod federation_authority_snapshot;
 #[cfg(test)]
 mod federation_backup_test_support;
+mod federation_connection_intent;
 #[cfg(test)]
 mod federation_downstream_tests;
 mod federation_grant;
@@ -81,6 +92,11 @@ mod federation_grant_tests;
 mod federation_mutation_admission;
 #[cfg(test)]
 mod federation_mutation_admission_tests;
+mod federation_pairing;
+mod federation_pairing_connection;
+mod federation_storage_lease;
+pub use federation_connection_intent::FederationConnectionIntentRecord;
+pub use federation_pairing_connection::FederationPairingConnectionRecord;
 mod federation_quarantine;
 mod federation_quarantine_codec;
 mod federation_quarantine_evidence;
@@ -93,6 +109,13 @@ mod federation_relationship_evidence;
 #[cfg(test)]
 mod federation_relationship_tests;
 mod federation_storage_allocation;
+mod federation_storage_maintenance;
+mod federation_storage_provisioning;
+mod federation_storage_seal;
+pub use federation_storage_maintenance::{
+    FederationStorageMaintenanceCursor, FederationStorageMaintenanceItem, NodeAttestationContext,
+};
+pub use federation_storage_provisioning::FederationStorageAllocationProposal;
 #[cfg(test)]
 mod federation_storage_allocation_tests;
 mod federation_succession;
@@ -149,6 +172,13 @@ mod quorum_plan;
 mod reachability;
 mod receipt;
 mod recovery_authority;
+mod recovery_preparation;
+pub(crate) use cluster::valid_private_endpoint;
+pub use recovery_preparation::{
+    RecoveryControlKeys, RecoveryCredentialFence, RecoveryKeyInstallation,
+    RecoveryRestorationReceipt, RecoverySecretInventory, RecoverySecretInventoryBuilder,
+    RecoveryStateInstallation, prepare_authorized_partition_recovery,
+};
 #[cfg(test)]
 mod recovery_authority_tests;
 mod retention;
@@ -158,6 +188,7 @@ mod routing;
 mod secret_generation;
 #[cfg(test)]
 mod secret_generation_tests;
+mod secret_inventory;
 mod session;
 mod session_access;
 #[cfg(test)]
@@ -223,7 +254,7 @@ pub use backup_catalogue::{
     BackupCopyRecord, BackupCopyState, BackupDestinationCursor, BackupDestinationRecord,
     BackupDestinationState, MetadataBackupRecord, MetadataBackupState,
 };
-pub use backup_reclamation::BackupReclamationCursor;
+pub use backup_reclamation::{BackupReclamationCandidate, BackupReclamationCursor};
 pub use backup_run::{
     MetadataBackupProtectionEvidence, MetadataBackupRun, MetadataBackupRunClaimRecord,
     MetadataBackupRunState,
@@ -249,6 +280,7 @@ pub use external_certificate::{
     ExternalCertificateInstallationRecord, ExternalCertificatePublicationRecord,
 };
 pub use federation_actor_attestation::FederatedActorAttestationRecord;
+pub use federation_allocation_page::{FederationAllocationCursor, FederationAllocationQuery};
 pub use federation_assignment::FederationGrantAssignmentAuthority;
 pub use federation_authority_snapshot::FederationAuthoritySnapshotError;
 pub use federation_grant_cursor::{FederationGrantCursor, FederationGrantCursorError};
@@ -257,7 +289,9 @@ pub use federation_grant_evidence::{
     FederationGrantTerminationKind,
 };
 pub use federation_grant_record::FederationGrantRecordCodecError;
+pub(crate) use federation_grant_record::{decode_grant_definition, encode_grant_definition};
 pub use federation_mutation_admission::FederatedMutationAdmissionReceipt;
+pub use federation_pairing::{FederationPairingInvitationRecord, FederationPairingInvitationState};
 pub use federation_quarantine::{FederationQuarantineRecord, FederationQuarantineState};
 pub use federation_query::{
     FederationRelationshipRecord, FederationRelationshipState, FederationTransportAuthority,
@@ -277,11 +311,12 @@ pub use locality_policy::{
 };
 pub use maintenance_work::{
     DueStorageScrub, DueStorageScrubCursor, DueStorageScrubPage, MaintenanceEffectReference,
-    MaintenanceWorkClaim, MaintenanceWorkCursor, MaintenanceWorkRecord, MaintenanceWorkState,
-    MaintenanceWorkWindow, ReadyMaintenanceWork, ReadyMaintenanceWorkPage, RebalanceScanProgress,
-    ShardRepairEffectRecord, StorageDrainCursor, StorageDrainRecord, StorageDrainState,
-    StorageDrainStatusPage, StorageScopeDrainAction, StorageScopeDrainCursor,
-    StorageScopeDrainRecord, StorageScopeDrainState, empty_target_drain_catalogue_digest,
+    MaintenanceVerificationProgress, MaintenanceWorkClaim, MaintenanceWorkCursor,
+    MaintenanceWorkRecord, MaintenanceWorkState, MaintenanceWorkWindow, ReadyMaintenanceWork,
+    ReadyMaintenanceWorkPage, RebalanceScanProgress, ShardRepairEffectRecord, StorageDrainCursor,
+    StorageDrainRecord, StorageDrainState, StorageDrainStatusPage, StorageScopeDrainAction,
+    StorageScopeDrainCursor, StorageScopeDrainRecord, StorageScopeDrainState,
+    empty_target_drain_catalogue_digest,
 };
 pub use manual_dns_task::{ManualDnsTaskCursor, ManualDnsTaskRecord, ManualDnsTaskState};
 pub use membership::AuthoritativeMembership;
@@ -399,6 +434,22 @@ impl AuthoritativeMetadataKernel for AuthoritativeRepository {
 }
 
 impl AuthoritativeRepository {
+    /// Runs synchronous metadata reads against one consistent committed database view.
+    ///
+    /// The callback must only read this repository and return owned observations. It must
+    /// not perform network/provider IO, mutate metadata or start a nested read view. The
+    /// view ends before return; subsequent checks observe newly committed authority.
+    /// This is local snapshot consistency, not a consensus read barrier or a reservation.
+    ///
+    /// # Errors
+    /// Returns a repository error when the database view cannot be opened or closed.
+    pub fn with_read_view<T>(&self, read: impl FnOnce(&Self) -> T) -> Result<T, RepositoryError> {
+        let transaction = self.database.connection().unchecked_transaction()?;
+        let result = read(self);
+        transaction.commit()?;
+        Ok(result)
+    }
+
     /// Returns the immutable partition identity fixed by the opened database.
     #[must_use]
     pub const fn partition_id(&self) -> meshspan_domain::PartitionId {
@@ -412,6 +463,14 @@ impl AuthoritativeRepository {
     /// Fails closed if a root partition contains multiple meshes or malformed identity bytes.
     pub fn local_mesh_id(&self) -> Result<Option<meshspan_domain::MeshId>, RepositoryError> {
         mesh_identity::local_mesh_id(&self.database)
+    }
+
+    /// Reads the single local swarm's validated display name without treating it as an ID.
+    ///
+    /// # Errors
+    /// Rejects inconsistent identity or non-canonical retained names.
+    pub fn local_mesh_name(&self) -> Result<Option<crate::RecordName>, RepositoryError> {
+        mesh_identity::local_mesh_name(&self.database)
     }
 
     /// Reads the exact active exporter policy, or none when it has never been configured.
@@ -557,6 +616,64 @@ impl AuthoritativeRepository {
         relationship_id: meshspan_domain::FederationRelationshipId,
     ) -> Result<Option<FederationRelationshipRecord>, RepositoryError> {
         federation_query::relationship(&self.database, relationship_id)
+    }
+
+    /// Reads one exact invitation, including expired or cancelled history, without granting access.
+    ///
+    /// # Errors
+    /// Rejects malformed stored public fields, lifetime, state or identifiers.
+    pub fn federation_pairing_invitation(
+        &self,
+        relationship_id: meshspan_domain::FederationRelationshipId,
+    ) -> Result<Option<FederationPairingInvitationRecord>, RepositoryError> {
+        federation_pairing::load(self.database.connection(), relationship_id)
+    }
+
+    /// Reads the exact retained pairing intent for approval, retry and native connection recovery.
+    ///
+    /// # Errors
+    /// Rejects malformed or mismatched retained identities and signed public material.
+    pub fn federation_pairing_connection(
+        &self,
+        id: meshspan_domain::FederationRelationshipId,
+    ) -> Result<Option<FederationPairingConnectionRecord>, RepositoryError> {
+        federation_pairing_connection::load(self.database.connection(), id)
+    }
+
+    /// Pages active/restricted native pairings hosted by one exact local gateway node.
+    /// # Errors
+    /// Rejects corrupt retained peers or an unavailable indexed query.
+    pub fn federation_pairing_connections(
+        &self,
+        node: meshspan_domain::NodeId,
+        after: Option<meshspan_domain::FederationRelationshipId>,
+        limit: PageLimit,
+    ) -> Result<
+        Page<FederationPairingConnectionRecord, meshspan_domain::FederationRelationshipId>,
+        RepositoryError,
+    > {
+        federation_pairing_connection::page(self.database.connection(), node, after, limit)
+    }
+
+    /// Reads a pairing only when this active gateway is its exact recorded identity owner.
+    /// # Errors
+    /// Rejects corrupt pairing material or unavailable node-role evidence.
+    pub fn hosted_federation_pairing(
+        &self,
+        node: meshspan_domain::NodeId,
+        id: meshspan_domain::FederationRelationshipId,
+    ) -> Result<Option<FederationPairingConnectionRecord>, RepositoryError> {
+        federation_pairing_connection::hosted(self.database.connection(), node, id)
+    }
+
+    /// Reads the immutable outbound pairing input, without invitation secrets.
+    /// # Errors
+    /// Rejects corrupt retained identity, signature, bounds or routing material.
+    pub fn federation_connection_intent(
+        &self,
+        id: meshspan_domain::FederationRelationshipId,
+    ) -> Result<Option<FederationConnectionIntentRecord>, RepositoryError> {
+        federation_connection_intent::load(self.database.connection(), id)
     }
 
     /// Returns the active public identity for one exact relationship side.
@@ -738,6 +855,33 @@ impl AuthoritativeRepository {
         membership_epoch: u64,
     ) -> Result<meshspan_consensus::DurableCoreState, ConsensusStoreError> {
         consensus::load_state(&self.database, membership_epoch)
+    }
+
+    /// Reads one digest-verified log entry only when it belongs to the locally applied prefix.
+    ///
+    /// This is an indexed, bounded local read, not a fresh quorum barrier. Use `with_read_view`
+    /// when comparing its position/digest with permissions or another observation.
+    ///
+    /// # Errors
+    /// Rejects genesis, malformed stored bytes, oversized payloads and fenced recovery state.
+    pub fn applied_consensus_entry(
+        &self,
+        position: meshspan_consensus::LogPosition,
+    ) -> Result<Option<meshspan_consensus::LogEntry>, ConsensusStoreError> {
+        consensus::applied_entry(&self.database, position)
+    }
+
+    /// Advances the applied frontier for an already-committed, exact durable term no-op.
+    /// Application metadata, revision and operation receipts remain unchanged.
+    ///
+    /// # Errors
+    /// Rejects a non-no-op, substituted/missing durable entry, gap or fenced recovery.
+    /// The consensus driver must establish commitment before invoking this application boundary.
+    pub fn apply_term_confirmation(
+        &mut self,
+        entry: &meshspan_consensus::LogEntry,
+    ) -> Result<(), ConsensusStoreError> {
+        consensus::apply_term_confirmation(&mut self.database, entry)
     }
 
     /// Applies one vote/log mutation in a single durable SQLite transaction.
@@ -1371,6 +1515,19 @@ impl AuthoritativeRepository {
         storage_target::registration_context(&self.database, node_id, now)
     }
 
+    /// Reads an exact historical target marker from independently authenticated recovery metadata.
+    /// Retired generations remain eligible for offline salvage, never for live provider access.
+    /// This lookup grants no registration, read, write or service-admission authority.
+    /// # Errors
+    /// Rejects invalid generations, malformed fingerprints and database failures.
+    pub fn recovery_storage_target_marker(
+        &self,
+        target_id: meshspan_domain::TargetId,
+        generation: u64,
+    ) -> Result<Option<[u8; 32]>, RepositoryError> {
+        storage_target::recovery_marker(&self.database, target_id, generation)
+    }
+
     /// Returns the current active replicated configuration for one node-local storage provider.
     ///
     /// A draining, retired, foreign or inactive target returns `None`. The returned catalogue
@@ -1676,6 +1833,26 @@ impl AuthoritativeRepository {
         secret_generation::load(&self.database, context)
     }
 
+    /// Lists retained secret identities, including historical generations, in primary-key order.
+    ///
+    /// This inventory contains no plaintext and grants no decryption authority. An offline
+    /// recovery verifier pages an isolated restored database; a live multi-page read is not a
+    /// snapshot and must not be used to claim completeness across concurrent commits.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an unrepresentable cursor, malformed stored identity or database failure.
+    pub fn secret_generation_contexts(
+        &self,
+        after: Option<meshspan_secret_envelope::SecretContext>,
+        limit: PageLimit,
+    ) -> Result<
+        Page<meshspan_secret_envelope::SecretContext, meshspan_secret_envelope::SecretContext>,
+        RepositoryError,
+    > {
+        secret_inventory::contexts(&self.database, after, limit)
+    }
+
     /// Returns the newest committed volume content-key generation.
     ///
     /// Content envelopes retain their exact generation for reads; only new content uses this
@@ -1743,6 +1920,19 @@ impl AuthoritativeRepository {
         &self,
     ) -> Result<Vec<meshspan_secret_envelope::WrappingPublicKey>, RepositoryError> {
         secret_generation::volume_key_recipients(&self.database)
+    }
+
+    /// Returns active gateways, active/draining storage nodes and the verified recovery key.
+    ///
+    /// This recipient set is for storage-permit MAC keys only, never content or gateway secrets.
+    /// Nodes with both roles appear once; detached nodes are excluded.
+    ///
+    /// # Errors
+    /// Fails closed for missing current wrapping keys, invalid recovery evidence or excess size.
+    pub fn storage_permit_recipients(
+        &self,
+    ) -> Result<Vec<meshspan_secret_envelope::WrappingPublicKey>, RepositoryError> {
+        secret_generation::storage_permit_recipients(&self.database)
     }
 
     /// Returns the public offline authority and recovery-bundle verification state for one mesh.
@@ -1815,6 +2005,21 @@ impl AuthoritativeRepository {
         volume_inventory::volume_inventory_candidates(&self.database, after, limit)
     }
 
+    /// Pages all retained volume identities without mutable names or permission assumptions.
+    ///
+    /// Background observations use the primary key so a rename cannot repeat or skip a volume.
+    /// This is not a cross-page snapshot; concurrent new identities may appear on the next pass.
+    ///
+    /// # Errors
+    /// Rejects corrupt stored identities or database failure.
+    pub fn volume_identity_page(
+        &self,
+        after: Option<meshspan_domain::VolumeId>,
+        limit: PageLimit,
+    ) -> Result<Page<meshspan_domain::VolumeId, meshspan_domain::VolumeId>, RepositoryError> {
+        volume_inventory::identities(&self.database, after, limit)
+    }
+
     /// Returns one exact logical-volume record and its stable root identity.
     ///
     /// # Errors
@@ -1864,6 +2069,20 @@ impl AuthoritativeRepository {
         volume_id: meshspan_domain::VolumeId,
     ) -> Result<Option<ConvergedVolumeHead>, RepositoryError> {
         volume_head::load(&self.database, volume_id)
+    }
+
+    /// Checks an exact publication against retained, committed head history.
+    ///
+    /// Later heads and a different metadata publisher do not undo convergence.
+    /// This is historical evidence, not current access or content-protection authority.
+    ///
+    /// # Errors
+    /// Rejects reconciliation evidence, corrupt history and database failures.
+    pub fn namespace_publication_is_committed(
+        &self,
+        expected: &crate::CommitConvergedVolumeHead,
+    ) -> Result<bool, RepositoryError> {
+        volume_head::publication_is_committed(&self.database, expected)
     }
 
     /// Returns one stable bounded page of active or expiring read-only volume snapshots.

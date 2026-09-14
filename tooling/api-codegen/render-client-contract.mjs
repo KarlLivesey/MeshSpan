@@ -2,6 +2,7 @@
 
 import { renderAuthenticationClientInterface } from "./render-authentication-client.mjs";
 import { renderBackupScheduleClientInterface } from "./render-backup-schedule-client.mjs";
+import { renderFederationClientInterface } from "./render-federation-client.mjs";
 import { renderMetricsClientInterface } from "./render-metrics-client.mjs";
 import { renderNotificationClientInterface } from "./render-notification-client.mjs";
 import { renderUpdateClientInterface } from "./render-update-client.mjs";
@@ -126,6 +127,7 @@ function renderClientInterface() {
   ${renderAuthenticationClientInterface()}
   ${renderCertificateClientInterface()}
   ${renderBackupScheduleClientInterface()}
+  ${renderFederationClientInterface()}
   ${renderMetricsClientInterface()}
   ${renderNotificationClientInterface()}
   ${renderUpdateClientInterface()}

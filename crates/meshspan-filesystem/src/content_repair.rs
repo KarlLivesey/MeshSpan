@@ -13,6 +13,27 @@ use meshspan_domain::{MeshId, OperationId, Revision, TargetId, UnixMicros};
 
 use crate::{CommittedProtectedStripe, ContentShardRouter};
 
+mod recovery;
+pub use recovery::restore_recovery_stripe;
+
+/// Authority and deadline for checking an encrypted stripe without modifying storage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StripeReadRequest {
+    /// Identity for this check and its derived exact-shard reads.
+    pub operation_id: OperationId,
+    /// Current authority admitting the maintenance read.
+    pub authorization_revision: Revision,
+    /// Exclusive deadline for all provider reads.
+    pub deadline: UnixMicros,
+    /// Authority-agreed time at admission.
+    pub observed_at: UnixMicros,
+}
+
+struct VerifiedSlices {
+    bytes: BoundedItems<Option<BoundedBytes>>,
+    receipts: BoundedItems<ShardReceipt>,
+}
+
 /// Complete authority and destination for one physical shard repair attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ShardRepairRequest {
@@ -77,35 +98,79 @@ where
     ) -> Result<ShardReceipt, ContractError> {
         let source_index = validate_request(request, stripe)?;
         let context = repair_context(request);
-        let available = self.read_verified_slices(request, stripe)?;
-        let encoded = reconstruct_and_encode(&self.coding, context, stripe, available)?;
+        let read = StripeReadRequest {
+            operation_id: request.replacement_operation_id,
+            authorization_revision: request.authorization_revision,
+            deadline: request.deadline,
+            observed_at: request.observed_at,
+        };
+        let targets = stripe
+            .receipts
+            .as_slice()
+            .iter()
+            .map(|receipt| receipt.target_id)
+            .collect();
+        let available = self.read_verified_slices(read, stripe, &targets)?;
+        let ciphertext = reconstruct_ciphertext(&self.coding, context, stripe, available.bytes)?;
+        let encoded = self
+            .coding
+            .encode(context, stripe.stripe.coding_layout(), &ciphertext)?;
         let replacement_bytes = encoded
             .as_slice()
             .get(source_index)
             .cloned()
             .ok_or(ContractError::InternalContract)?;
-        verify_replacement_bytes(request.source_receipt, &replacement_bytes)?;
-        let reservation = self.router.reserve(ReserveStorageRequest {
-            context,
-            target_id: request.replacement_target_id,
-            target_generation: request.replacement_target_generation,
-            class: ReservationClass::Repair,
-            bytes: request.source_receipt.length,
-            observed_at: request.observed_at,
-        })?;
-        let receipt = self.router.put_exact(
-            PutShardRequest {
-                context,
-                reservation,
-                shard: request.source_receipt.shard,
-                expected_length: request.source_receipt.length,
-                expected_digest: request.source_receipt.digest,
-                bytes: replacement_bytes,
-            },
-            request.observed_at,
-        )?;
-        validate_replacement_receipt(request, receipt)?;
-        Ok(receipt)
+        store_replacement(&mut self.router, request, replacement_bytes)
+    }
+
+    /// Proves current decodability using only the explicitly permitted targets.
+    ///
+    /// Reads and verifies enough distinct slices, reconstructs encrypted content and checks
+    /// its recorded length/digest. Returns the exact contributing receipts, not ciphertext
+    /// or a decryption key. No reservation, write, repair or metadata mutation occurs.
+    /// The caller owns scope/target selection and must bind this observation to its admission
+    /// barrier: success is neither a future availability lease nor proof of locality policy.
+    ///
+    /// # Errors
+    /// Rejects malformed authority/layout/receipts, duplicate or excessive target selectors,
+    /// insufficient surviving data, mismatched reconstructed content and provider failures.
+    pub fn verify_read_availability(
+        &self,
+        request: StripeReadRequest,
+        stripe: &CommittedProtectedStripe,
+        permitted_targets: &[TargetId],
+    ) -> Result<BoundedItems<ShardReceipt>, ContractError> {
+        if request.deadline <= request.observed_at
+            || request.observed_at.get() < 0
+            || request.authorization_revision == Revision::ZERO
+            || permitted_targets.len() > 24
+        {
+            return Err(ContractError::InvalidInput);
+        }
+        let targets: BTreeSet<_> = permitted_targets.iter().copied().collect();
+        if targets.len() != permitted_targets.len() {
+            return Err(ContractError::InvalidInput);
+        }
+        let manifest = stripe
+            .receipts
+            .as_slice()
+            .first()
+            .ok_or(ContractError::Unavailable)?
+            .shard
+            .manifest_digest;
+        if manifest == [0; 32] {
+            return Err(ContractError::InvalidInput);
+        }
+        validate_receipts(stripe, manifest)?;
+        let available = self.read_verified_slices(request, stripe, &targets)?;
+        let context = RequestContext {
+            contract_version: ContractVersion::V1_0,
+            operation_id: request.operation_id,
+            expected_revision: Some(request.authorization_revision),
+            deadline: request.deadline,
+        };
+        reconstruct_ciphertext(&self.coding, context, stripe, available.bytes)?;
+        Ok(available.receipts)
     }
 
     /// Returns the owned routed storage implementation after orderly worker shutdown.
@@ -116,16 +181,20 @@ where
 
     fn read_verified_slices(
         &self,
-        request: ShardRepairRequest,
+        request: StripeReadRequest,
         stripe: &CommittedProtectedStripe,
-    ) -> Result<BoundedItems<Option<BoundedBytes>>, ContractError> {
+        targets: &BTreeSet<TargetId>,
+    ) -> Result<VerifiedSlices, ContractError> {
         let total = usize::from(stripe.stripe.coding_layout().total_slices());
         let required = usize::from(stripe.stripe.coding_layout().data_slices());
         let mut available = vec![None; total];
-        let mut valid = 0_usize;
+        let mut receipts = Vec::with_capacity(required);
         for receipt in stripe.receipts.as_slice() {
-            if valid == required {
+            if receipts.len() == required {
                 break;
+            }
+            if !targets.contains(&receipt.target_id) {
+                continue;
             }
             let index = usize::from(receipt.shard.shard_index);
             let context = read_context(request, *receipt)?;
@@ -143,7 +212,7 @@ where
             match self.router.get_exact(context, permit, request.observed_at) {
                 Ok(bytes) if receipt_matches_bytes(*receipt, &bytes) => {
                     available[index] = Some(bytes);
-                    valid += 1;
+                    receipts.push(*receipt);
                 }
                 Ok(_)
                 | Err(
@@ -152,10 +221,15 @@ where
                 Err(error) => return Err(error),
             }
         }
-        if valid < required {
+        if receipts.len() < required {
             return Err(ContractError::Unavailable);
         }
-        BoundedItems::new(available, total).map_err(|_| ContractError::InternalContract)
+        Ok(VerifiedSlices {
+            bytes: BoundedItems::new(available, total)
+                .map_err(|_| ContractError::InternalContract)?,
+            receipts: BoundedItems::new(receipts, required)
+                .map_err(|_| ContractError::InternalContract)?,
+        })
     }
 }
 
@@ -218,12 +292,12 @@ fn validate_receipts(
     Ok(())
 }
 
-fn reconstruct_and_encode<Coding: CodingScheme>(
+fn reconstruct_ciphertext<Coding: CodingScheme>(
     coding: &Coding,
     context: RequestContext,
     stripe: &CommittedProtectedStripe,
     available: BoundedItems<Option<BoundedBytes>>,
-) -> Result<BoundedItems<BoundedBytes>, ContractError> {
+) -> Result<BoundedBytes, ContractError> {
     let digests = stripe
         .stripe
         .shards()
@@ -239,7 +313,13 @@ fn reconstruct_and_encode<Coding: CodingScheme>(
         logical_length: stripe.stripe.chunk().ciphertext_length,
         logical_digest: stripe.stripe.chunk().ciphertext_digest,
     })?;
-    coding.encode(context, stripe.stripe.coding_layout(), &ciphertext)
+    let chunk = stripe.stripe.chunk();
+    if u64::try_from(ciphertext.len()).ok() != Some(chunk.ciphertext_length)
+        || blake3::hash(ciphertext.as_slice()).as_bytes() != &chunk.ciphertext_digest
+    {
+        return Err(ContractError::Corrupt);
+    }
+    Ok(ciphertext)
 }
 
 const fn repair_context(request: ShardRepairRequest) -> RequestContext {
@@ -252,12 +332,12 @@ const fn repair_context(request: ShardRepairRequest) -> RequestContext {
 }
 
 fn read_context(
-    request: ShardRepairRequest,
+    request: StripeReadRequest,
     receipt: ShardReceipt,
 ) -> Result<RequestContext, ContractError> {
     let mut digest = blake3::Hasher::new();
     digest.update(b"meshspan.content.repair-read.v1\0");
-    digest.update(&request.replacement_operation_id.as_bytes());
+    digest.update(&request.operation_id.as_bytes());
     digest.update(&receipt.operation_id.as_bytes());
     digest.update(&receipt.shard.shard_index.to_be_bytes());
     let mut bytes = [0_u8; 16];
@@ -286,6 +366,37 @@ fn verify_replacement_bytes(
     } else {
         Err(ContractError::Corrupt)
     }
+}
+
+/// Provider durability is shared by live repair and isolated offline restoration.
+fn store_replacement(
+    router: &mut impl ContentShardRouter,
+    request: ShardRepairRequest,
+    bytes: BoundedBytes,
+) -> Result<ShardReceipt, ContractError> {
+    verify_replacement_bytes(request.source_receipt, &bytes)?;
+    let context = repair_context(request);
+    let reservation = router.reserve(ReserveStorageRequest {
+        context,
+        target_id: request.replacement_target_id,
+        target_generation: request.replacement_target_generation,
+        class: ReservationClass::Repair,
+        bytes: request.source_receipt.length,
+        observed_at: request.observed_at,
+    })?;
+    let receipt = router.put_exact(
+        PutShardRequest {
+            context,
+            reservation,
+            shard: request.source_receipt.shard,
+            expected_length: request.source_receipt.length,
+            expected_digest: request.source_receipt.digest,
+            bytes,
+        },
+        request.observed_at,
+    )?;
+    validate_replacement_receipt(request, receipt)?;
+    Ok(receipt)
 }
 
 fn validate_replacement_receipt(

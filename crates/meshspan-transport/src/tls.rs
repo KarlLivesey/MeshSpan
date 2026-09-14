@@ -114,6 +114,16 @@ pub(crate) fn prepare_server_config(
     client_roots: RootCertStore,
     limits: TransportLimits,
 ) -> Result<ServerConfig, TransportError> {
+    prepare_server_config_with_alpn(credentials, client_roots, limits, ALPN, None)
+}
+
+pub(crate) fn prepare_server_config_with_alpn(
+    credentials: NodeCredentials,
+    client_roots: RootCertStore,
+    limits: TransportLimits,
+    alpn: &[u8],
+    keep_alive: Option<std::time::Duration>,
+) -> Result<ServerConfig, TransportError> {
     let provider = Arc::new(meshspan_rustls_provider::provider());
     let verifier =
         WebPkiClientVerifier::builder_with_provider(Arc::new(client_roots), provider.clone())
@@ -125,11 +135,11 @@ pub(crate) fn prepare_server_config(
         .with_client_cert_verifier(verifier)
         .with_single_cert(credentials.certificate_chain, credentials.private_key)
         .map_err(|_| TransportError::InvalidConfiguration)?;
-    tls.alpn_protocols = vec![ALPN.to_vec()];
+    tls.alpn_protocols = vec![alpn.to_vec()];
     let crypto =
         QuicServerConfig::try_from(tls).map_err(|_| TransportError::InvalidConfiguration)?;
     let mut server = server_config(Arc::new(crypto))?;
-    server.transport_config(transport_config(limits)?);
+    server.transport_config(transport_config(limits, keep_alive)?);
     Ok(server)
 }
 
@@ -155,6 +165,16 @@ pub(crate) fn prepare_client_config(
     server_roots: RootCertStore,
     limits: TransportLimits,
 ) -> Result<ClientConfig, TransportError> {
+    prepare_client_config_with_alpn(credentials, server_roots, limits, ALPN, None)
+}
+
+pub(crate) fn prepare_client_config_with_alpn(
+    credentials: NodeCredentials,
+    server_roots: RootCertStore,
+    limits: TransportLimits,
+    alpn: &[u8],
+    keep_alive: Option<std::time::Duration>,
+) -> Result<ClientConfig, TransportError> {
     let provider = Arc::new(meshspan_rustls_provider::provider());
     let mut tls = RustlsClientConfig::builder_with_provider(provider)
         .with_protocol_versions(&[&rustls::version::TLS13])
@@ -162,11 +182,11 @@ pub(crate) fn prepare_client_config(
         .with_root_certificates(server_roots)
         .with_client_auth_cert(credentials.certificate_chain, credentials.private_key)
         .map_err(|_| TransportError::InvalidConfiguration)?;
-    tls.alpn_protocols = vec![ALPN.to_vec()];
+    tls.alpn_protocols = vec![alpn.to_vec()];
     let crypto =
         QuicClientConfig::try_from(tls).map_err(|_| TransportError::InvalidConfiguration)?;
     let mut client = ClientConfig::new(Arc::new(crypto));
-    client.transport_config(transport_config(limits)?);
+    client.transport_config(transport_config(limits, keep_alive)?);
     Ok(client)
 }
 
@@ -186,8 +206,12 @@ pub async fn connect(
     Ok(endpoint.connect(remote_address, certificate_name)?.await?)
 }
 
-fn transport_config(limits: TransportLimits) -> Result<Arc<TransportConfig>, TransportError> {
+fn transport_config(
+    limits: TransportLimits,
+    keep_alive: Option<std::time::Duration>,
+) -> Result<Arc<TransportConfig>, TransportError> {
     let mut transport = TransportConfig::default();
+    transport.keep_alive_interval(keep_alive);
     transport.max_concurrent_bidi_streams(VarInt::from_u32(limits.maximum_bidirectional_streams));
     transport.max_concurrent_uni_streams(VarInt::from_u32(0));
     transport.stream_receive_window(

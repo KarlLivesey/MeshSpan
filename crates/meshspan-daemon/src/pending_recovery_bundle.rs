@@ -16,6 +16,35 @@ use crate::protected_file::{self, ProtectedFileError, PublishMode};
 
 const MINIMUM_RECOVERY_BUNDLE_BYTES: usize = 256;
 const DOWNLOAD_PREFIX: &str = "meshspan-recovery-file-v1.";
+pub(crate) const MAXIMUM_RECOVERY_DOWNLOAD_BYTES: usize =
+    DOWNLOAD_PREFIX.len() + MAXIMUM_RECOVERY_BUNDLE_BYTES * 2 + 2;
+
+/// Consumes the exact saved setup/panel text representation, permitting a line ending.
+pub(crate) fn decode_download_text(value: &str) -> Result<RecoveryBundle, RecoveryBundleError> {
+    if value.len() > MAXIMUM_RECOVERY_DOWNLOAD_BYTES {
+        return Err(RecoveryBundleError::Corrupt);
+    }
+    let encoded = value
+        .trim_end_matches(['\r', '\n'])
+        .strip_prefix(DOWNLOAD_PREFIX)
+        .ok_or(RecoveryBundleError::Corrupt)?;
+    if !encoded.len().is_multiple_of(2)
+        || encoded.len() > MAXIMUM_RECOVERY_BUNDLE_BYTES * 2
+        || !encoded
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(RecoveryBundleError::Corrupt);
+    }
+    let bytes = (0..encoded.len())
+        .step_by(2)
+        .map(|offset| {
+            u8::from_str_radix(&encoded[offset..offset + 2], 16)
+                .map_err(|_| RecoveryBundleError::Corrupt)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    RecoveryBundle::decode(&bytes)
+}
 
 /// One validated encrypted bundle retained only until the administrator verifies a saved copy.
 pub struct PendingRecoveryBundle {

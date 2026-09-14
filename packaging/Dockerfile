@@ -8,6 +8,7 @@ LABEL org.opencontainers.image.licenses="GPL-2.0-only"
 COPY bin/meshspan-daemon /usr/local/bin/meshspan-daemon
 COPY LICENSE /usr/share/licenses/meshspan/LICENSE
 COPY dependencies.json provenance.json /usr/share/meshspan/
+COPY sbom.cdx.json THIRD-PARTY-NOTICES.txt /usr/share/meshspan/
 # Supply a reviewed PEM trust bundle in the build context. Public CA trust is
 # explicit; mesh-private roots are managed separately by the daemon.
 COPY ca-certificates.crt /etc/ssl/certs/ca-certificates.crt

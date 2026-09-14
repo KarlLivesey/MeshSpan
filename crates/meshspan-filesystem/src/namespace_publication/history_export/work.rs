@@ -10,7 +10,7 @@ use super::super::history_records::{
 };
 use super::super::repository::load_object_revision;
 use super::super::transfer::{export, export_graph};
-use super::{ValidatedQuery, to_i64};
+use super::{Traversal, ValidatedQuery, to_i64};
 use crate::directory::DirectoryReachabilityReference;
 use crate::publication::load_directory_node;
 use crate::{DirectoryNodeDigest, PublicationError};
@@ -60,6 +60,28 @@ pub(super) fn enqueue_commit(
     enqueue(transaction, digest, WORK_COMMIT, &commit_id.as_bytes())
 }
 
+pub(super) fn enqueue_root(
+    transaction: &Transaction<'_>,
+    query: &ValidatedQuery,
+    commit_id: NamespaceCommitId,
+) -> Result<(), PublicationError> {
+    let root = super::super::repository::load_namespace_root(transaction, commit_id)?;
+    let revision = load_object_revision(transaction, root.root_object_revision_id)?;
+    if root.volume_id != query.volume_id
+        || revision.volume_id != query.volume_id
+        || revision.object_id != root.root_object_id
+        || revision.kind != 1
+    {
+        return Err(PublicationError::Corrupt);
+    }
+    enqueue(
+        transaction,
+        query.digest,
+        WORK_REVISION,
+        &root.root_object_revision_id.as_bytes(),
+    )
+}
+
 struct WorkItem {
     kind: i64,
     identity: Vec<u8>,
@@ -107,7 +129,9 @@ fn process_work(
     ordinal: u64,
 ) -> Result<bool, PublicationError> {
     match work.kind {
-        WORK_COMMIT => process_commit(transaction, query, work, ordinal),
+        WORK_COMMIT if query.traversal == Traversal::CausalHistory => {
+            process_commit(transaction, query, work, ordinal)
+        }
         WORK_REVISION => process_revision(transaction, query, work, ordinal),
         WORK_DIRECTORY_NODE => process_directory(transaction, query, work, ordinal),
         WORK_FILE_VERSION => process_version(transaction, query, work, ordinal),
@@ -137,8 +161,8 @@ fn process_commit(
         work,
         record.digest(),
     )?;
-    for parent in &source.commit.parents {
-        enqueue_commit(transaction, query.digest, *parent)?;
+    for dependency in source.dependencies() {
+        enqueue_commit(transaction, query.digest, dependency)?;
     }
     let references = export_graph::commit_references(&source);
     for revision in references.revisions {
@@ -181,7 +205,9 @@ fn process_revision(
         work,
         record.digest(),
     )?;
-    if let Some(prior) = source.prior_revision_id {
+    if let Some(prior) = source.prior_revision_id
+        && query.traversal == Traversal::CausalHistory
+    {
         enqueue(transaction, query.digest, WORK_REVISION, &prior.as_bytes())?;
     }
     if let Some(root) = source.directory_root {
@@ -261,7 +287,9 @@ fn process_version(
         work,
         record.digest(),
     )?;
-    if let Some(parent) = source.parent_version_id {
+    if let Some(parent) = source.parent_version_id
+        && query.traversal == Traversal::CausalHistory
+    {
         enqueue(
             transaction,
             query.digest,

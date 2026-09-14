@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
-//! Public controls for registered-folder metadata backup destinations.
+//! Public controls for typed metadata backup destinations.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::OperationId;
 
-/// One registered target selected for encrypted recovery copies.
+/// One exact provider binding selected for encrypted recovery copies.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigureBackupDestinationRequest {
@@ -25,15 +25,11 @@ pub struct ConfigureBackupDestinationRequest {
     /// Human-facing name, without control characters.
     #[schemars(length(min = 1, max = 128), pattern(r"^\P{Cc}+$"))]
     pub name: String,
-    /// Exact registered storage target, never a raw path.
-    #[schemars(
-        length(equal = 36),
-        pattern(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
-    )]
-    pub target_id: String,
-    /// Observed target generation. A returned or replaced target must match it.
+    /// Exact provider identity, never a raw path or a credential.
+    pub provider: BackupDestinationProvider,
+    /// Observed provider generation. Configuration does not prove delivery support.
     #[schemars(length(min = 1, max = 20), pattern(r"^[1-9][0-9]{0,19}$"))]
-    pub target_generation: String,
+    pub provider_generation: String,
     /// Accept new backup copies when true; false pauses future copies, not deletion.
     pub enabled: bool,
 }
@@ -80,7 +76,7 @@ pub enum BackupDestinationFailureRelationship {
     Independent,
 }
 
-/// Exact replaceable provider binding. Only registered targets are configurable here initially.
+/// Exact replaceable provider binding, checked against current metadata authority.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BackupDestinationProvider {

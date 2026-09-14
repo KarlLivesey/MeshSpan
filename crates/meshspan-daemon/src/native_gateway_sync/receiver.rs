@@ -18,7 +18,7 @@ use meshspan_filesystem::{
     ContentLayoutTransferHeader, ContentLayoutTransferPage, ContentPublicationRequest,
     DurableContentCatalog, NamespaceHistoryCommitRecord, NamespaceHistoryImmutableRecord,
     NamespaceHistoryLimits, NamespaceHistoryPage, NamespaceHistoryReceiveRequest,
-    NamespaceHistoryReceiveStatus, VersionPublicationStore, provider_operation_id,
+    NamespaceHistoryReceiveStatus, provider_operation_id,
 };
 use meshspan_metadata::{AuthoritativeRepository, PartitionDatabase};
 use meshspan_protocol::v1::control_envelope::Message;
@@ -29,7 +29,7 @@ use meshspan_protocol::v1::{
 };
 use sha2::{Digest, Sha256};
 
-use super::{NativeGatewaySyncError, identifier};
+use super::{NativeGatewayHistory, NativeGatewaySyncError, identifier};
 
 const PAGE_ITEMS: u32 = 128;
 const IMMUTABLE_FETCH_CONCURRENCY: usize = 32;
@@ -38,7 +38,7 @@ const REQUEST_TIMEOUT_MICROS: i64 = 60 * 1_000_000;
 
 pub(super) async fn publish_head(
     network: &ConsensusNetwork,
-    state_directory: &Path,
+    history: &NativeGatewayHistory,
     source: NodeId,
     publish_operation_id: OperationId,
     publish_deadline: i64,
@@ -52,42 +52,36 @@ pub(super) async fn publish_head(
         &advertised,
     );
     let status = begin_history_receive(
-        state_directory,
+        history,
         network.local_node_id(),
         session_id,
         publish_deadline,
         &advertised,
-    )?;
-    let status = receive_history_pages(
-        network,
-        state_directory,
-        source,
-        session_id,
-        &advertised,
-        status,
     )
     .await?;
+    let status =
+        receive_history_pages(network, history, source, session_id, &advertised, status).await?;
     receive_history_objects(
         network,
-        state_directory,
+        history,
         source,
         session_id,
         advertised.volume_id,
         status,
     )
     .await?;
-    complete_received_history(state_directory, session_id, &advertised)?;
+    complete_received_history(history, session_id, &advertised).await?;
     for route in &advertised.content_routes {
         receive_content_layout(
             network,
-            state_directory,
+            &history.state_directory,
             source,
             advertised.volume_id,
             route,
         )
         .await?;
     }
-    adopt_received_head(network.local_node_id(), state_directory, &advertised)?;
+    adopt_received_head(network.local_node_id(), history, &advertised).await?;
     Ok(accepted(advertised.result_digest()))
 }
 
@@ -99,7 +93,7 @@ struct ParsedContentRoute {
     target_generation: u64,
 }
 
-struct AdvertisedHead {
+pub(super) struct AdvertisedHead {
     volume_id: VolumeId,
     namespace_commit_id: NamespaceCommitId,
     root_object_revision_id: meshspan_domain::ObjectRevisionId,
@@ -107,7 +101,7 @@ struct AdvertisedHead {
 }
 
 impl AdvertisedHead {
-    fn parse(request: &PublishNamespaceHead) -> Result<Self, NativeGatewaySyncError> {
+    pub(super) fn parse(request: &PublishNamespaceHead) -> Result<Self, NativeGatewaySyncError> {
         let volume_id = VolumeId::from_bytes(identifier(&request.volume_id)?)
             .map_err(|_| NativeGatewaySyncError::Invalid)?;
         let namespace_commit_id =
@@ -137,7 +131,7 @@ impl AdvertisedHead {
         })
     }
 
-    fn result_digest(&self) -> [u8; 32] {
+    pub(super) fn result_digest(&self) -> [u8; 32] {
         let mut digest = Sha256::new();
         digest.update(b"meshspan.native.gateway-head-accepted.v1\0");
         digest.update(self.volume_id.as_bytes());
@@ -174,8 +168,8 @@ impl ParsedContentRoute {
     }
 }
 
-fn begin_history_receive(
-    state_directory: &Path,
+async fn begin_history_receive(
+    history: &NativeGatewayHistory,
     local_node_id: NodeId,
     session_id: [u8; 32],
     publish_deadline: i64,
@@ -183,32 +177,34 @@ fn begin_history_receive(
 ) -> Result<NamespaceHistoryReceiveStatus, NativeGatewaySyncError> {
     let now = current_time()?;
     let expires_at = UnixMicros::new(publish_deadline);
-    open_version_store(state_directory, now)?
-        .begin_namespace_history_receive(&NamespaceHistoryReceiveRequest {
-            session_id,
-            scope_binding: super::source::scope_binding(local_node_id, advertised.volume_id),
-            volume_id: advertised.volume_id,
-            requested_heads: vec![advertised.namespace_commit_id],
-            limits: NamespaceHistoryLimits::DEFAULT,
-            now,
-            expires_at,
+    let request = NamespaceHistoryReceiveRequest {
+        session_id,
+        scope_binding: super::source::scope_binding(local_node_id, advertised.volume_id),
+        volume_id: advertised.volume_id,
+        requested_heads: vec![advertised.namespace_commit_id],
+        limits: NamespaceHistoryLimits::DEFAULT,
+        now,
+        expires_at,
+    };
+    history
+        .execute(move |store| {
+            store
+                .begin_namespace_history_receive(&request)
+                .map_err(|_| NativeGatewaySyncError::Invalid)
         })
-        .map_err(|_| NativeGatewaySyncError::Invalid)
+        .await
 }
 
 async fn receive_history_pages(
     network: &ConsensusNetwork,
-    state_directory: &Path,
+    history: &NativeGatewayHistory,
     source: NodeId,
     session_id: [u8; 32],
     advertised: &AdvertisedHead,
     mut status: NamespaceHistoryReceiveStatus,
 ) -> Result<NamespaceHistoryReceiveStatus, NativeGatewaySyncError> {
-    let known_commits = local_known_commits(
-        network.local_node_id(),
-        state_directory,
-        advertised.volume_id,
-    )?;
+    let known_commits =
+        local_known_commits(network.local_node_id(), history, advertised.volume_id).await?;
     while !status.terminal {
         let input_cursor = status.next_cursor.clone();
         let response = request(
@@ -236,26 +232,33 @@ async fn receive_history_pages(
         };
         let page = decode_history_page(result)?;
         let now = current_time()?;
-        status = open_version_store(state_directory, now)?
-            .receive_namespace_history_page(session_id, &input_cursor, &page, now)
-            .map_err(|_| NativeGatewaySyncError::Invalid)?;
+        status = history
+            .execute(move |store| {
+                store
+                    .receive_namespace_history_page(session_id, &input_cursor, &page, now)
+                    .map_err(|_| NativeGatewaySyncError::Invalid)
+            })
+            .await?;
     }
     Ok(status)
 }
 
-fn local_known_commits(
+async fn local_known_commits(
     local_node_id: NodeId,
-    state_directory: &Path,
+    history: &NativeGatewayHistory,
     volume_id: VolumeId,
 ) -> Result<Vec<NamespaceCommitId>, NativeGatewaySyncError> {
     let branch_id = InitialBootstrapMaterial::local_branch_id(local_node_id)
         .map_err(|_| NativeGatewaySyncError::Invalid)?;
-    let now = current_time()?;
-    Ok(open_version_store(state_directory, now)?
-        .namespace_head(branch_id, volume_id)
-        .map_err(|_| NativeGatewaySyncError::Invalid)?
-        .map(|head| vec![head.namespace_commit_id])
-        .unwrap_or_default())
+    history
+        .execute(move |store| {
+            Ok(store
+                .namespace_head(branch_id, volume_id)
+                .map_err(|_| NativeGatewaySyncError::Invalid)?
+                .map(|head| vec![head.namespace_commit_id])
+                .unwrap_or_default())
+        })
+        .await
 }
 
 fn decode_history_page(
@@ -288,7 +291,7 @@ fn decode_history_page(
 
 async fn receive_history_objects(
     network: &ConsensusNetwork,
-    state_directory: &Path,
+    history: &NativeGatewayHistory,
     source: NodeId,
     session_id: [u8; 32],
     volume_id: VolumeId,
@@ -296,9 +299,16 @@ async fn receive_history_objects(
 ) -> Result<(), NativeGatewaySyncError> {
     while status.missing_immutable_records != 0 {
         let export_token = status.export_token.ok_or(NativeGatewaySyncError::Invalid)?;
-        let digests = open_version_store(state_directory, current_time()?)?
-            .namespace_history_missing_immutable_digests(session_id, IMMUTABLE_FETCH_CONCURRENCY)
-            .map_err(|_| NativeGatewaySyncError::Invalid)?;
+        let digests = history
+            .execute(move |store| {
+                store
+                    .namespace_history_missing_immutable_digests(
+                        session_id,
+                        IMMUTABLE_FETCH_CONCURRENCY,
+                    )
+                    .map_err(|_| NativeGatewaySyncError::Invalid)
+            })
+            .await?;
         if digests.is_empty() {
             return Err(NativeGatewaySyncError::Invalid);
         }
@@ -320,9 +330,13 @@ async fn receive_history_objects(
         while let Some(result) = requests.join_next().await {
             let record = result.map_err(|_| NativeGatewaySyncError::Unavailable)??;
             let now = current_time()?;
-            status = open_version_store(state_directory, now)?
-                .receive_namespace_history_object(session_id, &record, now)
-                .map_err(|_| NativeGatewaySyncError::Invalid)?;
+            status = history
+                .execute(move |store| {
+                    store
+                        .receive_namespace_history_object(session_id, &record, now)
+                        .map_err(|_| NativeGatewaySyncError::Invalid)
+                })
+                .await?;
         }
     }
     if status.terminal && status.missing_immutable_records == 0 {
@@ -371,43 +385,103 @@ async fn fetch_history_object(
     .map_err(|_| NativeGatewaySyncError::Invalid)
 }
 
-fn complete_received_history(
-    state_directory: &Path,
+async fn complete_received_history(
+    history: &NativeGatewayHistory,
     session_id: [u8; 32],
     advertised: &AdvertisedHead,
 ) -> Result<(), NativeGatewaySyncError> {
     let now = current_time()?;
-    let mut store = open_version_store(state_directory, now)?;
-    store
-        .complete_namespace_history_receive(session_id, now)
-        .map_err(|_| NativeGatewaySyncError::Invalid)?;
-    let actual_root = store
-        .namespace_commit_root(advertised.volume_id, advertised.namespace_commit_id)
-        .map_err(|_| NativeGatewaySyncError::Invalid)?;
-    if actual_root != advertised.root_object_revision_id {
-        return Err(NativeGatewaySyncError::Invalid);
-    }
-    Ok(())
+    let (volume_id, namespace_commit_id, root_object_revision_id) = (
+        advertised.volume_id,
+        advertised.namespace_commit_id,
+        advertised.root_object_revision_id,
+    );
+    history
+        .execute(move |store| {
+            store
+                .complete_namespace_history_receive(session_id, now)
+                .map_err(|_| NativeGatewaySyncError::Invalid)?;
+            let actual_root = store
+                .namespace_commit_root(volume_id, namespace_commit_id)
+                .map_err(|_| NativeGatewaySyncError::Invalid)?;
+            if actual_root != root_object_revision_id {
+                return Err(NativeGatewaySyncError::Invalid);
+            }
+            Ok(())
+        })
+        .await
 }
 
-fn adopt_received_head(
+async fn adopt_received_head(
     local_node_id: NodeId,
-    state_directory: &Path,
+    history: &NativeGatewayHistory,
     advertised: &AdvertisedHead,
 ) -> Result<(), NativeGatewaySyncError> {
-    let now = current_time()?;
-    let mut store = open_version_store(state_directory, now)?;
+    let (volume_id, namespace_commit_id, root_object_revision_id) = (
+        advertised.volume_id,
+        advertised.namespace_commit_id,
+        advertised.root_object_revision_id,
+    );
     let branch_id = InitialBootstrapMaterial::local_branch_id(local_node_id)
         .map_err(|_| NativeGatewaySyncError::Unavailable)?;
-    store
-        .adopt_imported_namespace_head(
-            branch_id,
-            advertised.volume_id,
-            advertised.namespace_commit_id,
-            advertised.root_object_revision_id,
-        )
-        .map_err(|_| NativeGatewaySyncError::Invalid)?;
-    Ok(())
+    let state_directory = history.state_directory.clone();
+    history
+        .execute(move |store| {
+            store
+                .retain_received_namespace_head(
+                    branch_id,
+                    volume_id,
+                    namespace_commit_id,
+                    root_object_revision_id,
+                )
+                .map_err(|_| NativeGatewaySyncError::Unavailable)?;
+            // A peer's immutable restore receipt is not authority to roll back the
+            // namespace. The local replicated committed head must already cover every
+            // restore in this lineage, including restores underneath later mutations.
+            let database = PartitionDatabase::open_existing(
+                &state_directory.join("root-authority.sqlite3"),
+                current_time()?,
+            )
+            .map_err(|_| NativeGatewaySyncError::Unavailable)?;
+            let head = AuthoritativeRepository::new(database)
+                .converged_volume_head(volume_id)
+                .map_err(|_| NativeGatewaySyncError::Unavailable)?;
+            if let Some(current) = head {
+                let Some(root) = store
+                    .known_namespace_commit_root(volume_id, current.namespace_commit_id)
+                    .map_err(|_| NativeGatewaySyncError::Unavailable)?
+                else {
+                    // Metadata can overtake immutable delivery. Acknowledge the already durable
+                    // frontier so its sender can deliver the missing newer commit; do not adopt
+                    // any live head until its committed restore ancestry can be verified.
+                    return Ok(());
+                };
+                if root != current.root_object_revision_id {
+                    return Err(NativeGatewaySyncError::Invalid);
+                }
+            }
+            if head.is_none_or(|head| head.namespace_commit_id != namespace_commit_id) {
+                store
+                    .plan_reconciliation(
+                        &meshspan_filesystem::ReconciliationFrontier {
+                            converged_head: head.map(|head| head.namespace_commit_id),
+                            eligible_heads: vec![namespace_commit_id],
+                        },
+                        meshspan_filesystem::ReconciliationLimits::DEFAULT,
+                    )
+                    .map_err(|_| NativeGatewaySyncError::Unavailable)?;
+            }
+            match store.adopt_imported_namespace_head(
+                branch_id,
+                volume_id,
+                namespace_commit_id,
+                root_object_revision_id,
+            ) {
+                Ok(_) | Err(meshspan_filesystem::PublicationError::StaleHead) => Ok(()),
+                Err(_) => Err(NativeGatewaySyncError::Invalid),
+            }
+        })
+        .await
 }
 
 async fn receive_content_layout(
@@ -418,6 +492,9 @@ async fn receive_content_layout(
     route: &ParsedContentRoute,
 ) -> Result<(), NativeGatewaySyncError> {
     validate_source_target(state_directory, source, route)?;
+    if has_committed_layout(state_directory, volume_id, route)? {
+        return Ok(());
+    }
     let (contract, header) =
         import_layout_pages(network, state_directory, source, volume_id, route).await?;
     let now = current_time()?;
@@ -441,6 +518,32 @@ async fn receive_content_layout(
             .map_err(|_| NativeGatewaySyncError::Invalid)?;
     }
     Ok(())
+}
+
+fn has_committed_layout(
+    state_directory: &Path,
+    volume: VolumeId,
+    route: &ParsedContentRoute,
+) -> Result<bool, NativeGatewaySyncError> {
+    let catalog = open_catalog(state_directory, current_time()?)?;
+    let Some(content) = catalog
+        .committed_content_by_manifest(route.manifest_id)
+        .map_err(|_| NativeGatewaySyncError::Invalid)?
+    else {
+        return Ok(false);
+    };
+    if content.publication_operation_id != route.publication_operation_id {
+        return Err(NativeGatewaySyncError::Invalid);
+    }
+    let transfer = catalog
+        .committed_layout_transfer(content)
+        .map_err(|_| NativeGatewaySyncError::Invalid)?;
+    if transfer.volume_id() != volume {
+        return Err(NativeGatewaySyncError::Invalid);
+    }
+    // Existing locally verified content is not re-imported using a new relay's request identity.
+    // This is local retained-layout evidence, never a claim that the relay owns another replica.
+    Ok(true)
 }
 
 async fn import_layout_pages(
@@ -769,14 +872,6 @@ fn receive_session_id(
     digest.update(head.volume_id.as_bytes());
     digest.update(head.namespace_commit_id.as_bytes());
     digest.finalize().into()
-}
-
-fn open_version_store(
-    state_directory: &Path,
-    now: UnixMicros,
-) -> Result<VersionPublicationStore, NativeGatewaySyncError> {
-    VersionPublicationStore::open(&state_directory.join("filesystem"), now)
-        .map_err(|_| NativeGatewaySyncError::Unavailable)
 }
 
 fn open_catalog(

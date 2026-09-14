@@ -1,0 +1,107 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+syntax = "proto3";
+
+package meshspan.private.v1;
+
+import "meshspan/private/v1/common.proto";
+import "meshspan/private/v1/data.proto";
+import "meshspan/private/v1/federation.proto";
+import "meshspan/private/v1/consensus.proto";
+
+// Applied history for an authenticated same-swarm non-voting replica.
+// This is neither a consensus acknowledgement nor a linearizable read.
+message MetadataReplicaCursor {
+  bytes partition_id = 1;
+  uint64 membership_epoch = 2;
+  bytes plan_digest = 3;
+  LogPosition applied = 4;
+  bytes applied_digest = 5;
+}
+
+message FetchMetadataReplicaPage {
+  RequestHeader header = 1;
+  MetadataReplicaCursor after = 2;
+}
+
+// Success is followed by exactly byte_length canonical body bytes in DataFrames,
+// then EOF. Rejection has no cursor/body/digest/frame limit and is followed by EOF.
+message MetadataReplicaPageHeader {
+  bytes request_id = 1;
+  MetadataReplicaCursor after = 2;
+  uint64 byte_length = 3;
+  bytes digest = 4;
+  uint64 maximum_frame_bytes = 5;
+  optional WireError rejection = 6;
+}
+
+// Bulk payload, never embedded in a DataControlEnvelope.
+message MetadataReplicaBody {
+  uint32 format_version = 1;
+  MetadataReplicaCursor after = 2;
+  repeated LogEntry entries = 3;
+}
+
+// Same-swarm mTLS relay only. The original external signature is retained;
+// the receiving storage owner independently verifies its authority before IO.
+message ForwardFederatedBackupRequest {
+  RequestHeader header = 1;
+  bytes provider_node_id = 2;
+  // Exact encode_federation_frame bytes, including its bounded frame prefix.
+  bytes request = 3;
+  uint64 maximum_frame_bytes = 4;
+}
+
+// Replies are authenticated by the owner-node mTLS connection. The nested
+// signature MUST be empty; only the external gateway signs federation replies.
+message ForwardFederatedBackupReady {
+  bytes request_digest = 1;
+  FederatedBackupReady ready = 2;
+}
+
+message ForwardFederatedBackupResult {
+  bytes request_digest = 1;
+  FederatedBackupResult result = 2;
+}
+
+// The envelope composes data and federation types without either payload
+// schema depending on its transport routing container. Existing tags are unchanged.
+message DataControlEnvelope {
+  oneof message {
+    PutShardBegin put_shard_begin = 10;
+    PutShardReady put_shard_ready = 11;
+    PutShardFinish put_shard_finish = 12;
+    PutShardResult put_shard_result = 13;
+    GetShardRequest get_shard_request = 20;
+    GetShardHeader get_shard_header = 21;
+    GetShardResult get_shard_result = 22;
+    ScrubShardRequest scrub_shard_request = 23;
+    ScrubShardResult scrub_shard_result = 24;
+    DeleteShardRequest delete_shard_request = 30;
+    DeleteShardResult delete_shard_result = 31;
+    ValidateRemoval validate_removal = 32;
+    ReclaimShardRequest reclaim_shard_request = 33;
+    ReclaimShardResult reclaim_shard_result = 34;
+    StoreBackupBegin store_backup_begin = 40;
+    StoreBackupReady store_backup_ready = 41;
+    StoreBackupFinish store_backup_finish = 42;
+    StoreBackupResult store_backup_result = 43;
+    ReadBackupRequest read_backup_request = 50;
+    ReadBackupHeader read_backup_header = 51;
+    ReadBackupResult read_backup_result = 52;
+    VerifyBackupRequest verify_backup_request = 60;
+    VerifyBackupResult verify_backup_result = 61;
+    LookupBackupRequest lookup_backup_request = 62;
+    LookupBackupResult lookup_backup_result = 63;
+    DeleteBackupRequest delete_backup_request = 70;
+    DeleteBackupResult delete_backup_result = 71;
+    GetUpdateArtifactRequest get_update_artifact_request = 80;
+    GetUpdateArtifactHeader get_update_artifact_header = 81;
+    GetUpdateArtifactResult get_update_artifact_result = 82;
+    ForwardFederatedBackupRequest forward_federated_backup_request = 90;
+    ForwardFederatedBackupReady forward_federated_backup_ready = 91;
+    ForwardFederatedBackupResult forward_federated_backup_result = 92;
+    FetchMetadataReplicaPage fetch_metadata_replica_page = 100;
+    MetadataReplicaPageHeader metadata_replica_page_header = 101;
+  }
+}

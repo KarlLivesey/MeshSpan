@@ -5,10 +5,26 @@
 use meshspan_contracts::{LatencyHistogram, RuntimeMetric};
 use std::time::Duration;
 
+#[path = "openmetrics_coding.rs"]
+mod coding;
 #[path = "openmetrics_consensus.rs"]
 mod consensus;
+#[path = "openmetrics_filesystem.rs"]
+mod filesystem;
+#[path = "openmetrics_gateway.rs"]
+mod gateway;
+#[path = "openmetrics_inventory.rs"]
+mod inventory;
+#[path = "openmetrics_io.rs"]
+mod io;
+#[path = "openmetrics_lifecycle.rs"]
+mod lifecycle;
 #[path = "openmetrics_operational.rs"]
 mod operational;
+#[path = "openmetrics_maintenance_progress.rs"]
+mod progress;
+#[path = "openmetrics_protection.rs"]
+mod protection;
 
 pub(super) enum Measurement<'a> {
     Counter(u64),
@@ -35,7 +51,25 @@ pub(super) fn describe(sample: &RuntimeMetric) -> Descriptor<'_> {
 
 // Keep the versioned public vocabulary separate from typed numeric representation.
 fn name_and_help(sample: &RuntimeMetric) -> (&'static str, &'static str) {
+    use meshspan_contracts::GatewayProtocol::{Https, Smb};
     match sample {
+        RuntimeMetric::Inventory(value) => inventory::name_and_help(value),
+        RuntimeMetric::Lifecycle(kind, value) => lifecycle::name_and_help(*kind, value),
+        RuntimeMetric::FilesystemOperation(kind, value) => filesystem::operation(*kind, value),
+        RuntimeMetric::FilesystemReadBytes(_) => (
+            "filesystem_read_bytes",
+            "Verified logical bytes returned to connectors, not client delivery.",
+        ),
+        RuntimeMetric::FilesystemStagedWriteBytes(_) => (
+            "filesystem_staged_write_bytes",
+            "Bytes accepted by durable staging, including replay; not published file bytes.",
+        ),
+        RuntimeMetric::FilePublications(scope, _) => filesystem::publication(*scope),
+        RuntimeMetric::Coding(kind, value) => coding::name_and_help(*kind, value),
+        RuntimeMetric::GatewayTransfer(protocol, value) => gateway::name_and_help(*protocol, value),
+        RuntimeMetric::MaintenanceProgress(value) => progress::name_and_help(value),
+        RuntimeMetric::StorageIo(kind, value) => io::name_and_help(*kind, value),
+        RuntimeMetric::Protection(value) => protection::name_and_help(value),
         RuntimeMetric::Consensus(value) => consensus::name_and_help(value),
         RuntimeMetric::Maintenance(kind, value) => operational::maintenance(*kind, value),
         RuntimeMetric::StorageUsage(value) => operational::usage(value),
@@ -96,45 +130,54 @@ fn name_and_help(sample: &RuntimeMetric) -> (&'static str, &'static str) {
             "storage_reconciliation_failed_steps",
             "Failed steps in the last completed storage reconciliation cycle.",
         ),
-        RuntimeMetric::HttpsDispatches(_) => (
-            "https_dispatches",
-            "HTTPS handler dispatches ended, including cancellations.",
+        RuntimeMetric::HttpsAuthenticationRequired(_) => (
+            "https_authentication_required_responses",
+            "HTTPS 401 responses, including absent credentials; not unique users or sign-in attempts.",
         ),
-        RuntimeMetric::HttpsServerErrors(_) => (
-            "https_server_error_responses",
-            "HTTPS dispatches returning a 5xx response.",
+        RuntimeMetric::HttpsForbidden(_) => (
+            "https_forbidden_responses",
+            "HTTPS 403 responses; excludes concealed-resource 404 responses and TLS admission failures.",
         ),
-        RuntimeMetric::HttpsCancelledDispatches(_) => (
-            "https_cancelled_dispatches",
-            "HTTPS dispatch futures dropped before returning a response.",
+        RuntimeMetric::HttpsDispatches(_) => gateway::dispatches(Https),
+        RuntimeMetric::HttpsServerErrors(_) => gateway::dispatch_errors(Https),
+        RuntimeMetric::HttpsCancelledDispatches(_) => gateway::cancelled_dispatches(Https),
+        RuntimeMetric::HttpsDispatchDuration(_) => gateway::dispatch_duration(Https),
+        RuntimeMetric::SmbDispatches(_) => gateway::dispatches(Smb),
+        RuntimeMetric::SmbDispatchErrors(_) => gateway::dispatch_errors(Smb),
+        RuntimeMetric::SmbAuthenticationRejections(_) => (
+            "smb_authentication_rejections",
+            "Parsed SMB credential proofs rejected by shared authentication; excludes malformed handshakes and unavailable authority.",
         ),
-        RuntimeMetric::HttpsDispatchDuration(_) => (
-            "https_dispatch_duration_seconds",
-            "HTTPS handler lifetime; excludes subsequent response-body streaming.",
-        ),
-        RuntimeMetric::SmbDispatches(_) => (
-            "smb_dispatches",
-            "Complete SMB payload dispatches ended, including cancellations.",
-        ),
-        RuntimeMetric::SmbDispatchErrors(_) => (
-            "smb_dispatch_errors",
-            "SMB handler errors; excludes ordinary protocol error-status responses.",
-        ),
-        RuntimeMetric::SmbCancelledDispatches(_) => (
-            "smb_cancelled_dispatches",
-            "SMB dispatch futures dropped before returning.",
-        ),
-        RuntimeMetric::SmbDispatchDuration(_) => (
-            "smb_dispatch_duration_seconds",
-            "SMB payload handler lifetime; excludes response socket writes.",
-        ),
+        RuntimeMetric::SmbCancelledDispatches(_) => gateway::cancelled_dispatches(Smb),
+        RuntimeMetric::SmbDispatchDuration(_) => gateway::dispatch_duration(Smb),
     }
 }
 
 fn measurement(sample: &RuntimeMetric) -> Measurement<'_> {
     match sample {
+        RuntimeMetric::Inventory(value) => inventory::measurement(value),
+        RuntimeMetric::Lifecycle(_, value) => lifecycle::measurement(value),
+        RuntimeMetric::FilesystemOperation(_, value) => filesystem::measurement(value),
+        RuntimeMetric::Coding(_, value) => coding::measurement(value),
+        RuntimeMetric::GatewayTransfer(_, value) => gateway::measurement(value),
+        RuntimeMetric::MaintenanceProgress(value) => progress::measurement(value),
+        RuntimeMetric::StorageIo(_, value) => io::measurement(value),
+        RuntimeMetric::Protection(value) => protection::measurement(value),
         RuntimeMetric::Consensus(value) => consensus::measurement(value),
         RuntimeMetric::Maintenance(_, value) => match value {
+            meshspan_contracts::MaintenanceMetric::JobObservationAge(value) => {
+                Measurement::Seconds(*value)
+            }
+            meshspan_contracts::MaintenanceMetric::QueuedJobs(value)
+            | meshspan_contracts::MaintenanceMetric::ClaimedJobs(value)
+            | meshspan_contracts::MaintenanceMetric::CompletedJobs(value)
+            | meshspan_contracts::MaintenanceMetric::ProtectionDebtJobs(value)
+            | meshspan_contracts::MaintenanceMetric::LocalityDebtJobs(value) => {
+                Measurement::Gauge(*value)
+            }
+            meshspan_contracts::MaintenanceMetric::PendingDemandBytes(value) => {
+                Measurement::Bytes(*value)
+            }
             meshspan_contracts::MaintenanceMetric::Attempts(value)
             | meshspan_contracts::MaintenanceMetric::Failures(value) => {
                 Measurement::Counter(*value)
@@ -144,10 +187,18 @@ fn measurement(sample: &RuntimeMetric) -> Measurement<'_> {
         RuntimeMetric::StorageUsage(value) => match value {
             meshspan_contracts::StorageUsageMetric::Age(value) => Measurement::Seconds(*value),
             meshspan_contracts::StorageUsageMetric::SampledTargets(value)
+            | meshspan_contracts::StorageUsageMetric::SampledPackTargets(value)
+            | meshspan_contracts::StorageUsageMetric::UnavailablePackTargets(value)
+            | meshspan_contracts::StorageUsageMetric::SampledFilesystems(value)
+            | meshspan_contracts::StorageUsageMetric::UnavailableFilesystemTargets(value)
             | meshspan_contracts::StorageUsageMetric::UnavailableTargets(value) => {
                 Measurement::Gauge(*value)
             }
             meshspan_contracts::StorageUsageMetric::CommittedBytes(value)
+            | meshspan_contracts::StorageUsageMetric::PackDatabaseBytes(value)
+            | meshspan_contracts::StorageUsageMetric::PackReusableBytes(value)
+            | meshspan_contracts::StorageUsageMetric::FilesystemTotalBytes(value)
+            | meshspan_contracts::StorageUsageMetric::FilesystemAvailableBytes(value)
             | meshspan_contracts::StorageUsageMetric::ReservedBytes(value)
             | meshspan_contracts::StorageUsageMetric::ConfiguredLimitBytes(value)
             | meshspan_contracts::StorageUsageMetric::RepairReserveBytes(value) => {
@@ -165,18 +216,24 @@ fn measurement(sample: &RuntimeMetric) -> Measurement<'_> {
         | RuntimeMetric::OpenTargets(value)
         | RuntimeMetric::PendingReturnScans(value)
         | RuntimeMetric::LastReconciliationFailedSteps(value) => Measurement::Gauge(*value),
-        RuntimeMetric::DroppedObservations(value)
+        RuntimeMetric::FilesystemReadBytes(value)
+        | RuntimeMetric::FilesystemStagedWriteBytes(value)
+        | RuntimeMetric::FilePublications(_, value)
+        | RuntimeMetric::DroppedObservations(value)
         | RuntimeMetric::TargetCheckEvictions(value)
         | RuntimeMetric::EventEvictions(value)
         | RuntimeMetric::ReconciliationCycles(value)
         | RuntimeMetric::ReconciliationFailures(value)
         | RuntimeMetric::TargetProbePasses(value)
         | RuntimeMetric::TargetProbeFailures(value)
+        | RuntimeMetric::HttpsAuthenticationRequired(value)
+        | RuntimeMetric::HttpsForbidden(value)
         | RuntimeMetric::HttpsDispatches(value)
         | RuntimeMetric::HttpsServerErrors(value)
         | RuntimeMetric::HttpsCancelledDispatches(value)
         | RuntimeMetric::SmbDispatches(value)
         | RuntimeMetric::SmbDispatchErrors(value)
+        | RuntimeMetric::SmbAuthenticationRejections(value)
         | RuntimeMetric::SmbCancelledDispatches(value) => Measurement::Counter(*value),
     }
 }

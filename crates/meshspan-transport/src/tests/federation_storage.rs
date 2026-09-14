@@ -354,7 +354,7 @@ fn reject_tampered_request(
     Ok(())
 }
 
-fn client_identity<'a>(
+pub(super) fn client_identity<'a>(
     certificate: &'a CertificateDer<'_>,
     signing_key: &'a SigningKey,
 ) -> Result<FederationLocalIdentity<'a>, Box<dyn Error>> {
@@ -376,7 +376,7 @@ fn client_identity<'a>(
     )?)
 }
 
-fn exchange_context(
+pub(super) fn exchange_context(
     request_id: u8,
     operation_id: u8,
     trace_id: u8,

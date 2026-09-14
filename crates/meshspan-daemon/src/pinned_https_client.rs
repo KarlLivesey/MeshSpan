@@ -21,6 +21,12 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 const MAXIMUM_HEADER_BYTES: usize = 16 * 1_024;
 
+pub(crate) struct PinnedJsonPayload<'a> {
+    pub(crate) body: &'a [u8],
+    pub(crate) maximum_response_bytes: usize,
+    pub(crate) authorization: Option<&'a str>,
+}
+
 pub(crate) async fn post_pinned_json(
     origin: &str,
     route: &str,
@@ -28,6 +34,30 @@ pub(crate) async fn post_pinned_json(
     body: &[u8],
     maximum_response_bytes: usize,
 ) -> Result<Vec<u8>, PinnedHttpsClientError> {
+    post_pinned_json_authorised(
+        origin,
+        route,
+        certificate_fingerprint,
+        PinnedJsonPayload {
+            body,
+            maximum_response_bytes,
+            authorization: None,
+        },
+    )
+    .await
+}
+
+pub(crate) async fn post_pinned_json_authorised(
+    origin: &str,
+    route: &str,
+    certificate_fingerprint: [u8; 32],
+    payload: PinnedJsonPayload<'_>,
+) -> Result<Vec<u8>, PinnedHttpsClientError> {
+    let PinnedJsonPayload {
+        body,
+        maximum_response_bytes,
+        authorization,
+    } = payload;
     if certificate_fingerprint == [0; 32]
         || body.is_empty()
         || route.is_empty()
@@ -71,7 +101,7 @@ pub(crate) async fn post_pinned_json(
     .await
     .map_err(|_| PinnedHttpsClientError::Unavailable)?
     .map_err(|_| PinnedHttpsClientError::Rejected)?;
-    let request = request_head(authority.as_str(), route, body.len())?;
+    let request = request_head(authority.as_str(), route, body.len(), authorization)?;
     tokio::time::timeout(IO_TIMEOUT, async {
         tls.write_all(&request).await?;
         tls.write_all(body).await?;
@@ -102,6 +132,7 @@ fn request_head(
     host: &str,
     route: &str,
     body_length: usize,
+    authorization: Option<&str>,
 ) -> Result<Vec<u8>, PinnedHttpsClientError> {
     if host.bytes().any(|byte| byte.is_ascii_control())
         || route
@@ -110,8 +141,19 @@ fn request_head(
     {
         return Err(PinnedHttpsClientError::InvalidRequest);
     }
+    let authorization = match authorization {
+        Some(value)
+            if value.is_empty()
+                || value.len() > 1024
+                || value.bytes().any(|byte| byte.is_ascii_control()) =>
+        {
+            return Err(PinnedHttpsClientError::InvalidRequest);
+        }
+        Some(value) => format!("Authorization: {value}\r\n"),
+        None => String::new(),
+    };
     Ok(format!(
-        "POST {route} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {body_length}\r\nConnection: close\r\n\r\n"
+        "POST {route} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {body_length}\r\n{authorization}Connection: close\r\n\r\n"
     )
     .into_bytes())
 }

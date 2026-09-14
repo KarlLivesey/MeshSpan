@@ -29,6 +29,85 @@ pub(super) struct HeadFixture {
 }
 
 #[test]
+fn publication_confirmation_survives_another_publisher_and_later_heads()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let file_path = directory.path().join("confirmation.sqlite3");
+    let fixture = fixture()?;
+    let mut repository = open_and_prepare(&file_path, &fixture)?;
+    let first = publication_command(&fixture, None, 30, 31, 32, 33, 34)?;
+    let AuthoritativeCommand::CommitConvergedVolumeHead(expected) = &first else {
+        return Err("command".into());
+    };
+    assert!(!repository.namespace_publication_is_committed(expected)?);
+    repository.apply_committed(
+        LogPosition { index: 3, term: 1 },
+        context(35, fixture.administrator, 36, 102, Some(2))?,
+        &first,
+    )?;
+    assert!(repository.namespace_publication_is_committed(expected)?);
+    let second = publication_command(&fixture, Some(commit(30)?), 40, 41, 42, 43, 44)?;
+    repository.apply_committed(
+        LogPosition { index: 4, term: 1 },
+        context(45, fixture.administrator, 46, 103, Some(3))?,
+        &second,
+    )?;
+    drop(repository);
+    let repository = AuthoritativeRepository::new(PartitionDatabase::open(
+        &file_path,
+        fixture.partition,
+        UnixMicros::new(200),
+    )?);
+    assert!(repository.namespace_publication_is_committed(expected)?);
+    for changed in [
+        CommitConvergedVolumeHead {
+            volume_id: VolumeId::from_bytes([90; 16])?,
+            ..*expected
+        },
+        CommitConvergedVolumeHead {
+            expected_namespace_commit_id: Some(commit(91)?),
+            ..*expected
+        },
+        CommitConvergedVolumeHead {
+            root_object_revision_id: object_revision(92)?,
+            ..*expected
+        },
+        CommitConvergedVolumeHead {
+            namespace_commit_id: commit(93)?,
+            ..*expected
+        },
+        CommitConvergedVolumeHead {
+            evidence: ConvergedHeadEvidence::Publication {
+                operation_id: OperationId::from_bytes([94; 16])?,
+                request_digest: [33; 32],
+                result_digest: [34; 32],
+            },
+            ..*expected
+        },
+        CommitConvergedVolumeHead {
+            evidence: ConvergedHeadEvidence::Publication {
+                operation_id: OperationId::from_bytes([32; 16])?,
+                request_digest: [95; 32],
+                result_digest: [34; 32],
+            },
+            ..*expected
+        },
+        CommitConvergedVolumeHead {
+            evidence: ConvergedHeadEvidence::Publication {
+                operation_id: OperationId::from_bytes([32; 16])?,
+                request_digest: [33; 32],
+                result_digest: [96; 32],
+            },
+            ..*expected
+        },
+    ] {
+        assert!(!repository.namespace_publication_is_committed(&changed)?);
+    }
+    assert_eq!(repository.current_revision()?, Revision::new(4));
+    Ok(())
+}
+
+#[test]
 fn converged_head_digest_binds_every_authority_and_evidence_field()
 -> Result<(), Box<dyn std::error::Error>> {
     let fixture = fixture()?;
@@ -288,6 +367,13 @@ fn broken_head_history_fails_closed_in_reads_and_invariant_checks()
         Err(RepositoryError::CorruptState)
     ));
     let report = repository.check_invariants(super::PageLimit::new(100)?)?;
+    let AuthoritativeCommand::CommitConvergedVolumeHead(publication) = first else {
+        return Err("publication command".into());
+    };
+    assert!(matches!(
+        repository.namespace_publication_is_committed(&publication),
+        Err(RepositoryError::CorruptState)
+    ));
     assert!(report.findings.iter().any(|finding| {
         finding.kind == super::InvariantKind::InvalidVolumeHeadHistory
             && finding.subject_id == fixture.volume.as_bytes()

@@ -15,6 +15,9 @@ pub enum RetainedNamespaceRootSource {
     ConvergedHead(VolumeId),
     /// One active or expiring user snapshot.
     Snapshot(SnapshotId),
+    /// One immutable root held by at least one active capture or retained backup.
+    /// Shared ownership is deduplicated by commit; retiring one owner cannot release another's pin.
+    Backup(NamespaceCommitId),
 }
 
 /// One immutable namespace root retained at an exact metadata revision.
@@ -85,6 +88,11 @@ pub(super) fn retained_roots(
             UNION ALL
             SELECT 2, snapshot_id, namespace_commit_id, root_object_revision_id
             FROM volume_snapshots WHERE volume_id = ?1 AND state IN (1, 2)
+            UNION ALL
+            SELECT DISTINCT 3, p.namespace_commit_id, p.namespace_commit_id, h.root_object_revision_id
+            FROM backup_namespace_roots p JOIN volume_head_transitions h
+              ON h.volume_id = p.volume_id AND h.namespace_commit_id = p.namespace_commit_id
+            WHERE p.volume_id = ?1
          )
          SELECT source_kind, source_id, namespace_commit_id, root_object_revision_id
          FROM roots WHERE (source_kind, source_id) > (?2, ?3)
@@ -159,6 +167,11 @@ pub(super) fn retained_root_summary(
             UNION ALL
             SELECT 2, snapshot_id, namespace_commit_id, root_object_revision_id
             FROM volume_snapshots WHERE volume_id = ?1 AND state IN (1, 2)
+            UNION ALL
+            SELECT DISTINCT 3, p.namespace_commit_id, p.namespace_commit_id, h.root_object_revision_id
+            FROM backup_namespace_roots p JOIN volume_head_transitions h
+              ON h.volume_id = p.volume_id AND h.namespace_commit_id = p.namespace_commit_id
+            WHERE p.volume_id = ?1
          )
          SELECT source_kind, source_id, namespace_commit_id, root_object_revision_id
          FROM roots ORDER BY source_kind, source_id",
@@ -234,6 +247,10 @@ fn retained_root_record_digest(root: RetainedNamespaceRoot) -> [u8; 32] {
             digest.update(&[2]);
             digest.update(&snapshot_id.as_bytes());
         }
+        RetainedNamespaceRootSource::Backup(commit_id) => {
+            digest.update(&[3]);
+            digest.update(&commit_id.as_bytes());
+        }
     }
     digest.update(&root.namespace_commit_id.as_bytes());
     digest.update(&root.root_object_revision_id.as_bytes());
@@ -257,6 +274,14 @@ fn decode_root(
         2 => RetainedNamespaceRootSource::Snapshot(
             SnapshotId::from_bytes(source_id).map_err(|_| RepositoryError::CorruptState)?,
         ),
+        3 => {
+            let commit = NamespaceCommitId::from_bytes(source_id)
+                .map_err(|_| RepositoryError::CorruptState)?;
+            if source_id.as_slice() != stored.2 {
+                return Err(RepositoryError::CorruptState);
+            }
+            RetainedNamespaceRootSource::Backup(commit)
+        }
         _ => return Err(RepositoryError::CorruptState),
     };
     Ok(RetainedNamespaceRoot {
@@ -277,6 +302,10 @@ fn cursor(root: RetainedNamespaceRoot) -> RetainedNamespaceRootCursor {
         RetainedNamespaceRootSource::Snapshot(snapshot_id) => RetainedNamespaceRootCursor {
             source_kind: 2,
             source_id: snapshot_id.as_bytes(),
+        },
+        RetainedNamespaceRootSource::Backup(commit_id) => RetainedNamespaceRootCursor {
+            source_kind: 3,
+            source_id: commit_id.as_bytes(),
         },
     }
 }

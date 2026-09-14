@@ -45,6 +45,13 @@ operation relies on.
 - Logical-volume creation commits its first content-key generation and every
   recipient envelope in the same consensus transaction. Current gateways and
   the verified offline recovery key receive envelopes; storage-only nodes do not.
+- A later gateway receives additive envelopes for retained volume-key generations.
+  `ExtendVolumeKeyRecipients` is an audited, administrator-authorised consensus
+  command: it requires the unchanged ciphertext digest, admits only current
+  gateway/recovery wrapping keys and cannot replace any existing envelope. The
+  source authenticates the original ciphertext before rewrapping its data key.
+  Historical file versions keep their exact key generation; enrolment does not
+  rewrite files or export a node's private key.
 - A gateway reloads a volume key only by selecting its exact committed recipient
   envelope and opening it inside the node-local wrapping-key boundary. The result
   becomes a zeroising filesystem capability; connectors and storage providers do
@@ -90,6 +97,17 @@ credential blobs are not accepted.
 - Storage read and removal permits use canonical domain-separated keyed BLAKE3
   MACs. The provider verifies the MAC and every bound identity, revision, epoch,
   incarnation and expiry; a plain digest supplied by a caller is never authority.
+- Storage providers need the current permit-MAC key, distinct from volume-content,
+  authentication, public-TLS and CA private keys. Recovery distributes only the
+  fresh permit generation to storage-only nodes; it grants neither gateway roles
+  nor historical operational keys. Recipient sets must match the root-signed role
+  selection. A valid MAC does not replace the authenticated issuer, target and
+  current metadata checks above.
+- Routine storage-permit redistribution includes active gateways, active or
+  draining storage nodes, and the verified offline recovery recipient. A node
+  with both service roles appears once. Other gateway secrets keep their own
+  narrower recipient policy; a new gateway must not remove a storage-only node's
+  permit envelope. Metadata rejects incomplete or extra permit recipient sets.
 - Permission changes and principal disablement increment epochs/revisions used
   to invalidate capabilities and sessions.
 - Administration and content access are separate; break-glass access is explicit,

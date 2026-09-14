@@ -67,6 +67,52 @@ fn destination_edits_compare_their_own_revision_and_preserve_binding()
 }
 
 #[test]
+fn destination_can_pause_after_provider_replacement_but_cannot_resume()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = fixture()?;
+    let destination = BackupDestinationId::from_bytes([30; 16])?;
+    configure_destination(&mut fixture, destination)?;
+    let original = fixture
+        .repository
+        .backup_destination(destination)?
+        .ok_or("missing")?;
+    // Simulate an independently replaced provider generation in the durable catalogue.
+    let database =
+        rusqlite::Connection::open(fixture.directory.path().join("backup-catalogue.sqlite3"))?;
+    assert_eq!(
+        database.execute(
+            "UPDATE storage_targets SET current_generation = 2 WHERE target_id = ?1",
+            [fixture.target.as_bytes().as_slice()],
+        )?,
+        1
+    );
+    drop(database);
+    let pause = command(&fixture, 30, original.revision.get(), false)?;
+    let receipt = apply(&mut fixture, 4, 60, &pause)?;
+    let paused = fixture
+        .repository
+        .backup_destination(destination)?
+        .ok_or("missing")?;
+    assert_eq!(paused.state, BackupDestinationState::Paused);
+    assert_eq!(paused.binding, original.binding);
+    let resume = command(&fixture, 30, receipt.committed_revision.get(), true)?;
+    assert!(matches!(
+        apply(&mut fixture, 5, 61, &resume),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    assert_eq!(
+        fixture.repository.backup_destination(destination)?,
+        Some(paused)
+    );
+    let disabled_creation = command(&fixture, 31, 0, false)?;
+    assert!(matches!(
+        apply(&mut fixture, 5, 62, &disabled_creation),
+        Err(RepositoryError::InvalidCommand)
+    ));
+    Ok(())
+}
+
+#[test]
 fn administration_pages_include_paused_destinations_and_seek_without_replay()
 -> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = fixture()?;

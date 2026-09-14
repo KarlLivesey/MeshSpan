@@ -6,20 +6,72 @@
 mod acme_lifecycle;
 #[path = "headless_process/backup_history.rs"]
 mod backup_history;
+#[path = "headless_process/backup_recovery.rs"]
+mod backup_recovery;
+#[path = "headless_process/backup_takeover.rs"]
+mod backup_takeover;
 #[path = "headless_process/diagnostics.rs"]
 mod diagnostics;
 #[path = "headless_process/external_certificates.rs"]
 mod external_certificates;
+#[path = "headless_process/federated_backup.rs"]
+mod federated_backup;
+#[path = "headless_process/incarnation.rs"]
+mod incarnation;
 #[path = "headless_process/local_certificates.rs"]
 mod local_certificates;
 #[path = "headless_process/metrics.rs"]
 mod metrics;
+#[path = "headless_process/namespace_delivery.rs"]
+mod namespace_delivery;
 #[path = "headless_process/notifications.rs"]
 mod notifications;
+#[path = "headless_process/offline_backup.rs"]
+mod offline_backup;
 #[path = "support/passkey.rs"]
 mod passkey_support;
 #[path = "headless_process/private_certificates.rs"]
 mod private_certificates;
+#[path = "headless_process/protection_metrics.rs"]
+mod protection_metrics;
+#[path = "headless_process/recovery_certificate_transport.rs"]
+mod recovery_certificate_transport;
+#[path = "headless_process/recovery_consensus_permission.rs"]
+mod recovery_consensus_permission;
+#[path = "headless_process/recovery_content.rs"]
+mod recovery_content;
+#[path = "headless_process/recovery_history.rs"]
+mod recovery_history;
+#[path = "headless_process/recovery_keys.rs"]
+mod recovery_keys;
+#[path = "headless_process/recovery_live_file.rs"]
+mod recovery_live_file;
+#[path = "headless_process/recovery_live_storage.rs"]
+mod recovery_live_storage;
+#[path = "headless_process/recovery_providers.rs"]
+mod recovery_providers;
+#[path = "headless_process/recovery_restoration.rs"]
+mod recovery_restoration;
+#[path = "headless_process/recovery_restoration_collection.rs"]
+mod recovery_restoration_collection;
+#[path = "headless_process/recovery_resume.rs"]
+mod recovery_resume;
+#[path = "headless_process/recovery_routes.rs"]
+mod recovery_routes;
+#[path = "headless_process/recovery_runtime.rs"]
+mod recovery_runtime;
+#[path = "headless_process/recovery_state.rs"]
+mod recovery_state;
+#[path = "headless_process/recovery_state_collection.rs"]
+mod recovery_state_collection;
+#[path = "headless_process/recovery_state_set.rs"]
+mod recovery_state_set;
+#[path = "headless_process/recovery_storage_control.rs"]
+mod recovery_storage_control;
+#[path = "headless_process/recovery_storage_io.rs"]
+mod recovery_storage_io;
+#[path = "headless_process/recovery_targets.rs"]
+mod recovery_targets;
 #[path = "headless_process/stage10.rs"]
 mod stage10;
 #[path = "headless_process/stage8.rs"]
@@ -645,6 +697,10 @@ async fn clean_machine_operator_flow_uses_only_cli_and_public_https() -> Result<
             .ok_or("setup response omitted the API key")?;
         save_and_verify_recovery_bundle(&root, &root_client, api_key, &created).await?;
 
+        wait_for_storage_folder_visibility(&root, &root_client, api_key).await?;
+        let pre_enrolment_backup =
+            stage10::backup_destination_controls(root.address, &root_client, api_key).await?;
+
         let join_code = issue_join_code(&root, &root_client, api_key).await?;
         processes.push(peer.start_join(&join_code)?);
         let peer_client = wait_for_client(&peer.identity_path).await?;
@@ -652,12 +708,29 @@ async fn clean_machine_operator_flow_uses_only_cli_and_public_https() -> Result<
         web_panel::verify(peer.address, &peer_client).await?;
         wait_for_storage_folder_visibility(&root, &root_client, api_key).await?;
         wait_for_storage_folder_visibility(&peer, &peer_client, api_key).await?;
-        let root_backup =
-            stage10::backup_destination_controls(root.address, &root_client, api_key).await?;
-        let peer_backup = backup_history::automatic_backup_history(
+        let authorization = format!("Bearer {api_key}");
+        backup_history::assert_missing_gateway_key(
             peer.address,
             &peer_client,
-            &format!("Bearer {api_key}"),
+            &authorization,
+            &pre_enrolment_backup,
+        )
+        .await?;
+        let sequence =
+            stage10::request_post_enrolment_backup(root.address, &root_client, &authorization)
+                .await?;
+        let root_backup = backup_history::automatic_backup_history_for_schedule(
+            root.address,
+            &root_client,
+            &authorization,
+            sequence,
+        )
+        .await?;
+        let peer_backup = backup_history::automatic_backup_history_for_schedule(
+            peer.address,
+            &peer_client,
+            &authorization,
+            sequence,
         )
         .await?;
         assert_eq!(
@@ -1085,6 +1158,15 @@ async fn register_storage_folder(
     }
 }
 
+/// Test-owned children must be reaped even when an assertion unwinds past explicit cleanup.
+struct ProcessCleanup(Vec<Child>);
+
+impl Drop for ProcessCleanup {
+    fn drop(&mut self) {
+        stop_processes(&mut self.0);
+    }
+}
+
 fn stop_processes(processes: &mut [Child]) {
     for process in processes {
         let _killed = process.kill();
@@ -1096,95 +1178,98 @@ fn stop_processes(processes: &mut [Child]) {
 async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<(), Box<dyn Error>>
 {
     let fixture = ProcessFixture::new()?;
-    let mut process = fixture.start()?;
-    let claim = wait_for_claim(&fixture.claim_path).await?;
-    let client = wait_for_client(&fixture.identity_path).await?;
-    let administrator_id = bootstrap_administrator_id(&claim, &fixture.identity_path)?;
-    wait_for_status(fixture.address, &client, "claim_required").await?;
+    let mut processes = ProcessCleanup(vec![fixture.start()?]);
+    let proof = async {
+        let claim = wait_for_claim(&fixture.claim_path).await?;
+        let client = wait_for_client(&fixture.identity_path).await?;
+        let administrator_id = bootstrap_administrator_id(&claim, &fixture.identity_path)?;
+        wait_for_status(fixture.address, &client, "claim_required").await?;
 
-    let encoded_claim = claim.expose_encoded();
-    let body = serde_json::json!({
-        "operation_id": "00000000-0000-4000-8000-000000000001",
-        "claim": encoded_claim.as_str(),
-        "mesh_name": "Process mesh",
-        "administrator_name": "Administrator",
-        "host_name": "Test host",
-        "node_name": "Test node"
-    });
-    let response = request(
-        fixture.address,
-        &client,
-        "POST",
-        "/api/latest/setup/meshes",
-        Some(&serde_json::to_vec(&body)?),
-    )
-    .await?;
-    assert!(response.starts_with("HTTP/1.1 201 Created\r\n"));
-    assert!(response.contains("\"api_key\":\"meshspan-key-v1."));
-    let created: serde_json::Value = serde_json::from_str(response_body(&response)?)?;
-    let api_key = created["api_key"]
-        .as_str()
-        .ok_or("setup response omitted the API key")?;
-    save_and_verify_recovery_bundle(&fixture, &client, api_key, &created).await?;
-    let session_body = serde_json::to_vec(&serde_json::json!({
-        "operation_id": "00000000-0000-4000-8000-000000000002",
-        "authentication": { "method": "api_key", "secret": api_key },
-        "client_label": null,
-        "remember": false
-    }))?;
-    assert!(!fixture.claim_path.exists());
-    wait_for_status(fixture.address, &client, "configured").await?;
-    let target_marker = wait_for_storage_marker(&fixture.storage_path).await?;
-    let provider_journal = wait_for_live_provider(&fixture).await?;
-    assert_wrapping_key_committed(&fixture)?;
-    assert_eq!(
-        fs::read(fixture.storage_path.join("operator-file.txt"))?,
-        b"untouched"
-    );
-    let browser_session = create_browser_session(fixture.address, &client, &session_body).await?;
-    assert_live_totp_verifier_rejects_unknown_factor(fixture.address, &client, api_key).await?;
-    let totp_secret = enrol_totp(fixture.address, &client, api_key, &browser_session).await?;
-    let passkey = enrol_passkey(fixture.address, &client, api_key, &browser_session).await?;
-    assert_api_key_lifecycle(fixture.address, &client, api_key, &browser_session).await?;
-    assert_volume_inventory_empty(fixture.address, &client, api_key).await?;
-    create_user(fixture.address, &client, api_key).await?;
-    let volume_id = create_volume(fixture.address, &client, api_key, &administrator_id).await?;
-    assign_single_node_strong_acknowledgement(fixture.address, &client, api_key, &volume_id)
+        let encoded_claim = claim.expose_encoded();
+        let body = serde_json::json!({
+            "operation_id": "00000000-0000-4000-8000-000000000001",
+            "claim": encoded_claim.as_str(),
+            "mesh_name": "Process mesh",
+            "administrator_name": "Administrator",
+            "host_name": "Test host",
+            "node_name": "Test node"
+        });
+        let response = request(
+            fixture.address,
+            &client,
+            "POST",
+            "/api/latest/setup/meshes",
+            Some(&serde_json::to_vec(&body)?),
+        )
         .await?;
-    assert_volume_visible(fixture.address, &client, api_key).await?;
-    let content = b"headless native file bytes";
-    let committed = upload_file(fixture.address, &client, api_key, &volume_id, content).await?;
-    if committed["acknowledgement"]["configured_consistency"] != "strong"
-        || committed["acknowledgement"]["acknowledged_consistency"] != "strong"
-        || committed["acknowledgement"]["durability_scope"] != "globally_converged"
-        || committed["acknowledgement"]["policy_committed"] != true
-    {
-        return Err("strong upload returned no globally converged acknowledgement".into());
+        assert!(response.starts_with("HTTP/1.1 201 Created\r\n"));
+        assert!(response.contains("\"api_key\":\"meshspan-key-v1."));
+        let created: serde_json::Value = serde_json::from_str(response_body(&response)?)?;
+        let api_key = created["api_key"]
+            .as_str()
+            .ok_or("setup response omitted the API key")?;
+        save_and_verify_recovery_bundle(&fixture, &client, api_key, &created).await?;
+        let session_body = serde_json::to_vec(&serde_json::json!({
+            "operation_id": "00000000-0000-4000-8000-000000000002",
+            "authentication": { "method": "api_key", "secret": api_key },
+            "client_label": null,
+            "remember": false
+        }))?;
+        assert!(!fixture.claim_path.exists());
+        wait_for_status(fixture.address, &client, "configured").await?;
+        let target_marker = wait_for_storage_marker(&fixture.storage_path).await?;
+        let provider_journal = wait_for_live_provider(&fixture).await?;
+        assert_wrapping_key_committed(&fixture)?;
+        assert_eq!(
+            fs::read(fixture.storage_path.join("operator-file.txt"))?,
+            b"untouched"
+        );
+        let browser_session =
+            create_browser_session(fixture.address, &client, &session_body).await?;
+        assert_live_totp_verifier_rejects_unknown_factor(fixture.address, &client, api_key).await?;
+        let totp_secret = enrol_totp(fixture.address, &client, api_key, &browser_session).await?;
+        let passkey = enrol_passkey(fixture.address, &client, api_key, &browser_session).await?;
+        assert_api_key_lifecycle(fixture.address, &client, api_key, &browser_session).await?;
+        assert_volume_inventory_empty(fixture.address, &client, api_key).await?;
+        create_user(fixture.address, &client, api_key).await?;
+        let volume_id = create_volume(fixture.address, &client, api_key, &administrator_id).await?;
+        assign_single_node_strong_acknowledgement(fixture.address, &client, api_key, &volume_id)
+            .await?;
+        assert_volume_visible(fixture.address, &client, api_key).await?;
+        let content = b"headless native file bytes";
+        let committed = upload_file(fixture.address, &client, api_key, &volume_id, content).await?;
+        if committed["acknowledgement"]["configured_consistency"] != "strong"
+            || committed["acknowledgement"]["acknowledged_consistency"] != "strong"
+            || committed["acknowledgement"]["durability_scope"] != "globally_converged"
+            || committed["acknowledgement"]["policy_committed"] != true
+        {
+            return Err("strong upload returned no globally converged acknowledgement".into());
+        }
+        assert_file_surfaces(fixture.address, &client, api_key, &volume_id, content).await?;
+
+        stop_processes(&mut processes.0);
+        processes.0.push(fixture.start()?);
+        wait_for_status(fixture.address, &client, "configured").await?;
+        assert_eq!(
+            wait_for_storage_marker(&fixture.storage_path).await?,
+            target_marker
+        );
+        assert_eq!(wait_for_live_provider(&fixture).await?, provider_journal);
+        assert_wrapping_key_committed(&fixture)?;
+        create_browser_session(fixture.address, &client, &session_body).await?;
+        assert_passkey_session(fixture.address, &client, &passkey).await?;
+        let multi_factor_session =
+            create_totp_browser_session(fixture.address, &client, api_key, &totp_secret).await?;
+        assert_recovery_code_lifecycle(fixture.address, &client, api_key, &multi_factor_session)
+            .await?;
+        assert_volume_visible(fixture.address, &client, api_key).await?;
+        assert_user_visible(fixture.address, &client, api_key).await?;
+        assert_file_surfaces(fixture.address, &client, api_key, &volume_id, content).await?;
+        Ok(())
     }
-    assert_file_surfaces(fixture.address, &client, api_key, &volume_id, content).await?;
-
-    process.kill()?;
-    process.wait()?;
-    process = fixture.start()?;
-    wait_for_status(fixture.address, &client, "configured").await?;
-    assert_eq!(
-        wait_for_storage_marker(&fixture.storage_path).await?,
-        target_marker
-    );
-    assert_eq!(wait_for_live_provider(&fixture).await?, provider_journal);
-    assert_wrapping_key_committed(&fixture)?;
-    create_browser_session(fixture.address, &client, &session_body).await?;
-    assert_passkey_session(fixture.address, &client, &passkey).await?;
-    let multi_factor_session =
-        create_totp_browser_session(fixture.address, &client, api_key, &totp_secret).await?;
-    assert_recovery_code_lifecycle(fixture.address, &client, api_key, &multi_factor_session)
-        .await?;
-    assert_volume_visible(fixture.address, &client, api_key).await?;
-    assert_user_visible(fixture.address, &client, api_key).await?;
-    assert_file_surfaces(fixture.address, &client, api_key, &volume_id, content).await?;
-    process.kill()?;
-    process.wait()?;
-    Ok(())
+    .await;
+    drop(processes);
+    retain_failure_state(proof, [fixture.temporary])
 }
 
 struct RegisteredPasskey {
@@ -2077,10 +2162,42 @@ async fn upload_file(
     volume_id: &str,
     content: &[u8],
 ) -> Result<serde_json::Value, Box<dyn Error>> {
+    upload_named_file(
+        address,
+        client,
+        api_key,
+        volume_id,
+        FileUploadProof {
+            path: "process-proof.bin",
+            content,
+            operation_base: 6,
+        },
+    )
+    .await
+}
+
+struct FileUploadProof<'a> {
+    path: &'a str,
+    content: &'a [u8],
+    operation_base: u16,
+}
+
+async fn upload_named_file(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    volume_id: &str,
+    proof: FileUploadProof<'_>,
+) -> Result<serde_json::Value, Box<dyn Error>> {
+    let content = proof.content;
+    let write_operation = format!(
+        "00000000-0000-4000-8000-{:012x}",
+        u32::from(proof.operation_base) + 1
+    );
     let authorization = format!("Bearer {api_key}");
     let begin_body = serde_json::to_vec(&serde_json::json!({
-        "operation_id": "00000000-0000-4000-8000-000000000006",
-        "path": "process-proof.bin",
+        "operation_id": format!("00000000-0000-4000-8000-{:012x}", proof.operation_base),
+        "path": proof.path,
         "disposition": { "mode": "create_new" },
         "maximum_bytes": 1024
     }))?;
@@ -2112,10 +2229,7 @@ async fn upload_file(
         "application/octet-stream",
         &[
             ("Authorization", authorization.as_str()),
-            (
-                "MeshSpan-Operation-Id",
-                "00000000-0000-4000-8000-000000000007",
-            ),
+            ("MeshSpan-Operation-Id", write_operation.as_str()),
             ("MeshSpan-Stage-Fence", stage_fence.as_str()),
             ("MeshSpan-Content-BLAKE3", digest.as_str()),
         ],
@@ -2130,7 +2244,7 @@ async fn upload_file(
         .as_u64()
         .ok_or("native range write omitted its fence")?;
     let commit_body = serde_json::to_vec(&serde_json::json!({
-        "operation_id": "00000000-0000-4000-8000-000000000008",
+        "operation_id": format!("00000000-0000-4000-8000-{:012x}", u32::from(proof.operation_base) + 2),
         "stage_fence": stage_fence,
         "expected_sequence": checkpoint,
         "final_length": content.len(),

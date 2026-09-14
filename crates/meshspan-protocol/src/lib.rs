@@ -2,11 +2,21 @@
 
 //! Generated private wire messages plus strict bounded framing and validation.
 
+mod federation_backup_discovery;
+mod federation_backup_signing;
 mod federation_signing;
 mod framing;
+mod metadata_replica;
 mod node_capability;
 mod validation;
 
+pub use federation_backup_discovery::{
+    decode_backup_allocation_cursor, encode_backup_allocation_cursor,
+};
+pub use federation_backup_signing::{
+    federation_backup_allocation_request_digest_payload, federation_backup_request_digest_payload,
+    federation_backup_signing_payload,
+};
 pub use federation_signing::{
     federation_authority_fetch_signing_payload, federation_authority_page_digest_payload,
     federation_authority_page_signing_payload, federation_branch_fetch_signing_payload,
@@ -31,6 +41,10 @@ pub use framing::{
     encode_data_control_frame, encode_data_frame, encode_federation_frame,
 };
 pub use meshspan_protobuf::EncodeError as ProtocolEncodeError;
+pub use metadata_replica::{
+    MAXIMUM_METADATA_REPLICA_BODY_BYTES, MAXIMUM_METADATA_REPLICA_COMMAND_BYTES,
+    MAXIMUM_METADATA_REPLICA_ENTRIES, decode_metadata_replica_body, encode_metadata_replica_body,
+};
 pub use node_capability::node_capability_digest;
 
 /// Generated version-one private wire messages.

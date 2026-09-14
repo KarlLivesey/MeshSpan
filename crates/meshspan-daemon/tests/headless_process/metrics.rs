@@ -2,6 +2,11 @@
 
 //! Real authenticated exporter enable, exact retry, disable, re-enable and scrape proof.
 
+#[path = "metrics/inventory.rs"]
+mod inventory;
+#[path = "metrics/smb.rs"]
+mod smb;
+
 use super::{
     ClientConfig, Error, SocketAddr, request_with_headers, require_status, response_body,
     response_header,
@@ -18,7 +23,8 @@ async fn exporter_policy_survives_restart_and_reaches_another_gateway() -> Resul
 {
     let root = super::ProcessFixture::new()?;
     let peer = super::ProcessFixture::new()?;
-    let mut processes = vec![root.start()?];
+    let mut cleanup = super::ProcessCleanup(vec![root.start()?]);
+    let processes = &mut cleanup.0;
     let mut phase = "initial root startup and exporter configuration";
     let proof = async {
         let claim = super::wait_for_claim(&root.claim_path).await?;
@@ -71,7 +77,7 @@ async fn exporter_policy_survives_restart_and_reaches_another_gateway() -> Resul
             (root.address, root.smb_address, root.private_address),
             (peer.address, peer.smb_address, peer.private_address)).into()
     });
-    super::stop_processes(&mut processes);
+    super::stop_processes(processes);
     super::retain_failure_state(proof, [root.temporary, peer.temporary])
 }
 
@@ -115,6 +121,7 @@ async fn configure_and_verify(
     let first = configure(address, client, &authorization, &enable).await?;
     assert_eq!(first.sequence, 1);
     verify(address, client, api_key).await?;
+    let before = access_rejections(address, client, &authorization).await?;
     let ambiguous = request_with_headers(
         address,
         client,
@@ -167,7 +174,38 @@ async fn configure_and_verify(
             .sequence,
         3
     );
+    let after = access_rejections(address, client, &authorization).await?;
+    assert_eq!(after, (before.0 + 1, before.1 + 1));
     verify(address, client, api_key).await
+}
+
+async fn access_rejections(
+    address: SocketAddr,
+    client: &ClientConfig,
+    authorization: &str,
+) -> Result<(u64, u64), Box<dyn Error>> {
+    let response = request_with_headers(
+        address,
+        client,
+        "GET",
+        SCRAPE,
+        None,
+        &[("Authorization", authorization)],
+    )
+    .await?;
+    require_status(&response, "200 OK", "read access rejection counters")?;
+    let body = response_body(&response)?;
+    let count = |name: &str| -> Result<u64, Box<dyn Error>> {
+        Ok(body
+            .lines()
+            .find_map(|line| line.strip_prefix(name))
+            .ok_or("missing access rejection counter")?
+            .parse()?)
+    };
+    Ok((
+        count("meshspan_v1_https_authentication_required_responses_total ")?,
+        count("meshspan_v1_https_forbidden_responses_total ")?,
+    ))
 }
 
 async fn verify_history(
@@ -216,32 +254,7 @@ async fn verify(
     api_key: &str,
 ) -> Result<(), Box<dyn Error>> {
     let authorization = format!("Bearer {api_key}");
-    let response = request_with_headers(
-        address,
-        client,
-        "GET",
-        SCRAPE,
-        None,
-        &[("Authorization", &authorization)],
-    )
-    .await?;
-    require_status(&response, "200 OK", "scrape enabled runtime observations")?;
-    assert_eq!(
-        response_header(&response, "content-type")?,
-        meshspan_daemon::OPENMETRICS_CONTENT_TYPE
-    );
-    assert_eq!(response_header(&response, "cache-control")?, "no-store");
-    let body = response_body(&response)?;
-    assert!(body.len() <= meshspan_api_contract::MAX_METRICS_EXPORT_BYTES);
-    assert!(body.ends_with("# EOF\n"));
-    assert!(!body.contains(api_key));
-    assert!(!body.contains("target_id"));
-    let completed = body
-        .lines()
-        .find_map(|line| line.strip_prefix("meshspan_v1_storage_reconciliation_cycles_total "))
-        .ok_or("missing real reconciliation counter")?
-        .parse::<u64>()?;
-    assert!(completed > 0);
+    verify_reconciled_scrape(address, client, api_key).await?;
     let policy = request_with_headers(
         address,
         client,
@@ -258,6 +271,57 @@ async fn verify(
     assert!(policy.policy.enabled);
     assert_eq!(policy.policy.allowed_principals.len(), 1);
     verify_consensus_measurements(address, client, &authorization).await
+}
+
+async fn verify_reconciled_scrape(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+) -> Result<(), Box<dyn Error>> {
+    let authorization = format!("Bearer {api_key}");
+    let deadline = tokio::time::Instant::now() + super::WAIT_LIMIT;
+    loop {
+        let response = tokio::time::timeout_at(
+            deadline,
+            request_with_headers(
+                address,
+                client,
+                "GET",
+                SCRAPE,
+                None,
+                &[("Authorization", &authorization)],
+            ),
+        )
+        .await??;
+        if scrape_has_completed_cycle(&response, api_key)? {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("exporter did not observe a completed storage cycle".into());
+        }
+        // Listener readiness is not evidence that asynchronous maintenance has completed.
+        super::sleep(super::RETRY_INTERVAL).await;
+    }
+}
+
+fn scrape_has_completed_cycle(response: &str, api_key: &str) -> Result<bool, Box<dyn Error>> {
+    require_status(response, "200 OK", "scrape enabled runtime observations")?;
+    assert_eq!(
+        response_header(response, "content-type")?,
+        meshspan_daemon::OPENMETRICS_CONTENT_TYPE
+    );
+    assert_eq!(response_header(response, "cache-control")?, "no-store");
+    let body = response_body(response)?;
+    assert!(body.len() <= meshspan_api_contract::MAX_METRICS_EXPORT_BYTES);
+    assert!(body.ends_with("# EOF\n"));
+    assert!(!body.contains(api_key));
+    assert!(!body.contains("target_id"));
+    let completed = body
+        .lines()
+        .find_map(|line| line.strip_prefix("meshspan_v1_storage_reconciliation_cycles_total "))
+        .ok_or("missing real reconciliation counter")?
+        .parse::<u64>()?;
+    Ok(completed > 0)
 }
 
 async fn verify_consensus_measurements(
@@ -293,6 +357,19 @@ async fn verify_consensus_measurements(
             && committed > 0
         {
             assert!(applied <= committed);
+            assert_eq!(
+                value("meshspan_v1_consensus_apply_gap ")?,
+                Some(committed - applied)
+            );
+            assert!(value("meshspan_v1_consensus_remote_members ")?.is_some());
+            let leader = value("meshspan_v1_consensus_role ")? == Some(3);
+            for name in [
+                "meshspan_v1_consensus_replication_unknown_members ",
+                "meshspan_v1_consensus_replication_lagging_members ",
+                "meshspan_v1_consensus_replication_maximum_committed_gap ",
+            ] {
+                assert_eq!(value(name)?.is_some(), leader, "{name}");
+            }
             assert!(matches!(value("meshspan_v1_consensus_role ")?, Some(1..=3)));
             assert!(matches!(
                 value("meshspan_v1_consensus_persistence_blocked ")?,
@@ -380,6 +457,23 @@ async fn verify_storage_measurements(
             );
             assert!(count("meshspan_v1_storage_accounted_committed_bytes ").is_some());
             assert!(count("meshspan_v1_storage_accounted_reserved_bytes ").is_some());
+            assert_eq!(count("meshspan_v1_storage_sampled_filesystems "), Some(1));
+            assert_eq!(
+                count("meshspan_v1_storage_unavailable_filesystem_targets "),
+                Some(0)
+            );
+            let total = count("meshspan_v1_storage_filesystem_total_bytes ")
+                .ok_or("filesystem capacity absent")?;
+            let available = count("meshspan_v1_storage_filesystem_available_bytes ")
+                .ok_or("filesystem available bytes absent")?;
+            assert!(total > 0 && available <= total);
+            for kind in ["repair", "drain", "rebalance", "reconcile", "scrub"] {
+                assert!(count(&format!("meshspan_v1_maintenance_{kind}_queued_jobs ")).is_some());
+                assert!(count(&format!("meshspan_v1_maintenance_{kind}_claimed_jobs ")).is_some());
+                assert!(
+                    count(&format!("meshspan_v1_maintenance_{kind}_completed_jobs ")).is_some()
+                );
+            }
             assert!(body.contains("# UNIT meshspan_v1_storage_accounted_committed_bytes bytes\n"));
             return Ok(());
         }

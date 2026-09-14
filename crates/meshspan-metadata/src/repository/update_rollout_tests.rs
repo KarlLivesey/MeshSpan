@@ -18,6 +18,37 @@ use crate::{
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[test]
+fn retained_update_inventory_pages_exact_states_across_restart() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    for seed in 40..=56 {
+        fixture.rollout = WorkId::from_bytes([seed; 16])?;
+        fixture.start()?;
+        if seed < 56 {
+            fixture.control(UpdateRolloutControl::Cancel)?;
+        }
+    }
+    fixture.reopen()?;
+    let first = fixture
+        .repository
+        .update_rollout_state_page(None, PageLimit::new(16)?)?;
+    assert_eq!(first.items, vec![UpdateRolloutState::Cancelled; 16]);
+    assert_eq!(first.next, Some(WorkId::from_bytes([55; 16])?));
+    let last = fixture
+        .repository
+        .update_rollout_state_page(first.next, PageLimit::new(16)?)?;
+    assert_eq!(last.items, vec![UpdateRolloutState::Running]);
+    assert_eq!(last.next, None);
+    assert!(
+        fixture
+            .repository
+            .update_rollout_state_page(Some(fixture.rollout), PageLimit::new(1)?)?
+            .items
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[test]
 fn artifact_source_is_bound_to_signed_bytes_and_current_node_incarnation() -> TestResult {
     let mut fixture = Fixture::new()?;
     fixture.start()?;
@@ -84,6 +115,12 @@ fn rollout_requires_all_staged_and_resumes_exact_progress_after_database_restart
     fixture.start()?;
     let pending = fixture.nodes()?;
     assert_eq!(pending.len(), 2);
+    assert!(
+        fixture
+            .repository
+            .update_restart_candidate(fixture.rollout)?
+            .is_none()
+    );
     assert_eq!(
         fixture.repository.update_progress_counts(fixture.rollout)?,
         crate::UpdateProgressCounts {
@@ -100,11 +137,26 @@ fn rollout_requires_all_staged_and_resumes_exact_progress_after_database_restart
     assert!(fixture.advance(7, UpdateNodePhase::Restarting).is_err());
     assert!(fixture.advance(6, UpdateNodePhase::Restarting).is_err());
     fixture.advance(7, UpdateNodePhase::Staged)?;
+    assert!(fixture.advance(6, UpdateNodePhase::Restarting).is_err());
+    fixture.advance(6, UpdateNodePhase::Preparing)?;
+    assert!(fixture.advance(7, UpdateNodePhase::Preparing).is_err());
+    assert_eq!(
+        fixture
+            .repository
+            .update_restart_candidate(fixture.rollout)?,
+        Some(fixture.nodes()?[0].clone())
+    );
     fixture.advance(6, UpdateNodePhase::Restarting)?;
     assert!(fixture.advance(7, UpdateNodePhase::Restarting).is_err());
     fixture.reopen()?;
     assert_eq!(fixture.nodes()?[0].phase, UpdateNodePhase::Restarting);
     assert!(fixture.nodes()?[0].restart_pending);
+    assert_eq!(
+        fixture
+            .repository
+            .update_restart_candidate(fixture.rollout)?,
+        Some(fixture.nodes()?[0].clone())
+    );
     assert_eq!(
         fixture.repository.update_progress_counts(fixture.rollout)?,
         crate::UpdateProgressCounts {
@@ -115,6 +167,13 @@ fn rollout_requires_all_staged_and_resumes_exact_progress_after_database_restart
         }
     );
     fixture.advance(6, UpdateNodePhase::Verified)?;
+    assert_eq!(
+        fixture
+            .repository
+            .update_restart_candidate(fixture.rollout)?,
+        Some(fixture.nodes()?[1].clone())
+    );
+    fixture.advance(7, UpdateNodePhase::Preparing)?;
     fixture.advance(7, UpdateNodePhase::Restarting)?;
     fixture.advance(7, UpdateNodePhase::Verified)?;
     let complete = fixture
@@ -145,6 +204,7 @@ fn failed_restart_retains_exclusivity_and_resume_probes_instead_of_replacing_aga
     fixture.start()?;
     fixture.advance(6, UpdateNodePhase::Staged)?;
     fixture.advance(7, UpdateNodePhase::Staged)?;
+    fixture.advance(6, UpdateNodePhase::Preparing)?;
     fixture.advance(6, UpdateNodePhase::Restarting)?;
     fixture.advance(6, UpdateNodePhase::Failed)?;
     assert_eq!(fixture.active()?.state, UpdateRolloutState::Paused);
@@ -208,6 +268,63 @@ fn signer_revocation_pauses_and_untrusted_candidate_is_not_admitted() -> TestRes
     Ok(())
 }
 
+#[test]
+fn preparation_persists_a_fixed_barrier_and_later_writes_do_not_starve_restart() -> TestResult {
+    let mut fixture = Fixture::with_nodes(3)?;
+    let mut start = fixture.start_command()?;
+    start.allow_service_interruption = false;
+    fixture.commit(AuthoritativeCommand::StartUpdateRollout(start))?;
+    for node in 6..9 {
+        fixture.advance(node, UpdateNodePhase::Staged)?;
+    }
+    fixture.advance(6, UpdateNodePhase::Preparing)?;
+    let prepared = fixture.nodes()?[0].clone();
+    assert_eq!(prepared.phase, UpdateNodePhase::Preparing);
+    assert!(!prepared.restart_pending);
+    let barrier = prepared.preparation_log_index.ok_or("barrier missing")?;
+    assert_eq!(barrier, fixture.repository.current_revision()?.get());
+    let command = fixture.advance_command(6, UpdateNodePhase::Restarting)?;
+    // Change the log after the observations without changing the plan or disabling trust.
+    fixture.configure_signer(true)?;
+    fixture.reopen()?;
+    assert_eq!(fixture.nodes()?[0].preparation_log_index, Some(barrier));
+    let mut stale = command.clone();
+    let AuthoritativeCommand::AdvanceUpdateNode(value) = &mut stale else {
+        return Err("wrong fixture command".into());
+    };
+    for peer in &mut value
+        .restart_readiness
+        .as_mut()
+        .ok_or("witness absent")?
+        .ready_nodes
+    {
+        peer.applied_index = barrier - 1;
+    }
+    assert!(fixture.commit(stale).is_err());
+    fixture.commit(command)?;
+    assert_eq!(fixture.nodes()?[0].phase, UpdateNodePhase::Restarting);
+    assert!(fixture.nodes()?[0].restart_pending);
+    Ok(())
+}
+
+#[test]
+fn failed_preparation_can_resume_without_claiming_that_the_process_restarted() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.start()?;
+    fixture.advance(6, UpdateNodePhase::Staged)?;
+    fixture.advance(7, UpdateNodePhase::Staged)?;
+    fixture.advance(6, UpdateNodePhase::Preparing)?;
+    fixture.advance(6, UpdateNodePhase::Failed)?;
+    assert!(!fixture.nodes()?[0].restart_pending);
+    fixture.reopen()?;
+    fixture.control(UpdateRolloutControl::Resume)?;
+    assert_eq!(fixture.nodes()?[0].phase, UpdateNodePhase::Pending);
+    assert_eq!(fixture.nodes()?[0].preparation_log_index, None);
+    assert!(!fixture.nodes()?[0].restart_pending);
+    fixture.control(UpdateRolloutControl::Cancel)?;
+    Ok(())
+}
+
 struct Fixture {
     directory: TempDir,
     repository: AuthoritativeRepository,
@@ -218,6 +335,33 @@ struct Fixture {
 }
 
 #[test]
+fn update_status_keeps_sequence_and_counts_together_during_a_concurrent_commit() -> TestResult {
+    let mut writer = Fixture::new()?;
+    writer.start()?;
+    let reader = AuthoritativeRepository::new(PartitionDatabase::open_existing(
+        &writer.directory.path().join("authority.sqlite3"),
+        UnixMicros::new(1),
+    )?);
+    let snapshot = reader.update_administration_observed(None, || {
+        writer
+            .advance(6, UpdateNodePhase::Staged)
+            .map_err(|_| super::RepositoryError::InvalidCommand)
+    })?;
+    let (record, counts) = snapshot.rollout.ok_or("snapshot rollout missing")?;
+    assert_eq!(record.sequence, 1);
+    assert_eq!(counts.pending, 2);
+    assert_eq!(counts.staged, 0);
+    let (record, counts) = reader
+        .update_administration_snapshot(None)?
+        .rollout
+        .ok_or("next rollout missing")?;
+    assert_eq!(record.sequence, 2);
+    assert_eq!(counts.pending, 1);
+    assert_eq!(counts.staged, 1);
+    Ok(())
+}
+
+#[test]
 fn restart_uses_real_quorum_predicates_and_requires_explicit_interruption_consent() -> TestResult {
     let mut insufficient = Fixture::with_nodes(2)?;
     let mut start = insufficient.start_command()?;
@@ -225,6 +369,7 @@ fn restart_uses_real_quorum_predicates_and_requires_explicit_interruption_consen
     insufficient.commit(AuthoritativeCommand::StartUpdateRollout(start))?;
     insufficient.advance(6, UpdateNodePhase::Staged)?;
     insufficient.advance(7, UpdateNodePhase::Staged)?;
+    insufficient.advance(6, UpdateNodePhase::Preparing)?;
     assert!(
         insufficient
             .advance(6, UpdateNodePhase::Restarting)
@@ -244,6 +389,7 @@ fn restart_uses_real_quorum_predicates_and_requires_explicit_interruption_consen
     for node in 6..9 {
         redundant.advance(node, UpdateNodePhase::Staged)?;
     }
+    redundant.advance(6, UpdateNodePhase::Preparing)?;
     redundant.advance(6, UpdateNodePhase::Restarting)?;
     assert!(redundant.nodes()?[0].restart_pending);
     Ok(())
@@ -388,6 +534,14 @@ impl Fixture {
     }
 
     fn advance(&mut self, number: u8, phase: UpdateNodePhase) -> TestResult {
+        self.commit(self.advance_command(number, phase)?)
+    }
+
+    fn advance_command(
+        &self,
+        number: u8,
+        phase: UpdateNodePhase,
+    ) -> Result<AuthoritativeCommand, Box<dyn std::error::Error>> {
         let node_id = NodeId::from_bytes([number; 16])?;
         let sequence = self
             .nodes()?
@@ -418,7 +572,7 @@ impl Fixture {
         } else {
             None
         };
-        self.commit(AuthoritativeCommand::AdvanceUpdateNode(AdvanceUpdateNode {
+        Ok(AuthoritativeCommand::AdvanceUpdateNode(AdvanceUpdateNode {
             rollout_id: self.rollout,
             node_id,
             incarnation: 1,

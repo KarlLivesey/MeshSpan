@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 use meshspan_contracts::{
-    BackupDeleteReceipt, BackupDeleteRequest, BackupObjectIdentity, BackupObjectReference,
-    ContractVersion, RequestContext,
+    BackupDeleteReceipt, BackupDeleteRequest, ContractVersion, RequestContext,
 };
 use meshspan_domain::{OperationId, RandomSource, UnixMicros, uuid_v8};
 use meshspan_metadata::{
-    AuthoritativeCommand, BackupCopyRecord, BackupCopyState, RecordBackupReclamation,
+    AuthoritativeCommand, BackupReclamationCandidate, RecordBackupReclamation,
 };
 use sha2::{Digest, Sha256};
 
@@ -20,16 +19,16 @@ pub(super) fn reclaim(
     resolver: &mut impl MetadataBackupProviderResolver,
     random: &mut impl RandomSource,
     input: &BackupRetentionInput,
-    copy: &BackupCopyRecord,
+    copy: &BackupReclamationCandidate,
 ) -> Result<(), BackupRetentionError> {
-    if copy.state != BackupCopyState::Retired || copy.revision.get() == 0 {
+    if copy.retirement_revision.get() == 0 {
         return Err(BackupRetentionError::Invalid);
     }
     let destination = authority
-        .destination(copy.destination_id)?
+        .destination(copy.object.destination_id)?
         .ok_or(BackupRetentionError::Invalid)?;
-    if destination.destination_id != copy.destination_id
-        || destination.binding.provider_generation() != copy.provider_generation
+    if destination.destination_id != copy.object.destination_id
+        || destination.binding.provider_generation() != copy.object.provider_generation
     {
         return Err(BackupRetentionError::Invalid);
     }
@@ -48,18 +47,18 @@ pub(super) fn reclaim(
         receipt: expected,
     });
     let receipt = authority.commit(context, &command)?;
-    validate_receipt(receipt, context, &command, copy.backup_id)
+    validate_receipt(receipt, context, &command, copy.object.backup_id)
 }
 
 fn delete_request(
-    copy: &BackupCopyRecord,
+    copy: &BackupReclamationCandidate,
     input: &BackupRetentionInput,
 ) -> Result<BackupDeleteRequest, BackupRetentionError> {
     let mut digest = Sha256::new();
     digest.update(b"meshspan.metadata-backup.delete.v1\0");
-    digest.update(copy.backup_id.as_bytes());
-    digest.update(copy.destination_id.as_bytes());
-    digest.update(copy.revision.get().to_be_bytes());
+    digest.update(copy.object.backup_id.as_bytes());
+    digest.update(copy.object.destination_id.as_bytes());
+    digest.update(copy.retirement_revision.get().to_be_bytes());
     let hash = digest.finalize();
     let mut operation = [0; 16];
     operation.copy_from_slice(&hash[..16]);
@@ -75,16 +74,10 @@ fn delete_request(
             contract_version: ContractVersion::V1_0,
             operation_id: OperationId::from_bytes(uuid_v8(operation))?,
             deadline: UnixMicros::new(deadline),
-            expected_revision: Some(copy.revision),
+            expected_revision: Some(copy.retirement_revision),
         },
-        object: BackupObjectIdentity {
-            backup_id: copy.backup_id,
-            destination_id: copy.destination_id,
-            provider_generation: copy.provider_generation,
-            byte_length: copy.byte_length,
-            digest: copy.copy_digest,
-        },
-        object_reference: BackupObjectReference::new(copy.object_reference.clone())?,
-        retirement_revision: copy.revision,
+        object: copy.object,
+        object_reference: copy.object_reference.clone(),
+        retirement_revision: copy.retirement_revision,
     })
 }

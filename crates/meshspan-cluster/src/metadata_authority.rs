@@ -23,6 +23,7 @@ use crate::membership::{
     membership_operation_id, membership_proposal_id, plan_next_transition, validate_transition,
 };
 use crate::{ClusterDriverError, DriverEffect, PartitionConsensusDriver};
+use crate::{MetadataReplicaCursor, MetadataReplicaError, MetadataReplicaPage};
 
 const DEFAULT_EVENT_CAPACITY: usize = 256;
 const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(200);
@@ -31,7 +32,12 @@ const DEFAULT_ELECTION_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
 #[path = "metadata_observation.rs"]
 mod observation;
-pub use observation::MetadataAuthorityObservation;
+pub use observation::{MetadataAuthorityObservation, MetadataReplicationObservation};
+
+#[path = "metadata_linearizable_read.rs"]
+mod linearizable_read;
+pub use linearizable_read::MetadataReadFence;
+use linearizable_read::{PendingRead, ReadRequest};
 
 /// One authenticated peer message admitted to the local authority reactor.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -108,6 +114,27 @@ pub struct MetadataAuthorityHandle {
 }
 
 impl MetadataAuthorityHandle {
+    /// Reads a bounded committed-history page through the existing single owner.
+    ///
+    /// This historical read does not append a command or supply fresh authorisation. The private
+    /// transport handler must authorise the replication recipient before calling this method.
+    ///
+    /// # Errors
+    /// Rejects a full/stopped queue, a one-second response timeout or an invalid history cursor.
+    pub async fn replica_page(
+        &self,
+        after: MetadataReplicaCursor,
+    ) -> Result<MetadataReplicaPage, MetadataReplicaError> {
+        let (respond, response) = oneshot::channel();
+        self.events
+            .try_send(AuthorityEvent::ReplicaPage(after, respond))
+            .map_err(|_| MetadataReplicaError::Unavailable)?;
+        tokio::time::timeout(Duration::from_secs(1), response)
+            .await
+            .map_err(|_| MetadataReplicaError::Unavailable)?
+            .map_err(|_| MetadataReplicaError::Unavailable)?
+    }
+
     /// Submits or exactly resolves one operation, returning only after committed application.
     ///
     /// # Errors
@@ -221,6 +248,11 @@ fn spawn_metadata_authority_runtime(
 }
 
 enum AuthorityEvent {
+    Read(ReadRequest),
+    ReplicaPage(
+        MetadataReplicaCursor,
+        oneshot::Sender<Result<MetadataReplicaPage, MetadataReplicaError>>,
+    ),
     Submit(Box<AuthoritySubmission>),
     Peer(PeerConsensusMessage),
     BeginElection,
@@ -254,6 +286,8 @@ struct MetadataAuthorityRuntime {
     pending: BTreeMap<OperationId, PendingOperation>,
     queued: VecDeque<QueuedOperation>,
     next_proposal_id: u64,
+    next_read_id: u64,
+    reads: BTreeMap<meshspan_consensus::ReadBarrierId, PendingRead>,
     election_deadline: Instant,
     coordinates_membership: bool,
 }
@@ -275,6 +309,8 @@ impl MetadataAuthorityRuntime {
             pending: BTreeMap::new(),
             queued: VecDeque::new(),
             next_proposal_id: 1,
+            next_read_id: 1,
+            reads: BTreeMap::new(),
             election_deadline,
             coordinates_membership,
         }
@@ -286,6 +322,7 @@ impl MetadataAuthorityRuntime {
         let mut election_check = tokio::time::interval(self.config.election_check_interval);
         election_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
+            self.expire_reads(Instant::now())?;
             let outcome = tokio::select! {
                 _ = heartbeat.tick(), if self.driver.role() == Role::Leader => {
                     self.process_input(CoreInput::Heartbeat)
@@ -295,7 +332,7 @@ impl MetadataAuthorityRuntime {
                 }
                 event = self.events.recv() => {
                     let Some(event) = event else {
-                        self.fail_pending();
+                        self.finish_unresolved(MetadataAuthorityRequestError::Unavailable);
                         return Ok(());
                     };
                     if self.handle_event(event)? {
@@ -305,7 +342,7 @@ impl MetadataAuthorityRuntime {
                 }
             };
             if let Err(error) = outcome {
-                self.fail_pending();
+                self.finish_unresolved(MetadataAuthorityRequestError::Unavailable);
                 return Err(error);
             }
         }
@@ -316,6 +353,10 @@ impl MetadataAuthorityRuntime {
         event: AuthorityEvent,
     ) -> Result<bool, MetadataAuthorityRuntimeError> {
         match event {
+            AuthorityEvent::Read(request) => self.begin_read(request)?,
+            AuthorityEvent::ReplicaPage(after, respond) => {
+                let _cancelled = respond.send(self.driver.metadata_replica_page(after));
+            }
             AuthorityEvent::Submit(submission) => self.submit(*submission)?,
             AuthorityEvent::Peer(peer) => self.receive_peer(peer)?,
             AuthorityEvent::BeginElection => self.process_input(CoreInput::ElectionTimeout)?,
@@ -323,7 +364,7 @@ impl MetadataAuthorityRuntime {
                 let _cancelled = respond.send(self.observation());
             }
             AuthorityEvent::Shutdown(respond) => {
-                self.fail_pending();
+                self.finish_unresolved(MetadataAuthorityRequestError::Unavailable);
                 let _closed = respond.send(());
                 return Ok(true);
             }
@@ -396,6 +437,13 @@ impl MetadataAuthorityRuntime {
     fn admit_next(
         &mut self,
     ) -> Result<Option<(Vec<DriverEffect>, OperationId)>, MetadataAuthorityRuntimeError> {
+        // A term confirmation occupies a real log position but has no application command
+        // to preflight. Preserve queued writes until its durable application advances that gap.
+        if self.driver.last_log_entry().is_some_and(|entry| {
+            entry.is_term_confirmation() && entry.position.index > self.driver.applied_index()
+        }) {
+            return Ok(None);
+        }
         let Some(queued) = self.queued.pop_front() else {
             return Ok(None);
         };
@@ -549,6 +597,15 @@ impl MetadataAuthorityRuntime {
             .collect::<VecDeque<_>>();
         loop {
             let Some((effect, rejection_operation)) = pending_effects.pop_front() else {
+                if self.driver.role() != Role::Leader {
+                    // Settle committed receipts first, then release unresolved callers. Vote and
+                    // append processing can step down without a separate RoleChanged effect.
+                    // Redirection preserves the durable log and never claims rollback/failure.
+                    self.finish_unresolved(MetadataAuthorityRequestError::NotLeader {
+                        leader_id: self.driver.leader_id(),
+                    });
+                    break;
+                }
                 if !self.pending.is_empty() {
                     break;
                 }
@@ -574,6 +631,12 @@ impl MetadataAuthorityRuntime {
                 DriverEffect::Send { to, message } => self.transport.send(to, message),
                 DriverEffect::ApplyCommitted { entries } => {
                     for entry in entries {
+                        if entry.is_term_confirmation() {
+                            let effects = self.driver.apply_term_confirmation(&entry, now())?;
+                            pending_effects
+                                .extend(effects.into_iter().map(|effect| (effect, None)));
+                            continue;
+                        }
                         if entry.command_version == METADATA_COMMAND_VERSION {
                             let applied =
                                 self.driver.apply_authoritative_committed(&entry, now())?;
@@ -597,9 +660,13 @@ impl MetadataAuthorityRuntime {
                         );
                     }
                 }
-                DriverEffect::RoleChanged { .. }
-                | DriverEffect::ProposalAppended { .. }
-                | DriverEffect::ReadBarrierReady { .. } => {}
+                DriverEffect::ReadBarrierReady {
+                    read_barrier_id,
+                    applied_index,
+                } => {
+                    self.complete_read(read_barrier_id, applied_index)?;
+                }
+                DriverEffect::RoleChanged { .. } | DriverEffect::ProposalAppended { .. } => {}
             }
         }
         Ok(())
@@ -719,19 +786,19 @@ impl MetadataAuthorityRuntime {
         }
     }
 
-    fn fail_pending(&mut self) {
+    fn finish_unresolved(&mut self, error: MetadataAuthorityRequestError) {
+        for read in std::mem::take(&mut self.reads).into_values() {
+            read.reject(error);
+        }
         let pending = std::mem::take(&mut self.pending);
         for operation in pending.into_values() {
             for waiter in operation.waiters {
-                let _closed = waiter.send(Err(MetadataAuthorityRequestError::Unavailable));
+                let _closed = waiter.send(Err(error));
             }
         }
         let queued = std::mem::take(&mut self.queued);
         for operation in queued {
-            respond_to_waiters(
-                operation.waiters,
-                Err(MetadataAuthorityRequestError::Unavailable),
-            );
+            respond_to_waiters(operation.waiters, Err(error));
         }
     }
 }
@@ -804,6 +871,8 @@ fn now() -> UnixMicros {
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum MetadataAuthorityRequestError {
     /// The receiving node is not leader; the authenticated hint may be absent.
+    /// Previously appended work may still commit. Resolve/retry the same operation identity;
+    /// this redirect is not proof of rollback or non-commitment.
     #[error("metadata authority is not leader")]
     NotLeader {
         /// Last authenticated leader known to this node.

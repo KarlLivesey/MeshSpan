@@ -93,17 +93,18 @@ async fn verify_bundle(
         require_redaction(body, api_key);
         let bundle: DiagnosticsBundleResponse = serde_json::from_str(body)?;
         encode_diagnostics_bundle_response(&bundle)?;
-        if let Some(runtime) = bundle.runtime {
-            assert!(runtime.reconciliation_cycles.0.parse::<u64>()? > 0);
+        if let Some(runtime) = bundle.runtime
+            && runtime.reconciliation_cycles.0.parse::<u64>()? > 0
+        {
             assert!(runtime.storage_reconciliation.is_some());
             assert!(runtime.target_checks.len() <= 100);
             assert!(runtime.recent_events.len() <= 100);
             return Ok(());
         }
-        // Null is a valid non-blocking observation under contention; retry the read,
-        // never trigger maintenance or treat unavailable evidence as a healthy sample.
+        // Listeners open before maintenance starts: both null under contention and a readable
+        // zero-cycle startup sample are valid. Wait for actual work, without triggering it.
         if started.elapsed() >= super::WAIT_LIMIT {
-            return Err("runtime observation store did not become readable".into());
+            return Err("runtime observations did not report a completed storage cycle".into());
         }
         tokio::time::sleep(super::RETRY_INTERVAL).await;
     }

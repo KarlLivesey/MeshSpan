@@ -23,6 +23,7 @@ use crate::{
 enum ReceiptMode {
     Exact,
     WrongEntity,
+    Unapplied,
 }
 
 struct FakeAuthority {
@@ -51,7 +52,7 @@ impl StorageTargetRegistrationAuthority for FakeAuthority {
             return Err(StorageTargetRegistrationAuthorityError::Failed);
         };
         let kind = match self.mode {
-            ReceiptMode::Exact => EntityKind::StorageTarget,
+            ReceiptMode::Exact | ReceiptMode::Unapplied => EntityKind::StorageTarget,
             ReceiptMode::WrongEntity => EntityKind::Volume,
         };
         Ok(CommandReceipt {
@@ -84,12 +85,86 @@ impl StorageTargetRegistrationAuthority for FakeAuthority {
                 generation: 1,
                 usage_limit: StorageUsageLimit::Percent(95),
                 policy_revision: Revision::new(2),
-                catalogue_revision: Revision::new(2),
+                catalogue_revision: Revision::new(if matches!(self.mode, ReceiptMode::Unapplied) {
+                    1
+                } else {
+                    2
+                }),
             }))
     }
 }
 
 struct FixedRandom(u8);
+
+#[test]
+fn recovered_registration_requires_current_admission_without_recommitting()
+-> Result<(), Box<dyn std::error::Error>> {
+    use meshspan_domain::{OperationId, TargetId};
+    use meshspan_storage::{FolderRegistration, RegisteredFolder, UsageLimit};
+    use std::os::unix::ffi::OsStrExt as _;
+    let directory = tempdir()?;
+    let storage = directory.path().join("storage");
+    let journal = directory.path().join("original-state");
+    fs::create_dir(&storage)?;
+    fs::create_dir(&journal)?;
+    let storage = fs::canonicalize(storage)?;
+    let journal = fs::canonicalize(journal)?;
+    let context = context()?;
+    let folder = RegisteredFolder::register_new(
+        &storage,
+        FolderRegistration {
+            mesh_id: context.mesh_id,
+            target_id: TargetId::from_bytes([81; 16])?,
+            generation: 1,
+            usage_limit: UsageLimit::Percent(95),
+        },
+        &mut FixedRandom(90),
+    )?;
+    let record = meshspan_metadata::LocalRecoveredTarget {
+        target_id: folder.marker().target_id(),
+        node_id: context.node_id,
+        mesh_id: context.mesh_id,
+        recovery_id: OperationId::from_bytes([82; 16])?,
+        state_digest: [83; 32],
+        generation: 1,
+        marker_fingerprint: folder.marker().fingerprint().as_bytes(),
+        canonical_path: storage.as_os_str().as_bytes().to_vec(),
+        journal_directory: journal.as_os_str().as_bytes().to_vec(),
+        policy_revision: Revision::new(2),
+        usage_limit: StorageUsageLimit::Percent(95),
+    };
+    drop(folder);
+    let local_path = directory.path().join("local.sqlite3");
+    let mut local = LocalDatabase::open(&local_path, context.node_id, UnixMicros::new(1))?;
+    local.install_local_recovered_target(&record)?;
+    let commits = Arc::new(AtomicUsize::new(0));
+    let mut service = StorageTargetRegistrationService::new(
+        local,
+        authority(Some(context), Arc::clone(&commits), ReceiptMode::Unapplied),
+        FixedRandom(1),
+    );
+    assert!(matches!(
+        service.register(&storage, UnixMicros::new(3)),
+        Err(StorageTargetRegistrationError::Conflict)
+    ));
+    drop(service);
+    let local = LocalDatabase::open_existing(&local_path, UnixMicros::new(4))?;
+    let mut service = StorageTargetRegistrationService::new(
+        local,
+        authority(Some(context), Arc::clone(&commits), ReceiptMode::Exact),
+        FixedRandom(1),
+    );
+    let target = service.register(&storage, UnixMicros::new(5))?;
+    assert_eq!(
+        target.marker().fingerprint().as_bytes(),
+        record.marker_fingerprint
+    );
+    assert_eq!(target.into_parts().2, Some(journal));
+    assert!(service.local_targets()?.is_empty());
+    assert_eq!(service.recovered_targets()?, vec![record]);
+    assert_eq!(commits.load(Ordering::Relaxed), 0);
+    Ok(())
+}
 
 impl RandomSource for FixedRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {

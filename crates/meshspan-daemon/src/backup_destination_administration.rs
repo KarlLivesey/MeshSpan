@@ -4,11 +4,13 @@
 
 use axum::http::HeaderMap;
 use meshspan_api_contract::{
-    ConfigureBackupDestinationRequest, ConfigureBackupDestinationResponse,
-    ListBackupDestinationsQuery, ListBackupDestinationsResponse,
+    BackupDestinationProvider, ConfigureBackupDestinationRequest,
+    ConfigureBackupDestinationResponse, ListBackupDestinationsQuery,
+    ListBackupDestinationsResponse,
 };
 use meshspan_domain::{
-    AuditEventId, BackupDestinationId, OperationId, Revision, TargetId, UnixMicros, uuid_v8,
+    AuditEventId, BackupDestinationId, ComponentInstanceId, MeshId, OperationId, Revision,
+    TargetId, UnixMicros, uuid_v8,
 };
 use meshspan_metadata::{
     AuthoritativeCommand, BackupDestinationBinding, BackupFailureRelationship, CommandContext,
@@ -182,10 +184,7 @@ fn command(
         parse_uuid(&request.destination_id).map_err(|_| BackupDestinationError::InvalidInput)?,
     )
     .map_err(|_| BackupDestinationError::InvalidInput)?;
-    let target_id = TargetId::from_bytes(
-        parse_uuid(&request.target_id).map_err(|_| BackupDestinationError::InvalidInput)?,
-    )
-    .map_err(|_| BackupDestinationError::InvalidInput)?;
+    let binding = provider_binding(request)?;
     let mut audit = Sha256::new();
     audit.update(b"meshspan.backup-destination.audit.v1\0");
     audit.update(operation.as_bytes());
@@ -193,13 +192,10 @@ fn command(
     let mut audit_bytes = [0; 16];
     audit_bytes.copy_from_slice(&hash[..16]);
     let mut evidence = Sha256::new();
-    evidence.update(b"meshspan.backup-destination.unassessed.v1\0");
-    evidence.update(target_id.as_bytes());
-    let target_generation = request
-        .target_generation
-        .parse::<u64>()
-        .map_err(|_| BackupDestinationError::InvalidInput)?;
-    evidence.update(target_generation.to_be_bytes());
+    evidence.update(b"meshspan.backup-destination.unassessed.v2\0");
+    evidence
+        .update(serde_json::to_vec(&request.provider).map_err(|_| BackupDestinationError::Failed)?);
+    evidence.update(binding.provider_generation().to_be_bytes());
     Ok((
         CommandContext {
             operation_id: operation,
@@ -214,15 +210,47 @@ fn command(
             expected_destination_revision: Revision::new(request.expected_revision),
             name: RecordName::new(&request.name)
                 .map_err(|_| BackupDestinationError::InvalidInput)?,
-            binding: BackupDestinationBinding::RegisteredTarget {
-                target_id,
-                target_generation,
-            },
+            binding,
             failure_relationship: BackupFailureRelationship::Unknown,
             failure_evidence_digest: evidence.finalize().into(),
             enabled: request.enabled,
         }),
     ))
+}
+
+fn provider_binding(
+    request: &ConfigureBackupDestinationRequest,
+) -> Result<BackupDestinationBinding, BackupDestinationError> {
+    let provider_generation = request
+        .provider_generation
+        .parse::<u64>()
+        .map_err(|_| BackupDestinationError::InvalidInput)?;
+    let invalid = |_| BackupDestinationError::InvalidInput;
+    Ok(match &request.provider {
+        BackupDestinationProvider::RegisteredTarget { target_id } => {
+            BackupDestinationBinding::RegisteredTarget {
+                target_id: TargetId::from_bytes(parse_uuid(target_id).map_err(invalid)?)
+                    .map_err(|_| BackupDestinationError::InvalidInput)?,
+                target_generation: provider_generation,
+            }
+        }
+        BackupDestinationProvider::FederatedMesh { remote_mesh_id } => {
+            BackupDestinationBinding::FederatedMesh {
+                remote_mesh_id: MeshId::from_bytes(parse_uuid(remote_mesh_id).map_err(invalid)?)
+                    .map_err(|_| BackupDestinationError::InvalidInput)?,
+                provider_generation,
+            }
+        }
+        BackupDestinationProvider::ComponentProvider { instance_id } => {
+            BackupDestinationBinding::ComponentProvider {
+                instance_id: ComponentInstanceId::from_bytes(
+                    parse_uuid(instance_id).map_err(invalid)?,
+                )
+                .map_err(|_| BackupDestinationError::InvalidInput)?,
+                provider_generation,
+            }
+        }
+    })
 }
 
 fn response(

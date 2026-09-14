@@ -5,15 +5,15 @@
 use meshspan_domain::{
     BranchId, FederatedMutationAcknowledgement, FederatedMutationEvidence, FederatedPrincipal,
     FederationGrantId, FederationRelationshipId, FederationResourceScope, FileVersionId, MeshId,
-    NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Rights, UnixMicros,
-    VolumeId,
+    NamespaceCommitId, ObjectId, ObjectRevisionId, OperationId, PrincipalId, Rights, SnapshotId,
+    UnixMicros, VolumeId,
 };
 
-use super::super::repository::{StoredCommit, stored_commit_digest};
-use super::super::transfer::TransferredMutationCommit;
+use super::super::transfer::{CommitEvidence, TransferredNamespaceCommit};
 use super::{
     COMMIT_DOMAIN, FEDERATED_COMMIT_FORMAT_VERSION, LOCAL_COMMIT_FORMAT_VERSION,
-    MAXIMUM_COMMIT_RECORD_BYTES, NamespaceHistoryRecordError,
+    MAXIMUM_COMMIT_PARENTS, MAXIMUM_COMMIT_RECORD_BYTES, MERGE_COMMIT_FORMAT_VERSION,
+    NamespaceHistoryRecordError, RESTORE_COMMIT_FORMAT_VERSION,
 };
 use crate::{
     BranchMutation, BranchMutationIntent, BranchRenameIntent, DirectoryRevisionTransition,
@@ -26,7 +26,7 @@ const MAXIMUM_COMPONENT_BYTES: usize = 16 * 1_024;
 
 pub(super) fn decode_commit(
     bytes: &[u8],
-) -> Result<TransferredMutationCommit, NamespaceHistoryRecordError> {
+) -> Result<TransferredNamespaceCommit, NamespaceHistoryRecordError> {
     if bytes.len() > MAXIMUM_COMMIT_RECORD_BYTES {
         return Err(NamespaceHistoryRecordError::BoundsExceeded);
     }
@@ -35,7 +35,10 @@ pub(super) fn decode_commit(
     let format_version = decoder.byte()?;
     if !matches!(
         format_version,
-        LOCAL_COMMIT_FORMAT_VERSION | FEDERATED_COMMIT_FORMAT_VERSION
+        LOCAL_COMMIT_FORMAT_VERSION
+            | FEDERATED_COMMIT_FORMAT_VERSION
+            | MERGE_COMMIT_FORMAT_VERSION
+            | RESTORE_COMMIT_FORMAT_VERSION
     ) {
         return Err(NamespaceHistoryRecordError::Invalid);
     }
@@ -47,18 +50,44 @@ pub(super) fn decode_commit(
     let parents = decode_parents(&mut decoder)?;
     let operation_id = decoder.identifier(OperationId::from_bytes)?;
     let request_digest = decoder.digest()?;
-    if decoder.byte()? != 1 {
-        return Err(NamespaceHistoryRecordError::Invalid);
-    }
-    let intent_digest = decoder.digest()?;
+    let payload = match (format_version, decoder.byte()?) {
+        (LOCAL_COMMIT_FORMAT_VERSION | FEDERATED_COMMIT_FORMAT_VERSION, 1) => {
+            ReconciliationCommitPayload::Mutation {
+                intent_digest: decoder.digest()?,
+            }
+        }
+        (MERGE_COMMIT_FORMAT_VERSION, 2) => ReconciliationCommitPayload::Merge {
+            replay_digest: decoder.digest()?,
+        },
+        (RESTORE_COMMIT_FORMAT_VERSION, 3) => ReconciliationCommitPayload::Restore {
+            snapshot_id: decoder.identifier(SnapshotId::from_bytes)?,
+            snapshot_namespace_commit_id: decoder.identifier(NamespaceCommitId::from_bytes)?,
+        },
+        _ => return Err(NamespaceHistoryRecordError::Invalid),
+    };
     let created_by = decoder.identifier(PrincipalId::from_bytes)?;
     let created_at = UnixMicros::new(decoder.signed()?);
     let commit_digest = decoder.digest()?;
-    let intent = decode_intent(&mut decoder)?;
-    let acknowledgement = if format_version == FEDERATED_COMMIT_FORMAT_VERSION {
-        Some(decode_acknowledgement(&mut decoder)?)
+    let evidence = if format_version == MERGE_COMMIT_FORMAT_VERSION {
+        CommitEvidence::Merge {
+            causal_plan_digest: decoder.digest()?,
+            result_digest: decoder.digest()?,
+        }
+    } else if format_version == RESTORE_COMMIT_FORMAT_VERSION {
+        CommitEvidence::Restore {
+            result_digest: decoder.digest()?,
+        }
     } else {
-        None
+        let intent = decode_intent(&mut decoder)?;
+        let acknowledgement = if format_version == FEDERATED_COMMIT_FORMAT_VERSION {
+            Some(Box::new(decode_acknowledgement(&mut decoder)?))
+        } else {
+            None
+        };
+        CommitEvidence::Mutation {
+            intent,
+            acknowledgement,
+        }
     };
     decoder.finish()?;
     let commit = ReconciliationCommit {
@@ -70,20 +99,18 @@ pub(super) fn decode_commit(
         parents,
         operation_id,
         request_digest,
-        payload: ReconciliationCommitPayload::Mutation { intent_digest },
+        payload,
     };
-    validate_record(&commit, &intent, created_by, created_at, commit_digest)?;
-    let record = TransferredMutationCommit {
+    let record = TransferredNamespaceCommit {
         commit,
         created_by,
         created_at,
         commit_digest,
-        intent,
-        acknowledgement,
+        evidence,
     };
-    if let Some(acknowledgement) = record.acknowledgement {
-        let mut bare = record.clone();
-        bare.acknowledgement = None;
+    super::validation::validate(&record)?;
+    if let Some(acknowledgement) = record.acknowledgement() {
+        let bare = record.without_acknowledgement();
         let mutation_digest = blake3::hash(&super::encode_commit(&bare)?).into();
         super::validate_acknowledgement(&record, &acknowledgement, mutation_digest)?;
     }
@@ -153,37 +180,6 @@ fn decode_resource(
             provider_mesh_id: authority,
         }),
         _ => Err(NamespaceHistoryRecordError::Invalid),
-    }
-}
-
-fn validate_record(
-    commit: &ReconciliationCommit,
-    intent: &BranchMutationIntent,
-    created_by: PrincipalId,
-    created_at: UnixMicros,
-    commit_digest: [u8; 32],
-) -> Result<(), NamespaceHistoryRecordError> {
-    let ReconciliationCommitPayload::Mutation { intent_digest } = commit.payload else {
-        return Err(NamespaceHistoryRecordError::Invalid);
-    };
-    let stored = StoredCommit {
-        commit_id: commit.commit_id,
-        branch_id: commit.branch_id,
-        volume_id: commit.volume_id,
-        root_object_id: commit.root_object_id,
-        root_object_revision_id: commit.root_object_revision_id,
-        parent_id: commit.parents.first().copied(),
-        created_by,
-        operation_id: commit.operation_id,
-        created_at,
-    };
-    if intent.commit_id != commit.commit_id
-        || intent.digest() != intent_digest
-        || stored_commit_digest(&stored, commit.request_digest) != commit_digest
-    {
-        Err(NamespaceHistoryRecordError::Invalid)
-    } else {
-        Ok(())
     }
 }
 
@@ -291,7 +287,7 @@ fn decode_mutation(
 fn decode_parents(
     decoder: &mut Decoder<'_>,
 ) -> Result<Vec<NamespaceCommitId>, NamespaceHistoryRecordError> {
-    let count = decoder.bounded_count(1)?;
+    let count = decoder.bounded_count(MAXIMUM_COMMIT_PARENTS)?;
     (0..count)
         .map(|_| decoder.identifier(NamespaceCommitId::from_bytes))
         .collect()

@@ -88,7 +88,16 @@ Status: **draft for review**.
 | D-080 | Bounded local metrics and optional exporters follow `stage-6-11-decisions.md` section 8. Metrics never become authority, durability evidence or an unbounded high-cardinality database.                                                                                                                                                                                                                                                                                    |
 | D-081 | `0.1.0` proof and required post-`0.1.0`, pre-`1.0` automatic metadata-group scaling follow `stage-6-11-decisions.md` section 9.                                                                                                                                                                                                                                                                                                                                            |
 | D-082 | Pre-`1.0` releases offer no downgrade or rollback compatibility guarantee. Safe migration, verified backup and honest release notes remain mandatory.                                                                                                                                                                                                                                                                                                                      |
-| D-083 | Each swarm is the intrinsic root principal for every volume, folder, file and version it owns. Local user/group grants and outbound swarm grants are sibling delegations from that root; ownership has no synthetic self-federation record, and every external re-delegation is explicit and narrowing.                                                                                                                                                              |
+| D-083 | Each swarm is the intrinsic root principal for every volume, folder, file and version it owns. Local user/group grants and outbound swarm grants are sibling delegations from that root; ownership has no synthetic self-federation record, and every external re-delegation is explicit and narrowing.                                                                                                                                                                    |
+
+### D-084 — stable federated storage, renewable permission
+
+Accepted by the owner: physical allocation identity, stored-object locations and
+capacity charges survive federation-grant renewal. Current access is carried by
+separate renewable authority, advanced only through explicit authorised grant
+succession. Renewal cannot mint another quota budget, discard stored bytes or
+revive revoked authority. Current restrictions and revocations apply to every
+operation. Implementation progress is tracked in Stage 10 task 7.
 
 ## Open decisions
 

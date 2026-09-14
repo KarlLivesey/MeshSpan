@@ -16,6 +16,119 @@ use crate::{JointQuorumPlan, compile_plan, flat_plan};
 mod membership_loss;
 
 #[test]
+fn cancelled_read_barriers_release_core_capacity_without_success() -> Result<(), Box<dyn Error>> {
+    let mut core = elected_core(3, 2)?;
+    for number in 1..=1_025 {
+        let id = ReadBarrierId(number);
+        core.step(CoreInput::BeginReadBarrier(id))?;
+        assert!(core.step(CoreInput::CancelReadBarrier(id))?.is_empty());
+    }
+    assert_eq!(core.commit_index(), 0);
+    assert!(core.log_entry(1).is_none());
+    let effects = core.step(message(
+        2,
+        CoreMessage::AppendResponse(AppendResponse {
+            term: 1,
+            accepted: false,
+            matched_index: 0,
+            next_index_hint: 1,
+            read_barrier_id: Some(ReadBarrierId(1_025)),
+            membership_epoch: 1,
+            plan_digest: fixture_plan_digest()?,
+        }),
+    )?)?;
+    assert!(effects.is_empty());
+    assert_eq!(
+        core.step(CoreInput::CancelReadBarrier(ReadBarrierId(0))),
+        Err(CoreError::InvalidInput)
+    );
+    Ok(())
+}
+
+#[test]
+fn term_confirmation_is_a_fixed_durable_log_entry_not_arbitrary_metadata()
+-> Result<(), Box<dyn Error>> {
+    let mut core = core(1)?;
+    persist_only_effect(&mut core, CoreInput::ElectionTimeout)?;
+    let effects = core.step(CoreInput::ConfirmTerm {
+        proposal_id: ProposalId(1),
+        operation_id: operation(1)?,
+    })?;
+    let id = only_persistence_id(&effects)?;
+    assert_eq!(core.commit_index(), 0);
+    core.step(CoreInput::Persisted(id))?;
+    let entry = core.log_entry(1).ok_or("confirmation missing")?;
+    assert_eq!(entry.command_version, u16::MAX);
+    assert_eq!(entry.command, b"MSCT\x01");
+    assert!(entry.is_term_confirmation());
+    assert!(
+        LogEntry::new(
+            entry.position,
+            entry.operation_id,
+            u16::MAX,
+            b"different".to_vec()
+        )
+        .is_err()
+    );
+    assert_eq!(core.commit_index(), 1);
+    assert_eq!(core.applied_index(), 0);
+    Ok(())
+}
+
+#[test]
+fn newly_elected_leader_cannot_complete_read_before_committing_its_term()
+-> Result<(), Box<dyn Error>> {
+    let mut core = elected_core(3, 2)?;
+    core.step(CoreInput::BeginReadBarrier(ReadBarrierId(99)))?;
+    let effects = core.step(message(
+        2,
+        CoreMessage::AppendResponse(AppendResponse {
+            term: 1,
+            accepted: false,
+            matched_index: 0,
+            next_index_hint: 1,
+            read_barrier_id: Some(ReadBarrierId(99)),
+            membership_epoch: 1,
+            plan_digest: fixture_plan_digest()?,
+        }),
+    )?)?;
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, CoreEffect::ReadBarrierReady { .. }))
+    );
+    let persistence =
+        only_persistence_id(&core.step(proposal(1, b"term confirmation".to_vec())?)?)?;
+    core.step(CoreInput::Persisted(persistence))?;
+    let effects = core.step(message(
+        2,
+        CoreMessage::AppendResponse(AppendResponse {
+            term: 1,
+            accepted: true,
+            matched_index: 1,
+            next_index_hint: 2,
+            read_barrier_id: None,
+            membership_epoch: 1,
+            plan_digest: fixture_plan_digest()?,
+        }),
+    )?)?;
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, CoreEffect::ReadBarrierReady { .. }))
+    );
+    let effects = core.step(CoreInput::AppliedThrough(1))?;
+    assert_eq!(
+        effects,
+        vec![CoreEffect::ReadBarrierReady {
+            read_barrier_id: ReadBarrierId(99),
+            applied_index: 1
+        }]
+    );
+    Ok(())
+}
+
+#[test]
 fn campaign_is_durable_before_messages_or_role_change() -> Result<(), Box<dyn Error>> {
     let mut core = core(3)?;
     let effects = core.step(CoreInput::ElectionTimeout)?;
@@ -210,6 +323,22 @@ fn higher_term_is_persisted_before_step_down() -> Result<(), Box<dyn Error>> {
 #[test]
 fn read_barrier_requires_current_read_quorum_response() -> Result<(), Box<dyn Error>> {
     let mut core = elected_core(3, 2)?;
+    let persistence =
+        only_persistence_id(&core.step(proposal(1, b"term confirmation".to_vec())?)?)?;
+    core.step(CoreInput::Persisted(persistence))?;
+    core.step(message(
+        2,
+        CoreMessage::AppendResponse(AppendResponse {
+            term: 1,
+            accepted: true,
+            matched_index: 1,
+            next_index_hint: 2,
+            read_barrier_id: None,
+            membership_epoch: 1,
+            plan_digest: fixture_plan_digest()?,
+        }),
+    )?)?;
+    core.step(CoreInput::AppliedThrough(1))?;
     let read_barrier_id = ReadBarrierId(41);
     let effects = core.step(CoreInput::BeginReadBarrier(read_barrier_id))?;
     assert_eq!(effects.len(), 2);
@@ -230,7 +359,7 @@ fn read_barrier_requires_current_read_quorum_response() -> Result<(), Box<dyn Er
             term: 1,
             accepted: false,
             matched_index: 0,
-            next_index_hint: 1,
+            next_index_hint: 2,
             read_barrier_id: Some(read_barrier_id),
             membership_epoch: 1,
             plan_digest: fixture_plan_digest()?,
@@ -240,7 +369,7 @@ fn read_barrier_requires_current_read_quorum_response() -> Result<(), Box<dyn Er
         effects.as_slice(),
         [CoreEffect::ReadBarrierReady {
             read_barrier_id: ReadBarrierId(41),
-            applied_index: 0
+            applied_index: 1
         }]
     ));
     Ok(())

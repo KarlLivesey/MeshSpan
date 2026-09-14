@@ -49,7 +49,7 @@ pub struct NamespaceHistoryPageRequest {
 pub struct NamespaceHistoryPage {
     /// Stable source-side export identity required for separately fetched immutable bodies.
     pub export_token: [u8; 32],
-    /// Canonical independently validated mutation commits.
+    /// Canonical independently validated mutation or merge commits.
     pub commits: Vec<NamespaceHistoryCommitRecord>,
     /// Canonical transfer digests for immutable bodies carried on data streams.
     pub immutable_object_digests: Vec<[u8; 32]>,
@@ -107,16 +107,38 @@ pub(super) fn page(
     connection: &mut Connection,
     request: NamespaceHistoryPageRequest,
 ) -> Result<NamespaceHistoryPage, PublicationError> {
-    let query = ValidatedQuery::new(request)?;
+    query_page(
+        connection,
+        &ValidatedQuery::new(request, Traversal::CausalHistory)?,
+    )
+}
+
+pub(super) fn retained_tree_page(
+    connection: &mut Connection,
+    request: NamespaceHistoryPageRequest,
+) -> Result<NamespaceHistoryPage, PublicationError> {
+    if !request.known_commits.is_empty() {
+        return Err(PublicationError::InvalidInput);
+    }
+    query_page(
+        connection,
+        &ValidatedQuery::new(request, Traversal::RetainedTree)?,
+    )
+}
+
+fn query_page(
+    connection: &mut Connection,
+    query: &ValidatedQuery,
+) -> Result<NamespaceHistoryPage, PublicationError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    initialise(&transaction, &query)?;
+    initialise(&transaction, query)?;
     require_cursor(&transaction, query.digest, query.start_ordinal)?;
     let target = query
         .start_ordinal
         .checked_add(u64::try_from(query.limit).map_err(|_| PublicationError::InvalidInput)?)
         .ok_or(PublicationError::InvalidInput)?;
-    work::process_until(&transaction, &query, target)?;
-    let result = output::load_page(&transaction, &query)?;
+    work::process_until(&transaction, query, target)?;
+    let result = output::load_page(&transaction, query)?;
     transaction.commit()?;
     Ok(result)
 }
@@ -129,6 +151,7 @@ pub(super) fn history_object(
 }
 
 struct ValidatedQuery {
+    traversal: Traversal,
     digest: [u8; 32],
     scope_binding: [u8; 32],
     volume_id: VolumeId,
@@ -141,8 +164,17 @@ struct ValidatedQuery {
     has_cursor: bool,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Traversal {
+    CausalHistory,
+    RetainedTree,
+}
+
 impl ValidatedQuery {
-    fn new(request: NamespaceHistoryPageRequest) -> Result<Self, PublicationError> {
+    fn new(
+        request: NamespaceHistoryPageRequest,
+        traversal: Traversal,
+    ) -> Result<Self, PublicationError> {
         let heads = unique_sorted(request.requested_heads, MAXIMUM_HEADS, false)?;
         let known = unique_sorted(request.known_commits, MAXIMUM_KNOWN_COMMITS, true)?;
         let lifetime = request
@@ -157,7 +189,13 @@ impl ValidatedQuery {
         {
             return Err(PublicationError::InvalidInput);
         }
-        let digest = request_digest(request.scope_binding, request.volume_id, &heads, &known)?;
+        let digest = request_digest(
+            request.scope_binding,
+            request.volume_id,
+            &heads,
+            &known,
+            traversal,
+        )?;
         let has_cursor = !request.cursor.is_empty();
         let start_ordinal = if has_cursor {
             output::decode_cursor(&request.cursor, digest)?
@@ -165,6 +203,7 @@ impl ValidatedQuery {
             0
         };
         Ok(Self {
+            traversal,
             digest,
             scope_binding: request.scope_binding,
             volume_id: request.volume_id,
@@ -201,9 +240,13 @@ fn request_digest(
     volume_id: VolumeId,
     heads: &[NamespaceCommitId],
     known: &[NamespaceCommitId],
+    traversal: Traversal,
 ) -> Result<[u8; 32], PublicationError> {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.history-export.v1\0");
+    digest.update(match traversal {
+        Traversal::CausalHistory => b"meshspan.filesystem.history-export.v1\0",
+        Traversal::RetainedTree => b"meshspan.filesystem.retained-tree.v1\0",
+    });
     digest.update(&scope_binding);
     digest.update(&volume_id.as_bytes());
     update_identifiers(&mut digest, heads)?;
@@ -276,7 +319,10 @@ fn initialise(
         )?;
     }
     for head in &query.heads {
-        work::enqueue_commit(transaction, query.digest, *head)?;
+        match query.traversal {
+            Traversal::CausalHistory => work::enqueue_commit(transaction, query.digest, *head)?,
+            Traversal::RetainedTree => work::enqueue_root(transaction, query, *head)?,
+        }
     }
     output::issue_cursor(transaction, query.digest, 0)
 }

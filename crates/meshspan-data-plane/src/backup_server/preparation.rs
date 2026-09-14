@@ -80,6 +80,24 @@ where
         Ok(request)
     }
 
+    pub(super) fn prepare_lookup(
+        &self,
+        peer: AuthenticatedPeer,
+        value: &meshspan_protocol::v1::LookupBackupRequest,
+        observed_at: UnixMicros,
+    ) -> Result<meshspan_contracts::BackupLookupRequest, ContractError> {
+        let header = value.header.as_ref().ok_or(ContractError::InvalidInput)?;
+        self.validate_sender(header, peer)?;
+        let request = meshspan_contracts::BackupLookupRequest {
+            context: request_context(header, Revision::new(value.authority_revision))
+                .map_err(|_| ContractError::InvalidInput)?,
+            object: required_object(value.object.as_ref())?,
+        };
+        meshspan_contracts::validate_backup_lookup_request(&request, observed_at)?;
+        self.validate_binding(request.object)?;
+        Ok(request)
+    }
+
     pub(super) fn prepare_delete(
         &self,
         peer: AuthenticatedPeer,

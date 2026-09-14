@@ -2,6 +2,8 @@
 
 //! Exclusive, capability-probed registration of an existing storage folder.
 
+mod compaction;
+
 use std::ffi::OsStr;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -193,6 +195,32 @@ impl RegisteredFolder {
     /// Measures capacity from the already-open capability rather than a caller-supplied path.
     pub(crate) fn capacity_observation(&self) -> Result<CapacityObservation, StorageFolderError> {
         capacity_observation(&self.private_directory)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn filesystem_observation(
+        &self,
+    ) -> Result<meshspan_contracts::FilesystemSpaceObservation, StorageFolderError> {
+        use std::os::unix::fs::MetadataExt;
+        let capacity = self.capacity_observation()?;
+        let identity = self
+            .private_directory
+            .try_clone()?
+            .into_std_file()
+            .metadata()?
+            .dev();
+        Ok(meshspan_contracts::FilesystemSpaceObservation {
+            identity,
+            total_bytes: capacity.total_bytes,
+            available_bytes: capacity.available_bytes,
+        })
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn filesystem_observation(
+        &self,
+    ) -> Result<meshspan_contracts::FilesystemSpaceObservation, StorageFolderError> {
+        Err(StorageFolderError::CapabilityProbeFailed)
     }
 
     pub(crate) fn pack_database_path(&self, sequence: u64) -> Result<PathBuf, StorageFolderError> {

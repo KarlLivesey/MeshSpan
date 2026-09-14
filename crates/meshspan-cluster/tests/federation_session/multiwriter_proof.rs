@@ -111,7 +111,7 @@ async fn prove_disconnected_edits(
             federation.home_gateway,
         ),
     )?;
-    sync_history(
+    Box::pin(sync_history(
         &proof,
         &federation,
         source_directory.path(),
@@ -119,7 +119,7 @@ async fn prove_disconnected_edits(
         source.namespace_commit_id,
         vec![base.namespace_commit_id],
         120,
-    )
+    ))
     .await
     .map_err(|error| format!("first history sync: {error}"))?;
     let first_merge = reconcile_visible_edits(
@@ -185,7 +185,7 @@ async fn prove_suspended_writer_quarantine(
             1,
         ),
     );
-    sync_history(
+    Box::pin(sync_history(
         &proof,
         &federation,
         source_directory.path(),
@@ -193,7 +193,7 @@ async fn prove_suspended_writer_quarantine(
         rejected.namespace_commit_id,
         vec![source.namespace_commit_id],
         140,
-    )
+    ))
     .await
     .map_err(|error| format!("quarantine history sync: {error}"))?;
     prove_quarantined_edit_stays_invisible(

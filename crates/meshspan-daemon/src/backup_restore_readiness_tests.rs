@@ -107,6 +107,14 @@ impl BackupRestoreReadinessAuthority for MemoryAuthority {
 struct InvalidContainerProvider(Vec<u8>);
 
 impl BackupProvider for InvalidContainerProvider {
+    fn lookup_exact(
+        &self,
+        _request: &meshspan_contracts::BackupLookupRequest,
+        _observed_at: UnixMicros,
+    ) -> Result<meshspan_contracts::BackupObjectReceipt, meshspan_contracts::ContractError> {
+        Err(meshspan_contracts::ContractError::NotFound)
+    }
+
     fn describe(&self) -> ImplementationDescriptor {
         ImplementationDescriptor {
             implementation_id: "invalid-container-test",

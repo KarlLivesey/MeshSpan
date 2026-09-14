@@ -107,6 +107,7 @@ fn load_group_activations_for_principal(
          JOIN access_activation_policies ap ON ap.policy_id = a.policy_id
          WHERE a.principal_id = ?1 AND a.group_id IS NOT NULL
            AND a.revoked_at IS NULL AND a.activated_at <= ?2 AND a.expires_at > ?2
+           AND a.revision > COALESCE((SELECT source_revision FROM partition_recovery_credential_fence), 0)
            AND a.identity_revision = ?3 AND a.source_revision = p.revision
            AND a.policy_revision = ap.revision AND g.activation_policy_id = a.policy_id
          GROUP BY a.group_id LIMIT ?4",
