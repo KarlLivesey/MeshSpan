@@ -149,6 +149,21 @@ describe("backup destination changes", () => {
 });
 
 describe("backup change confirmation", () => {
+  it("keeps saved status when the following inventory refresh fails", async () => {
+    const client = fixture();
+    const configure = vi.spyOn(client, "configureBackupDestination");
+    mount(client);
+    await ready();
+    vi.spyOn(client, "getBackupSchedule").mockRejectedValueOnce(
+      new Error("read unavailable"),
+    );
+    button("Pause Recovery folder").click();
+    await shows("Backup settings saved.");
+    await shows("Backup settings could not be read.");
+    expect(configure).toHaveBeenCalledOnce();
+    expect(document.body.textContent).not.toContain("result is unknown");
+  });
+
   it("does not call a mismatched receipt saved", async () => {
     const client = fixture();
     client.configureBackupDestination = async (request) => ({

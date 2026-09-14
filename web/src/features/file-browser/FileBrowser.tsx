@@ -35,6 +35,18 @@ export function FileBrowser(props: FileBrowserProps): JSX.Element {
       <Show when={model.error()}>
         {(message) => <p class="error">{message()}</p>}
       </Show>
+      <Show when={model.mutation().phase === "unknown"}>
+        <button
+          type="button"
+          disabled={model.phase() !== "idle"}
+          onClick={() => void model.retryMutation()}
+        >
+          Retry pending change
+        </button>
+      </Show>
+      <Show when={model.mutation().phase === "committed"}>
+        <p role="status">Saved to the local branch.</p>
+      </Show>
       <Show
         when={model.selectedVolume()}
         fallback={<FileBrowserEmpty loading={model.phase() === "loading"} />}

@@ -7,6 +7,17 @@ import type {
   ListDirectoryResponse,
   ListVolumesResponse,
 } from "../../generated/types.gen";
+import {
+  createExactMutation,
+  type ExactMutation,
+  type MutationOutcome,
+} from "../../native-api/mutation-outcome";
+import {
+  sendFileMutation,
+  verifyFileReceipt,
+  type FileMutation,
+  type FileReceipt,
+} from "./mutations";
 import { childPath, parentPath } from "./path";
 import { uploadBrowserFile } from "./upload";
 
@@ -38,6 +49,8 @@ export type FileBrowserModel = Readonly<{
   loadMore: () => Promise<void>;
   loadMoreVolumes: () => Promise<void>;
   mutationsAvailable: Accessor<boolean>;
+  mutation: Accessor<MutationOutcome<FileReceipt>>;
+  retryMutation: () => Promise<void>;
   openDirectory: (entry: DirectoryEntry) => Promise<void>;
   openParent: () => Promise<void>;
   phase: Accessor<BrowserPhase>;
@@ -74,6 +87,7 @@ type BrowserContext = Readonly<{
   csrfToken: Accessor<string | undefined>;
   selectedVolume: Accessor<VolumeSummary | undefined>;
   state: BrowserState;
+  mutation: ExactMutation<FileMutation, FileReceipt>;
 }>;
 
 /** Owns one current-user view of the specialised native file API. */
@@ -86,9 +100,24 @@ export function createFileBrowserModel(
     state
       .volumes()
       .find((volume) => volume.volume_id === state.selectedVolumeId());
-  const context = { client, csrfToken, selectedVolume, state };
+  const mutation: ExactMutation<FileMutation, FileReceipt> =
+    createExactMutation(
+      async (request) =>
+        sendFileMutation(client(), request, requireCsrfToken(csrfToken())),
+      verifyFileReceipt,
+      async () => reloadDirectory(context),
+    );
+  const context: BrowserContext = {
+    client,
+    csrfToken,
+    selectedVolume,
+    state,
+    mutation,
+  };
   const mutationsAvailable = () =>
-    selectedVolume()?.state === "active" && csrfToken() !== undefined;
+    selectedVolume()?.state === "active" &&
+    csrfToken() !== undefined &&
+    !mutation.locked();
   return {
     createDirectory: async (name) => createDirectory(context, name),
     deleteEntry: async (entry) => deleteEntry(context, entry),
@@ -98,6 +127,8 @@ export function createFileBrowserModel(
     loadMore: async () => loadMore(context),
     loadMoreVolumes: async () => loadMoreVolumes(context),
     mutationsAvailable,
+    mutation: mutation.state,
+    retryMutation: async () => commitMutation(context),
     openDirectory: async (entry) => openDirectory(context, entry),
     openParent: async () =>
       loadDirectory(context, parentPath(directoryPath(state.directory()))),
@@ -270,14 +301,11 @@ async function createDirectory(
     directoryPath(context.state.directory()),
     name,
   );
-  await commitMutation(context, async () => {
-    await context
-      .client()
-      .createDirectory(
-        selected.volume_id,
-        { operation_id: crypto.randomUUID(), path: selectedPath },
-        requireCsrfToken(context.csrfToken()),
-      );
+  await commitMutation(context, {
+    kind: "create",
+    operation_id: crypto.randomUUID(),
+    path: selectedPath,
+    volume_id: selected.volume_id,
   });
 }
 
@@ -290,14 +318,12 @@ async function deleteEntry(
     directoryPath(context.state.directory()),
     entry.name,
   );
-  await commitMutation(context, async () => {
-    await context
-      .client()
-      .deleteObject(
-        selected.volume_id,
-        { operation_id: crypto.randomUUID(), path: selectedPath },
-        requireCsrfToken(context.csrfToken()),
-      );
+  await commitMutation(context, {
+    kind: "delete",
+    operation_id: crypto.randomUUID(),
+    path: selectedPath,
+    volume_id: selected.volume_id,
+    object_id: entry.object_id,
   });
 }
 
@@ -308,21 +334,20 @@ async function renameEntry(
 ): Promise<void> {
   const selected = requireWritableVolume(context);
   const currentPath = directoryPath(context.state.directory());
-  await commitMutation(context, async () => {
-    await context.client().renameObject(
-      selected.volume_id,
-      {
-        operation_id: crypto.randomUUID(),
-        source_path: childPath(currentPath, entry.name),
-        target_path: childPath(currentPath, name),
-      },
-      requireCsrfToken(context.csrfToken()),
-    );
+  await commitMutation(context, {
+    kind: "rename",
+    operation_id: crypto.randomUUID(),
+    source_path: childPath(currentPath, entry.name),
+    target_path: childPath(currentPath, name),
+    volume_id: selected.volume_id,
+    object_id: entry.object_id,
   });
 }
 
 async function uploadFile(context: BrowserContext, file: File): Promise<void> {
   const selected = requireWritableVolume(context);
+  if (context.mutation.locked())
+    throw new TypeError("resolve the pending change first");
   const currentPath = directoryPath(context.state.directory());
   const existing = context.state
     .directory()
@@ -344,9 +369,15 @@ async function uploadFile(context: BrowserContext, file: File): Promise<void> {
       path: childPath(currentPath, file.name),
       volumeId: selected.volume_id,
     });
-    await reloadDirectory(context);
+    try {
+      await reloadDirectory(context);
+    } catch {
+      context.state.setError("Saved; the current view could not refresh.");
+    }
   } catch (cause) {
-    context.state.setError("MeshSpan could not finish that upload.");
+    context.state.setError(
+      "The upload result is unknown. Check the current file before starting another upload.",
+    );
     throw cause;
   } finally {
     context.state.setProgress(undefined);
@@ -356,16 +387,21 @@ async function uploadFile(context: BrowserContext, file: File): Promise<void> {
 
 async function commitMutation(
   context: BrowserContext,
-  operation: () => Promise<void>,
+  request?: FileMutation,
 ): Promise<void> {
   context.state.setPhase("mutating");
   context.state.setError(undefined);
   try {
-    await operation();
-    await reloadDirectory(context);
-  } catch (cause) {
-    context.state.setError("MeshSpan did not commit that change.");
-    throw cause;
+    if (request === undefined) await context.mutation.retry();
+    else await context.mutation.submit(request);
+    const result = context.mutation.state();
+    if (result.phase === "unknown") {
+      context.state.setError(
+        `The result is unknown. Retry the pending change to confirm operation ${result.operationId}.`,
+      );
+    } else if (result.phase === "committed") {
+      context.state.setError(result.refreshWarning);
+    }
   } finally {
     context.state.setPhase("idle");
   }

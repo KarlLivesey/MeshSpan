@@ -74,6 +74,30 @@ remain. Receipts, routes and segment history still grow over the target lifetime
 the current provider lock and 32-pack observation limit are not claimed solved.
 No dependency or wire/API contract changed. Stage estimates remain unchanged.
 
+### ACC-02 — truthful browser mutation outcomes
+
+The first browser slice retains the exact request and operation ID for uncertain
+file namespace changes, API-key issuance, passkey registration, backup settings
+and logout. Receipts are checked against the request. A successful mutation stays
+committed when its later refresh fails. Lost responses and missing sign-out CSRF
+state remain explicitly unknown with recovery controls. Retained sensitive
+requests stay in memory; this is not persistent upload recovery.
+
+Three pre-fix browser regressions failed: refresh failure reversed creation
+success, lost mutation response claimed non-commit and missing-CSRF logout
+claimed anonymity. Six focused suites passed **38 tests** in **2.28 s** in the
+isolated worktree; focused strict lint, typecheck, formatting and diff checks
+passed under NVM Node **26.8.2** / pnpm **11.19.0**. After exact patch integration,
+the same six suites passed **38 tests** in **3.77 s** with two Vitest workers:
+mutation-outcome, authentication-security-panel, backup-administration-panel,
+file-browser-model, file-browser-panel and session-provider.
+
+ACC-02 remains open for server outcome/retry classification, real dropped-response
+daemon proof and the remaining credential/admin forms. Upload retry belongs to
+ACC-04. The current API supplies no reliable rollback classification, so server
+exceptions remain unknown. No dependency or generated/public API shape changed.
+The complete assembled gate is pending; no stage acceptance is claimed closed.
+
 ## Tasks 10/27 — Linux directory durability prerequisite
 
 On 2026-09-14 the provided clean Linux checkout was fast-forwarded from

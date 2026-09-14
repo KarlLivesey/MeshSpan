@@ -3,7 +3,12 @@
 import { createSignal, Show, type Accessor, type Setter } from "solid-js";
 import type { JSX } from "@solidjs/web";
 
+import { zCreateApiKeyRequest } from "../../generated/zod.gen";
 import type { CreateApiKeyRequest } from "../../generated/types.gen";
+import {
+  createExactMutation,
+  mutationMessage,
+} from "../../native-api/mutation-outcome";
 import type { AuthenticationSecurityClient } from "./model";
 
 type ApiKeyIssuanceProps = Readonly<{
@@ -15,66 +20,23 @@ type ApiKeyIssuanceProps = Readonly<{
 type ApiKeyScope = CreateApiKeyRequest["scopes"][number];
 
 export function ApiKeyIssuance(props: ApiKeyIssuanceProps): JSX.Element {
-  const [label, setLabel] = createSignal("Automation");
-  const [expiresAt, setExpiresAt] = createSignal("");
-  const [httpsSignIn, setHttpsSignIn] = createSignal(false);
-  const [nativeApi, setNativeApi] = createSignal(true);
-  const [smbSignIn, setSmbSignIn] = createSignal(false);
-  const [secret, setSecret] = createSignal<string>();
-  const [pending, setPending] = createSignal(false);
-  const [error, setError] = createSignal<string>();
-
-  const issue = async (event: SubmitEvent): Promise<void> => {
-    event.preventDefault();
-    if (pending()) {
-      return;
-    }
-    setPending(true);
-    setSecret(undefined);
-    setError(undefined);
-    try {
-      const result = await props.client.createCurrentUserApiKey(
-        {
-          expires_at_epoch_micros: expiryEpochMicroseconds(expiresAt()),
-          label: label().trim(),
-          operation_id: crypto.randomUUID(),
-          scopes: selectedScopes(httpsSignIn(), nativeApi(), smbSignIn()),
-        },
-        props.csrfToken,
-      );
-      setSecret(result.secret);
-      await props.onChanged();
-    } catch {
-      setError("MeshSpan could not issue that API key. Nothing was changed.");
-    } finally {
-      setPending(false);
-    }
-  };
+  const model = createApiKeyIssuance(props);
 
   return (
-    <form class="security-action-card" onSubmit={(event) => void issue(event)}>
+    <form
+      class="security-action-card"
+      onSubmit={(event) => void model.issue(event)}
+    >
       <div>
         <p class="eyebrow">Scoped access</p>
         <h3>Create an API key</h3>
         <p>Choose only the entry points this credential needs.</p>
       </div>
-      <ApiKeyFields
-        expiresAt={expiresAt}
-        httpsSignIn={httpsSignIn}
-        label={label}
-        nativeApi={nativeApi}
-        pending={pending}
-        setExpiresAt={setExpiresAt}
-        setHttpsSignIn={setHttpsSignIn}
-        setLabel={setLabel}
-        setNativeApi={setNativeApi}
-        setSmbSignIn={setSmbSignIn}
-        smbSignIn={smbSignIn}
-      />
-      <button class="quiet-button" disabled={pending()} type="submit">
-        {pending() ? "Creating…" : "Create API key"}
+      <ApiKeyFields {...model} />
+      <button class="quiet-button" disabled={model.submitting()} type="submit">
+        {model.buttonLabel()}
       </button>
-      <Show when={secret()}>
+      <Show when={model.secret()}>
         {(value) => (
           <div class="one-time-secret">
             <p class="sensitive-note">
@@ -85,9 +47,98 @@ export function ApiKeyIssuance(props: ApiKeyIssuanceProps): JSX.Element {
         )}
       </Show>
       <div class="form-message" aria-live="polite">
-        <Show when={error()}>{(value) => <p class="error">{value()}</p>}</Show>
+        <Show when={model.error()}>
+          {(value) => <p class="error">{value()}</p>}
+        </Show>
       </div>
     </form>
+  );
+}
+
+function createApiKeyIssuance(props: ApiKeyIssuanceProps) {
+  const [label, setLabel] = createSignal("Automation");
+  const [expiresAt, setExpiresAt] = createSignal("");
+  const [httpsSignIn, setHttpsSignIn] = createSignal(false);
+  const [nativeApi, setNativeApi] = createSignal(true);
+  const [smbSignIn, setSmbSignIn] = createSignal(false);
+  const [localError, setLocalError] = createSignal<string>();
+  const mutation = createExactMutation(
+    async (request: CreateApiKeyRequest) =>
+      props.client.createCurrentUserApiKey(request, props.csrfToken),
+    (receipt, request) => {
+      if (
+        receipt.operation_id !== request.operation_id ||
+        receipt.expires_at_epoch_micros !== request.expires_at_epoch_micros ||
+        !sameScopes(receipt.scopes, request.scopes)
+      ) {
+        throw new TypeError("API key receipt does not match the request.");
+      }
+    },
+    async () => props.onChanged(),
+  );
+  const pending = mutation.locked;
+  const submitting = mutation.busy;
+  const secret = () => {
+    const result = mutation.state();
+    return result.phase === "committed" ? result.receipt.secret : undefined;
+  };
+  const error = () => localError() ?? mutationMessage(mutation.state());
+
+  const issue = async (event: SubmitEvent): Promise<void> => {
+    event.preventDefault();
+    setLocalError(undefined);
+    if (mutation.locked()) {
+      await mutation.retry();
+      return;
+    }
+    try {
+      const request: CreateApiKeyRequest = {
+        expires_at_epoch_micros: expiryEpochMicroseconds(expiresAt()),
+        label: label().trim(),
+        operation_id: crypto.randomUUID(),
+        scopes: selectedScopes(httpsSignIn(), nativeApi(), smbSignIn()),
+      };
+      zCreateApiKeyRequest.parse(request);
+      await mutation.submit(request);
+    } catch {
+      setLocalError(
+        "The API key request could not be prepared. Check its fields before submitting.",
+      );
+    }
+  };
+
+  const buttonLabel = (): string => {
+    if (submitting()) return "Creating…";
+    return pending() ? "Retry API key creation" : "Create API key";
+  };
+  return {
+    label,
+    setLabel,
+    expiresAt,
+    setExpiresAt,
+    httpsSignIn,
+    setHttpsSignIn,
+    nativeApi,
+    setNativeApi,
+    smbSignIn,
+    setSmbSignIn,
+    pending,
+    submitting,
+    issue,
+    secret,
+    error,
+    buttonLabel,
+  };
+}
+
+function sameScopes(
+  first: readonly ApiKeyScope[],
+  second: readonly ApiKeyScope[],
+): boolean {
+  return (
+    first.length === second.length &&
+    new Set(first).size === second.length &&
+    second.every((scope) => first.includes(scope))
   );
 }
 

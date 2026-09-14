@@ -61,7 +61,7 @@ describe("native file browser panel", () => {
 
     enterText("New folder name", "Quarterly");
     clickButton("Create folder");
-    await settle();
+    await waitForRowAction("Quarterly", "Rename");
     expect(fixture.createDirectory).toHaveBeenCalledWith(
       VOLUME_ID,
       expect.objectContaining({ path: "Quarterly" }),
@@ -72,14 +72,19 @@ describe("native file browser panel", () => {
     clickRowButton("Quarterly", "Rename");
     enterText("New name for Quarterly", "Archive");
     clickRowButton("Quarterly", "Save name");
-    await settle();
+    await waitForRowAction("Archive", "Delete");
     expect(rowFor("Archive")).toBeDefined();
 
     clickRowButton("Archive", "Delete");
     clickRowButton("Archive", "Confirm delete");
-    await settle();
-    expect(document.querySelector("tbody")?.textContent).not.toContain(
-      "Archive",
+    await vi.waitFor(
+      () => {
+        flush();
+        expect(document.querySelector("tbody")?.textContent).not.toContain(
+          "Archive",
+        );
+      },
+      { interval: 1, timeout: 1_000 },
     );
   });
 
@@ -122,12 +127,14 @@ function browserFixture() {
   const renameObject = vi.fn<FileBrowserClient["renameObject"]>(
     async (_volumeId, request) => {
       const sourceName = leafName(request.source_path);
+      const source = rootEntries.find((entry) => entry.name === sourceName);
+      if (source === undefined) throw new Error("rename source is missing");
       rootEntries = rootEntries.map((entry) =>
         entry.name === sourceName
           ? { ...entry, name: leafName(request.target_path) }
           : entry,
       );
-      return renameResponse(request);
+      return { ...renameResponse(request), object_id: source.object_id };
     },
   );
   const deleteObject = vi.fn<FileBrowserClient["deleteObject"]>(
@@ -135,8 +142,12 @@ function browserFixture() {
       const removed = rootEntries.find(
         (entry) => entry.name === leafName(request.path),
       );
+      if (removed === undefined) throw new Error("delete target is missing");
       rootEntries = rootEntries.filter((entry) => entry !== removed);
-      return deleteResponse(request, removed?.kind ?? "file");
+      return {
+        ...deleteResponse(request, removed.kind),
+        object_id: removed.object_id,
+      };
     },
   );
   const client: BrowserClient = {
@@ -176,6 +187,22 @@ async function settle(): Promise<void> {
     await Promise.resolve();
     flush();
   }
+}
+
+async function waitForRowAction(
+  rowName: string,
+  action: string,
+): Promise<void> {
+  await vi.waitFor(
+    () => {
+      flush();
+      const button = [...rowFor(rowName).querySelectorAll("button")].find(
+        (candidate) => candidate.textContent.trim() === action,
+      );
+      expect(button?.disabled).toBe(false);
+    },
+    { interval: 1, timeout: 1_000 },
+  );
 }
 
 function clickButton(name: string): void {

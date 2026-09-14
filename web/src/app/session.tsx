@@ -20,6 +20,7 @@ import type {
   CreateSessionRequestWritable,
   CurrentSessionResponse,
 } from "../generated/types.gen";
+import { createExactMutation } from "../native-api/mutation-outcome";
 import {
   browserCredentials,
   requestPasskeyAssertion,
@@ -33,7 +34,7 @@ export type SessionState =
   | Readonly<{ phase: "checking" }>
   | Readonly<{ phase: "anonymous" }>
   | Readonly<{ phase: "authenticated"; session: CurrentSessionResponse }>
-  | Readonly<{ message: string; phase: "unavailable" }>;
+  | Readonly<{ message: string; phase: "unavailable" | "revocation_unknown" }>;
 
 type SessionContextValue = Readonly<{
   client: MeshSpanFetchClient;
@@ -167,19 +168,60 @@ function createSessionActions(
       remember,
     );
   };
-  const signOut = async (): Promise<void> => {
-    const token = store.csrfToken();
-    if (token === undefined) {
-      store.setState({ phase: "anonymous" });
-      return;
-    }
-    await client.revokeCurrentSession(
-      { operation_id: crypto.randomUUID() },
-      token,
-    );
-    store.clear();
-  };
+  const signOut = createSignOut(client, store);
   return { signInWithApiKey, signInWithPasskey, signOut };
+}
+
+function createSignOut(
+  client: MeshSpanFetchClient,
+  store: SessionStore,
+): () => Promise<void> {
+  const mutation = createExactMutation(
+    async (request: {
+      operation_id: string;
+      session_id: string;
+      token: string;
+    }) =>
+      client.revokeCurrentSession(
+        { operation_id: request.operation_id },
+        request.token,
+      ),
+    (receipt, request) => {
+      if (
+        receipt.operation_id !== request.operation_id ||
+        receipt.session_id !== request.session_id
+      ) {
+        throw new TypeError(
+          "Session revocation receipt does not match the request.",
+        );
+      }
+    },
+    async () => {
+      store.clear();
+      return Promise.resolve();
+    },
+  );
+  return async () => {
+    const token = store.csrfToken();
+    const current = store.state();
+    if (mutation.locked()) await mutation.retry();
+    else if (token !== undefined && current.phase === "authenticated") {
+      await mutation.submit({
+        operation_id: crypto.randomUUID(),
+        session_id: current.session.session_id,
+        token,
+      });
+    }
+    if (mutation.state().phase !== "committed") {
+      store.setState({
+        phase: "revocation_unknown",
+        message:
+          token === undefined
+            ? "Sign-out is not confirmed: this browser is missing its session security token. Check the session again; the server cookie may still be valid."
+            : "Sign-out is not confirmed. Retry the same revocation or check whether the session is still active.",
+      });
+    }
+  };
 }
 
 function factorField(additionalFactor?: SessionAdditionalFactor): Readonly<{

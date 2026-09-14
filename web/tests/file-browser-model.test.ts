@@ -82,6 +82,86 @@ describe("native file browser model", () => {
     expect(fixture.listDirectory).toHaveBeenCalledTimes(2);
     expect(model.directory()?.entries[0]?.name).toBe("New folder");
   });
+});
+
+describe("file mutation outcomes", () => {
+  it("keeps a committed create when refreshing the directory fails", async () => {
+    const fixture = browserFixture();
+    const model = createFileBrowserModel(
+      () => fixture.client,
+      () => CSRF_TOKEN,
+    );
+    await model.loadInitial();
+    fixture.listDirectory.mockRejectedValueOnce(new Error("refresh lost"));
+
+    await expect(model.createDirectory("Saved")).resolves.toBeUndefined();
+
+    expect(model.error()).toContain("Saved");
+    expect(model.error()).not.toContain("did not commit");
+    expect(fixture.createDirectory).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not accept a receipt for another volume", async () => {
+    const fixture = browserFixture();
+    fixture.createDirectory.mockImplementationOnce(
+      async (_volumeId, request) => ({
+        ...directoryCreation(request.path, request.operation_id),
+        volume_id: "wrong-volume",
+      }),
+    );
+    const model = createFileBrowserModel(
+      () => fixture.client,
+      () => CSRF_TOKEN,
+    );
+    await model.loadInitial();
+    await model.createDirectory("Requested");
+    expect(model.mutation().phase).toBe("unknown");
+    expect(fixture.listDirectory).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains a lost create response and blocks a changed attempt", async () => {
+    const fixture = browserFixture();
+    fixture.createDirectory.mockRejectedValueOnce(new Error("response lost"));
+    const model = createFileBrowserModel(
+      () => fixture.client,
+      () => CSRF_TOKEN,
+    );
+    await model.loadInitial();
+
+    await model.createDirectory("Original").catch(() => undefined);
+    expect(model.error()).toContain("unknown");
+    await model.createDirectory("Changed").catch(() => undefined);
+    expect(fixture.createDirectory).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("file mutation recovery", () => {
+  it("replays one rename identity after a committed response is lost", async () => {
+    const fixture = browserFixture();
+    const entry = directoryEntry("Original", "20");
+    const rename = vi
+      .fn<FileBrowserClient["renameObject"]>()
+      .mockRejectedValueOnce(new Error("response lost"))
+      .mockImplementation(async (_volumeId, request) => ({
+        ...directoryCreation(request.target_path, request.operation_id),
+        object_id: entry.object_id,
+        source_path: request.source_path,
+        target_path: request.target_path,
+      }));
+    const model = createFileBrowserModel(
+      () => ({ ...fixture.client, renameObject: rename }),
+      () => CSRF_TOKEN,
+    );
+    await model.loadInitial();
+    await model.renameEntry(entry, "Renamed");
+    await model.renameEntry(entry, "Changed");
+    expect(rename).toHaveBeenCalledTimes(1);
+    await model.retryMutation();
+    expect(rename).toHaveBeenCalledTimes(2);
+    expect(rename.mock.calls[1]).toEqual(rename.mock.calls[0]);
+    expect(model.mutation().phase).toBe("committed");
+    expect(fixture.listDirectory).toHaveBeenCalledTimes(2);
+  });
 
   it("does not expose mutations without a browser CSRF capability", async () => {
     const fixture = browserFixture();
