@@ -14,10 +14,10 @@ mod http01;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 118;
-pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 16;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 119;
+pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 17;
 
-const PARTITION_MIGRATIONS: [Migration; 118] = [
+const PARTITION_MIGRATIONS: [Migration; 119] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -487,12 +487,16 @@ const PARTITION_MIGRATIONS: [Migration; 118] = [
         sql: include_str!("../schema/partition/117_recovery_consensus_activation.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 118,
         sql: include_str!("../schema/partition/118_user_enrollments.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/119_node_capability_presentations.sql"),
     },
 ];
 
-const LOCAL_MIGRATIONS: [Migration; 16] = [
+const LOCAL_MIGRATIONS: [Migration; 17] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/local/001_initial.sql"),
@@ -554,8 +558,12 @@ const LOCAL_MIGRATIONS: [Migration; 16] = [
         sql: include_str!("../schema/local/015_federation_storage_seals.sql"),
     },
     Migration {
-        version: LOCAL_SCHEMA_VERSION,
+        version: 16,
         sql: include_str!("../schema/local/016_recovered_storage_targets.sql"),
+    },
+    Migration {
+        version: LOCAL_SCHEMA_VERSION,
+        sql: include_str!("../schema/local/017_node_capability_presentations.sql"),
     },
 ];
 

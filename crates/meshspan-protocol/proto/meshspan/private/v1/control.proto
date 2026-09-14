@@ -520,6 +520,18 @@ message UpdateWorkloadObservation {
   uint64 excluded_targets = 12;
 }
 
+// An authenticated node's narrow, canonical capability refresh command.
+message NodeCapabilityReport {
+  uint32 command_version = 1;
+  bytes canonical_command = 2;
+}
+
+// A correlated authority receipt. It never substitutes for replicated presentation state.
+message NodeCapabilityReportResult {
+  bytes request_digest = 1;
+  OperationResult result = 2;
+}
+
 message ControlEnvelope {
   RequestHeader header = 1;
   oneof message {
@@ -604,5 +616,7 @@ message ControlEnvelope {
     NativeContentLayoutPage native_content_layout_page = 117;
     ProbeUpdateReadiness probe_update_readiness = 118;
     UpdateReadinessResult update_readiness_result = 119;
+    NodeCapabilityReport node_capability_report = 120;
+    NodeCapabilityReportResult node_capability_report_result = 121;
   }
 }

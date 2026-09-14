@@ -78,6 +78,19 @@ impl PrivateConsensusRuntime {
 }
 
 impl ConsensusMessageTransport for PrivateConsensusRuntime {
+    fn consensus_transfer_support_for(
+        &self,
+        expected: meshspan_transport::PeerBinding,
+        capability_digest: [u8; 32],
+    ) -> Result<
+        Option<meshspan_cluster::ObservedConsensusTransferSupport>,
+        meshspan_cluster::ConsensusNetworkError,
+    > {
+        self.network()
+            .map_err(|()| meshspan_cluster::ConsensusNetworkError::InvalidConfiguration)?
+            .consensus_transfer_support_for(expected, capability_digest)
+    }
+
     fn send(&self, to: NodeId, message: CoreMessage) {
         if let Ok(network) = self.network() {
             network.send(to, message);

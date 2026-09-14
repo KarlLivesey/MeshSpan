@@ -80,6 +80,13 @@ impl PeerRegistry {
         Ok(AuthenticatedPeer(binding))
     }
 
+    /// Whether the exact supplied certificate/incarnation binding is currently enrolled.
+    /// This does not create an authenticated connection proof.
+    #[must_use]
+    pub fn matches_binding(&self, binding: PeerBinding) -> bool {
+        self.by_fingerprint.get(&binding.certificate_fingerprint) == Some(&binding)
+    }
+
     /// Revalidates a previously admitted peer against this current committed registry.
     ///
     /// Callers use this before admitting another request on a reused connection. An earlier
@@ -229,6 +236,7 @@ impl AuthenticatedPeer {
             return Err(TransportError::InvalidConfiguration);
         }
         Ok(NodeWelcome {
+            consensus_transfer: None,
             selected_version: Some(selected_version),
             peer_node_id: hello.node_id.clone(),
             peer_incarnation: hello.incarnation,

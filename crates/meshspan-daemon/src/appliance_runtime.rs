@@ -219,7 +219,7 @@ struct ApplianceServiceComposition {
     update_readiness: crate::update_readiness::UpdateReadiness,
     data_plane: RuntimeDataPlane,
     updates: crate::update_service::distribution::UpdateDistribution,
-    consensus_observations: crate::consensus_observation_worker::ConsensusObservationWorker,
+    consensus_background: ConsensusBackgroundServices,
     router: Router,
     smb_connections: SmbConnectionFactory,
     certificates: CertificateRuntime,
@@ -227,6 +227,54 @@ struct ApplianceServiceComposition {
     private_certificates: crate::private_certificate_renewal::PrivateCertificateRenewal,
     https_identity: RotatingHttpsIdentity,
     gateway_observations: Arc<crate::runtime_observations::RuntimeObservations>,
+}
+
+/// Consensus housekeeping shares service ownership, while reports and observations keep
+/// independent tasks so delayed authority writes cannot stall observation sampling.
+struct ConsensusBackgroundServices {
+    reporter: crate::node_capability_reporting::NodeCapabilityReporter,
+    observations: crate::consensus_observation_worker::ConsensusObservationWorker,
+}
+
+impl ConsensusBackgroundServices {
+    fn new(
+        node: &DaemonNodeRuntime,
+        authority: &MetadataAuthorityHandle,
+        observations: crate::runtime_observations::RuntimeObservations,
+    ) -> Self {
+        Self {
+            reporter: crate::node_capability_reporting::NodeCapabilityReporter::new(
+                node.local_state.state_directory().to_path_buf(),
+                Arc::clone(&node.private_network),
+                Some(authority.clone()),
+            ),
+            observations: crate::consensus_observation_worker::ConsensusObservationWorker::new(
+                authority.clone(),
+                observations,
+            ),
+        }
+    }
+
+    fn spawn(
+        self,
+        tasks: &mut tokio::task::JoinSet<Result<(), DaemonProcessError>>,
+        stop: &tokio::sync::watch::Sender<bool>,
+    ) {
+        let report_stop = stop.subscribe();
+        tasks.spawn(async move {
+            self.reporter
+                .run_until(report_stop)
+                .await
+                .map_err(|_| DaemonProcessError::PrivateNetworkState)
+        });
+        let observation_stop = stop.subscribe();
+        tasks.spawn(async move {
+            self.observations
+                .run_until(wait_for_shutdown(observation_stop))
+                .await;
+            Ok(())
+        });
+    }
 }
 
 struct OperationAdministration {
@@ -589,14 +637,14 @@ where
     let (restart, restart_requests) = tokio::sync::mpsc::unbounded_channel();
     let services =
         compose_appliance_services(&mut node, &private_authority, config, restart, started_at)?;
-    serve_daemon_cycle(
+    Box::pin(serve_daemon_cycle(
         config,
         services,
         private_authority.authority,
         private_authority.authority_task,
         restart_requests,
         shutdown,
-    )
+    ))
     .await
 }
 
@@ -840,11 +888,11 @@ fn compose_appliance_services(
         updates: operations
             .updates
             .with_observations(gateway_observations.as_ref().clone()),
-        consensus_observations:
-            crate::consensus_observation_worker::ConsensusObservationWorker::new(
-                private_authority.authority.clone(),
-                gateway_observations.as_ref().clone(),
-            ),
+        consensus_background: ConsensusBackgroundServices::new(
+            node,
+            &private_authority.authority,
+            gateway_observations.as_ref().clone(),
+        ),
         router: crate::gateway_measurements::observe_https(router, gateway_observations.clone()),
         smb_connections,
         certificates,
@@ -1222,6 +1270,7 @@ where
     // for remote authority with the target lock held, so start it only after binding.
     let serving = services.update_readiness.serving();
     let mut tasks = tokio::task::JoinSet::new();
+    services.consensus_background.spawn(&mut tasks, &stop);
     tasks.spawn(run_storage_target_reconciler(
         services.storage_targets,
         stop.subscribe(),
@@ -1258,14 +1307,6 @@ where
         services.gateway_observations,
     );
     let certificate_stop = stop.subscribe();
-    let observation_stop = stop.subscribe();
-    tasks.spawn(async move {
-        services
-            .consensus_observations
-            .run_until(wait_for_shutdown(observation_stop))
-            .await;
-        Ok(())
-    });
     let private_certificate_stop = stop.subscribe();
     let notification_stop = stop.subscribe();
     tasks.spawn(async move {
@@ -2271,6 +2312,16 @@ async fn handle_private_control(
             .await
             .map_err(|_| DaemonProcessError::PrivateNetworkState);
     }
+    if let Some(Message::NodeCapabilityReport(_)) = envelope.message.as_ref() {
+        return crate::node_capability_reporting::handle(
+            network,
+            authority,
+            state_directory,
+            request,
+        )
+        .await
+        .map_err(|_| DaemonProcessError::PrivateNetworkState);
+    }
     if let Some(Message::MetadataCommand(_)) = envelope.message.as_ref() {
         return crate::metadata_forwarding::handle(network, authority, state_directory, request)
             .await
@@ -2909,7 +2960,7 @@ fn open_root_repository(
     Ok(AuthoritativeRepository::new(database))
 }
 
-fn open_root_repository_at(
+pub(crate) fn open_root_repository_at(
     state_directory: &std::path::Path,
     now: UnixMicros,
 ) -> Result<AuthoritativeRepository, DaemonProcessError> {

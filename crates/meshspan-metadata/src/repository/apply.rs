@@ -22,7 +22,7 @@ use super::{
     session, smb_export_configuration, snapshot_schedule, storage_target, tags, topology,
     update_rollout, user_enrollment, user_snapshot, version_cleanup, volume_head,
 };
-use crate::{AuthoritativeCommand, CommandContext, PartitionDatabase};
+use crate::{AuthoritativeCommand, AuthoritativeCommandContext, CommandContext, PartitionDatabase};
 
 const POLICY_COMMITTED_OUTCOME: u8 = 3;
 const RESULT_KIND_ENTITY_REFERENCE: u8 = 1;
@@ -46,7 +46,7 @@ struct StoredOperation {
 #[derive(Clone, Copy)]
 struct TransactionCommand<'a> {
     position: LogPosition,
-    context: CommandContext,
+    context: AuthoritativeCommandContext,
     command: &'a AuthoritativeCommand,
     fault: Option<ApplyFaultPoint>,
 }
@@ -70,13 +70,74 @@ pub(super) fn apply_committed(
     context: CommandContext,
     command: &AuthoritativeCommand,
 ) -> Result<CommandReceipt, RepositoryError> {
-    apply_committed_inner(database, position, context, command, None)
+    apply_committed_inner(
+        database,
+        position,
+        AuthoritativeCommandContext::Principal(context),
+        command,
+        None,
+    )
 }
 
 pub(super) fn preflight_command(
     database: &mut PartitionDatabase,
     preceding: &[(LogPosition, CommandContext, AuthoritativeCommand)],
     context: CommandContext,
+    command: &AuthoritativeCommand,
+) -> Result<(), RepositoryError> {
+    preflight_inner(
+        database,
+        preceding.iter().map(|(position, context, command)| {
+            (
+                *position,
+                AuthoritativeCommandContext::Principal(*context),
+                command,
+            )
+        }),
+        AuthoritativeCommandContext::Principal(context),
+        command,
+    )
+}
+
+pub(super) fn apply_committed_entry(
+    database: &mut PartitionDatabase,
+    position: LogPosition,
+    context: AuthoritativeCommandContext,
+    command: &AuthoritativeCommand,
+) -> Result<CommandReceipt, RepositoryError> {
+    apply_committed_inner(database, position, context, command, None)
+}
+
+pub(super) fn preflight_entry(
+    database: &mut PartitionDatabase,
+    preceding: &[(
+        LogPosition,
+        AuthoritativeCommandContext,
+        AuthoritativeCommand,
+    )],
+    context: AuthoritativeCommandContext,
+    command: &AuthoritativeCommand,
+) -> Result<(), RepositoryError> {
+    preflight_inner(
+        database,
+        preceding
+            .iter()
+            .map(|(position, context, command)| (*position, *context, command)),
+        context,
+        command,
+    )
+}
+
+fn preflight_inner<'a>(
+    database: &mut PartitionDatabase,
+    preceding: impl IntoIterator<
+        Item = (
+            LogPosition,
+            AuthoritativeCommandContext,
+            &'a AuthoritativeCommand,
+        ),
+    >,
+    context: AuthoritativeCommandContext,
     command: &AuthoritativeCommand,
 ) -> Result<(), RepositoryError> {
     let partition_id = database.partition_id();
@@ -90,8 +151,8 @@ pub(super) fn preflight_command(
             partition_id.as_bytes(),
             state,
             TransactionCommand {
-                position: *position,
-                context: *preceding_context,
+                position,
+                context: preceding_context,
                 command: preceding_command,
                 fault: None,
             },
@@ -137,13 +198,19 @@ pub(super) fn apply_committed_with_fault(
     command: &AuthoritativeCommand,
     fault: ApplyFaultPoint,
 ) -> Result<CommandReceipt, RepositoryError> {
-    apply_committed_inner(database, position, context, command, Some(fault))
+    apply_committed_inner(
+        database,
+        position,
+        AuthoritativeCommandContext::Principal(context),
+        command,
+        Some(fault),
+    )
 }
 
 fn apply_committed_inner(
     database: &mut PartitionDatabase,
     position: LogPosition,
-    context: CommandContext,
+    context: AuthoritativeCommandContext,
     command: &AuthoritativeCommand,
     fault: Option<ApplyFaultPoint>,
 ) -> Result<CommandReceipt, RepositoryError> {
@@ -182,14 +249,14 @@ fn apply_transaction(
     } = input;
     validate_position(position)?;
     validate_transition(state, position)?;
-    let request_digest = command.request_digest(context);
-    if let Some(stored) = load_operation(transaction, context.operation_id)? {
+    let request_digest = context.request_digest(command);
+    if let Some(stored) = load_operation(transaction, context.operation_id())? {
         if stored.request_digest.as_slice() != request_digest {
             return Err(RepositoryError::OperationConflict);
         }
         advance_applied_position(transaction, state.revision, position)?;
         let mut receipt = decode_receipt(
-            context.operation_id,
+            context.operation_id(),
             &stored.request_digest,
             &stored.result_payload,
             &stored.result_digest,
@@ -200,12 +267,12 @@ fn apply_transaction(
         receipt.disposition = ApplyDisposition::Replayed;
         return Ok(receipt);
     }
-    if cleanup_inventory::is_reserved_operation(transaction, context.operation_id)? {
+    if cleanup_inventory::is_reserved_operation(transaction, context.operation_id())? {
         return Err(RepositoryError::OperationConflict);
     }
 
     if context
-        .expected_revision
+        .expected_revision()
         .is_some_and(|expected| expected != state.revision)
     {
         return Err(RepositoryError::StaleRevision);
@@ -215,11 +282,14 @@ fn apply_transaction(
         .revision
         .next()
         .map_err(|_| RepositoryError::CapacityExceeded)?;
-    authorise(transaction, context, command)?;
-    let entity = match update_rollout::execute(transaction, context, command, revision, position) {
-        Some(result) => result?,
-        None => execute(transaction, partition_id, context, command, revision)?,
-    };
+    let entity = execute_entry(
+        transaction,
+        partition_id,
+        context,
+        command,
+        revision,
+        position,
+    )?;
     inject_fault(fault, ApplyFaultPoint::AfterCommand)?;
     let payload = encode_result(entity, revision, position)?;
     let stored_result_digest = result_digest(&payload);
@@ -248,7 +318,7 @@ fn apply_transaction(
     inject_fault(fault, ApplyFaultPoint::BeforeCommit)?;
     Ok(CommandReceipt {
         disposition: ApplyDisposition::Applied,
-        operation_id: context.operation_id,
+        operation_id: context.operation_id(),
         request_digest,
         result_digest: stored_result_digest,
         committed_revision: revision,
@@ -256,6 +326,34 @@ fn apply_transaction(
         applied_position: position,
         entity,
     })
+}
+
+fn execute_entry(
+    transaction: &Transaction<'_>,
+    partition_id: [u8; 16],
+    context: AuthoritativeCommandContext,
+    command: &AuthoritativeCommand,
+    revision: Revision,
+    position: LogPosition,
+) -> Result<EntityReference, RepositoryError> {
+    match context {
+        AuthoritativeCommandContext::Principal(context) => {
+            if matches!(command, AuthoritativeCommand::RefreshNodeCapabilities(_)) {
+                return Err(RepositoryError::InvalidCommand);
+            }
+            authorise(transaction, context, command)?;
+            match update_rollout::execute(transaction, context, command, revision, position) {
+                Some(result) => result,
+                None => execute(transaction, partition_id, context, command, revision),
+            }
+        }
+        AuthoritativeCommandContext::Node(context) => match command {
+            AuthoritativeCommand::RefreshNodeCapabilities(value) => {
+                super::node_capability::refresh(transaction, context, value, revision)
+            }
+            _ => Err(RepositoryError::InvalidCommand),
+        },
+    }
 }
 
 fn inject_fault(
@@ -1230,37 +1328,39 @@ fn insert_operation(
     transaction: &Transaction<'_>,
     partition_id: [u8; 16],
     position: LogPosition,
-    context: CommandContext,
+    context: AuthoritativeCommandContext,
     operation_kind: u8,
     request_digest: [u8; 32],
     result_payload: &[u8],
     stored_result_digest: [u8; 32],
     revision: Revision,
 ) -> Result<(), RepositoryError> {
-    let operation = context.operation_id.as_bytes();
-    let actor = context.actor_principal_id.as_bytes();
+    let operation = context.operation_id().as_bytes();
+    let actor = context.principal_bytes();
+    let actor_node = context.node_bytes();
     transaction.execute(
         "INSERT INTO operations(
             operation_id, partition_id, actor_principal_id, actor_node_id,
             operation_kind, request_version, request_digest, outcome, durability_scope,
             started_at, completed_at, committed_log_index, result_kind, result_version,
             result_payload, result_digest, error_kind, revision
-         ) VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, NULL, ?8, ?8, ?9, ?10, ?5,
+         ) VALUES (?1, ?2, ?3, ?14, ?4, ?5, ?6, ?7, NULL, ?8, ?8, ?9, ?10, ?5,
                    ?11, ?12, NULL, ?13)",
         params![
             operation.as_slice(),
             partition_id.as_slice(),
-            actor.as_slice(),
+            actor.as_ref().map(<[u8; 16]>::as_slice),
             operation_kind,
             RECORD_VERSION,
             request_digest.as_slice(),
             POLICY_COMMITTED_OUTCOME,
-            context.occurred_at.get(),
+            context.occurred_at().get(),
             to_i64(position.index)?,
             RESULT_KIND_ENTITY_REFERENCE,
             result_payload,
             stored_result_digest.as_slice(),
-            to_i64(revision.get())?
+            to_i64(revision.get())?,
+            actor_node.as_ref().map(<[u8; 16]>::as_slice)
         ],
     )?;
     Ok(())
@@ -1268,7 +1368,7 @@ fn insert_operation(
 
 fn insert_audit_event(
     transaction: &Transaction<'_>,
-    context: CommandContext,
+    context: AuthoritativeCommandContext,
     event_kind: u8,
     entity: EntityReference,
     request_digest: [u8; 32],
@@ -1292,33 +1392,35 @@ fn insert_audit_event(
         stored_result_digest,
         previous.as_deref(),
     );
-    let event = context.audit_event_id.as_bytes();
-    let operation = context.operation_id.as_bytes();
-    let actor = context.actor_principal_id.as_bytes();
+    let event = context.audit_event_id().as_bytes();
+    let operation = context.operation_id().as_bytes();
+    let actor = context.principal_bytes();
+    let actor_node = context.node_bytes();
     transaction.execute(
         "INSERT INTO audit_events(
             event_id, operation_id, sequence, actor_principal_id, actor_node_id,
             event_kind, subject_kind, subject_id, occurred_at, redacted_payload,
             previous_event_digest, event_digest
-         ) VALUES (?1, ?2, 0, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+         ) VALUES (?1, ?2, 0, ?3, ?11, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             event.as_slice(),
             operation.as_slice(),
-            actor.as_slice(),
+            actor.as_ref().map(<[u8; 16]>::as_slice),
             event_kind,
             entity.kind as u8,
             entity.id.as_slice(),
-            context.occurred_at.get(),
+            context.occurred_at().get(),
             [RECORD_VERSION, event_kind].as_slice(),
             previous,
-            event_digest.as_slice()
+            event_digest.as_slice(),
+            actor_node.as_ref().map(<[u8; 16]>::as_slice)
         ],
     )?;
     Ok(())
 }
 
 fn audit_digest(
-    context: CommandContext,
+    context: AuthoritativeCommandContext,
     event_kind: u8,
     entity: EntityReference,
     request_digest: [u8; 32],
@@ -1326,11 +1428,19 @@ fn audit_digest(
     previous: Option<&[u8]>,
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
-    digest.update(b"meshspan.metadata.audit.v1");
-    digest.update(context.audit_event_id.as_bytes());
-    digest.update(context.operation_id.as_bytes());
-    digest.update(context.actor_principal_id.as_bytes());
-    digest.update(context.occurred_at.get().to_be_bytes());
+    match context {
+        AuthoritativeCommandContext::Principal(_) => digest.update(b"meshspan.metadata.audit.v1"),
+        AuthoritativeCommandContext::Node(_) => digest.update(b"meshspan.metadata.node-audit.v1"),
+    }
+    digest.update(context.audit_event_id().as_bytes());
+    digest.update(context.operation_id().as_bytes());
+    match context {
+        AuthoritativeCommandContext::Principal(value) => {
+            digest.update(value.actor_principal_id.as_bytes());
+        }
+        AuthoritativeCommandContext::Node(value) => digest.update(value.actor_node_id.as_bytes()),
+    }
+    digest.update(context.occurred_at().get().to_be_bytes());
     digest.update([event_kind, entity.kind as u8]);
     digest.update(entity.id);
     digest.update(request_digest);
@@ -1425,6 +1535,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::IssueUserEnrollment(_) => 163,
         AuthoritativeCommand::RevokeUserEnrollment(_) => 164,
         AuthoritativeCommand::RedeemUserEnrollment(_) => 165,
+        AuthoritativeCommand::RefreshNodeCapabilities(_) => 166,
         AuthoritativeCommand::RevokeAuthenticationMethod(_) => 75,
         AuthoritativeCommand::ConfigureAuthenticationPolicy(_) => 76,
         AuthoritativeCommand::SetObjectGrantInheritance(_) => 47,

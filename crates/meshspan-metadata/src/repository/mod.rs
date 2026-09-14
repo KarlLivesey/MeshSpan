@@ -11,7 +11,11 @@ mod acme;
 #[cfg(test)]
 mod acme_tests;
 mod apply;
+mod node_capability;
+#[cfg(test)]
+mod node_capability_tests;
 mod user_enrollment;
+pub use node_capability::NodeCapabilityPresentation;
 #[cfg(test)]
 mod user_enrollment_tests;
 pub use user_enrollment::{UserEnrollmentRecord, UserEnrollmentRedemption, UserEnrollmentState};
@@ -912,6 +916,47 @@ impl AuthoritativeRepository {
         persisted_at: meshspan_domain::UnixMicros,
     ) -> Result<(), ConsensusStoreError> {
         consensus::persist_mutation(&mut self.database, membership_epoch, mutation, persisted_at)
+    }
+
+    /// Reads the root-authoritative current capability presentation.
+    ///
+    /// # Errors
+    /// Rejects malformed persisted identity, certificate or digest fields.
+    pub fn node_capability_presentation(
+        &self,
+        node_id: meshspan_domain::NodeId,
+    ) -> Result<Option<NodeCapabilityPresentation>, RepositoryError> {
+        node_capability::read(self.database.connection(), node_id)
+    }
+
+    /// Applies an entry with its truthful committed actor kind through the shared transaction.
+    ///
+    /// # Errors
+    /// Rejects invalid authority, stale revision, conflicting replay and discontinuous positions.
+    pub fn apply_committed_entry(
+        &mut self,
+        position: LogPosition,
+        context: crate::AuthoritativeCommandContext,
+        command: &crate::AuthoritativeCommand,
+    ) -> Result<CommandReceipt, RepositoryError> {
+        apply::apply_committed_entry(&mut self.database, position, context, command)
+    }
+
+    /// Preflights a mixed-actor log prefix using the exact apply transaction, then rolls it back.
+    ///
+    /// # Errors
+    /// Rejects any entry that could not be applied at its proposed position.
+    pub fn preflight_entry(
+        &mut self,
+        preceding: &[(
+            LogPosition,
+            crate::AuthoritativeCommandContext,
+            crate::AuthoritativeCommand,
+        )],
+        context: crate::AuthoritativeCommandContext,
+        command: &crate::AuthoritativeCommand,
+    ) -> Result<(), RepositoryError> {
+        apply::preflight_entry(&mut self.database, preceding, context, command)
     }
 
     /// Applies one already-committed log entry atomically and returns durable evidence.

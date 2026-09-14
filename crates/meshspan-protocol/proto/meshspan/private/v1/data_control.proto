@@ -42,6 +42,33 @@ message MetadataReplicaBody {
   repeated LogEntry entries = 3;
 }
 
+// Oversized voting append or committed-prefix bytes use an independent bulk stream.
+// The embedded request retains exact phase/probe metadata but MUST have no entries.
+message ConsensusBulkStart {
+  RequestHeader header = 1;
+  uint32 format_version = 2;
+  uint64 byte_length = 3;
+  bytes body_digest = 4;
+  uint32 entry_count = 5;
+  oneof metadata {
+    AppendRequest append = 6;
+    CommittedPrefix prefix = 7;
+  }
+}
+
+// Canonical body, never embedded in a control envelope.
+message ConsensusBulkEntries {
+  uint32 format_version = 1;
+  bytes request_id = 2;
+  repeated LogEntry entries = 3;
+}
+
+// Ingress acknowledgement only; durable proof remains the ordinary AppendResponse.
+message ConsensusBulkReceipt {
+  bytes request_id = 1;
+  bytes body_digest = 2;
+}
+
 // Same-swarm mTLS relay only. The original external signature is retained;
 // the receiving storage owner independently verifies its authority before IO.
 message ForwardFederatedBackupRequest {
@@ -103,5 +130,7 @@ message DataControlEnvelope {
     ForwardFederatedBackupResult forward_federated_backup_result = 92;
     FetchMetadataReplicaPage fetch_metadata_replica_page = 100;
     MetadataReplicaPageHeader metadata_replica_page_header = 101;
+    ConsensusBulkStart consensus_bulk_start = 110;
+    ConsensusBulkReceipt consensus_bulk_receipt = 111;
   }
 }

@@ -189,6 +189,35 @@ effects, so constructing one effect per peer does not copy every payload before
 transport admission. Independent wire copies remain a transport responsibility.
 This does not remove the separate retained-log snapshot and lifetime-growth limit.
 
+The outer runtime also supplies a conservative frame budget for each peer.
+Unknown peers retain the 64 KiB control limit, including envelope and entry
+framing. Larger append bodies use the independent consensus bulk stream, with
+bounded frames, exact request/probe metadata, body digest, entry count and EOF.
+A bulk transfer receipt only confirms receipt of bytes; the ordinary correlated
+append response remains the durable replication proof. Byte reservations cover
+queued and in-flight copies separately from the core's durable log.
+
+Admission of commands that require bulk transfer checks every active plan member
+against the exact committed capability digest and a validated local Hello
+preimage bound to its current incarnation and certificate. Missing or unsupported
+evidence rejects the proposal before log append. The local preimage cache is
+bounded and restored with strict decoding and digest checks; it never grants
+membership or replaces authoritative metadata. Replication overrides are revoked
+before applying authoritative metadata and on membership activation, then rebuilt
+from current evidence.
+
+Each daemon automatically refreshes its configured presentation through a narrow
+node-authenticated root command. The current presentation is distinct from its
+immutable activation record. Compare-and-swap binds the prior presentation,
+initial activation, or verified initial admission certificate. Node actors are
+recorded as nodes, never synthetic user principals. Private control messages 120
+and 121 bind this command and its response to the authenticated connection,
+canonical request and deadline. Current roles follow the applied quorum plan;
+changing an advertised role invalidates cached handshakes before the new report.
+Only replicated presentation state completes the reporting workflow. Unknown
+outcomes retain the same command context for retry; an older peer's unsupported
+reporting endpoint cannot terminate ordinary control service.
+
 The core assumes crash, omission, corruption-detection and partition faults, not
 Byzantine voters. Mutual authentication prevents an unauthorised node from being
 counted, but a correctly enrolled malicious voter is outside this consensus

@@ -8,9 +8,11 @@ use meshspan_consensus::{
 };
 use meshspan_domain::{NodeId, PartitionId, UnixMicros};
 use meshspan_metadata::{
-    AuthoritativeRepository, ConsensusStoreError, METADATA_COMMAND_VERSION, RepositoryError,
-    decode_authoritative_command,
+    AuthoritativeRepository, ConsensusStoreError, RepositoryError,
+    decode_authoritative_entry_for_version, is_supported_metadata_command_version,
 };
+#[cfg(test)]
+use meshspan_metadata::{METADATA_COMMAND_VERSION, decode_authoritative_command};
 use thiserror::Error;
 
 use crate::{PartitionConsensusDriver, restore_member_incarnations};
@@ -280,10 +282,11 @@ impl MetadataReplica {
             self.durable.current_term = term;
             self.durable.voted_for = vote;
         }
-        if entry.command_version == METADATA_COMMAND_VERSION {
-            let decoded = decode_authoritative_command(&entry.command)
-                .map_err(|_| MetadataReplicaError::InvalidPage)?;
-            self.repository.apply_committed(
+        if is_supported_metadata_command_version(entry.command_version) {
+            let decoded =
+                decode_authoritative_entry_for_version(entry.command_version, &entry.command)
+                    .map_err(|_| MetadataReplicaError::InvalidPage)?;
+            self.repository.apply_committed_entry(
                 meshspan_metadata::LogPosition {
                     term: entry.position.term,
                     index: entry.position.index,
@@ -396,10 +399,11 @@ fn validate_page(page: &MetadataReplicaPage) -> Result<(), MetadataReplicaError>
             return Err(MetadataReplicaError::InvalidPage);
         }
         match entry.command_version {
-            METADATA_COMMAND_VERSION => {
-                let decoded = decode_authoritative_command(&entry.command)
-                    .map_err(|_| MetadataReplicaError::InvalidPage)?;
-                if decoded.context.operation_id != entry.operation_id {
+            version if is_supported_metadata_command_version(version) => {
+                let decoded =
+                    decode_authoritative_entry_for_version(entry.command_version, &entry.command)
+                        .map_err(|_| MetadataReplicaError::InvalidPage)?;
+                if decoded.context.operation_id() != entry.operation_id {
                     return Err(MetadataReplicaError::InvalidPage);
                 }
             }

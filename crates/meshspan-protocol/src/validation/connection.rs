@@ -10,6 +10,7 @@ use crate::v1::{
 use super::{valid_count, valid_identifier, valid_text, validate_wire_error};
 
 pub(super) fn hello(value: &NodeHello, limits: WireLimits) -> Result<(), WireContractError> {
+    crate::consensus_bulk::support(value.consensus_transfer.as_ref())?;
     valid_count(value.versions.len(), limits, false)?;
     valid_count(value.roles.len(), limits, false)?;
     valid_count(value.components.len(), limits, false)?;
@@ -32,6 +33,7 @@ pub(super) fn hello(value: &NodeHello, limits: WireLimits) -> Result<(), WireCon
 }
 
 pub(super) fn welcome(value: &NodeWelcome, limits: WireLimits) -> Result<(), WireContractError> {
+    crate::consensus_bulk::support(value.consensus_transfer.as_ref())?;
     let version = value
         .selected_version
         .as_ref()

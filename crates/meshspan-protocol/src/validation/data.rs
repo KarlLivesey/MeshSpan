@@ -19,6 +19,8 @@ use super::{
 
 pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireContractError> {
     match value {
+        Message::ConsensusBulkStart(value) => crate::consensus_bulk::start(value),
+        Message::ConsensusBulkReceipt(value) => crate::consensus_bulk::receipt(value),
         Message::FetchMetadataReplicaPage(value) => crate::metadata_replica::request(value),
         Message::MetadataReplicaPageHeader(value) => crate::metadata_replica::header(value, limits),
         Message::ForwardFederatedBackupRequest(value) => federation_relay::request(value, limits),

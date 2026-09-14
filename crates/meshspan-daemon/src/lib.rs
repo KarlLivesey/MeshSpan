@@ -279,6 +279,7 @@ mod native_upload_api_tests;
 #[cfg(test)]
 mod native_upload_service_tests;
 mod node_activation;
+mod node_capability_reporting;
 mod node_enrolment;
 mod node_enrolment_api;
 mod node_join_grant;

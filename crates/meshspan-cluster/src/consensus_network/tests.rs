@@ -17,6 +17,7 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 
+mod bulk;
 mod cancellation;
 mod delivery;
 mod live_identity;
@@ -77,14 +78,7 @@ async fn real_quinn_mtls_delivers_one_exact_authenticated_consensus_message()
     let received = tokio::time::timeout(Duration::from_secs(5), second_received.recv())
         .await?
         .ok_or("consensus receive queue closed")?;
-    assert_eq!(
-        received,
-        PeerConsensusMessage {
-            from: first_node,
-            sender_incarnation: 1,
-            message,
-        }
-    );
+    assert_eq!(received, PeerConsensusMessage::new(first_node, 1, message));
     Ok(())
 }
 
@@ -291,7 +285,7 @@ fn control_response(
     })
 }
 
-fn config(
+pub(super) fn config(
     local_node_id: NodeId,
     listen_address: SocketAddr,
     identity: &meshspan_test_certificates::IssuedCertificate,
@@ -315,11 +309,16 @@ fn config(
         private_key_pkcs8: Zeroizing::new(identity.private_key().to_vec()),
         trust_anchors: vec![trust_anchor],
         peers: vec![peer],
+        capability_cache: None,
         snapshot_staging_path: None,
     }
 }
 
-fn peer(node_id: NodeId, address: SocketAddr, certificate_der: &[u8]) -> ConsensusPeerConfig {
+pub(super) fn peer(
+    node_id: NodeId,
+    address: SocketAddr,
+    certificate_der: &[u8],
+) -> ConsensusPeerConfig {
     ConsensusPeerConfig {
         node_id,
         incarnation: 1,
@@ -329,6 +328,6 @@ fn peer(node_id: NodeId, address: SocketAddr, certificate_der: &[u8]) -> Consens
     }
 }
 
-fn unused_udp_address() -> Result<SocketAddr, std::io::Error> {
+pub(super) fn unused_udp_address() -> Result<SocketAddr, std::io::Error> {
     UdpSocket::bind("127.0.0.1:0")?.local_addr()
 }

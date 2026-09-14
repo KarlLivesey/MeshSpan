@@ -24,6 +24,8 @@ mod local_certificates;
 mod metrics;
 #[path = "headless_process/namespace_delivery.rs"]
 mod namespace_delivery;
+#[path = "headless_process/node_capabilities.rs"]
+mod node_capabilities;
 #[path = "headless_process/notifications.rs"]
 mod notifications;
 #[path = "headless_process/offline_backup.rs"]

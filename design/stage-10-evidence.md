@@ -77,7 +77,6 @@ remain. The old 30-second forced-abort behavior was unsafe and is removed; a
 cooperative aggregate shutdown bound is **not** proved. Private INT-01 lifecycle,
 the full integration gate, Stage 10 and publication remain open.
 
-
 ## ACC-01 — registration after another user is created
 
 The native enrollment test reached a real server defect: TOTP challenge creation
@@ -92,6 +91,91 @@ A focused metadata regression failed with revision 1 instead of 2 before the fix
 afterward (4.60-second build, 2.13-second tests), using four build/test workers.
 Formatting and diff checks passed. No schema, wire or dependency changes. The
 native HTTPS rerun and affected lint remain pending; this does not close ACC-01.
+
+## CORE-02 — bounded bulk replication and authoritative capability refresh
+
+The 64 KiB consensus control envelope remains unchanged. Oversized append and
+committed-prefix bodies use authenticated DataFrames on a separate, deadline-bound
+bulk lane. The descriptor binds the exact request, probe, phase, entry count and
+body digest; its receipt acknowledges ingress only, never durable replication.
+DecodeLimits bound repeated entries before allocation. Per-peer (64 MiB) and
+aggregate (128 MiB) reservations charge three simultaneous payload copies plus
+frame/entry overhead and survive queue dispatch and cancellation. Immutable core
+log payloads share Arc storage; these network reservations do not claim to bound
+permanent log or persistence memory.
+
+The original real-three-voter 70 KiB regression failed with NotLeader (**5.09 s**)
+and then timed out replicating the same operation (**18.37 s**). The failures are
+retained. After the bulk transport and exact admission fixtures, real Quinn tests
+committed and reopened exact **70 KiB** and maximum **512 KiB provider
+configuration** commands on all three repositories (**2/2, 7.55 s**, build
+**2.16 s**). Earlier protocol bulk tests passed **3/3, 0.46 s** and cluster bulk
+coverage passed **11/11, 9.78 s**, including generic 16 MiB command bytes,
+malformed/reset bodies, reservation release and responsive vote controls while a
+transfer stalls. The provider limit remains 512 KiB; metadata's 1 MiB codec bound
+and the reusable core's 16 MiB bound are distinct contracts.
+
+Large local proposals require every active-plan member's exact admitted
+capability before pending insertion or append. Unknown and unsupported evidence
+produce explicit errors without durable log changes (**2.13 s**). Local schema
+**17** stores bounded canonical Hello preimages; partition schema **119** stores
+root-committed current presentations separately from immutable activation.
+Authenticated node self-reports use opcode **138**, a distinct node actor envelope,
+principal NULL and the existing consensus/preflight/apply/receipt pipeline. Only
+versions **18** (historical principal commands) and **19** are decoded; new
+commands cannot be mislabeled as 18. The old exact-current-version consumer failed
+with InvalidCommittedCommand (**1.28 s**, build **8.32 s**); the mixed replica
+suite subsequently passed **17/17, 20.97 s**.
+
+Exact cached evidence survives network restart with the source offline; changed
+certificate, incarnation or digest fails admission. Cache tests passed **3/3,
+0.32 s**. Repeated closed response waiters are pruned and live duplicates bounded
+(**1/1, 0.45 s**). Current node codec tests passed **2/2, 0.02 s**. Those last two
+commands used the already-built unit binaries whose tested behavior was current;
+no concurrent Cargo build was started. Metadata capability tests passed **12/12,
+6.67 s** (build **2.54 s**), including migration 17/119, truthful actors, rollback,
+reopen/replay and prior-record guards. A new persisted upgrade-state fixture first
+failed StaleRevision (**1.08 s**) when current incarnation 2 had immutable
+activation 1. The fix accepts only a historical incarnation at or below current,
+with exact activation revision/digest and independently checked current
+certificate; the passing fixture preserves activation bytes unchanged.
+
+The native three-daemon promotion proof failed (**28.48 s**): cached and committed
+Hello digests agreed but retained learner roles after promotion. The network now
+replaces roles fallibly and invalidates cached handshakes without closing
+in-flight requests. A real Quinn regression passed (**0.12 s**, build **9.00 s**),
+including invalid/duplicate/contradictory roles, no-op replacement and the new
+handshake digest. The native three-daemon proof now passes: every daemon commits
+presentations matching its actual voter Hello, all three stop and restart, and
+the exact capability checks pass again. The combined native command ran in
+**52.25 s** (build **48.76 s**), with **1 passed, 1 failed**: capability promotion
+and restart passed; separate user enrollment failed on restart with
+`MetadataStore(IntegrityFailed)`. The latter fixture `.tmpT2GVSj` is retained.
+This is not a passing combined gate.
+
+The daemon owns its periodic self-reporter and cancellation path. Peer reports
+bind the current mTLS node, incarnation, certificate and validated Hello digest;
+unsupported older endpoints remain retryable. Two focused reporter tests passed.
+Applying authoritative metadata clears volatile peer budget overrides before
+further replication. Combined metadata/daemon/filesystem/SMB all-target,
+all-feature Clippy passed **19.57 s**, including the final incarnation guard and
+reporter composition. Tested tree: `07ce8aad` plus this CORE-02 change. No new
+CORE-02 dependency was introduced. The complete dependency-update/integration
+gate, remaining CORE-02 edge-case acceptance, Stage 10 task 17 and Stage 11
+candidate proofs remain open.
+
+Final review reproduced an expired transfer waiting indefinitely for a shared
+codec permit (**1 failed, 1.07 s**, build **9.26 s**). Both inbound and outbound
+codec admission now use the original transfer deadline, as does network IO.
+Started blocking codecs remain owned and observed; their late results cannot
+enter a peer queue. The nearest real Quinn bulk tests passed **7/7, 8.43 s**
+(build **4.24 s**), including exact encoded control payloads of **65,535**,
+**65,536** and **65,537** bytes: the first two traverse the real inline path;
+the last traverses normal queued bulk, all with exact decoded message bytes.
+Affected cluster all-target/all-feature Clippy passed **4.60 s**; scoped Rustfmt
+and diff checks passed. Reconnect-mid-body retry with exact matched/applied
+indexes remains an explicit acceptance gap; reset/substitution tests currently
+prove no dispatch and released reservations.
 
 ## CORE-02 — per-peer framing of replication backlogs
 

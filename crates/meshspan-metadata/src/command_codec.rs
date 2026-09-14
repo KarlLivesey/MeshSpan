@@ -20,8 +20,13 @@ mod external_certificate;
 mod fault_group;
 mod federation;
 mod federation_peer;
+mod node;
 mod user_enrollment;
 pub use federation_peer::{decode_federation_pairing_peer, encode_federation_pairing_peer};
+pub use node::{
+    DecodedAuthoritativeEntry, decode_authoritative_entry_for_version,
+    encode_authoritative_node_command, is_supported_metadata_command_version,
+};
 mod identity;
 mod locality_policy;
 mod maintenance_work;
@@ -74,6 +79,9 @@ pub fn encode_authoritative_command(
     context: CommandContext,
     command: &AuthoritativeCommand,
 ) -> Result<Vec<u8>, MetadataCommandCodecError> {
+    if matches!(command, AuthoritativeCommand::RefreshNodeCapabilities(_)) {
+        return Err(MetadataCommandCodecError::Unsupported);
+    }
     let mut encoder = Encoder::new(MAXIMUM_COMMAND_BYTES);
     encoder.fixed(&MAGIC)?;
     encoder.identifier(context.operation_id.as_bytes())?;
@@ -106,6 +114,9 @@ pub fn decode_authoritative_command(
     let occurred_at = UnixMicros::new(decoder.i64()?);
     let expected_revision = decoder.optional_u64()?.map(Revision::new);
     let command = decode_command(&mut decoder)?;
+    if matches!(command, AuthoritativeCommand::RefreshNodeCapabilities(_)) {
+        return Err(MetadataCommandCodecError::Unsupported);
+    }
     decoder.finish()?;
     Ok(DecodedAuthoritativeCommand {
         context: CommandContext {
@@ -156,15 +167,6 @@ fn encode_command(
         }
         AuthoritativeCommand::RevokePermissionGrant(value) => {
             identity::encode_revoke_permission(encoder, value)
-        }
-        AuthoritativeCommand::IssueUserEnrollment(value) => {
-            user_enrollment::encode_issue(encoder, value)
-        }
-        AuthoritativeCommand::RevokeUserEnrollment(value) => {
-            user_enrollment::encode_revoke(encoder, value)
-        }
-        AuthoritativeCommand::RedeemUserEnrollment(value) => {
-            user_enrollment::encode_redeem(encoder, value)
         }
         AuthoritativeCommand::CreateAuthenticationMethod(value) => {
             authentication::encode_create(encoder, value)
@@ -238,7 +240,9 @@ fn encode_extension_command(
     encoder: &mut Encoder,
     command: &AuthoritativeCommand,
 ) -> Result<bool, MetadataCommandCodecError> {
-    if cleanup::encode_command(encoder, command)? {
+    if cleanup::encode_command(encoder, command)?
+        || user_enrollment::encode_command(encoder, command)?
+    {
         return Ok(true);
     }
     if let AuthoritativeCommand::RegisterCleanupAttestationKey(value) = command {
@@ -476,5 +480,7 @@ impl From<meshspan_contracts::BoundedItemsError> for MetadataCommandCodecError {
     }
 }
 
+#[cfg(test)]
+mod node_tests;
 #[cfg(test)]
 mod tests;

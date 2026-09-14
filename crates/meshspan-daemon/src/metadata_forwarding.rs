@@ -291,7 +291,7 @@ pub(crate) async fn handle(
     })
 }
 
-fn authority_error_result(error: MetadataAuthorityRequestError) -> OperationResult {
+pub(crate) fn authority_error_result(error: MetadataAuthorityRequestError) -> OperationResult {
     let (outcome, code, diagnostic_code) = match error {
         MetadataAuthorityRequestError::NotLeader { .. } => {
             (OperationOutcome::Redirect, ErrorCode::Unavailable, 1)
@@ -325,7 +325,7 @@ fn authority_error_result(error: MetadataAuthorityRequestError) -> OperationResu
     }
 }
 
-fn authority_response_error(result: &OperationResult) -> MetadataAuthorityRequestError {
+pub(crate) fn authority_response_error(result: &OperationResult) -> MetadataAuthorityRequestError {
     match result
         .error
         .as_ref()

@@ -162,6 +162,7 @@ pub(super) fn network(
             certificate_name: name(local),
             private_key_pkcs8: zeroize::Zeroizing::new(std::fs::read(&source.identity_path)?),
             trust_anchors: vec![root.root_certificate_der],
+            capability_cache: None,
             snapshot_staging_path: None,
             peers: vec![ConsensusPeerConfig {
                 node_id: remote,

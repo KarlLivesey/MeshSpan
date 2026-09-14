@@ -251,7 +251,10 @@ impl PeerNetwork {
                     self.receive_snapshot(peer.node_id(), &state_path, &mut accepted, &snapshots)
                         .await?;
                 }
-                StreamKind::Metadata | StreamKind::Data | StreamKind::Federation => {
+                StreamKind::Metadata
+                | StreamKind::Data
+                | StreamKind::Federation
+                | StreamKind::ConsensusBulk => {
                     return Err(NodeRuntimeError::InvalidConfiguration);
                 }
             }
@@ -384,6 +387,7 @@ impl PeerNetwork {
 
     fn hello(&self) -> NodeHello {
         NodeHello {
+            consensus_transfer: None,
             versions: vec![ProtocolVersion { major: 1, minor: 0 }],
             mesh_id: self.mesh_id.as_bytes().to_vec(),
             node_id: self.local_node_id.as_bytes().to_vec(),

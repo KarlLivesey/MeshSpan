@@ -10,7 +10,20 @@ pub(super) const ISSUE: u16 = 135;
 pub(super) const REVOKE: u16 = 136;
 pub(super) const REDEEM: u16 = 137;
 
-pub(super) fn encode_issue(
+pub(super) fn encode_command(
+    encoder: &mut Encoder,
+    command: &AuthoritativeCommand,
+) -> Result<bool, MetadataCommandCodecError> {
+    match command {
+        AuthoritativeCommand::IssueUserEnrollment(value) => encode_issue(encoder, value)?,
+        AuthoritativeCommand::RevokeUserEnrollment(value) => encode_revoke(encoder, value)?,
+        AuthoritativeCommand::RedeemUserEnrollment(value) => encode_redeem(encoder, value)?,
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+fn encode_issue(
     encoder: &mut Encoder,
     value: &IssueUserEnrollment,
 ) -> Result<(), MetadataCommandCodecError> {
@@ -20,7 +33,7 @@ pub(super) fn encode_issue(
     encoder.fixed(&value.token_digest)?;
     encoder.i64(value.expires_at.get())
 }
-pub(super) fn encode_revoke(
+fn encode_revoke(
     encoder: &mut Encoder,
     value: &RevokeUserEnrollment,
 ) -> Result<(), MetadataCommandCodecError> {
@@ -28,7 +41,7 @@ pub(super) fn encode_revoke(
     encoder.identifier(value.enrollment_operation_id.as_bytes())?;
     encoder.u64(value.expected_revision.get())
 }
-pub(super) fn encode_redeem(
+fn encode_redeem(
     encoder: &mut Encoder,
     value: &RedeemUserEnrollment,
 ) -> Result<(), MetadataCommandCodecError> {

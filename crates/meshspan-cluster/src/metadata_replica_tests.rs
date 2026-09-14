@@ -64,12 +64,10 @@ fn term_confirmation_replicates_and_reopens_without_application_mutations() -> T
         .metadata_replica_page(fixture.replica.cursor()?)?;
     assert_eq!(page.entries, vec![entry.clone()]);
     let mut corrupted = page.clone();
-    corrupted
-        .entries
-        .first_mut()
-        .ok_or("entry missing")?
-        .command
-        .push(0);
+    let corrupted_entry = corrupted.entries.first_mut().ok_or("entry missing")?;
+    let mut altered = corrupted_entry.command.to_vec();
+    altered.push(0);
+    corrupted_entry.command = altered.into();
     assert!(matches!(
         fixture
             .replica

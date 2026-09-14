@@ -18,7 +18,7 @@ fn leadership_loss_redirects_pending_and_queued_waiters_without_erasing_durable_
             queued_context.operation_id = OperationId::from_bytes([79; 16])?;
         }
         runtime.submit(AuthoritySubmission {
-            context: queued_context,
+            context: AuthoritativeCommandContext::Principal(queued_context),
             command: command.clone(),
             respond,
         })?;
@@ -31,10 +31,10 @@ fn leadership_loss_redirects_pending_and_queued_waiters_without_erasing_durable_
         .last_log_entry()
         .ok_or("missing durable proposal")?
         .clone();
-    runtime.receive_peer(PeerConsensusMessage {
-        from: peer,
-        sender_incarnation: 1,
-        message: CoreMessage::VoteRequest(VoteRequest {
+    runtime.receive_peer(PeerConsensusMessage::new(
+        peer,
+        1,
+        CoreMessage::VoteRequest(VoteRequest {
             term: 2,
             candidate: peer,
             candidate_incarnation: 1,
@@ -42,7 +42,7 @@ fn leadership_loss_redirects_pending_and_queued_waiters_without_erasing_durable_
             membership_epoch: 1,
             plan_digest,
         }),
-    })?;
+    ))?;
     assert_eq!(runtime.driver.role(), Role::Follower);
     for mut receiver in receivers {
         assert!(
@@ -65,10 +65,10 @@ fn leadership_loss_redirects_pending_and_queued_waiters_without_erasing_durable_
             .is_none()
     );
     // Redirection is not rollback or a claim of failure: the next leader can commit these bytes.
-    runtime.receive_peer(PeerConsensusMessage {
-        from: peer,
-        sender_incarnation: 1,
-        message: CoreMessage::AppendRequest(AppendRequest {
+    runtime.receive_peer(PeerConsensusMessage::new(
+        peer,
+        1,
+        CoreMessage::AppendRequest(AppendRequest {
             probe_id: meshspan_consensus::AppendProbeId(1),
             term: 2,
             leader: peer,
@@ -81,10 +81,10 @@ fn leadership_loss_redirects_pending_and_queued_waiters_without_erasing_durable_
             membership_epoch: 1,
             plan_digest,
         }),
-    })?;
+    ))?;
     let (respond, mut response) = oneshot::channel();
     runtime.submit(AuthoritySubmission {
-        context,
+        context: AuthoritativeCommandContext::Principal(context),
         command,
         respond,
     })?;
@@ -111,16 +111,70 @@ pub(super) fn elected_runtime(
         false,
     );
     runtime.process_input(CoreInput::ElectionTimeout)?;
-    runtime.receive_peer(PeerConsensusMessage {
-        from: peer,
-        sender_incarnation: 1,
-        message: CoreMessage::VoteResponse(VoteResponse {
+    runtime.receive_peer(PeerConsensusMessage::new(
+        peer,
+        1,
+        CoreMessage::VoteResponse(VoteResponse {
             term: 1,
             granted: true,
             membership_epoch: 1,
             plan_digest: plan.proof_digest(),
         }),
-    })?;
+    ))?;
     assert_eq!(runtime.driver.role(), Role::Leader);
     Ok((runtime, peer))
+}
+
+#[test]
+fn repeated_closed_response_waiters_are_pruned_and_live_duplicates_are_bounded()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let (mut runtime, _peer) = elected_runtime(&directory.path().join("bounded-waiters.sqlite3"))?;
+    runtime.config.event_capacity = 2;
+    let (context, command) = command(runtime.driver.local_node_id(), [78; 16])?;
+    let mut live = Vec::new();
+    for _ in 0..2 {
+        let (respond, response) = oneshot::channel();
+        runtime.submit(AuthoritySubmission {
+            context: AuthoritativeCommandContext::Principal(context),
+            command: command.clone(),
+            respond,
+        })?;
+        live.push(response);
+    }
+    let log = runtime.driver.persistence().load_consensus_state(1)?.log;
+    let (respond, mut rejected) = oneshot::channel();
+    runtime.submit(AuthoritySubmission {
+        context: AuthoritativeCommandContext::Principal(context),
+        command: command.clone(),
+        respond,
+    })?;
+    assert_eq!(
+        rejected.try_recv()?,
+        Err(MetadataAuthorityRequestError::Unavailable)
+    );
+    drop(live);
+    for _ in 0..20 {
+        let (respond, response) = oneshot::channel();
+        runtime.submit(AuthoritySubmission {
+            context: AuthoritativeCommandContext::Principal(context),
+            command: command.clone(),
+            respond,
+        })?;
+        assert_eq!(
+            runtime
+                .pending
+                .get(&context.operation_id)
+                .ok_or("pending operation")?
+                .waiters
+                .len(),
+            1
+        );
+        drop(response);
+    }
+    assert_eq!(
+        runtime.driver.persistence().load_consensus_state(1)?.log,
+        log
+    );
+    Ok(())
 }

@@ -188,6 +188,12 @@ impl ConsensusCore {
         Ok(())
     }
 
+    /// Revokes all per-peer capability grants while retaining the installed safe default budget.
+    /// Outer state-machine adapters call this before applying authority-changing metadata.
+    pub fn clear_replication_budget_overrides(&mut self) {
+        self.replication_peers.clear();
+    }
+
     /// Returns current volatile role.
     #[must_use]
     pub fn role(&self) -> Role {

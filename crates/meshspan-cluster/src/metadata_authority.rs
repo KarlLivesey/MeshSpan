@@ -12,8 +12,9 @@ use meshspan_consensus::{
 };
 use meshspan_domain::{NodeId, OperationId, UnixMicros};
 use meshspan_metadata::{
-    AuthoritativeCommand, AuthoritativeRepository, CommandContext, CommandReceipt,
-    METADATA_COMMAND_VERSION, encode_authoritative_command,
+    AuthoritativeCommand, AuthoritativeCommandContext, AuthoritativeRepository, CommandContext,
+    CommandReceipt, METADATA_COMMAND_VERSION, NodeCommandContext, RefreshNodeCapabilities,
+    encode_authoritative_command, encode_authoritative_node_command,
 };
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
@@ -30,6 +31,7 @@ const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(200);
 const DEFAULT_ELECTION_TIMEOUT: Duration = Duration::from_millis(1_200);
 const DEFAULT_ELECTION_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
+mod capability_admission;
 #[path = "metadata_observation.rs"]
 mod observation;
 pub use observation::{MetadataAuthorityObservation, MetadataReplicationObservation};
@@ -40,7 +42,7 @@ pub use linearizable_read::MetadataReadFence;
 use linearizable_read::{PendingRead, ReadRequest};
 
 /// One authenticated peer message admitted to the local authority reactor.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct PeerConsensusMessage {
     /// Enrolled sender identity established by mTLS routing.
     pub from: NodeId,
@@ -48,12 +50,61 @@ pub struct PeerConsensusMessage {
     pub sender_incarnation: u64,
     /// Strictly decoded consensus message.
     pub message: CoreMessage,
+    allocation: Option<Arc<crate::consensus_network::bulk_budget::ConsensusByteReservation>>,
 }
+
+impl PeerConsensusMessage {
+    /// Wraps an inline message; oversized ingress uses the transport's owned byte reservation.
+    #[must_use]
+    pub const fn new(from: NodeId, sender_incarnation: u64, message: CoreMessage) -> Self {
+        Self {
+            from,
+            sender_incarnation,
+            message,
+            allocation: None,
+        }
+    }
+
+    pub(crate) fn with_allocation(
+        from: NodeId,
+        sender_incarnation: u64,
+        message: CoreMessage,
+        allocation: Arc<crate::consensus_network::bulk_budget::ConsensusByteReservation>,
+    ) -> Self {
+        Self {
+            from,
+            sender_incarnation,
+            message,
+            allocation: Some(allocation),
+        }
+    }
+}
+
+impl PartialEq for PeerConsensusMessage {
+    fn eq(&self, other: &Self) -> bool {
+        self.from == other.from
+            && self.sender_incarnation == other.sender_incarnation
+            && self.message == other.message
+    }
+}
+
+impl Eq for PeerConsensusMessage {}
 
 /// Non-blocking private transport used only for already validated consensus messages.
 pub trait ConsensusMessageTransport: Send + Sync + 'static {
     /// Queues one message for its exact enrolled destination.
     fn send(&self, to: NodeId, message: CoreMessage);
+    /// Returns exact cached capability evidence; absence is unknown and never compatibility.
+    ///
+    /// # Errors
+    /// Fails closed if transport identity or cache state cannot be read.
+    fn consensus_transfer_support_for(
+        &self,
+        _expected: meshspan_transport::PeerBinding,
+        _capability_digest: [u8; 32],
+    ) -> Result<Option<crate::ObservedConsensusTransferSupport>, crate::ConsensusNetworkError> {
+        Ok(None)
+    }
 }
 
 impl<F> ConsensusMessageTransport for F
@@ -143,6 +194,32 @@ impl MetadataAuthorityHandle {
     pub async fn commit_or_resolve(
         &self,
         context: CommandContext,
+        command: AuthoritativeCommand,
+    ) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
+        self.submit_entry(AuthoritativeCommandContext::Principal(context), command)
+            .await
+    }
+
+    /// Submits an authenticated node capability report through the same durable receipt pipeline.
+    /// The caller must bind the exact report to the ingress mTLS identity or configured local Hello.
+    ///
+    /// # Errors
+    /// Returns redirect, unavailable, conflicting or rejected outcomes without fabricating success.
+    pub async fn commit_or_resolve_node(
+        &self,
+        context: NodeCommandContext,
+        command: RefreshNodeCapabilities,
+    ) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
+        self.submit_entry(
+            AuthoritativeCommandContext::Node(context),
+            AuthoritativeCommand::RefreshNodeCapabilities(command),
+        )
+        .await
+    }
+
+    async fn submit_entry(
+        &self,
+        context: AuthoritativeCommandContext,
         command: AuthoritativeCommand,
     ) -> Result<CommandReceipt, MetadataAuthorityRequestError> {
         let (respond, response) = oneshot::channel();
@@ -261,7 +338,7 @@ enum AuthorityEvent {
 }
 
 struct AuthoritySubmission {
-    context: CommandContext,
+    context: AuthoritativeCommandContext,
     command: AuthoritativeCommand,
     respond: oneshot::Sender<Result<CommandReceipt, MetadataAuthorityRequestError>>,
 }
@@ -272,7 +349,7 @@ struct PendingOperation {
 }
 
 struct QueuedOperation {
-    context: CommandContext,
+    context: AuthoritativeCommandContext,
     command: AuthoritativeCommand,
     request_digest: [u8; 32],
     waiters: Vec<oneshot::Sender<Result<CommandReceipt, MetadataAuthorityRequestError>>>,
@@ -322,6 +399,7 @@ impl MetadataAuthorityRuntime {
         let mut election_check = tokio::time::interval(self.config.election_check_interval);
         election_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
+            self.refresh_replication_budgets()?;
             self.expire_reads(Instant::now())?;
             let outcome = tokio::select! {
                 _ = heartbeat.tick(), if self.driver.role() == Role::Leader => {
@@ -381,11 +459,11 @@ impl MetadataAuthorityRuntime {
             command,
             respond,
         } = submission;
-        let request_digest = command.request_digest(context);
+        let request_digest = context.request_digest(&command);
         if let Some(receipt) = self
             .driver
             .persistence()
-            .resolve_operation(context.operation_id)?
+            .resolve_operation(context.operation_id())?
         {
             let outcome = if receipt.request_digest == request_digest {
                 Ok(receipt)
@@ -395,8 +473,13 @@ impl MetadataAuthorityRuntime {
             let _closed = respond.send(outcome);
             return Ok(());
         }
-        if let Some(pending) = self.pending.get_mut(&context.operation_id) {
+        if let Some(pending) = self.pending.get_mut(&context.operation_id()) {
             if pending.request_digest == request_digest {
+                pending.waiters.retain(|waiter| !waiter.is_closed());
+                if pending.waiters.len() >= self.config.event_capacity {
+                    let _closed = respond.send(Err(MetadataAuthorityRequestError::Unavailable));
+                    return Ok(());
+                }
                 pending.waiters.push(respond);
             } else {
                 let _closed = respond.send(Err(MetadataAuthorityRequestError::Conflict));
@@ -406,9 +489,14 @@ impl MetadataAuthorityRuntime {
         if let Some(queued) = self
             .queued
             .iter_mut()
-            .find(|queued| queued.context.operation_id == context.operation_id)
+            .find(|queued| queued.context.operation_id() == context.operation_id())
         {
             if queued.request_digest == request_digest {
+                queued.waiters.retain(|waiter| !waiter.is_closed());
+                if queued.waiters.len() >= self.config.event_capacity {
+                    let _closed = respond.send(Err(MetadataAuthorityRequestError::Unavailable));
+                    return Ok(());
+                }
                 queued.waiters.push(respond);
             } else {
                 let _closed = respond.send(Err(MetadataAuthorityRequestError::Conflict));
@@ -437,6 +525,7 @@ impl MetadataAuthorityRuntime {
     fn admit_next(
         &mut self,
     ) -> Result<Option<(Vec<DriverEffect>, OperationId)>, MetadataAuthorityRuntimeError> {
+        self.refresh_replication_budgets()?;
         // A term confirmation occupies a real log position but has no application command
         // to preflight. Preserve queued writes until its durable application advances that gap.
         if self.driver.last_log_entry().is_some_and(|entry| {
@@ -454,12 +543,12 @@ impl MetadataAuthorityRuntime {
                     leader_id: self.driver.leader_id(),
                 }),
             );
-            return Ok(Some((Vec::new(), queued.context.operation_id)));
+            return Ok(Some((Vec::new(), queued.context.operation_id())));
         }
         if let Some(receipt) = self
             .driver
             .persistence()
-            .resolve_operation(queued.context.operation_id)?
+            .resolve_operation(queued.context.operation_id())?
         {
             let outcome = if receipt.request_digest == queued.request_digest {
                 Ok(receipt)
@@ -467,36 +556,48 @@ impl MetadataAuthorityRuntime {
                 Err(MetadataAuthorityRequestError::Conflict)
             };
             respond_to_waiters(queued.waiters, outcome);
-            return Ok(Some((Vec::new(), queued.context.operation_id)));
+            return Ok(Some((Vec::new(), queued.context.operation_id())));
         }
         if let Err(error) = self
             .driver
-            .preflight_authoritative_command(queued.context, &queued.command)
+            .preflight_authoritative_entry(queued.context, &queued.command)
         {
             respond_to_waiters(queued.waiters, Err(map_preflight_error(&error)));
-            return Ok(Some((Vec::new(), queued.context.operation_id)));
+            return Ok(Some((Vec::new(), queued.context.operation_id())));
         }
-        let bytes = match encode_authoritative_command(queued.context, &queued.command) {
+        let encoded = match queued.context {
+            AuthoritativeCommandContext::Principal(context) => {
+                encode_authoritative_command(context, &queued.command)
+            }
+            AuthoritativeCommandContext::Node(context) => {
+                encode_authoritative_node_command(context, &queued.command)
+            }
+        };
+        let bytes = match encoded {
             Ok(bytes) => bytes,
             Err(meshspan_metadata::MetadataCommandCodecError::Unsupported) => {
                 respond_to_waiters(
                     queued.waiters,
                     Err(MetadataAuthorityRequestError::Unsupported),
                 );
-                return Ok(Some((Vec::new(), queued.context.operation_id)));
+                return Ok(Some((Vec::new(), queued.context.operation_id())));
             }
             Err(_) => {
                 respond_to_waiters(queued.waiters, Err(MetadataAuthorityRequestError::Failed));
-                return Ok(Some((Vec::new(), queued.context.operation_id)));
+                return Ok(Some((Vec::new(), queued.context.operation_id())));
             }
         };
+        if let Err(error) = self.check_bulk_admission(bytes.len()) {
+            respond_to_waiters(queued.waiters, Err(error));
+            return Ok(Some((Vec::new(), queued.context.operation_id())));
+        }
         let proposal_id = ProposalId(self.next_proposal_id);
         self.next_proposal_id = self
             .next_proposal_id
             .checked_add(1)
             .ok_or(MetadataAuthorityRuntimeError::ProposalSpaceExhausted)?;
         self.pending.insert(
-            queued.context.operation_id,
+            queued.context.operation_id(),
             PendingOperation {
                 request_digest: queued.request_digest,
                 waiters: queued.waiters,
@@ -505,7 +606,7 @@ impl MetadataAuthorityRuntime {
         let effects = match self.driver.step(
             CoreInput::Propose {
                 proposal_id,
-                operation_id: queued.context.operation_id,
+                operation_id: queued.context.operation_id(),
                 command_version: METADATA_COMMAND_VERSION,
                 command: bytes,
             },
@@ -513,17 +614,19 @@ impl MetadataAuthorityRuntime {
         ) {
             Ok(effects) => effects,
             Err(error) => {
-                self.finish_pending(queued.context.operation_id, Err(map_driver_error(&error)));
+                self.finish_pending(queued.context.operation_id(), Err(map_driver_error(&error)));
                 return Err(error.into());
             }
         };
-        Ok(Some((effects, queued.context.operation_id)))
+        Ok(Some((effects, queued.context.operation_id())))
     }
 
     fn receive_peer(
         &mut self,
         peer: PeerConsensusMessage,
     ) -> Result<(), MetadataAuthorityRuntimeError> {
+        let _allocation = peer.allocation;
+        self.refresh_replication_budgets()?;
         let contacted_term = match &peer.message {
             CoreMessage::AppendRequest(request) => (request.membership_epoch
                 == self.driver.active_plan().membership_epoch()
@@ -582,6 +685,7 @@ impl MetadataAuthorityRuntime {
     }
 
     fn process_input(&mut self, input: CoreInput) -> Result<(), MetadataAuthorityRuntimeError> {
+        self.refresh_replication_budgets()?;
         let effects = self.driver.step(input, now())?;
         self.process_effects(effects, None)
     }
@@ -637,7 +741,9 @@ impl MetadataAuthorityRuntime {
                                 .extend(effects.into_iter().map(|effect| (effect, None)));
                             continue;
                         }
-                        if entry.command_version == METADATA_COMMAND_VERSION {
+                        if meshspan_metadata::is_supported_metadata_command_version(
+                            entry.command_version,
+                        ) {
                             let applied =
                                 self.driver.apply_authoritative_committed(&entry, now())?;
                             self.finish_pending(applied.receipt.operation_id, Ok(applied.receipt));

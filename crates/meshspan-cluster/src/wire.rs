@@ -81,8 +81,19 @@ pub fn encode_consensus_message(message: &CoreMessage) -> Message {
 pub fn decode_consensus_message(
     envelope: &ValidatedControlEnvelope,
 ) -> Result<CoreMessage, ConsensusWireError> {
+    decode_payload(envelope.as_inner())
+}
+
+pub(crate) fn decode_bulk_message(
+    envelope: &meshspan_protocol::ValidatedConsensusBulk,
+) -> Result<CoreMessage, ConsensusWireError> {
+    decode_payload(envelope.as_inner())
+}
+
+fn decode_payload(
+    envelope: &meshspan_protocol::v1::ControlEnvelope,
+) -> Result<CoreMessage, ConsensusWireError> {
     match envelope
-        .as_inner()
         .message
         .as_ref()
         .ok_or(ConsensusWireError::InvalidMessage)?

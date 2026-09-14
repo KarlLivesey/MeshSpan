@@ -270,6 +270,7 @@ pub(super) fn start_network(
             directory.join("secrets/node-identity.pk8"),
         )?),
         trust_anchors: vec![root.root_certificate_der],
+        capability_cache: None,
         snapshot_staging_path: None,
         peers: vec![ConsensusPeerConfig {
             node_id: destination.0,

@@ -114,8 +114,10 @@ pub use cleanup_worker::{
 #[cfg(test)]
 mod cleanup_worker_tests;
 pub use consensus_network::{
-    ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, ConsensusPeerConfig,
-    OutboundConsensusSnapshot, PeerControlRequest, PeerDataStream, ReceivedConsensusSnapshot,
+    ConsensusCapabilityCacheConfig, ConsensusNetwork, ConsensusNetworkConfig,
+    ConsensusNetworkError, ConsensusPeerConfig, LocalNodeCapabilityPresentation,
+    ObservedConsensusTransferSupport, OutboundConsensusSnapshot, PeerControlRequest,
+    PeerDataStream, ReceivedConsensusSnapshot,
 };
 pub use convergence::{reconciliation_head_command, snapshot_restore_head_command};
 pub use driver::{

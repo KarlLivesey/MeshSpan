@@ -81,7 +81,7 @@ fn read_waits_for_both_quorums_and_preserves_a_queued_application_write()
     let (context, command) = command(runtime.driver.local_node_id(), [89; 16])?;
     let (respond, mut response) = oneshot::channel();
     runtime.submit(AuthoritySubmission {
-        context,
+        context: AuthoritativeCommandContext::Principal(context),
         command,
         respond,
     })?;
@@ -125,10 +125,10 @@ fn cancelled_expired_and_deposed_reads_never_become_successful()
         .last_log_entry()
         .ok_or("term confirmation missing")?
         .position;
-    runtime.receive_peer(PeerConsensusMessage {
-        from: peer,
-        sender_incarnation: 1,
-        message: CoreMessage::VoteRequest(VoteRequest {
+    runtime.receive_peer(PeerConsensusMessage::new(
+        peer,
+        1,
+        CoreMessage::VoteRequest(VoteRequest {
             term: 2,
             candidate: peer,
             candidate_incarnation: 1,
@@ -136,7 +136,7 @@ fn cancelled_expired_and_deposed_reads_never_become_successful()
             membership_epoch: 1,
             plan_digest: runtime.driver.active_plan().proof_digest(),
         }),
-    })?;
+    ))?;
     assert!(matches!(
         deposed.try_recv()?,
         Err(MetadataAuthorityRequestError::NotLeader { .. })
@@ -238,10 +238,10 @@ fn acknowledge(
         .map_or((probe.previous, probe.previous_digest), |entry| {
             (entry.position, entry.entry_digest())
         });
-    runtime.receive_peer(PeerConsensusMessage {
-        from: peer,
-        sender_incarnation: 1,
-        message: CoreMessage::AppendResponse(AppendResponse {
+    runtime.receive_peer(PeerConsensusMessage::new(
+        peer,
+        1,
+        CoreMessage::AppendResponse(AppendResponse {
             probe_id: Some(probe.probe_id),
             matched_digest: if accepted { digest } else { [0; 32] },
             term: probe.term,
@@ -252,6 +252,6 @@ fn acknowledge(
             membership_epoch: probe.membership_epoch,
             plan_digest: probe.plan_digest,
         }),
-    })?;
+    ))?;
     Ok(())
 }

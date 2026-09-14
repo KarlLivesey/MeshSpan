@@ -280,14 +280,14 @@ async fn failed_public_listener_bind_stops_and_joins_authority()
     tokio::pin!(shutdown);
     let result = tokio::time::timeout(
         Duration::from_secs(10),
-        serve_daemon_cycle(
+        Box::pin(serve_daemon_cycle(
             &config,
             services,
             private.authority,
             private.authority_task,
             requests,
             shutdown,
-        ),
+        )),
     )
     .await?;
     let authority_survived = observer.observe().await.is_ok();

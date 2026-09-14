@@ -272,6 +272,18 @@ async fn prepare_join_network(
     } else {
         std::net::SocketAddr::from(([0_u16; 8], 0))
     };
+    let cache_path = local_state.state_directory().join("local.sqlite3");
+    let cache_node = local_state.node_id();
+    let capability_cache = tokio::task::spawn_blocking(move || {
+        meshspan_cluster::ConsensusCapabilityCacheConfig::open(
+            cache_path,
+            cache_node,
+            meshspan_domain::Clock::now(&crate::OperatingSystemClock),
+        )
+    })
+    .await
+    .map_err(|_| HeadlessNodeJoinError::PrivateNetwork)?
+    .map_err(|_| HeadlessNodeJoinError::PrivateNetwork)?;
     Ok(PreparedJoinNetwork {
         config: ConsensusNetworkConfig {
             local_node_id: local_state.node_id(),
@@ -297,6 +309,7 @@ async fn prepare_join_network(
             ),
             trust_anchors: vec![decode_hex_vec(&admission.root_certificate_der_hex)?],
             peers,
+            capability_cache: Some(capability_cache),
             snapshot_staging_path: Some(
                 local_state.state_directory().join(ROOT_AUTHORITY_DATABASE),
             ),
@@ -324,7 +337,7 @@ async fn activate_joined_node(
                 NodeRole::Gateway.into(),
                 NodeRole::MetadataLearner.into(),
             ],
-            capability_digest: network.local_capability_digest().to_vec(),
+            capability_digest: network.local_capability_digest()?.to_vec(),
         })),
     };
     let target = admission

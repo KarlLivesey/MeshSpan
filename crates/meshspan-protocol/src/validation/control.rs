@@ -31,6 +31,16 @@ use super::{
 
 pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireContractError> {
     match value {
+        Message::NodeCapabilityReport(value) => {
+            if value.command_version == 0 {
+                return Err(WireContractError::InvalidMessage);
+            }
+            valid_nonempty_bytes(&value.canonical_command, 1_024)
+        }
+        Message::NodeCapabilityReportResult(value) => {
+            valid_digest(&value.request_digest)?;
+            validate_operation_result(value.result.as_ref(), limits)
+        }
         Message::FetchMetadataReadFence(value) => valid_digest(&value.nonce),
         Message::MetadataReadFenceResult(value) => read_fence::response(value),
         Message::ProbeUpdateReadiness(value) => updates::request(value),

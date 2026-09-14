@@ -110,6 +110,12 @@ pub(super) async fn run<F: Future<Output = ()> + Send>(
     let https_stop = stopped.clone();
     let https_task =
         tokio::spawn(async move { https.run_until(wait_for_shutdown(https_stop)).await });
+    let reporter = crate::node_capability_reporting::NodeCapabilityReporter::new(
+        node.local_state.state_directory().to_path_buf(),
+        Arc::clone(&node.private_network),
+        None,
+    );
+    let capability_task = tokio::spawn(reporter.run_until(stopped.clone()));
     let mut cycle = StorageCycle {
         node,
         network,
@@ -122,6 +128,7 @@ pub(super) async fn run<F: Future<Output = ()> + Send>(
         replica: Some(replica_task),
         replica_handle,
         https: Some(https_task),
+        capabilities: Some(capability_task),
         maintenance: None,
         jobs: tokio::task::JoinSet::new(),
     };
@@ -144,6 +151,7 @@ struct StorageCycle {
     replica_handle: MetadataReplicaRuntimeHandle,
     https: Option<JoinHandle<Result<(), HttpsServerError>>>,
     maintenance: Option<JoinHandle<Result<(), ()>>>,
+    capabilities: Option<JoinHandle<Result<(), meshspan_cluster::MetadataAuthorityRequestError>>>,
     jobs: tokio::task::JoinSet<Result<(), ()>>,
 }
 
@@ -163,6 +171,11 @@ impl StorageCycle {
                         Ok(MetadataReplicaRuntimeExit::MembershipAdmitted) => Ok(DaemonCycleExit::RestartRequested),
                         Ok(MetadataReplicaRuntimeExit::Stopped) | Err(_) => Err(DaemonProcessError::AuthorityTaskStopped),
                     };
+                }
+                result = wait_task(&mut self.capabilities) => {
+                    self.capabilities = None;
+                    return result.map_err(|_| DaemonProcessError::AuthorityTaskStopped)?
+                        .map(|()| DaemonCycleExit::Shutdown).map_err(|_| DaemonProcessError::PrivateNetworkState);
                 }
                 result = wait_task(&mut self.https) => {
                     self.https = None;
@@ -202,6 +215,9 @@ impl StorageCycle {
         let mut failed = self.network.close().is_err();
         while let Some(result) = self.jobs.join_next().await {
             failed |= result.is_err(); // Protocol errors are already returned to their caller.
+        }
+        if let Some(task) = self.capabilities {
+            failed |= !matches!(task.await, Ok(Ok(())));
         }
         if let Some(task) = self.maintenance {
             failed |= task.await.is_err();
