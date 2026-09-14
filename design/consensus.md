@@ -180,6 +180,15 @@ membership notices have no probe or read identity and only solicit fresh probes
 or bounded committed history. Missing successful correlation fails closed on the
 wire; legacy replies cannot become current match proof.
 
+Replication batches contain at most 64 entries and 16 MiB of aggregate command
+bytes. The same limit applies to current append and historical membership-prefix
+replay; receivers reject an oversized aggregate before requesting persistence.
+A larger log suffix advances in consecutive batches after exact acknowledgement.
+Core entries share immutable command bytes across log, persistence and outbound
+effects, so constructing one effect per peer does not copy every payload before
+transport admission. Independent wire copies remain a transport responsibility.
+This does not remove the separate retained-log snapshot and lifetime-growth limit.
+
 The core assumes crash, omission, corruption-detection and partition faults, not
 Byzantine voters. Mutual authentication prevents an unauthorised node from being
 counted, but a correctly enrolled malicious voter is outside this consensus

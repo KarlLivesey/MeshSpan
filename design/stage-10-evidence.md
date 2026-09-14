@@ -47,6 +47,27 @@ integration gate has not run on this slice. Stage 10/11 estimates remain 81/126;
 physical, interoperability, soak and independent-review gates are not claimed.
 The publication hold remains in force.
 
+### CORE-02 — bounded batches and shared immutable log payloads
+
+The two new core regressions failed before the fix: two legal 9 MiB entries
+were emitted together (expected one entry, actual two; **0.50 s**), and the
+follower requested persistence for their oversized aggregate (**1.02 s**) rather
+than rejecting it. Current append and historical-prefix selection now stop at
+16 MiB aggregate command bytes as well as 64 entries. Receivers enforce the same
+bound before persistence, and acknowledgement advances the next bounded batch.
+
+Log-entry payloads are shared immutable bytes across core effects and durable
+mutations. Transport adapters make independently owned wire copies after byte
+reservation; inbound conversion avoids an extra temporary full-command copy.
+The persistence boundary still independently validates command digests. No wire
+or stored-log encoding changes in this core slice. This does not close the
+separate lifetime log-compaction requirement.
+
+Final `cargo test -p meshspan-consensus -- --test-threads=4`: **41 passed, 0 ignored,
+3.94 s**. Affected all-target/all-feature Clippy with warnings denied: **0.41 s**.
+Formatting and diff checks passed. Consumer integration, capability admission,
+and the complete dependency-update gate remain pending; no whole stage is closed.
+
 ### ACC-02 follow-up — replacement-session logout
 
 Integration review reproduced an uncertain logout being retained after a different

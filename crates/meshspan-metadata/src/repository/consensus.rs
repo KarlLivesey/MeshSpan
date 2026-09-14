@@ -560,18 +560,13 @@ fn persist_log(
 fn validate_mutation_entries(mutation: &DurableMutation) -> Result<(), ConsensusStoreError> {
     let mut previous: Option<&LogEntry> = None;
     for entry in &mutation.append {
-        let rebuilt = LogEntry::new(
-            entry.position,
-            entry.operation_id,
-            entry.command_version,
-            entry.command.clone(),
-        )?;
-        if rebuilt != *entry
-            || previous.is_some_and(|prior| {
-                entry.position.index != prior.position.index.saturating_add(1)
-                    || entry.position.term < prior.position.term
-            })
-        {
+        entry
+            .validate()
+            .map_err(|_| ConsensusStoreError::InvalidMutation)?;
+        if previous.is_some_and(|prior| {
+            entry.position.index != prior.position.index.saturating_add(1)
+                || entry.position.term < prior.position.term
+        }) {
             return Err(ConsensusStoreError::InvalidMutation);
         }
         previous = Some(entry);

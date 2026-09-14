@@ -152,7 +152,7 @@ pub(crate) fn wire_entry(entry: &LogEntry) -> WireLogEntry {
         command_digest: entry.entry_digest().to_vec(),
         command: Some(VersionedPayload {
             format_version: u32::from(entry.command_version),
-            canonical_bytes: entry.command.clone(),
+            canonical_bytes: entry.command.to_vec(),
         }),
     }
 }
@@ -164,11 +164,11 @@ pub(crate) fn core_entry(entry: &WireLogEntry) -> Result<LogEntry, ConsensusWire
         .ok_or(ConsensusWireError::InvalidMessage)?;
     let command_version =
         u16::try_from(command.format_version).map_err(|_| ConsensusWireError::InvalidMessage)?;
-    let rebuilt = LogEntry::new(
+    let rebuilt = LogEntry::from_shared_command(
         core_position(entry.position.as_ref())?,
         operation_id(&entry.operation_id)?,
         command_version,
-        command.canonical_bytes.clone(),
+        std::sync::Arc::from(command.canonical_bytes.as_slice()),
     )
     .map_err(|_| ConsensusWireError::InvalidMessage)?;
     if rebuilt.entry_digest().as_slice() != entry.command_digest {

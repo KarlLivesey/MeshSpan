@@ -5,7 +5,7 @@
 use super::super::types::validate_committed_prefix;
 use super::{
     AfterPersistence, AppendResponse, ConsensusCore, CoreEffect, CoreError, CoreMessage,
-    DurableMutation, LogEntry, LogPosition, MAXIMUM_APPEND_ENTRIES, NodeId,
+    DurableMutation, LogPosition, NodeId,
 };
 use crate::CommittedPrefix;
 
@@ -63,13 +63,7 @@ impl ConsensusCore {
                 .ok_or(CoreError::InvalidInput)?
                 .entry_digest()
         };
-        let entries: Vec<LogEntry> = self
-            .log
-            .iter()
-            .filter(|entry| entry.position.index >= next && entry.position.index <= end)
-            .take(MAXIMUM_APPEND_ENTRIES)
-            .cloned()
-            .collect();
+        let entries = self.replication_entries(next, end);
         let sent_through = entries
             .last()
             .map_or(previous.index, |entry| entry.position.index);

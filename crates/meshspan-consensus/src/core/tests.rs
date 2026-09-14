@@ -15,6 +15,7 @@ use crate::{DurableCoreState, JointQuorumPlan, compile_plan, flat_plan};
 
 mod append_proof;
 mod membership_loss;
+mod replication_bytes;
 
 #[test]
 fn cancelled_read_barriers_release_core_capacity_without_success() -> Result<(), Box<dyn Error>> {
@@ -62,7 +63,7 @@ fn term_confirmation_is_a_fixed_durable_log_entry_not_arbitrary_metadata()
     core.step(CoreInput::Persisted(id))?;
     let entry = core.log_entry(1).ok_or("confirmation missing")?;
     assert_eq!(entry.command_version, u16::MAX);
-    assert_eq!(entry.command, b"MSCT\x01");
+    assert_eq!(entry.command.as_ref(), b"MSCT\x01");
     assert!(entry.is_term_confirmation());
     assert!(
         LogEntry::new(

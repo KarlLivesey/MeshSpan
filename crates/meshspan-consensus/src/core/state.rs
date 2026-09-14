@@ -14,12 +14,11 @@ use super::membership_history::MembershipHistory;
 use super::types::{
     AppendProbeId, AppendRequest, AppendResponse, CoreConfig, CoreEffect, CoreError, CoreInput,
     CoreMessage, DurableCoreState, DurableMutation, DurableQuorumPlan, LogEntry, LogPosition,
-    MemberIncarnations, PersistenceId, ProposalId, ReadBarrierId, Role, VoteRequest, VoteResponse,
-    validate_append_entries,
+    MAXIMUM_APPEND_COMMAND_BYTES, MAXIMUM_APPEND_ENTRIES, MemberIncarnations, PersistenceId,
+    ProposalId, ReadBarrierId, Role, VoteRequest, VoteResponse, validate_append_entries,
 };
 use crate::{ActiveQuorumPlan, CompiledQuorumPlan, JointQuorumPlan, QuorumFamily};
 
-const MAXIMUM_APPEND_ENTRIES: usize = 64;
 const MAXIMUM_PENDING_READ_BARRIERS: usize = 1_024;
 
 enum RoleState {
@@ -1174,6 +1173,20 @@ impl ConsensusCore {
         })
     }
 
+    fn replication_entries(&self, start: u64, end: u64) -> Vec<LogEntry> {
+        self.log
+            .iter()
+            .filter(|entry| entry.position.index >= start && entry.position.index <= end)
+            .take(MAXIMUM_APPEND_ENTRIES)
+            .scan(MAXIMUM_APPEND_COMMAND_BYTES, |remaining, entry| {
+                *remaining = remaining.checked_sub(entry.command.len())?;
+                // Cloning only shares immutable log bytes. Transport reserves byte credit
+                // before constructing an independently owned wire representation.
+                Some(entry.clone())
+            })
+            .collect()
+    }
+
     fn append_effect(
         &mut self,
         peer: NodeId,
@@ -1198,13 +1211,7 @@ impl ConsensusCore {
                 .map(LogEntry::entry_digest)
                 .ok_or(CoreError::InvalidInput)?
         };
-        let entries: Vec<LogEntry> = self
-            .log
-            .iter()
-            .filter(|entry| entry.position.index >= next)
-            .take(MAXIMUM_APPEND_ENTRIES)
-            .cloned()
-            .collect();
+        let entries = self.replication_entries(next, u64::MAX);
         let request = AppendRequest {
             probe_id: AppendProbeId(self.next_append_probe_id),
             term: self.current_term,
