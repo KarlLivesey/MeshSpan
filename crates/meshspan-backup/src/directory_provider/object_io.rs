@@ -299,6 +299,8 @@ fn append_hex(value: &mut String, bytes: &[u8]) -> Result<(), DirectoryBackupPro
 }
 
 fn sync_directory(directory: &Dir) -> Result<(), DirectoryBackupProviderError> {
-    directory.try_clone()?.into_std_file().sync_all()?;
+    // Linux directory capabilities may be O_PATH handles, which cannot be fsynced.
+    // A readable handle to the same capability keeps rename/unlink durability explicit.
+    directory.open(".")?.sync_all()?;
     Ok(())
 }

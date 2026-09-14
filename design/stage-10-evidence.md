@@ -10,6 +10,58 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Tasks 10/27 — Linux directory durability prerequisite
+
+On 2026-09-14 the provided clean Linux checkout was fast-forwarded from
+`3e3c3060` to PR #269's merge `fcd65853`; both Git fetch and the GitHub branch
+API confirmed that remote main had no later commit. The three failed headless
+tests recorded on that PR remain unresolved. Its owner-approved checkpoint merge
+did not close Stage 10 or supply passing integration evidence. Earlier Stage 4
+pack lifecycle and Stage 5 mesh-wide reuse gaps remain tracked once in task 17;
+Stage 9's integrated exit evidence still needs reconciliation.
+
+The initial offline-backup test could not build because `web/dist` was absent.
+The prescribed `pnpm build:daemon` then passed with NVM Node **26.8.2**, pnpm
+**11.19.0**, Rust **1.98.0** and four Cargo build workers: web **0.485 s**, Rust
+**97 s**. The focused headless run on the unchanged source failed in **18.88 s**
+(test build **13.51 s**) before backup capture: its storage folder remained
+`configuring`. Failure state is retained at `/tmp/.tmpz4sbZs` on this host.
+
+The existing `meshspan-storage` regression
+`folder::tests::registration_preserves_siblings_and_identity_survives_path_move`
+reproduced `EBADF` in **0.00 s** (build **5.00 s**). Linux capability directories
+use `O_PATH`; duplicating that descriptor does not make it fsync-capable. Folder
+publication now opens `.` readably through the held capability and fsyncs that
+same directory. It neither resolves an ambient pathname nor suppresses a failed
+flush. All **51 storage tests passed in 0.17 s**, build **1.31 s**, including
+restart, path movement, corruption, guarded deletion and CoW reclamation.
+
+The same defect in backup-object rename/unlink was independently reproduced by
+`directory_provider_tests::exact_stream_survives_restart_replays_and_retires_once`
+in **0.00 s** (build **3.83 s**). Applying the same capability-relative readable
+open passed all **21 backup tests in 1.49 s**, build **0.64 s**. Tests used four
+harness workers. Workspace Rust formatting and diff checks passed. Affected
+storage/backup all-target/all-feature Clippy passed with warnings denied in
+**3.40 s**. The real offline recovery rerun reached the later storage cleanup
+workflow but failed in **109.86 s** (build **9.48 s**) because the storage node
+rejected the newly enrolled cleanup peer as unknown. State is retained at
+`/tmp/.tmpIg8wOS` and `/tmp/.tmpnYbkMD`. Read-only inspection confirms the storage
+replica lacks that enrolled node, while both gateways retain it; the cause of
+stalled catch-up is under investigation. This is not passing recovery evidence.
+
+The original zero-root failure was then reproduced in **17.85 s**, build
+**3.25 s**, by making the existing fixture await the protected startup archive
+before creating its file. The old selection then predictably exported that
+earlier empty archive. The fixture correction is being verified separately;
+the Linux directory-sync correction does not claim to close it. The update
+handoff filter selected **zero tests** on GNU Linux: its existing compile-time
+gate requires macOS or musl, and this host currently has only the GNU Rust
+target and no musl C compiler. Neither update failure has passing evidence.
+The complete integration gate remains pending.
+No dependency, schema, protocol, licence or durability requirement changed.
+Task estimates remain **Stage 10: 81; Stage 11: 126/not started**. No release,
+tag, package/image publication or GitHub Actions ran.
+
 ## Task 10 — storage-only startup and shard service
 
 ### Committed cleanup acceptance — in progress
