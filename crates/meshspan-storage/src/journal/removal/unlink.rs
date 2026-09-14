@@ -56,6 +56,22 @@ impl TargetJournal {
         }
     }
 
+    /// Resolves a completed reclamation without depending on its retired payload pack.
+    pub(crate) fn committed_reclamation(
+        &self,
+        receipt: TombstoneReceipt,
+    ) -> Result<Option<ReclamationReceipt>, TargetJournalError> {
+        self.verify_committed_tombstone(receipt)?;
+        let transaction = self.connection.unchecked_transaction()?;
+        let stored = load_unlink_state(&transaction, receipt)?;
+        validate_unlink_state(&stored, receipt)?;
+        if stored.2.is_some() {
+            reclamation_receipt(receipt, &stored).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Accounts physical reclamation only after the pack accepted the exact tombstone receipt.
     ///
     /// # Errors

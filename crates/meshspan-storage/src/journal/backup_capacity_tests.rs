@@ -88,6 +88,8 @@ fn version_one_target_migrates_without_losing_shard_reservations()
     // Construct the exact prior schema: no new-table contents exist in this fixture.
     journal.connection.execute_batch(
         "DROP TABLE pack_routes; DROP TABLE pack_segments; DROP TABLE backup_capacity;
+         DROP INDEX provider_operations_pending;
+         DROP INDEX provider_operations_incomplete_shard;
          DELETE FROM schema_migrations WHERE version > 1; PRAGMA user_version = 1;",
     )?;
     drop(journal);

@@ -25,6 +25,11 @@ impl FolderShardStore {
                 .ok_or(FolderShardStoreError::Corrupt)?,
         };
         self.last_compaction_sequence = sequence;
+        if self.journal.pack_retirement_pending(sequence)?
+            || self.journal.prepare_pack_retirement(sequence)?
+        {
+            return self.retire_pack(sequence, now).map(Some);
+        }
         let space = if sequence == self.pack.sequence() {
             self.pack.observe_space()
         } else {
@@ -42,6 +47,37 @@ impl FolderShardStore {
             .compact(&self.folder, now)
             .map(Some)
             .map_err(|error| map_pack(&error))
+    }
+
+    fn retire_pack(
+        &mut self,
+        sequence: u64,
+        now: UnixMicros,
+    ) -> Result<u64, FolderShardStoreError> {
+        // The shared provider's exclusive lock pins readers for this bounded slice.
+        // Close any cached source handle before removing its main database and sidecars.
+        if self.pack.sequence() == sequence {
+            self.pack = PackStore::open(&self.folder, self.journal.active_pack_sequence()?, now)
+                .map_err(|error| map_pack(&error))?;
+        }
+        let source_exists = self.folder.pack_file_exists(sequence)?;
+        let reclaimed = if source_exists {
+            let source =
+                PackStore::open_read(&self.folder, sequence).map_err(|error| map_pack(&error))?;
+            source
+                .verify_reclaimed()
+                .map_err(|error| map_pack(&error))?;
+            source
+                .observe_space()
+                .map_err(|error| map_pack(&error))?
+                .database_bytes
+        } else {
+            // A committed retirement may have unlinked the main file before a crash.
+            0
+        };
+        self.folder.retire_pack_files(sequence)?;
+        self.journal.complete_pack_retirement(sequence)?;
+        Ok(reclaimed)
     }
 
     pub(super) fn select_pack(

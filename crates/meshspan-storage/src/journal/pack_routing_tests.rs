@@ -80,7 +80,9 @@ fn version_two_migration_retains_committed_and_incomplete_pack_locations()
     // These are exactly the v2 tables and receipts. Only the additive v3 schema is removed.
     journal.connection.execute_batch(
         "DROP TABLE pack_routes; DROP TABLE pack_segments;
-         DELETE FROM schema_migrations WHERE version = 3; PRAGMA user_version = 2;",
+         DROP INDEX provider_operations_pending;
+         DROP INDEX provider_operations_incomplete_shard;
+         DELETE FROM schema_migrations WHERE version >= 3; PRAGMA user_version = 2;",
     )?;
     drop(journal);
     let mut journal = open(directory.path())?;
@@ -94,6 +96,61 @@ fn version_two_migration_retains_committed_and_incomplete_pack_locations()
     assert_eq!(journal.capacity()?.committed_bytes, 7);
     assert_eq!(journal.capacity()?.reserved_bytes, 9);
     assert_eq!(journal.active_pack_sequence()?, 1);
+    journal.check_integrity()?;
+    Ok(())
+}
+
+#[test]
+fn version_three_upgrade_retains_receipts_and_indexes_pending_work()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let mut journal = open(directory.path())?;
+    let committed = request(&mut journal, 40, 7)?;
+    let pending = request(&mut journal, 41, 9)?;
+    journal.prepare_put(committed)?;
+    journal.prepare_put(pending)?;
+    let receipt = ShardReceipt {
+        operation_id: committed.reservation.operation_id,
+        shard: committed.shard,
+        length: committed.expected_length,
+        digest: committed.expected_digest,
+        target_id: journal.marker().target_id(),
+        target_generation: journal.marker().generation(),
+    };
+    journal.commit_put(
+        committed,
+        DurablePackEvidence {
+            receipt,
+            pack_sequence: 1,
+            pack_offset: 1,
+        },
+    )?;
+    journal.connection.execute_batch(
+        "DROP INDEX provider_operations_pending;
+         DROP INDEX provider_operations_incomplete_shard;
+         DROP INDEX pack_segments_by_lifecycle;
+         ALTER TABLE pack_segments DROP COLUMN lifecycle_state;
+         DELETE FROM schema_migrations WHERE version = 4; PRAGMA user_version = 3;",
+    )?;
+    drop(journal);
+    let mut journal = open(directory.path())?;
+    assert_eq!(
+        journal.prepare_put(committed)?,
+        PreparePutResult::Committed(receipt)
+    );
+    assert_eq!(journal.pending_puts(None, 10)?.puts.len(), 1);
+    assert!(!journal.pack_retirement_pending(1)?);
+    assert_eq!(journal.pack_sequences(10)?, vec![1]);
+    let plan: String = journal.connection.query_row(
+        "EXPLAIN QUERY PLAN SELECT operation_id FROM provider_operations
+         WHERE operation_kind = ?1 AND state = ?2 AND operation_id > ?3
+         ORDER BY operation_id LIMIT 2",
+        params![1, 1, &[] as &[u8]],
+        |row| row.get(3),
+    )?;
+    assert!(plan.contains("provider_operations_pending"), "{plan}");
+    assert_eq!(journal.capacity()?.committed_bytes, 7);
+    assert_eq!(journal.capacity()?.reserved_bytes, 9);
     journal.check_integrity()?;
     Ok(())
 }

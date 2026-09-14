@@ -80,7 +80,7 @@ fn tombstone_receipt_replays_after_restart_without_admitting_stale_new_removals(
     Ok(())
 }
 
-struct FixedRandom;
+pub(super) struct FixedRandom;
 
 impl RandomSource for FixedRandom {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
@@ -343,7 +343,7 @@ fn automatic_cow_reclamation_survives_both_sides_of_publication()
     Ok(())
 }
 
-fn registration() -> Result<FolderRegistration, Box<dyn std::error::Error>> {
+pub(super) fn registration() -> Result<FolderRegistration, Box<dyn std::error::Error>> {
     Ok(FolderRegistration {
         mesh_id: MeshId::from_bytes([1; 16])?,
         target_id: TargetId::from_bytes([2; 16])?,
@@ -352,7 +352,7 @@ fn registration() -> Result<FolderRegistration, Box<dyn std::error::Error>> {
     })
 }
 
-const fn policy() -> CapacityPolicy {
+pub(super) const fn policy() -> CapacityPolicy {
     CapacityPolicy {
         usage_limit: UsageLimit::DEFAULT,
         repair_reserve_bytes: 100,
@@ -360,7 +360,9 @@ const fn policy() -> CapacityPolicy {
     }
 }
 
-fn verifier(mesh_id: MeshId) -> Result<StoragePermitVerifier, Box<dyn std::error::Error>> {
+pub(super) fn verifier(
+    mesh_id: MeshId,
+) -> Result<StoragePermitVerifier, Box<dyn std::error::Error>> {
     Ok(StoragePermitVerifier::new(
         mesh_id,
         REMOVAL_EPOCH,
@@ -369,7 +371,7 @@ fn verifier(mesh_id: MeshId) -> Result<StoragePermitVerifier, Box<dyn std::error
     )?)
 }
 
-fn put_request(
+pub(super) fn put_request(
     store: &mut FolderShardStore,
     registration: FolderRegistration,
     length: usize,
@@ -406,7 +408,7 @@ fn put_request(
     })
 }
 
-fn signed_removal(
+pub(super) fn signed_removal(
     registration: FolderRegistration,
     shard: ShardIdentity,
 ) -> Result<RemovalPermit, Box<dyn std::error::Error>> {

@@ -47,6 +47,33 @@ integration gate has not run on this slice. Stage 10/11 estimates remain 81/126;
 physical, interoperability, soak and independent-review gates are not claimed.
 The publication hold remains in force.
 
+### DATA-05 — Stage 10 task 17, retiring fully reclaimed packs
+
+The first pack retirement slice was integrated from the isolated worktree based
+on `47da6368`. A fully reclaimed old pack can now be removed without losing exact
+put, tombstone or reclamation replay. Target-journal migration **004** fences
+retirement before deletion. Source identity/payload verification and the existing
+exclusive provider lock protect deletion; directory sync precedes the durable
+completion record. Pending packs remain visible to space observations.
+
+The missing-payload-pack replay regression failed before the fix with `NotFound`
+(build **3.20 s**, test **0.31 s**). Integration review found that prioritizing one
+pending retirement would starve all later work behind a corrupt source. The new
+two-candidate regression reproduced `Corrupt` on the second attempt (**0.41 s**).
+Maintenance now uses its indexed cyclic cursor across active and pending packs:
+the failure remains visible, later packs advance and wrapping retries the failure.
+The final `cargo test -p meshspan-storage -- --test-threads=4` passed **59 tests**,
+none ignored, in **6.00 s** (build **0.39 s**). Affected all-target/all-feature
+Clippy with warnings denied passed in **0.50 s**; formatting and diff checks
+passed. Four Cargo build workers were used. The exact patch was applied to the
+integrator checkout without conflict; the assembled integration gate is pending.
+
+DATA-05/task 17 is not closed: legacy oversized-pack splitting, terminal-history
+archival, temporary-space reservation and measured compaction pause/throughput
+remain. Receipts, routes and segment history still grow over the target lifetime;
+the current provider lock and 32-pack observation limit are not claimed solved.
+No dependency or wire/API contract changed. Stage estimates remain unchanged.
+
 ## Tasks 10/27 — Linux directory durability prerequisite
 
 On 2026-09-14 the provided clean Linux checkout was fast-forwarded from
