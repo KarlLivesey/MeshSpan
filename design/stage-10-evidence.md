@@ -10,6 +10,26 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## CORE-02 / ACC-01 — legacy migration fixtures after schemas 118/119 and 17
+
+Pre-gate compatibility review found two stale fixture assumptions introduced by
+the additive enrollment/capability schemas. The v109 backup fixture retained
+post-v109 tables and failed reopening with `user_enrollments already exists`
+(**1.56 s**). Its teardown now removes the 118/119 tables before replaying normal
+migrations; the existing exact surviving-history assertions remain unchanged.
+The focused test passed **1.49 s** (build **3.59 s**).
+
+The v14 quota fixture reached the correct new local schema 17 but still expected
+16 (**1 failed, 1.74 s**). Its expected version now names 17 and documents the
+new capability-cache migration. Existing exact pending, committed and replayed
+charge assertions remain unchanged. All **14** matching capacity-seal tests
+passed **8.07 s** (build **3.95 s**). Metadata all-target/all-feature Clippy
+passed **4.35 s**; scoped Rustfmt and diff checks passed. Fail-before runs used
+the already-built metadata test binary; after-fix runs used Cargo with four
+workers. Tested tree: `598a13b1` plus these two fixture changes. Production
+migrations, safety assertions and dependency policy are unchanged; the full
+gate remains pending.
+
 ## Stage 10 — retained readiness diagnostics before integration
 
 The existing setup-status transport diagnostic is retained in the headless test
