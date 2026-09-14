@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 import { createSignal, type Accessor } from "solid-js";
+import type { InvitationClient } from "./invitation-model";
 import type {
   AddGroupMemberRequest,
   AddGroupMemberResponse,
@@ -17,7 +18,7 @@ export type PrincipalSummary = ListPrincipalsResponse["principals"][number];
 
 export type PrincipalKind = "group" | "user";
 
-export interface IdentityAdministrationClient {
+export interface IdentityAdministrationClient extends InvitationClient {
   addGroupMember(
     groupId: string,
     request: AddGroupMemberRequest,

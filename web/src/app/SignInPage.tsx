@@ -121,6 +121,7 @@ function SignInIntroduction(): JSX.Element {
     <div class="sign-in-copy">
       <p class="eyebrow">Secure entry</p>
       <h1>Sign in to your swarm</h1>
+      <a href="/enroll">Have an invitation? Create your first key</a>
       <p>
         Use a passkey for ordinary access. API-key sign-in remains available for
         initial setup, recovery and explicitly scoped credentials.

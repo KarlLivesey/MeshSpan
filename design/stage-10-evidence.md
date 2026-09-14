@@ -11136,3 +11136,44 @@ The schedule API does not close these separate outstanding requirements:
 The remaining certificate, operational panel, metrics, update, packaging and
 Stage 11 gates continue to be tracked by [the roadmap](roadmap.md). This file
 records evidence for completed slices, not completion of the whole stage.
+
+## ACC-01 — browser first-key enrollment and session confirmation
+
+Managers can select an existing user or the newly created identity, confirm a
+recent additional factor, issue a ten-minute invitation and revoke that exact
+invitation. The anonymous `/enroll` page, linked from sign-in, accepts the token
+and returns an ordinary HTTPS/native-API key for independent sign-in. Tokens and
+keys remain in component memory; they are not placed in URLs or browser storage.
+Requests retain their operation, recipient route, revision, expiry and payload
+across unknown outcomes. Pending edits and recipient changes are locked. Only a
+matching committed receipt reveals a secret or reports revocation; unsuccessful
+sign-in does not erase the already-created key or imply enrollment failed.
+
+Session-owned step-up adopts the rotated CSRF proof while preserving the chosen
+storage lifetime. Exact retries retain the original factor and operation. The
+integrated review reproduced two races before fixing them: a delayed refresh
+restored the administrator's displayed identity after Bob signed in, and a
+competing sign-in was dispatched while step-up could still replace the cookie.
+Refresh results now belong to a session generation; stale successes and failures
+cannot replace newer state. A shared in-flight guard prevents overlapping
+cookie-changing actions within the session provider. Late step-up receipts are
+also rejected after an observed external session replacement.
+
+Validation on `27de83ab` plus this browser/session slice, using NVM Node 26.8.2:
+
+- Missing invitation entry: new regression failed before implementation; the
+  four existing identity panel tests passed. Both session race regressions also
+  failed before their respective fixes.
+- `pnpm --filter @meshspan/web test` with the enrollment, enrollment-client,
+  identity panel/client, session provider/step-up and mutation-outcome files,
+  `--maxWorkers=2`: **39 tests across seven files passed**, Vitest **4.30 s**,
+  command wall time **5.57 s**.
+- `pnpm web:lint`: passed with warnings denied, **40.79 s**. Earlier fixture-only
+  void-type and nested-conditional lint findings were corrected.
+- `pnpm web:typecheck`: passed, **10.05 s**. Scoped Prettier and diff checks passed.
+
+The native HTTPS two-user enrollment/restart scenario is prepared separately
+and has not been run as evidence for this slice. First-passkey enrollment and
+real two-user file-sharing/SMB acceptance remain required follow-ups. This does
+not close ACC-01 or Stage 10, and no full integration gate, Cargo lane,
+dependency change, release or publication was performed by this browser slice.

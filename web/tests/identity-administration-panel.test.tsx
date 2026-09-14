@@ -26,6 +26,39 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("first-credential invitation entry", () => {
+  it("offers first-credential enrollment for a selected user", async () => {
+    const fixture = clientFixture({
+      users: page("user", [principal("user", "Bob", "bob")]),
+    });
+    mountPanel(fixture.client);
+    await settle();
+    clickButton("Invite to sign in");
+    await settle();
+    expect(document.body.textContent).toContain("Invite Bob to sign in");
+  });
+  it("keeps the recipient selected while invitation issuance is unknown", async () => {
+    const fixture = clientFixture({
+      users: page("user", [
+        principal("user", "Bob", "bob"),
+        principal("user", "Sam", "sam"),
+      ]),
+    });
+    const issue = vi
+      .spyOn(fixture.client, "issueUserEnrollment")
+      .mockRejectedValueOnce(new TypeError("response lost"));
+    mountPanel(fixture.client);
+    await settle();
+    clickButton("Invite to sign in");
+    clickButton("Issue invitation");
+    await settle();
+    clickButton("Invite to sign in");
+    expect(document.body.textContent).toContain("Invite Bob to sign in");
+    expect(document.body.textContent).not.toContain("Invite Sam to sign in");
+    expect(issue).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("identity administration panel", () => {
   it("loads both directories and follows a ready-to-use next page", async () => {
     const fixture = clientFixture({
@@ -68,6 +101,7 @@ describe("identity administration panel", () => {
       "Taylor is ready to receive access.",
     );
     expect(document.body.textContent).toContain("Taylor");
+    expect(document.body.textContent).toContain("Invite Taylor to sign in");
   });
 
   it("surfaces bounded load and mutation failures without inventing state", async () => {
@@ -228,6 +262,7 @@ function clientFixture(options: ClientFixtureOptions = {}): ClientFixture {
   return {
     addGroupMember,
     client: {
+      ...invitationClient(),
       addGroupMember,
       createGroup,
       createUser,
@@ -242,6 +277,29 @@ function clientFixture(options: ClientFixtureOptions = {}): ClientFixture {
     listGroupMembers,
     listNextPrincipals,
     removeGroupMember,
+  };
+}
+
+function invitationClient(): Pick<
+  IdentityAdministrationClient,
+  "issueUserEnrollment" | "revokeUserEnrollment"
+> {
+  return {
+    issueUserEnrollment: vi.fn<
+      IdentityAdministrationClient["issueUserEnrollment"]
+    >(async (principalId, request) => ({
+      ...request,
+      principal_id: principalId,
+      token: `meshspan-user-enrollment-v1.${"a".repeat(32)}.${"b".repeat(64)}`,
+      committed_revision: 2,
+    })),
+    revokeUserEnrollment: vi.fn<
+      IdentityAdministrationClient["revokeUserEnrollment"]
+    >(async (enrollmentId, request) => ({
+      operation_id: request.operation_id,
+      enrollment_operation_id: enrollmentId,
+      committed_revision: 3,
+    })),
   };
 }
 
@@ -305,7 +363,11 @@ function mountPanel(client: IdentityAdministrationClient): void {
   mountedRoots.add(
     render(
       () => (
-        <IdentityAdministrationPanel client={client} csrfToken={CSRF_TOKEN} />
+        <IdentityAdministrationPanel
+          client={client}
+          csrfToken={CSRF_TOKEN}
+          stepUp={stepUpFixture}
+        />
       ),
       root,
     ),
@@ -361,4 +423,8 @@ async function settle(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
   flush();
+}
+
+async function stepUpFixture(): Promise<void> {
+  return Promise.resolve();
 }

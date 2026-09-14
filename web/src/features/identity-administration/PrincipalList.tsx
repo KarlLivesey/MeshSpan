@@ -13,6 +13,7 @@ import type {
 type PrincipalListProps = Readonly<{
   directory: PrincipalDirectory;
   kind: PrincipalKind;
+  selectionDisabled?: boolean;
   onSelect?: (principal: PrincipalSummary) => void;
   selectedPrincipalId?: string | undefined;
 }>;
@@ -61,7 +62,9 @@ function PrincipalTable(props: PrincipalListProps): JSX.Element {
             <th scope="col">State</th>
             <th scope="col">Created</th>
             <Show when={props.onSelect !== undefined}>
-              <th scope="col">Membership</th>
+              <th scope="col">
+                {props.kind === "user" ? "Sign-in" : "Membership"}
+              </th>
             </Show>
           </tr>
         </thead>
@@ -81,6 +84,8 @@ type PrincipalRowProps = PrincipalListProps &
 function PrincipalRow(props: PrincipalRowProps): JSX.Element {
   const selected = () =>
     props.selectedPrincipalId === props.principal.principal_id;
+  const actionLabel = () =>
+    props.kind === "user" ? "Invite to sign in" : "Manage members";
   return (
     <tr>
       <th data-label="Name" scope="row">
@@ -97,6 +102,7 @@ function PrincipalRow(props: PrincipalRowProps): JSX.Element {
       <Show when={props.onSelect !== undefined}>
         <td data-label="Membership">
           <button
+            disabled={props.selectionDisabled}
             aria-pressed={selected() ? "true" : "false"}
             class="quiet-action table-action"
             onClick={() => {
@@ -104,7 +110,7 @@ function PrincipalRow(props: PrincipalRowProps): JSX.Element {
             }}
             type="button"
           >
-            {selected() ? "Managing" : "Manage members"}
+            {selected() ? "Managing" : actionLabel()}
           </button>
         </td>
       </Show>
