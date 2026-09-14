@@ -68,11 +68,41 @@ case passes here; this does not explain its earlier full-gate timeout. Logs:
 Real HTTPS mesh creation/restart and three-process join, voter promotion and
 restart both pass (**25.08 s**, build **58.98 s**); exact capability identity and
 historical strong receipts remain checked. Log:
-`/tmp/meshspan-int01-native-create-join-restart.log`. The original offline-backup
-regression is running; the update-handoff regressions require the musl target
-on Linux and are not counted by this native build. Final required integration
-gate and affected additional acceptance remain pending. No stage completion is
-claimed.
+`/tmp/meshspan-int01-native-create-join-restart.log`. On signed/pushed `36cc730a`, the original offline-backup regression passes
+(**114.57 s**, build **0.38 s**), preserving offline verification, changed-byte
+rejection, exact recovery and no live-state writes. The native command selects
+only this test: update handoff is compiled for macOS/musl, not Linux GNU. Log:
+`/tmp/meshspan-int01-pr269-regressions.log`.
+
+The two original update-handoff regressions then both pass under the configured
+`x86_64-unknown-linux-musl` target (**245.09 s**, build **142 s**, two test
+workers). They retain the exact uninterrupted preparation, replace both real
+processes, verify both installations and the peer witness, and reauthenticate
+the selected executable through the original cold launcher. Log:
+`/tmp/meshspan-int01-musl-handoff-regressions.log`. This cold-launch interruption
+is not a physical power-loss proof. All three failures originally reported on
+PR #269 now pass in these focused runs.
+
+The required NVM `pnpm check:dependency-update` gate on `36cc730a` **fails**
+(**291.31 s**, Rust lane **217.64 s**), with four check/build/test workers, Node
+**26.8.2**, pnpm **11.19.0** and repository Rust **1.98.0**. Advisory scans,
+generated/build/static/licence/tooling checks and web tests (**17.99 s**) pass.
+The cluster target reports **133 passed, 2 failed** (**65.72 s**): maximum
+generic bulk delivery exceeds its unchanged **15 s** deadline, and the
+three-voter maximum-provider proof exceeds **15 s** during large-command
+replication. Later Rust targets are not reached. Log:
+`/tmp/meshspan-dependency-update-36cc730a.log`.
+
+The bulk timeout diagnostic records a held receive-side codec permit and byte
+reservation, with no message in the application queue. The retained authority
+fixture `/home/karl/.cache/meshspan-validation/tmp/.tmpFmJOyP` has all three nodes
+voting for the same root in term **16**; the root repeatedly appends the
+**524,620-byte** command in terms **2/4/6/8/10/12/14/16**, while both followers
+remain at log index **8**. Unlike the previous gate failure, no invalid vote
+persistence is reported. This narrows further investigation to transfer/codec
+progress and leadership churn; it does not establish their cause. The earlier
+passing focused runs do not close either failure. No integration/stage
+completion is claimed.
 
 ## INT-01 — configured startup retains the private generation
 
