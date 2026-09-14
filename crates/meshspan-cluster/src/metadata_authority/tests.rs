@@ -488,6 +488,12 @@ struct RealAuthorityCluster {
 
 impl RealAuthorityCluster {
     async fn start() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::start_with_bulk_gate(None).await
+    }
+
+    async fn start_with_bulk_gate(
+        gate: Option<Arc<consensus_bulk::interruption::BulkGate>>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let certificate_authority = CertificateAuthority::new()?;
         let authority_certificate = certificate_authority.certificate_der().to_vec();
@@ -517,7 +523,8 @@ impl RealAuthorityCluster {
             partition_id,
         )?;
         probe_network_mesh(&networks, &nodes).await?;
-        let authorities = start_authorities(&directory, &nodes, &plan, networks.clone())?;
+        let authorities =
+            start_authorities(&directory, &nodes, &plan, networks.clone(), gate.as_ref())?;
         let forwarders = start_forwarders(inbound, &authorities);
         Ok(Self {
             networks,
@@ -608,6 +615,7 @@ fn start_authorities(
     nodes: &[NodeId; 3],
     plan: &meshspan_consensus::CompiledQuorumPlan,
     networks: Vec<ConsensusNetwork>,
+    gate: Option<&Arc<consensus_bulk::interruption::BulkGate>>,
 ) -> Result<Vec<AuthorityTask>, Box<dyn std::error::Error>> {
     networks
         .into_iter()
@@ -618,8 +626,17 @@ fn start_authorities(
                 nodes[index],
                 plan,
             )?;
-            let transport: Arc<dyn ConsensusMessageTransport> = Arc::new(network);
-            let config = authority_config(index)?;
+            let mut config = authority_config(index)?;
+            let transport: Arc<dyn ConsensusMessageTransport> = if let Some(gate) = gate {
+                // Only the interrupted-body fixture holds replication while observing disk state.
+                config.election_timeout = Duration::from_secs(5);
+                Arc::new(consensus_bulk::interruption::GatedTransport::new(
+                    network,
+                    Arc::clone(gate),
+                ))
+            } else {
+                Arc::new(network)
+            };
             Ok(spawn_replication_fixture_authority(
                 driver, transport, config,
             )?)

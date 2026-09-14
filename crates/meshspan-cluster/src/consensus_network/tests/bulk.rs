@@ -449,3 +449,84 @@ async fn exact_control_payload_boundary_uses_inline_then_bulk_without_losing_byt
     second.close()?;
     Ok(())
 }
+
+impl ConsensusNetwork {
+    pub(crate) async fn interrupt_bulk_body_for_test(
+        &self,
+        receiver: &Self,
+        message: &CoreMessage,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let Message::AppendRequest(mut request) = encode_consensus_message(message) else {
+            return Err("expected genuine append request".into());
+        };
+        let header = self.request_header(OperationId::from_bytes([166; 16])?, i64::MAX);
+        let entries = std::mem::take(&mut request.entries);
+        let count = u32::try_from(entries.len())?;
+        let body = meshspan_protocol::encode_consensus_bulk_entries(
+            &meshspan_protocol::v1::ConsensusBulkEntries {
+                format_version: 1,
+                request_id: header.request_id.clone(),
+                entries,
+            },
+        )?;
+        // Fill capacity with owned test leases, leaving exactly one body-sized slot. Observing
+        // that final slot disappear proves the receiver admitted this body before interruption.
+        let mut held = Vec::new();
+        while let Ok(lease) = receiver
+            .bulk_budgets
+            .reserve(self.local_node_id(), body.len())
+        {
+            held.push(lease);
+        }
+        drop(held.pop().ok_or("no capacity for interrupted body")?);
+        let connection = self.connect_peer(receiver.local_node_id()).await?;
+        let (mut send, _receive) = open_stream(&connection, StreamKind::ConsensusBulk).await?;
+        send_data_control(
+            &mut send,
+            &DataControlEnvelope {
+                message: Some(DataMessage::ConsensusBulkStart(ConsensusBulkStart {
+                    header: Some(header),
+                    format_version: 1,
+                    byte_length: u64::try_from(body.len())?,
+                    body_digest: Sha256::digest(&body).to_vec(),
+                    entry_count: count,
+                    metadata: Some(Metadata::Append(request)),
+                })),
+            },
+            self.wire_limits,
+        )
+        .await?;
+        meshspan_transport::send_data_frame(
+            &mut send,
+            &meshspan_protocol::v1::DataFrame {
+                offset: 0,
+                bytes: body.get(..1024).ok_or("body is not bulk sized")?.to_vec(),
+            },
+            self.wire_limits,
+        )
+        .await?;
+        wait_for_body_slot(receiver, self.local_node_id(), body.len(), false).await?;
+        send.reset(0_u32.into())?;
+        connection.close(0_u32.into(), b"controlled interrupted bulk reconnect");
+        connection.closed().await;
+        wait_for_body_slot(receiver, self.local_node_id(), body.len(), true).await?;
+        Ok(())
+    }
+}
+
+async fn wait_for_body_slot(
+    network: &ConsensusNetwork,
+    peer: NodeId,
+    length: usize,
+    available: bool,
+) -> Result<(), tokio::time::error::Elapsed> {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if network.bulk_budgets.reserve(peer, length).is_ok() == available {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+}

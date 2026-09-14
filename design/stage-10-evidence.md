@@ -10,6 +10,28 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## CORE-02 — interrupted bulk retry through three authorities
+
+The remaining interrupted/reconnect proof now passes. The existing real Quinn
+three-authority harness captures a genuine leader request, admits a partial
+body, resets the connection and verifies released transfer capacity. During
+interruption there is no accepted match above the baseline, no committed/applied
+index advance, no follower log advance and no operation receipt. The same
+original probe and entry then cross a new connection; the correlated match
+response binds the exact probe and digest, all three authorities apply the exact
+index/receipt, and reopening all three repositories retains canonical bytes and
+receipt identity. No new operation substitutes for the interrupted one.
+
+The first focused run passed **1/1, 5.13 s** (build **7.55 s**). After strengthening
+match-index and bounded diagnostic assertions, all four authority-bulk tests
+passed **8.69 s** (build **5.74 s**). Cluster all-target/all-feature Clippy passed
+**1.98 s**; scoped Rustfmt and diff checks passed. A five-second election window
+belongs only to the named controlled-interruption fixture; existing test timing
+is unchanged. Changes are test-only and reuse the existing transport/authority
+harness. Tested tree: `67ca152a` plus these four test files. This resolves the
+previously recorded CORE-02 interrupted-reconnect acceptance gap. Integration
+still requires the complete dependency-update gate; Stage 10/11 remain open.
+
 ## CORE-02 / ACC-01 — legacy migration fixtures after schemas 118/119 and 17
 
 Pre-gate compatibility review found two stale fixture assumptions introduced by
