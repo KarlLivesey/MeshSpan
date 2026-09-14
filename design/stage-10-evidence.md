@@ -10,6 +10,16 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Integration gate — generated barrel drift after the native checkpoint
+
+On signed/pushed `f4cd8c82`, the NVM dependency-update gate passed both advisory
+scans, then stopped at generated drift (**3.93 s** overall). Its normal generation
+pipeline removed one duplicate `export * from "./fetch.gen"` from the generated
+TypeScript barrel; no API schema, client method or type changed. A subsequent
+`pnpm check:generated` passes with no further drift. No generated file was edited
+by hand. Later canonical lanes were not reached in this attempt; full validation
+still needs a completed run. Log: `/tmp/meshspan-dependency-update-f4cd8c82.log`.
+
 ## ACC-01/02 — combined two-user workflow exposes commit replay failure
 
 The new native HTTPS/encrypted-SMB checkpoint reached an exact replay defect on
