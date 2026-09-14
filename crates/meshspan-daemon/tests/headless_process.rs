@@ -82,6 +82,8 @@ mod stage10;
 mod stage8;
 #[path = "headless_process/updates.rs"]
 mod updates;
+#[path = "headless_process/user_enrollment.rs"]
+mod user_enrollment;
 #[path = "headless_process/web_panel.rs"]
 mod web_panel;
 

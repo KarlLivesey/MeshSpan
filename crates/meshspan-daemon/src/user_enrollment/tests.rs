@@ -238,7 +238,7 @@ impl UserEnrollmentAuthority for RepositorySessionAuthority {
     ) -> Result<Option<UserEnrollmentRecord>, UserEnrollmentError> {
         self.repository
             .user_enrollment(operation)
-            .map_err(repository_error)
+            .map_err(|error| repository_error(&error))
     }
     fn enrollment_principal(
         &self,
@@ -246,7 +246,7 @@ impl UserEnrollmentAuthority for RepositorySessionAuthority {
     ) -> Result<Option<PrincipalRecord>, UserEnrollmentError> {
         self.repository
             .principal(principal)
-            .map_err(repository_error)
+            .map_err(|error| repository_error(&error))
     }
     fn enrollment_manager(
         &self,
@@ -255,7 +255,7 @@ impl UserEnrollmentAuthority for RepositorySessionAuthority {
     ) -> Result<bool, UserEnrollmentError> {
         self.repository
             .principal_is_system_manager(principal, now)
-            .map_err(repository_error)
+            .map_err(|error| repository_error(&error))
     }
     fn enrollment_operation_time(
         &self,
@@ -264,7 +264,7 @@ impl UserEnrollmentAuthority for RepositorySessionAuthority {
         self.repository
             .operation_status(operation)
             .map(|status| status.map(|value| value.started_at))
-            .map_err(repository_error)
+            .map_err(|error| repository_error(&error))
     }
     fn commit_enrollment(
         &mut self,
@@ -281,12 +281,12 @@ impl UserEnrollmentAuthority for RepositorySessionAuthority {
                 context,
                 command,
             )
-            .map_err(repository_error)?;
+            .map_err(|error| repository_error(&error))?;
         self.next_index += 1;
         Ok(result)
     }
 }
-fn repository_error(error: RepositoryError) -> UserEnrollmentError {
+fn repository_error(error: &RepositoryError) -> UserEnrollmentError {
     match error {
         RepositoryError::InvalidCommand => UserEnrollmentError::Rejected,
         RepositoryError::OperationConflict => UserEnrollmentError::Conflict,

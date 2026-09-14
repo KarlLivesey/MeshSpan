@@ -90,7 +90,23 @@ A focused metadata regression failed with revision 1 instead of 2 before the fix
 (6.64-second build, 1.15-second test). All four registration-profile tests passed
 afterward (4.60-second build, 2.13-second tests), using four build/test workers.
 Formatting and diff checks passed. No schema, wire or dependency changes. The
-native HTTPS rerun and affected lint remain pending; this does not close ACC-01.
+native rerun exposed a second startup defect: integrity validation rejected a
+replacement session's copied primary-factor timestamp, although migration 049
+and step-up preserve its earlier authentication time. Reopening the committed
+step-up fixture failed `IntegrityFailed` before the fix (**1.22 s**, build
+**4.02 s**). The checker now accepts earlier factors only for replacement
+sessions; corruption tests still reject stale normal-session and future
+replacement-session factors. All five metadata session tests passed **3.18 s**
+(build **2.73 s**); metadata all-target/all-feature Clippy passed **10.96 s**.
+
+Native HTTPS enrollment/restart passed **1/1, 16.58 s** (build **13.17 s**): Bob
+signs in independently as a nonmanager, then signs in again after restart and
+recovers the exact enrollment receipt. Changed-request and second-operation
+redemptions are rejected before restart. Scoped formatting and diff checks
+passed. Tested tree: `68e476ad` plus this integrity fix and native acceptance
+fixture. No schema, wire or dependency changes. First-passkey enrollment and
+real two-user file sharing through HTTPS/SMB remain open; ACC-01 and Stage 10
+are not closed.
 
 ## CORE-02 — bounded bulk replication and authoritative capability refresh
 

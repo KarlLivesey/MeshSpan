@@ -100,14 +100,14 @@ async fn handle<C: UserEnrollmentController>(
     request: Request,
 ) -> Response<Body> {
     let headers = request.headers().clone();
-    if action.requires_manager() {
-        if let Err(error) = authenticate(&state, headers.clone()).await {
-            return failure(error, None, state.schema_digest);
-        }
+    if action.requires_manager()
+        && let Err(error) = authenticate(&state, headers.clone()).await
+    {
+        return failure(&error, None, state.schema_digest);
     }
     if request.uri().query().is_some() {
         return failure(
-            UserEnrollmentError::InvalidRequest,
+            &UserEnrollmentError::InvalidRequest,
             None,
             state.schema_digest,
         );
@@ -129,8 +129,8 @@ async fn handle<C: UserEnrollmentController>(
     .await;
     match execution {
         Ok(Ok(body)) => json_response(StatusCode::OK, body, state.schema_digest),
-        Ok(Err(error)) => failure(error.error, error.operation, state.schema_digest),
-        Err(_) => failure(UserEnrollmentError::Unavailable, None, state.schema_digest),
+        Ok(Err(error)) => failure(&error.error, error.operation, state.schema_digest),
+        Err(_) => failure(&UserEnrollmentError::Unavailable, None, state.schema_digest),
     }
 }
 async fn authenticate<C: UserEnrollmentController>(
@@ -168,7 +168,8 @@ fn execute<C: UserEnrollmentController>(
                 .map_err(|error| execution_failure(error, None))?;
             let target = PrincipalId::parse(&target)
                 .ok_or_else(|| execution_failure(UserEnrollmentError::InvalidRequest, None))?;
-            let request = decode_issue_user_enrollment_request(bytes).map_err(boundary_failure)?;
+            let request = decode_issue_user_enrollment_request(bytes)
+                .map_err(|error| boundary_failure(&error))?;
             let operation = Some(request.operation_id.clone());
             let response = controller
                 .issue(actor, &target, &request)
@@ -182,7 +183,8 @@ fn execute<C: UserEnrollmentController>(
                 .map_err(|error| execution_failure(error, None))?;
             let target = OperationId::parse(&target)
                 .ok_or_else(|| execution_failure(UserEnrollmentError::InvalidRequest, None))?;
-            let request = decode_revoke_user_enrollment_request(bytes).map_err(boundary_failure)?;
+            let request = decode_revoke_user_enrollment_request(bytes)
+                .map_err(|error| boundary_failure(&error))?;
             let operation = Some(request.operation_id.clone());
             let response = controller
                 .revoke(actor, &target, &request)
@@ -191,8 +193,8 @@ fn execute<C: UserEnrollmentController>(
                 .map_err(|_| execution_failure(UserEnrollmentError::Failed, operation))
         }
         Action::Redeem => {
-            let request =
-                decode_redeem_user_enrollment_api_key_request(bytes).map_err(boundary_failure)?;
+            let request = decode_redeem_user_enrollment_api_key_request(bytes)
+                .map_err(|error| boundary_failure(&error))?;
             let operation = Some(request.operation_id.clone());
             let response = controller
                 .redeem(&request, now)
@@ -208,7 +210,7 @@ fn execution_failure(
 ) -> ExecutionFailure {
     ExecutionFailure { error, operation }
 }
-fn boundary_failure(error: BoundaryError) -> ExecutionFailure {
+fn boundary_failure(error: &BoundaryError) -> ExecutionFailure {
     let error = match error {
         BoundaryError::InvalidSchema(_) | BoundaryError::EncodeMismatch => {
             UserEnrollmentError::Failed
@@ -221,7 +223,7 @@ fn boundary_failure(error: BoundaryError) -> ExecutionFailure {
     execution_failure(error, None)
 }
 fn failure(
-    error: UserEnrollmentError,
+    error: &UserEnrollmentError,
     operation: Option<OperationId>,
     digest: HeaderValue,
 ) -> Response<Body> {
