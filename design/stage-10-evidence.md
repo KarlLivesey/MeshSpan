@@ -200,6 +200,29 @@ assertions. Affected all-target/all-feature daemon Clippy passed with warnings
 denied in **5.52 s**; Rust formatting and diff checks passed. The complete gate
 must be rerun on the corrected candidate before integration.
 
+### Tasks 22/24/27 — local musl validation tooling
+
+The Linux host had no musl compiler and passwordless system package installation
+was unavailable. A local tool cache now contains the official `extra/musl`
+**1.2.6-2 x86_64** package, downloaded from the configured Arch mirror. Its archive
+SHA-256 is `476173e159e6eafb918bbeb804e322b51d2ad8cdd64ffb577e180d8ebfb3942c`.
+The detached package signature verifies against the installed Arch keyring, using
+key `C5D2A6E0ED2D11C66B9FA2A306313911057DD5A8`. The keyring first required dearmoring;
+that initial verification attempt did not succeed and was not treated as trust.
+
+Only the extracted compiler wrapper/specification paths were relocated beneath
+`/home/karl/.cache/meshspan-validation/musl/root`. No system package or repository
+toolchain configuration changed. The package retains its upstream MIT/permissive
+copyright notices. A compiled C smoke executable is inspected as static x86-64
+ELF and executes successfully. Rust's `x86_64-unknown-linux-musl` standard-library
+component was installed for the repository's existing **1.98.0** toolchain.
+
+This prepares the environment; no MeshSpan musl build, update handoff, packaged
+acceptance or publication has yet run. The active GNU integration gate owns the
+Cargo lane. Complete package notices must also cover the actual linked compiler/
+standard-library components, beyond the current Cargo/npm source scan; this is
+part of task 24's remaining dependency inventory, not a waived requirement.
+
 ### Full local gate — failed; no integration
 
 `MESHSPAN_CHECK_WORKERS=4 CARGO_BUILD_JOBS=4 pnpm check`, under the configured NVM

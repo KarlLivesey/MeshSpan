@@ -484,6 +484,23 @@ the stage; publication-dependent acceptance remains held separately and visible.
     Complete the documented offline verification and recovery-authority workflow,
     exact-position restoration, membership/secret checks and safe service
     admission. Restore-readiness must not masquerade as a completed restore.
+    The [2026-09-14 Linux continuation](stage-10-evidence.md#tasks-1027--linux-directory-durability-prerequisite)
+    reproduced PR #269's zero-root failure with deterministic startup-backup
+    ordering. Requiring a fresh post-upload capture passes the original history
+    assertions. Retained histories and live diagnostics explain the later
+    unknown-peer failure: a fetch interrupted by gateway death legitimately uses
+    its 30-second deadline before automatic catch-up, exceeding the fixture's
+    15-second routing allowance. The post-restart readiness budget now includes
+    that protocol deadline. The corrected full workflow passed in **139.28 s**,
+    including committed cleanup/replay and file preservation. A preceding earlier,
+    unlabelled post-restart timeout remains unexplained and retained; a passing
+    retry does not close it. The full local gate then failed in **510.74 s**
+    at a federation-pairing/backup session library test (`DeadlineExceeded`);
+    headless and later Rust targets were not reached. Task 10 and integration
+    remain open. Subsequent contextual reproduction identified an expired store
+    request created before unrelated federation proofs; moving each attempt's
+    deadline to its start passed all 440 daemon library tests. A new full gate is
+    running; a separate storage-snapshot `Unavailable` remains unexplained.
     [Headless offline verification](stage-10-evidence.md#task-10--headless-offline-backup-verification)
     now consumes the actual encrypted export, independently saved digest and
     setup recovery bundle/code, checks exact SQLite state and stored recovery
@@ -960,6 +977,11 @@ the stage; publication-dependent acceptance remains held separately and visible.
     **108 → 106**; only the assembled-stage pass remains for this task.
 
 22. **Mesh-wide rolling updates — Partial; automatic interruption-allowed installation implemented; availability-preserving coordination remains.** **7 points remaining.**
+    PR #269's failed workload-observation and two-process installation tests remain
+    unresolved. The current GNU Linux build excludes the handoff module; a zero-test
+    filtered run is not verification. A supported musl/macOS execution environment
+    is required for their existing real-executable acceptance tests. Local musl
+    tooling is now prepared on this host; the MeshSpan build and proofs are pending.
     Accepted decisions §7, PER-003/006, TST-007. Provide one administrator-selected
     signed candidate, compatibility checks, availability-aware node ordering,
     durable progress and stop-on-failed-probe behaviour. Prove interrupted update
@@ -1083,6 +1105,9 @@ the stage; publication-dependent acceptance remains held separately and visible.
     Verify entry points, state/storage paths and dependency/licence inventory.
     The development daemon build and an SMB test-client image do not close this
     product packaging task. Local preparation only while publication is held.
+    The Linux continuation prepared verified local musl compiler tooling. Actual
+    linked standard-library/compiler-runtime notices must be included alongside
+    Cargo/npm notices in the final dependency inventory; build/acceptance remains.
     [Local package assembly](stage-10-evidence.md#tasks-2427--local-native-package-and-packaged-process-execution)
     now builds an inspected macOS ARM64 dev archive with embedded panels,
     licence/inventory/provenance/checksums and passes a packaged setup/join/renewal/
@@ -1115,6 +1140,11 @@ the stage; publication-dependent acceptance remains held separately and visible.
     or the independent security review required by Stage 11.
 
 27. **Packaged-platform HTTPS/SMB acceptance — Partial; current-tree workflow corrections verified.** **6 points remaining.**
+    The [Linux continuation](stage-10-evidence.md#tasks-1027--linux-directory-durability-prerequisite)
+    fixed independently reproduced directory-fsync failures in folder and backup
+    providers; all 72 affected provider tests pass. Corrected full Linux offline
+    recovery passes in **139.28 s**, but a separate post-restart timeout remains
+    unexplained. No packaged-platform closure is claimed.
     Stage 10 exit gate, TST-004/007/009, REL-003. Run complete real-client file
     cycles, backup/recovery and upgrade paths using the accepted native/container
     artefacts, including Linux-only, macOS-only and mixed-host meshes. Keep local

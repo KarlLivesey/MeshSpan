@@ -31,16 +31,18 @@ The proof writes exact bytes through HTTPS and SMB, reads them back through both
 interfaces, then stops the two daemons in the same declared availability cell.
 The remaining gateways still return the exact acknowledged version. Fixture
 identities are mapped back to authoritative topology hosts before failure
-injection, so the test removes the intended machines rather than relying on
-discovery order.
+injection, so the test stops the processes representing the intended host groups
+rather than relying on discovery order. This is a local six-process proof, not
+six physical hosts or physical machine/power-loss evidence.
 
 Two clean consecutive runs passed in 41.14 and 42.52 seconds.
 
 ## Failure-model proof
 
-The direct real-folder acceptance test uses six machines with two folders each.
-It removes two whole machines, three additional storage devices and an isolated
-availability cell, then verifies exact reconstruction. Exhaustive small-topology
+The direct real-folder acceptance test models six machines with two local folders
+each. Its test router marks the targets representing two whole machines, three
+additional devices and an isolated availability cell unavailable, then verifies
+exact reconstruction. It does not remove physical machines, drives or links. Exhaustive small-topology
 tests compare the production placement search with a simple minimum-layout
 oracle. Separate cases prove heterogeneous capacity cannot manufacture fault
 independence and that a single machine reports device protection without falsely
