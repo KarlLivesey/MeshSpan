@@ -88,6 +88,7 @@ source/advisory policy automation arrive before a release artefact is built.
 | `meshspan-test-certificates` (workspace) |            0.1.0 | `GPL-2.0-only`             |
 | `sync_wrapper` (workspace)               |            1.0.2 | `GPL-2.0-only`             |
 | `p256`                                   |           0.14.0 | `Apache-2.0 OR MIT`        |
+| `p384`                                   |           0.14.0 | `Apache-2.0 OR MIT`        |
 | `rusqlite`                               |           0.40.2 | `MIT`                      |
 | `schemars`                               |            1.2.2 | `MIT`                      |
 | `serde`                                  |          1.0.229 | `MIT OR Apache-2.0`        |
@@ -130,6 +131,14 @@ ChaCha20-Poly1305 traffic protection. RFC 9001 AES and ChaCha packet/header vect
 rejection and a real mutually authenticated Rustls handshake are executable tests. Broader
 algorithm support is not implied and requires equivalent standards and interoperability proof.
 
+The explicit external HTTPS/certificate profile additionally admits `p384` 0.14.0
+under its MIT option for ECDSA P-384/SHA-384 verification. It reuses already resolved
+RustCrypto dependencies; no existing version changed. Internal node/federation
+identity verification and local signing retain the P-256 profile. Captured
+Let's Encrypt/Cloudflare chains and an independent P-384 issuer fixture cover
+external verification and its daemon call sites. RSA remains unsupported and
+NET-01 interoperability acceptance remains open; no advisory exclusion was added.
+
 The workspace `meshspan-quinn-rustls` package binds caller-supplied Rustls configurations to the
 public cryptography traits in current stable Quinn. It also supplies stateless-reset, retry and
 address-validation-token protection without enabling Quinn's Ring or AWS-LC adapters. This keeps
@@ -170,16 +179,16 @@ lockfile.
 
 ### Runtime and transport
 
-| Direct dependency | Need                                                                             |
-| ----------------- | -------------------------------------------------------------------------------- |
-| `tokio`           | One async runtime, sockets, tasks, timers, channels and bounded blocking workers |
-| `tokio-util`      | Cancellation tokens and framed/stream utilities not present in the core runtime  |
-| `quinn`           | Private QUIC streams and datagrams between mutually authenticated nodes          |
-| `rustls`          | Shared in-process TLS implementation for QUIC, HTTPS and certificate handling    |
-| `bytes`           | Bounded zero-copy-oriented network buffers                                       |
-| `hyper`           | In-process HTTP/1.1 server and ACME client protocol engine                       |
-| `hyper-util`      | Tokio IO adaptation for Hyper connections                                        |
-| `http-body-util`  | Bounded request bodies and streamed response-frame access                        |
+| Direct dependency | Need                                                                                                                                                   |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tokio`           | One async runtime, sockets, tasks, timers, channels and bounded blocking workers                                                                       |
+| `tokio-util`      | Cancellation tokens and framed/stream utilities not present in the core runtime                                                                        |
+| `quinn`           | Private QUIC streams and datagrams between mutually authenticated nodes                                                                                |
+| `rustls`          | Shared in-process TLS implementation for QUIC, HTTPS and certificate handling                                                                          |
+| `bytes`           | Bounded zero-copy-oriented network buffers                                                                                                             |
+| `hyper`           | In-process HTTP/1.1 server and ACME client protocol engine                                                                                             |
+| `hyper-util`      | Tokio IO adaptation for Hyper connections                                                                                                              |
+| `http-body-util`  | Bounded request bodies and streamed response-frame access                                                                                              |
 | `httpdate`        | HTTP-date parsing for ACME retry deadlines; reuses the already locked transitive package under its MIT option, with no additional runtime dependencies |
 
 There is no OpenRaft or `raft-rs` runtime dependency. Their behaviour remains a
@@ -241,7 +250,7 @@ the first implementation.
 | `blake3`           | Content, manifest, proof and operation digests where the design selects BLAKE3 |
 | `ed25519-dalek`    | Signed routing, grants, receipts and offline-authority projections             |
 | `chacha20poly1305` | Authenticated envelope encryption for protected application material           |
-| `cmac`             | SMB 3.1.1 AES-CMAC packet signing for compatible standard clients               |
+| `cmac`             | SMB 3.1.1 AES-CMAC packet signing for compatible standard clients              |
 | `hkdf`             | Domain-separated key derivation                                                |
 | `sha2`             | Standards that mandate SHA-2, including certificate and SMB constructions      |
 | `getrandom`        | Operating-system cryptographic randomness                                      |

@@ -2,9 +2,11 @@
 
 //! Narrow, portable RustCrypto-backed cryptography for `MeshSpan`'s Rustls profile.
 //!
-//! The initial profile deliberately supports only TLS 1.3, P-256 ECDHE and
-//! ECDSA P-256 identities. It provides AES-128-GCM and ChaCha20-Poly1305 traffic
-//! protection, including the QUIC algorithms required by RFC 9001.
+//! The internal profile deliberately supports only TLS 1.3, P-256 ECDHE and
+//! ECDSA P-256 identities. The external `WebPKI` profile also verifies P-384
+//! ECDSA/SHA-384 chains and peer signatures while keeping local signing P-256.
+//! Both profiles provide AES-128-GCM and ChaCha20-Poly1305 traffic protection,
+//! including the QUIC algorithms required by RFC 9001.
 
 use std::sync::Arc;
 
@@ -50,12 +52,32 @@ pub static TLS13_AES_128_GCM_SHA256: SupportedCipherSuite =
 /// Returns the complete, deliberately narrow `MeshSpan` Rustls provider.
 #[must_use]
 pub fn provider() -> CryptoProvider {
+    internal_identity_provider()
+}
+
+/// Returns the narrow P-256 profile for internal node and federation identities.
+#[must_use]
+pub fn internal_identity_provider() -> CryptoProvider {
     CryptoProvider {
         cipher_suites: vec![TLS13_CHACHA20_POLY1305_SHA256, TLS13_AES_128_GCM_SHA256],
         kx_groups: vec![&kx::SECP256R1],
-        signature_verification_algorithms: verify::ALGORITHMS,
+        signature_verification_algorithms: verify::INTERNAL_ALGORITHMS,
         secure_random: &PROVIDER,
         key_provider: &PROVIDER,
+    }
+}
+
+/// Returns the admitted external HTTPS and public certificate verification profile.
+///
+/// Supports ECDSA P-256/SHA-256 and P-384/SHA-384 verification. RSA and other
+/// signature algorithms remain unsupported; trust anchors never expand this set.
+/// Local signing keys, key exchange, traffic ciphers and TLS versions retain the
+/// internal profile's restrictions. Callers still select and validate trust roots.
+#[must_use]
+pub fn external_webpki_provider() -> CryptoProvider {
+    CryptoProvider {
+        signature_verification_algorithms: verify::EXTERNAL_ALGORITHMS,
+        ..internal_identity_provider()
     }
 }
 

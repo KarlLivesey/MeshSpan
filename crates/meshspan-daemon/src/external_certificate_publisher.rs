@@ -384,7 +384,7 @@ fn verify_submitted_chain(
             .map(CertificateDer::from)
             .collect(),
         PrivatePkcs8KeyDer::from(bundle.private_key_pkcs8().to_vec()).into(),
-        &meshspan_rustls_provider::provider(),
+        &meshspan_rustls_provider::external_webpki_provider(),
     )
     .map_err(|_| ExternalCertificatePublisherError::InvalidInput)?;
     let (leaf, remaining) = bundle
@@ -400,7 +400,7 @@ fn verify_submitted_chain(
         .map_err(|_| ExternalCertificatePublisherError::InvalidInput)?;
     let verifier = WebPkiServerVerifier::builder_with_provider(
         Arc::new(roots),
-        Arc::new(meshspan_rustls_provider::provider()),
+        Arc::new(meshspan_rustls_provider::external_webpki_provider()),
     )
     .build()
     .map_err(|_| ExternalCertificatePublisherError::InvalidInput)?;

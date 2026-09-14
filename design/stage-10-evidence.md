@@ -98,6 +98,30 @@ ACC-04. The current API supplies no reliable rollback classification, so server
 exceptions remain unknown. No dependency or generated/public API shape changed.
 The complete assembled gate is pending; no stage acceptance is claimed closed.
 
+### NET-01 — external P-384 certificate chains
+
+External certificate HTTPS, ACME result validation and gateway publication now
+select an explicit P-384-capable verification profile. Internal node/federation
+identity and local signing retain P-256. Captured public service chains and an
+independent OpenSSL-issued P-384 issuer/P-256 leaf fixture exercise the owning
+boundaries, including exact application bytes through a TLS handshake. Negative
+tests cover names, expiry, wrong roots and altered signatures.
+
+Before the change the captured production ACME chain regression failed
+(build **5.39 s**, test **0.00 s**). The provider suite then passed **9 tests**
+(build **3.00 s**, tests **0.19 s**), and the daemon `p384_` filter passed **3 tests**
+(build **98 s**, tests **0.08 s**). Affected all-target/all-feature Clippy passed
+in **16.31 s**. Captured chains passed **4 tests** again after test-only lint
+repairs; Rust formatting and `cargo deny check licenses` passed. The isolated
+daemon build first lacked its ignored web bundle; the unchanged baseline bundle
+was supplied before those tests. These are focused results, not live issuance.
+
+The sole added dependency is `p384` **0.14.0**, selecting its MIT option. Existing
+resolved dependency versions are unchanged. The full dependency-update gate is
+still required before integration. NET-01 remains open for RSA interoperability,
+real process issuance/installation and the remaining external acceptance. No
+publication, signature-profile weakening or advisory exclusion occurred.
+
 ## Tasks 10/27 — Linux directory durability prerequisite
 
 On 2026-09-14 the provided clean Linux checkout was fast-forwarded from
