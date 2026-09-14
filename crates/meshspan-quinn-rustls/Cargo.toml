@@ -17,7 +17,7 @@ getrandom.workspace = true
 hkdf.workspace = true
 hmac.workspace = true
 quinn-proto.workspace = true
-rustls = { version = "0.23.43", default-features = false, features = ["custom-provider", "std"] }
+rustls = { version = "0.23.45", default-features = false, features = ["custom-provider", "std"] }
 sha2.workspace = true
 zeroize.workspace = true
 

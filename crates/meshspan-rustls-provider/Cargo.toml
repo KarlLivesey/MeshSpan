@@ -19,7 +19,7 @@ getrandom.workspace = true
 hmac.workspace = true
 p256.workspace = true
 p384.workspace = true
-rustls = { version = "0.23.43", default-features = false, features = ["custom-provider", "std"] }
+rustls = { version = "0.23.45", default-features = false, features = ["custom-provider", "std"] }
 sha2.workspace = true
 
 [dev-dependencies]

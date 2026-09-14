@@ -10,6 +10,29 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Dependency gate — Rustls advisory and yanked wnaf patch
+
+On clean signed candidate `7f35e683`, NVM `pnpm check:dependency-update` stopped
+at Rust advisories in **1.41 s**. Rustls **0.23.43** is affected by
+[RUSTSEC-2026-0285 / GHSA-2mjx-qc3c-rqvc](https://github.com/rustls/rustls/security/advisories/GHSA-2mjx-qc3c-rqvc),
+a TLS 1.3 handshake encryption-level validation defect. JavaScript audit and
+canonical integration checks were not reached. The same scan separately warned
+that transitive **wnaf 0.14.0** was yanked. Log:
+`/tmp/meshspan-viability-integration-7f35e683.log`. An earlier attempt could not
+start because an external timing binary was absent; the actual run used Bash's
+built-in timer. Neither attempt is an integration pass.
+
+All three Rustls declarations now require **0.23.45**, the upstream patched
+release. The lockfile changes only Rustls and **wnaf 0.14.1**; the latter adds an
+edge to already-locked `primefield` for its endianness bounds. No other package
+version or enabled application feature changed. Both retain compatible MIT
+licence options. `cargo deny check licenses` passes. Thirteen focused TLS/QUIC
+adapter, external-chain and real mutual-TLS tests pass (**6.33 s** build; **0.19 s**
+reported test time). Affected all-target/all-feature Clippy passes **3.64 s**.
+The NVM advisory recheck passes both Rust and JavaScript scans in **1.62 s**.
+The complete dependency-update gate remains required after the assembled
+candidate is ready. Publication, live-CA and Stage 10/11 proof remain open.
+
 ## CORE-02 — interrupted bulk retry through three authorities
 
 The remaining interrupted/reconnect proof now passes. The existing real Quinn

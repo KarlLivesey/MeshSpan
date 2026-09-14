@@ -21,6 +21,19 @@ the entire canonical local gate, including generated-contract drift, both licenc
 policies, lint, formatting and all configured Rust/web tests. An unavailable audit
 service is a failed check, not a clean result. This command never publishes anything.
 
+Rustls is admitted at **0.23.45** or later on the maintained 0.23 line, including
+both MeshSpan TLS adapters. This fixes the handshake encryption-level validation
+issue in [GHSA-2mjx-qc3c-rqvc](https://github.com/rustls/rustls/security/advisories/GHSA-2mjx-qc3c-rqvc).
+The lockfile also selects **wnaf 0.14.1** instead of the yanked 0.14.0. Its
+[upstream change](https://github.com/RustCrypto/elliptic-curves/blob/master/wnaf/CHANGELOG.md)
+uses `primefield` bounds for scalar endianness. `primefield` was already locked;
+this adds a dependency edge, not a package or application capability. Its default
+features remain disabled at that edge. Rustls retains `Apache-2.0 OR ISC OR MIT`;
+wnaf retains `Apache-2.0 OR MIT`; their MIT options are permitted by
+MeshSpan's allow-only licence policy. The Rust 1.98 toolchain exceeds wnaf's
+1.85 minimum. These targeted patch changes still require the complete local
+dependency-update gate; focused TLS/QUIC tests alone do not admit integration.
+
 The code generator's exact `js-yaml@5.2.0` transitive pin is overridden to the
 maintained MIT-licensed `5.2.2` patch at that one dependency edge. It addresses
 [GHSA-pm4m-ph32-ghv5](https://github.com/nodeca/js-yaml/security/advisories/GHSA-pm4m-ph32-ghv5)
@@ -106,7 +119,7 @@ source/advisory policy automation arrive before a release artefact is built.
 | `form_urlencoded`                        |            1.2.2 | `MIT OR Apache-2.0`        |
 | `quinn`                                  |          0.11.11 | `MIT OR Apache-2.0`        |
 | `rcgen`                                  |           0.14.9 | `MIT OR Apache-2.0`        |
-| `rustls`                                 |          0.23.43 | `Apache-2.0 OR ISC OR MIT` |
+| `rustls`                                 |          0.23.45 | `Apache-2.0 OR ISC OR MIT` |
 | `tokio`                                  |           1.53.1 | `MIT`                      |
 | `tower`                                  |            0.5.3 | `MIT`                      |
 | `x25519-dalek`                           |            3.0.0 | `BSD-3-Clause`             |
