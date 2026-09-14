@@ -125,7 +125,12 @@ impl CleanupClient {
     }
 
     async fn wait_for_routes(&self) -> Result<(), Box<dyn Error>> {
-        let deadline = tokio::time::Instant::now() + harness::WAIT_LIMIT;
+        // The gateway was killed during passive catch-up. Its in-flight QUIC fetch may
+        // consume the protocol's full deadline before retrying against the restarted node.
+        // Retain the normal routing allowance after that bounded interruption.
+        let deadline = tokio::time::Instant::now()
+            + meshspan_cluster::MAXIMUM_METADATA_REPLICA_TRANSFER_TIME
+            + harness::WAIT_LIMIT;
         loop {
             let failure = match self.io.network.probe_peer(self.leader).await {
                 Ok(()) => match self.read_original_shard().await {

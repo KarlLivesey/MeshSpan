@@ -104,7 +104,15 @@ async fn backup_provider_snapshot_is_independent_of_storage_maintenance_lock()
         let waiter = std::thread::spawn(move || snapshot.wait_until_initialised(deadline));
         // Signal while maintenance is still locked: export admission must not acquire it.
         startup.finish_scan()?;
-        waiter.join().map_err(|_| "export waiter panicked")??;
+        waiter
+            .join()
+            .map_err(|_| "export waiter panicked")?
+            .map_err(|error| {
+                format!(
+                    "export startup wait at {:?}, deadline {deadline:?}: {error}",
+                    current_time()
+                )
+            })?;
         Ok(())
     })();
     let shutdown = authority.authority.shutdown().await;

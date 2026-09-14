@@ -212,7 +212,9 @@ async fn prove_private_leaf(
         node_id(root)?.to_string().replace('-', "")
     );
     let connection =
-        tokio::time::timeout(WAIT_LIMIT, endpoint.connect(root.private_address, &name)?).await??;
+        tokio::time::timeout(WAIT_LIMIT, endpoint.connect(root.private_address, &name)?)
+            .await
+            .map_err(|error| format!("private certificate handshake for {name}: {error}"))??;
     let trusted = PeerRegistry::new([PeerBinding {
         node_id: node_id(root)?,
         incarnation: expected.incarnation,

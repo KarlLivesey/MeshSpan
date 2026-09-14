@@ -150,7 +150,7 @@ pub(super) async fn configure(
     Ok(serde_json::from_str(response_body(&response)?)?)
 }
 
-pub(super) async fn request_post_enrolment_backup(
+pub(super) async fn request_fresh_backup(
     address: SocketAddr,
     client: &ClientConfig,
     authorization: &str,
@@ -168,15 +168,15 @@ pub(super) async fn request_post_enrolment_backup(
     require_status(
         &response,
         "200 OK",
-        "read backup policy before post-enrolment capture",
+        "read backup policy before fresh capture",
     )?;
     let response: meshspan_api_contract::BackupScheduleResponse =
         serde_json::from_str(response_body(&response)?)?;
     let schedule = response
         .schedule
         .ok_or("automatic backup schedule missing")?;
-    // Policy replacement schedules an immediate occurrence. Its new sequence fences the
-    // earlier automatic backup, which deliberately predates the peer's wrapping key.
+    // Policy replacement schedules an immediate occurrence. Its new sequence fences
+    // earlier archives that may predate the content or recipients this proof needs.
     let request = json!({
         "operation_id": "00000000-0000-4000-8000-000000000088",
         "expected_sequence": schedule.sequence, "policy": schedule.policy,
@@ -190,7 +190,7 @@ pub(super) async fn request_post_enrolment_backup(
         &[("Authorization", authorization)],
     )
     .await?;
-    require_status(&response, "200 OK", "schedule a backup after enrolment")?;
+    require_status(&response, "200 OK", "schedule a fresh backup")?;
     let configured: meshspan_api_contract::ConfigureBackupScheduleResponse =
         serde_json::from_str(response_body(&response)?)?;
     assert!(configured.sequence > schedule.sequence);

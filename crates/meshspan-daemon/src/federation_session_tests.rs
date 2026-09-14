@@ -93,7 +93,9 @@ impl SessionHosts {
                 tokio::time::timeout(Duration::from_secs(7), self.joiner.accept()).await??;
             assert_eq!(accepted.connection.remote_address(), original_address);
             verify_authority_exchange(joiner, &accepted.connection, relationship).await?;
-            backup::verify_capability(inviter, joiner, &accepted, self).await?;
+            backup::verify_capability(inviter, joiner, &accepted, self)
+                .await
+                .map_err(|error| format!("federation backup capability proof: {error}"))?;
             revoke(inviter, relationship)?;
             let reason =
                 tokio::time::timeout(Duration::from_secs(7), accepted.connection.closed()).await?;

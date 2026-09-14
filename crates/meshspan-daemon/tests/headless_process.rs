@@ -717,8 +717,7 @@ async fn clean_machine_operator_flow_uses_only_cli_and_public_https() -> Result<
         )
         .await?;
         let sequence =
-            stage10::request_post_enrolment_backup(root.address, &root_client, &authorization)
-                .await?;
+            stage10::request_fresh_backup(root.address, &root_client, &authorization).await?;
         let root_backup = backup_history::automatic_backup_history_for_schedule(
             root.address,
             &root_client,

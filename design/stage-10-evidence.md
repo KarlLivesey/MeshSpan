@@ -58,9 +58,202 @@ handoff filter selected **zero tests** on GNU Linux: its existing compile-time
 gate requires macOS or musl, and this host currently has only the GNU Rust
 target and no musl C compiler. Neither update failure has passing evidence.
 The complete integration gate remains pending.
+
+The recovery fixture now requests a fresh automatic capture after the strong
+file upload and requires that exact-or-later schedule sequence. It deliberately
+finishes the startup archive first and requires a different backup identity;
+the existing root/manifests/content assertions are unchanged. The shared capture
+helper has a general name and all its callers use it. The corrected run passed
+the formerly failing history checks, then reproduced the later unknown-peer
+cleanup failure in **93.46 s**, build **0.13 s**. The full test is still failed;
+state is retained at `/tmp/.tmpkDjJ71` and `/tmp/.tmpdhR7ck`. No full-suite retry
+was used to mask either defect.
+
+One signed progress-commit attempt for the Linux directory correction failed:
+the configured 1Password signer reported `failed to fill whole buffer`, and Git
+reported `failed to write commit object`. No commit, push or merge occurred.
+The staged Linux fix/evidence and separate recovery-fixture edits are preserved
+on `codex/stage10-recovery-update-regressions`. Signing was not retried or
+disabled; owner restoration of signing access has been requested. External and
+physical acceptance infrastructure is expected later per the owner, not tested
+or claimed available now.
+Final daemon all-target/all-feature Clippy passed with warnings denied in
+**52.23 s** on the corrected fixture tree. Rust formatting, both changed-document
+format checks and staged/unstaged diff checks passed. The root `pnpm exec
+prettier` lookup was unavailable; document checks used the already installed
+web-package formatter under NVM. All test and check processes have completed.
 No dependency, schema, protocol, licence or durability requirement changed.
 Task estimates remain **Stage 10: 81; Stage 11: 126/not started**. No release,
 tag, package/image publication or GitHub Actions ran.
+
+### Signing retry — authorization prompt timed out
+
+After the owner requested another attempt, the configured 1Password signer was
+retried once for the staged Linux directory fix. It again returned `failed to
+fill whole buffer`; Git created no commit. Read-only inspection found that the
+local SSH agent responds and advertises the exact configured Ed25519 signing
+key. The 1Password application log identifies an SSH authorization prompt timeout;
+earlier attempts also recorded a background prompt waiting in the tray. The owner
+reported seeing no request. Signing configuration remains intact, the staged fix
+is preserved, and no unsigned fallback, push or merge occurred.
+
+With 1Password in the foreground, the next owner-coordinated attempt succeeded:
+`61c698342f9ef874a6b42c073f52d9eb5714d707` contains the two Linux directory
+corrections and their initial evidence. `git verify-commit` reports a good SSH
+signature. The progress branch was pushed, `git ls-remote` confirms that exact
+head, and GitHub's commit API reports `verified: true`, reason `valid`. Remote
+main remains `fcd65853`; nothing has been merged. The later recovery fixture
+corrections and additional evidence remain separate uncommitted work.
+
+### Storage-replica restart diagnosis — not closure
+
+Disposable SQLite backups of retained failure state replayed successfully from
+index **28/epoch 2** through **54/epoch 4**, then from **36/epoch 2** through
+**62/epoch 4**, including each joint/stable boundary. Original retained databases
+were opened read-only for copying. This narrows the live failure; it does not
+prove the daemon worker performs that catch-up.
+
+A test-only diagnostic used the storage node's installed identity to request its
+exact missing page from the still-running recovered gateway. The recovery test
+still failed in **105.13 s**, build **5.01 s**, while that fresh authenticated
+fetch succeeded with five entries. State is retained at `/tmp/.tmpQPR6rH` and
+`/tmp/.tmpbKmw60`. Temporary worker tracing then reproduced the failure in
+**113.07 s**, build **9.48 s**, with a fresh fetch of eight entries succeeding;
+state is retained at `/tmp/.tmpwbr8VV` and `/tmp/.tmpsH71xH`. Live worker tracing
+showed advancement through index 36 before restart; diagnosis is continuing at
+the worker startup/source-selection boundary. No production catch-up correction,
+longer readiness deadline or passing full recovery is claimed.
+
+Further trace-only runs failed in **115.46 s** (build **8.11 s**, retained
+`/tmp/.tmpOZqHIE`, `/tmp/.tmpxm2clH`) and **125.68 s** (build **20.22 s**,
+retained `/tmp/.tmp7dY4cV`, `/tmp/.tmpHYc0w0`). They confirmed that the storage-only
+worker reopened correctly and began a fetch immediately before gateway death.
+An attached debugger was unavailable under the host's ptrace policy; temporary
+source tracing supplied the required observation instead.
+
+The final diagnostic deliberately retained the original failure after observing
+35 more seconds; it remained failed in **158.16 s**, build **3.76 s**. Its trace
+showed the outstanding fetch reaching the existing **30-second** protocol
+deadline, then automatic catch-up from index **36** to **62**, crossing both
+joint/stable membership changes. A fresh fetch then returned zero entries at
+epoch 4/index 62. State is retained at `/tmp/.tmp7Qy3hI` and `/tmp/.tmpUQdv2g`.
+This explains the apparent stall: the cleanup fixture's generic 15-second routing
+allowance expired before the interrupted history request's accepted deadline.
+
+Only the post-restart fixture readiness budget now includes one existing history
+transfer deadline plus its normal routing allowance. It still requires successful
+real shard read, exact bytes and all unchanged cleanup/restart assertions. The
+production deadline, retry policy, authentication and consensus rules are
+unchanged. All temporary tracing, the delayed-failure observation and the scratch
+example were removed before the corrected focused run. This is an evidence-led
+fixture correction, not a claim that a longer wait fixes a production defect.
+
+The corrected fixture's first run failed earlier in post-restart checks with an
+unlabelled timeout in **137.53 s**, build **27.61 s**, before new-peer cleanup.
+State is retained at `/tmp/.tmpDFwg1i`: both databases retain storage certificate
+generation 2; the gateway is in term 4 while the passive replica remains at its
+term-3 frontier. Certificate-handshake and returning-node-rejection timeouts now
+identify their operation. This separate failure is not explained or closed by
+the catch-up deadline finding. The full corrected workflow remains unverified.
+
+The next corrected full offline recovery run **passed in 139.28 s**, build
+**4.74 s**, with four test threads. It exercises the fresh post-upload export,
+all original offline-verification/history/content checks, replacement services,
+renewal and identity rejection, then exact committed cleanup and receipt replay
+through both interruption windows while preserving original/new file bytes.
+The added timeout messages do not alter either affected operation's deadline or
+success criteria. This passing run does **not** explain the preceding
+137.53-second timeout; its retained state remains an open reliability observation
+for Stage 10/Stage 11 task 14. The other two PR #269 update tests still have no
+passing proof on this GNU-only toolchain. No full integration gate ran.
+
+Affected daemon all-target/all-feature Clippy passed with warnings denied in
+**6.41 s** after removing diagnostics. Fresh `pnpm check:licences` under NVM
+passed Rust licensing and **9 production / 28 tool-only** JavaScript packages.
+Rust formatting and staged/unstaged diff checks passed. No dependency was added
+or changed; project licensing remains `GPL-2.0-only`.
+
+### Federation deadline diagnosis after the failed gate
+
+A daemon-library run with four test threads and test-only error context reproduced
+the federation failure in **72.70 s**, build **44.19 s**: the store after the
+independent interruption proofs rejected `capability deadline elapsed`. The run
+had **438 passing / 2 failing** tests; the additional failure was
+`backup_provider_snapshot_is_independent_of_storage_maintenance_lock`, returning
+`Unavailable`. Its cause is being isolated separately. The diagnostic log is
+`/tmp/meshspan-federation-diagnostic-lib.log`.
+
+The federation fixture created its five-second store context before allocation
+setup, routing, the stalled-upload proof and the separate lost-result recovery
+proof. The correction starts each attempt's existing five-second allowance when
+that attempt is ready to run. It preserves the operation/object identity and
+still replays the successful request exactly. No production deadline or authority
+check changes. Verification is pending; neither this diagnosis nor the earlier
+isolated passing retry closes the integration gate.
+
+The corrected daemon-library run passed **440 tests in 38.10 s**, build
+**19.99 s**, with four test threads. The federation regression passed. The
+storage-maintenance snapshot test also passed, but its previous `Unavailable`
+remains unexplained; its startup-wait failure now reports the observed time and
+deadline. This diagnostic does not change its five-second allowance or lock
+assertions. Affected all-target/all-feature daemon Clippy passed with warnings
+denied in **5.52 s**; Rust formatting and diff checks passed. The complete gate
+must be rerun on the corrected candidate before integration.
+
+### Full local gate — failed; no integration
+
+`MESHSPAN_CHECK_WORKERS=4 CARGO_BUILD_JOBS=4 pnpm check`, under the configured NVM
+toolchain, failed in **510.74 s**. The tested base is `fcd65853`; the binary diff
+of `crates` against that base has SHA-256
+`64dd51044cdb5feb2a60ad610cd7d0aaaaed1fbd88663f5b15e6f192a54e0487`.
+Only evidence prose changed during/after the run. The local gate log is
+`/tmp/meshspan-stage10-linux-integration.log`.
+
+Generated drift (**19.21 s**), embedded web (**0.82 s**), Rust format (**3.85 s**),
+workspace all-target/all-feature Rust lint (**51.18 s**), Rust licensing
+(**0.62 s**), JavaScript licensing (**1.26 s**), workspace format (**7.42 s**), web
+lint (**44.74 s**), web types (**14.01 s**), tooling tests (**1.65 s**) and web
+tests (**22.35 s**) passed. No advisory scan was run by this non-dependency gate.
+
+The Rust test lane failed in **390.31 s** at the daemon library: **439 passed,
+1 failed**, target runtime **44.91 s**. The failing test is
+`consensus_authentication_authority_tests::federation_pairing::connection::federation_connection_recovers_lost_approval_reply_over_real_tls`,
+returning `DeadlineExceeded`. Headless tests and later Rust targets were not
+reached. The previously passing focused offline recovery is not a passing full
+gate and neither missing update proof is closed.
+
+A focused local reproduction attempt passed in **8.08 s**, build **55.34 s**.
+That retry does not resolve the failure. Current source shows the named pairing
+test also exercises native QUIC sessions, allocation and backup IO; several
+backup requests use five-second deadlines, including a store request constructed
+before other setup/proof work. This is a diagnostic lead, not a confirmed cause
+or justification to relax deadlines. No federation code or test assertion was
+changed in response, and the full gate was not rerun while investigating.
+
+The existing 1Password signing failure remains unresolved. No retry, unsigned
+commit, progress push, PR, merge or publication occurred. Staged Linux durability
+changes and separate fixture/evidence edits remain in the provided checkout on
+`codex/stage10-recovery-update-regressions`. Stage 10 remains **81 points**, task
+10 **3 points**, and Stage 11 **126/not started**.
+
+### Earlier-stage prerequisite reconciliation
+
+Current-source/evidence inspection retains Stages 1–3's completed audit and the
+accepted pre-Stage-6 retrofit; it does not rerun their historical exit proofs.
+Stages 4 and 5 remain reopened for pack lifecycle/reuse, tracked once in Stage 10,
+task 17. Stages 6–8 have recorded integrated evidence, while their ignored real-SMB
+proofs still require separate execution on a candidate. The Stage 8 process test
+starts six local `ProcessFixture` children; the `protected_content` test uses
+real temporary folders and a test router's `set_offline_many`. Its historical
+wording is clarified accordingly: neither establishes physical six-host loss.
+
+Stage 9 has repair/scrub/drain workers and component tests in current source, but
+its roadmap exit requires seeded long churn plus those operations alongside real
+HTTPS/SMB traffic. No dedicated Stage 9 exit log or equivalent consolidated proof
+has been located. That acceptance remains open; component presence and Stage 8
+read reconstruction cannot substitute for it. Stage 11's integrated candidate
+requirements and physical/soak/reviewer gates also remain open. This review does
+not change task estimates or start automatic Stage 12 sharding.
 
 ## Task 10 — storage-only startup and shard service
 
