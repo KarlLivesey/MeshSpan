@@ -10,6 +10,74 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## ACC-05 — ordinary SMB lease renewal and owned connection shutdown
+
+The connection owner now renews one due open per maintenance step, with a
+one-second wake and half-life scheduling for the existing 60-second lease.
+Uncertain renewal fences that open and advances the queue. Close removes its
+renewal; disconnect releases clean opens and preserves acknowledged dirty staging
+for durable expiry without implicit publication or abort. Filesystem branch
+migration **046** explicitly distinguishes handle-bound locks from independently
+timed locks. Live handle-bound locks renew atomically; immutable acquisition
+deadlines and exact receipts survive replay. Legacy locks remain independent,
+including when their original deadlines happen to equal the handle deadline.
+
+SMB renewal samples its executed timestamp after acquiring native runtime
+ownership. It retains the original operation ID and intended expiry, rejects
+backward clocks, and never retries changed bytes after uncertainty. Other adapters
+and explicit takeover retain caller-owned replay timestamps. Idle maintenance
+preserves a partially read TCP frame. Shutdown signals idle readers, observes
+started blocking work, and retains bounded dispatch/cleanup failure reports.
+
+Fail-before evidence is retained:
+
+- The real client held the same open for 65 seconds, then its read failed with
+  errno 22 (**72.22 s**); fixture `.tmpcPkj4R` remains under the configured disk
+  validation TMPDIR. No renewal implementation was present for that baseline.
+- Lock continuity/corrupt-lifetime admission: **2 failed, 2 passed, 0.58 s**.
+- Missing idle maintenance and abandoned work at the old 30-second shutdown
+  deadline: **2 failed, 30.01 s**.
+- Native mutex admission: **2 failed, 1 passed, 0.22 s**. A queued renewal at
+  time 30 incorrectly extended an expired-at-60 handle to 90 after the clock
+  reached 70; a backward clock was also accepted.
+
+On `011d599f` plus the assembled working tree, focused native admission tests
+passed **3/3, 0.21 s** (final fixture build **72 s**). The fixed server binary passed **5/5,
+31.01 s**, including the named slow shutdown proof. Filesystem tests previously
+passed **245/245** (unit **37.96 s**, integration **16.06 s**), and SMB tests
+**65/65**. Their production behavior was unchanged after those runs. Combined
+`cargo clippy -p meshspan-metadata -p meshspan-daemon -p meshspan-filesystem
+-p meshspan-smb --all-targets --all-features -- -D warnings` passed in **19.57 s**.
+The first lint pass found test-only `expect`/`panic` plumbing and separately
+owned daemon composition/reporting/enrollment findings; these were corrected
+without weakening lint rules. The changed native fixture was rerun afterward.
+Targeted Rustfmt, diff checks and evidence Prettier passed; the latter used the
+installed web tool under NVM Node **26.8.2**, pnpm **11.19.0**. Cargo used four
+build workers, the shared target directory and disk-backed validation TMPDIR.
+
+The real public SMB proof now **passes**: the same `SMBCFILE` stays idle for
+65 seconds after acknowledged staging, reads exact bytes, rewrites and rereads
+through that open, closes, then reopens exact published bytes. The combined
+`cargo test -p meshspan-daemon --test headless_process -- --include-ignored
+--test-threads=2 smb_lease:: user_enrollment:: --nocapture` ran in **73.11 s**
+(build **16.15 s**): SMB passed, independent enrollment failed with HTTP 401
+creating a TOTP challenge; `.tmp93Me3Q` is retained for that separate diagnosis.
+This command is therefore a failed combined gate, not a passing checkpoint.
+
+The optional local helper uses installed Samba 4.24.7 `libsmbclient`; no runner
+was downloaded. Its authored source is GPL-2.0-only, but the external library is
+GPL-3.0-or-later: the combined local binary is not distributable as GPL-2.0-only
+and must never enter MeshSpan artifacts. It is selected only through
+`MESHSPAN_SMB_LEASE_CLIENT`; no Samba implementation source or dependency was added.
+
+ACC-05 remains open: native runtime lock contention can still delay unrelated
+opens beyond expiry (CORE-06 fairness); explicit wire FLUSH and lock-continuity
+proofs, current export generation/revocation binding, and accepted resource caps
+remain. The old 30-second forced-abort behavior was unsafe and is removed; a
+cooperative aggregate shutdown bound is **not** proved. Private INT-01 lifecycle,
+the full integration gate, Stage 10 and publication remain open.
+
+
 ## ACC-01 — registration after another user is created
 
 The native enrollment test reached a real server defect: TOTP challenge creation

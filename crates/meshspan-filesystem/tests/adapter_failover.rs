@@ -542,6 +542,7 @@ fn assert_handle_controls(
             handle_fence: 1,
             range: ByteRange::new(2, 2)?,
             kind: RangeLockKind::Exclusive,
+            lifetime: meshspan_filesystem::RangeLockLifetime::Independent,
             lease_expires_at: UnixMicros::new(70),
             observed_at: UnixMicros::new(20),
         },

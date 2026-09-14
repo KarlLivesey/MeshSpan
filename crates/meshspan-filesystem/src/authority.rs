@@ -983,6 +983,7 @@ where
                 gateway_node_id: context.gateway_node_id,
                 range: request.range,
                 kind: request.kind,
+                lifetime: request.lifetime,
                 lease_expires_at: request.lease_expires_at,
                 observed_at: request.observed_at,
             },

@@ -628,7 +628,7 @@ impl DurableContentReader for TestPublisher {
     }
 }
 
-fn seed_namespace(state: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn seed_namespace(state: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = VersionPublicationStore::open(state, UnixMicros::new(1))?;
     store.publish_root_file(&RootFilePublication {
         file: FilePublication {
@@ -696,7 +696,7 @@ fn uuid_text(bytes: [u8; 16]) -> String {
     )
 }
 
-const fn versioned(seed: u8) -> [u8; 16] {
+pub(crate) const fn versioned(seed: u8) -> [u8; 16] {
     let mut bytes = [seed; 16];
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;

@@ -15,13 +15,14 @@ use meshspan_smb::{DIRECT_TCP_MAX_PAYLOAD_LENGTH, DirectTcpFrameHeader, encode_d
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::task::JoinSet;
+use tokio::sync::watch;
+use tokio::task::{JoinError, JoinSet};
 use tokio::time::timeout;
 
 const DIRECT_TCP_HEADER_BYTES: usize = 4;
 const MINIMUM_SMB_PACKET_BYTES: usize = 64;
 const MAXIMUM_SMB_PACKET_BYTES: usize = DIRECT_TCP_MAX_PAYLOAD_LENGTH;
-const CONNECTION_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Per-connection bounded message and inactivity policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -61,11 +62,28 @@ impl SmbServerLimits {
 /// Mutable protocol/application state created independently for each TCP connection.
 pub trait SmbConnectionHandler: Send + 'static {
     /// Connection-local dispatch failure; it never terminates the listener.
-    type Error: Send;
+    /// Display must contain stable, redacted details suitable for a cleanup report.
+    type Error: Send + std::fmt::Display;
 
     /// Handles one complete bounded SMB message and optionally returns one response.
     fn handle(&mut self, request: Vec<u8>) -> SmbHandlerFuture<'_, Self::Error>;
+
+    /// Advances one bounded idle-maintenance step and returns its next wake delay.
+    fn maintain(
+        &mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<Duration, Self::Error>> + Send + '_>> {
+        Box::pin(async { Ok(Duration::from_secs(1)) })
+    }
+
+    /// Observes connection-local cleanup after all in-flight dispatch has completed.
+    fn shutdown(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + '_>> {
+        Box::pin(async { Ok(()) })
+    }
 }
+
+#[cfg(test)]
+#[path = "smb_server_lifecycle_tests.rs"]
+mod lifecycle_tests;
 
 /// One bound embedded SMB listener.
 pub struct SmbServer {
@@ -122,7 +140,8 @@ impl SmbServer {
     ///
     /// # Errors
     ///
-    /// Returns only when the shared listener can no longer accept connections.
+    /// Reports listener or owned cleanup failures after every started connection has drained.
+    /// Shutdown is cooperative: it never abandons a running blocking filesystem operation.
     pub async fn run_until<F, Make, H, E>(
         self,
         make_handler: Make,
@@ -135,51 +154,147 @@ impl SmbServer {
         E: Send,
     {
         let mut connections = JoinSet::new();
+        let (stop, stopped) = watch::channel(false);
+        let mut failures = ConnectionFailures::default();
         tokio::pin!(shutdown);
-        loop {
+        let primary = loop {
             tokio::select! {
-                () = &mut shutdown => break,
+                () = &mut shutdown => break None,
                 accepted = self.listener.accept() => {
-                    let (stream, _) = accepted.map_err(SmbServerError::Accept)?;
+                    let (stream, _) = match accepted {
+                        Ok(connection) => connection,
+                        Err(error) => break Some(Box::new(SmbServerError::Accept(error))),
+                    };
                     let Ok(mut handler) = make_handler() else {
                         continue;
                     };
                     let limits = self.limits;
                     let stream = ObservedGatewayIo::new(stream, GatewayProtocol::Smb, self.transfer_observer.clone());
+                    let stopped = stopped.clone();
                     connections.spawn(async move {
-                        drop(serve_connection(stream, limits, &mut handler).await);
+                        // Peer/protocol failures close only this client. If cleanup also fails,
+                        // retain both outcomes in the bounded listener shutdown report.
+                        let primary = serve_connection(stream, limits, &mut handler, stopped).await.err();
+                        handler.shutdown().await.map_err(|cleanup| {
+                            format!("dispatch: {}; cleanup: {}",
+                                bounded_failure(format_args!("{primary:?}"), 224),
+                                bounded_failure(format_args!("{cleanup}"), 224))
+                        })
                     });
                 }
-                completed = connections.join_next(), if !connections.is_empty() => {
-                    drop(completed);
+                Some(completed) = connections.join_next(), if !connections.is_empty() => {
+                    failures.observe(completed);
                 }
             }
+        };
+        // Stopping an idle read is safe; started handler work retains ownership until completion.
+        stop.send_replace(true);
+        while let Some(completed) = connections.join_next().await {
+            failures.observe(completed);
         }
-        let drain = async { while connections.join_next().await.is_some() {} };
-        if timeout(CONNECTION_DRAIN_TIMEOUT, drain).await.is_err() {
-            connections.shutdown().await;
-        }
-        Ok(())
+        failures.finish(primary)
     }
+}
+
+#[derive(Default)]
+struct ConnectionFailures {
+    first: Option<String>,
+    additional: u64,
+}
+
+impl ConnectionFailures {
+    fn observe(&mut self, completed: Result<Result<(), String>, JoinError>) {
+        let failure = match completed {
+            Ok(Ok(())) => return,
+            Ok(Err(failure)) => failure,
+            Err(_) => "SMB connection task stopped unexpectedly".to_owned(),
+        };
+        if self.first.is_none() {
+            self.first = Some(failure);
+        } else {
+            self.additional = self.additional.saturating_add(1);
+        }
+    }
+
+    fn finish(self, primary: Option<Box<SmbServerError>>) -> Result<(), SmbServerError> {
+        match (self.first, primary) {
+            (Some(first), primary) => Err(SmbServerError::Cleanup {
+                primary,
+                first,
+                additional_failures: self.additional,
+            }),
+            (None, Some(primary)) => Err(*primary),
+            (None, None) => Ok(()),
+        }
+    }
+}
+
+// Bound diagnostics during formatting, before a possibly long handler message allocates.
+fn bounded_failure(arguments: std::fmt::Arguments<'_>, maximum_bytes: usize) -> String {
+    use std::fmt::Write;
+    struct Report {
+        text: String,
+        maximum_bytes: usize,
+    }
+    impl std::fmt::Write for Report {
+        fn write_str(&mut self, value: &str) -> std::fmt::Result {
+            let remaining = self.maximum_bytes.saturating_sub(self.text.len());
+            let mut end = remaining.min(value.len());
+            while !value.is_char_boundary(end) {
+                end -= 1;
+            }
+            self.text.push_str(&value[..end]);
+            Ok(())
+        }
+    }
+    let mut report = Report {
+        text: String::new(),
+        maximum_bytes,
+    };
+    // Report's writer always succeeds, including after its fixed bound is reached.
+    if report.write_fmt(arguments).is_err() {
+        return "SMB connection failure could not be formatted".to_owned();
+    }
+    report.text
 }
 
 async fn serve_connection<H: SmbConnectionHandler>(
     mut stream: ObservedGatewayIo<TcpStream>,
     limits: SmbServerLimits,
     handler: &mut H,
+    mut stopped: watch::Receiver<bool>,
 ) -> Result<(), SmbConnectionIoError> {
+    let mut maintenance = tokio::time::Instant::now() + MAINTENANCE_INTERVAL;
     loop {
-        let Some(payload) = read_frame(&mut stream, limits).await? else {
+        let payload = {
+            // Keep the same read future across maintenance: partial headers and its inactivity
+            // deadline belong to that frame, and must never restart on an idle tick.
+            let reading = read_frame(&mut stream, limits);
+            tokio::pin!(reading);
+            loop {
+                if *stopped.borrow() {
+                    return Ok(());
+                }
+                tokio::select! {
+                    biased;
+                    _ = stopped.changed() => return Ok(()),
+                    () = tokio::time::sleep_until(maintenance) => {
+                        let delay = handler.maintain().await.map_err(|error| SmbConnectionIoError::Handler(bounded_failure(format_args!("{error}"), 224)))?;
+                        maintenance = tokio::time::Instant::now() + delay;
+                    }
+                    result = &mut reading => break result?,
+                }
+            }
+        };
+        let Some(payload) = payload else {
             return Ok(());
         };
-        let Some(response) = handler
-            .handle(payload)
-            .await
-            .map_err(|_| SmbConnectionIoError::Handler)?
-        else {
-            continue;
-        };
-        write_frame(&mut stream, limits, &response).await?;
+        let response = handler.handle(payload).await.map_err(|error| {
+            SmbConnectionIoError::Handler(bounded_failure(format_args!("{error}"), 224))
+        })?;
+        if let Some(response) = response {
+            write_frame(&mut stream, limits, &response).await?;
+        }
     }
 }
 
@@ -241,6 +356,18 @@ pub enum SmbServerError {
     /// The listener failed while accepting a connection.
     #[error("the SMB listener failed while accepting a connection: {0}")]
     Accept(#[source] io::Error),
+    /// Owned connection cleanup failed after all started work was observed.
+    #[error(
+        "SMB cleanup failed: {first}; {additional_failures} additional failures; listener: {primary:?}"
+    )]
+    Cleanup {
+        /// Original listener failure, when shutdown followed an accept failure.
+        primary: Option<Box<Self>>,
+        /// First bounded connection failure, retaining dispatch and cleanup outcomes.
+        first: String,
+        /// Further failures counted without retaining an unbounded history.
+        additional_failures: u64,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -251,8 +378,8 @@ enum SmbConnectionIoError {
     TimedOut,
     #[error("SMB Direct TCP frame is invalid")]
     InvalidFrame,
-    #[error("SMB connection handler failed")]
-    Handler,
+    #[error("SMB connection handler failed: {0}")]
+    Handler(String),
 }
 
 #[cfg(test)]

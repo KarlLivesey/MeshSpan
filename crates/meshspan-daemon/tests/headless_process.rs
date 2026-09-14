@@ -34,6 +34,8 @@ mod passkey_support;
 mod private_certificates;
 #[path = "headless_process/protection_metrics.rs"]
 mod protection_metrics;
+#[path = "headless_process/smb_lease.rs"]
+mod smb_lease;
 #[path = "headless_process/recovery_certificate_transport.rs"]
 mod recovery_certificate_transport;
 #[path = "headless_process/recovery_consensus_permission.rs"]

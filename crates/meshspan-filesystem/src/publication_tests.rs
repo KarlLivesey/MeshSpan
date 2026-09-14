@@ -2381,7 +2381,10 @@ fn content_reuse_migration_preserves_existing_namespace_versions()
     let first = initial_root_publication()?;
     let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
     store.publish_root_file(&first)?;
-    store.connection.execute_batch("DELETE FROM schema_migrations WHERE version = 45;
+    store.connection.execute_batch("DELETE FROM schema_migrations WHERE version = 46;
+        ALTER TABLE range_locks DROP COLUMN acquired_lease_expires_at;
+        ALTER TABLE range_locks DROP COLUMN lock_lifetime;
+        DELETE FROM schema_migrations WHERE version = 45;
         DROP TABLE namespace_convergence_job_heads;
         DROP TABLE namespace_convergence_jobs; DROP TRIGGER namespace_convergence_enqueue;
         DROP TABLE namespace_convergence_frontier; DELETE FROM schema_migrations WHERE version = 44;

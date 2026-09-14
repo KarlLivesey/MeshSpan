@@ -154,7 +154,19 @@ impl FilesystemFileAdapter for NativeFilesystemRuntime {
         context: meshspan_filesystem::FilesystemAccessContext,
         request: AdapterLeaseRequest,
     ) -> Result<HandleLeaseReceipt, Self::Error> {
-        self.with_mut(|filesystem| filesystem.renew_lease(context, request))
+        let mut owner = self.lock()?;
+        let (context, request) = super::lease::renewal_at_admission(
+            &owner,
+            context,
+            request,
+            crate::api_http::current_time,
+        )?;
+        owner
+            .filesystem
+            .as_mut()
+            .ok_or(NativeFilesystemRuntimeError::Unavailable)?
+            .renew_lease(context, request)
+            .map_err(Into::into)
     }
 
     fn lock_range(

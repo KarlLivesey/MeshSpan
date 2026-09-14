@@ -119,7 +119,7 @@ pub use handles::{
     ByteRange, CloseHandleOutcome, CloseHandleReceipt, CloseHandleRequest, CreateDisposition,
     HandleAccess, HandleAuthorityTarget, HandleError, HandleInformationReceipt, HandleLeaseReceipt,
     HandleLeaseRequest, HandleShare, HandleWriteAdmissionReceipt, HandleWriteAdmissionRequest,
-    LockRangeReceipt, LockRangeRequest, OpenHandleReceipt, OpenHandleRequest, RangeLockKind,
+    LockRangeReceipt, LockRangeRequest, OpenHandleReceipt, OpenHandleRequest, RangeLockKind, RangeLockLifetime,
     ReadyNamespaceDelete, ReadyNamespaceDeletePage, SetHandleDispositionRequest,
     SetHandleLengthRequest, UnlockRangeReceipt, UnlockRangeRequest,
 };

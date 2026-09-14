@@ -524,6 +524,7 @@ fn lock_request(
         gateway_node_id: open.gateway_node_id,
         range: ByteRange::new(start, length)?,
         kind,
+        lifetime: RangeLockLifetime::Independent,
         lease_expires_at: UnixMicros::new(expires_at),
         observed_at: UnixMicros::new(observed_at),
     })
@@ -679,3 +680,6 @@ fn publication() -> Result<RootFilePublication, Box<dyn std::error::Error>> {
         entry_generation: 1,
     })
 }
+
+#[path = "handles_lease_tests.rs"]
+mod lease;

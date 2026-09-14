@@ -137,6 +137,29 @@ where
         }
     }
 
+    /// Performs at most one due renewal, including while the client sends no requests.
+    ///
+    /// # Errors
+    ///
+    /// Returns the failure of the exact open fenced by this step. Other opens remain usable.
+    pub fn maintain(&mut self, now: UnixMicros) -> Result<bool, ConnectorFailure> {
+        self.dispatcher
+            .as_mut()
+            .map_or(Ok(false), |dispatcher| dispatcher.maintain(now))
+    }
+
+    /// Withdraws the session and releases at most one clean open; dirty staging retains its
+    /// durable lease expiry without an implicit publication. Repeat until this returns false.
+    ///
+    /// # Errors
+    ///
+    /// Reports the exact cleanup failure while still advancing to the next open.
+    pub fn detach_one(&mut self, now: UnixMicros) -> Result<bool, ConnectorFailure> {
+        self.dispatcher
+            .as_mut()
+            .map_or(Ok(false), |dispatcher| dispatcher.detach_one(now))
+    }
+
     fn negotiate(&mut self, packet: &[u8]) -> Result<Vec<u8>, SmbProtocolConnectionError> {
         let config = self.handshake_config.negotiate;
         let response = self.handshake_mut()?.negotiate(packet, config)?;

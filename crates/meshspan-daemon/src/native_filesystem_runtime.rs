@@ -4,6 +4,7 @@
 
 mod adapter;
 mod classification;
+mod lease;
 pub(crate) mod publication;
 
 use std::path::{Path, PathBuf};
