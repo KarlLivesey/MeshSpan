@@ -1170,11 +1170,17 @@ where
             }
         }
     };
-    serve_public_services(config, services, lifecycle).await?;
-    let shutdown_result = authority.shutdown().await;
-    let authority_result = authority_task.await;
-    shutdown_result?;
-    authority_result.map_err(|_| DaemonProcessError::AuthorityTaskStopped)??;
+    let mut outcome = ShutdownOutcome::default();
+    outcome.record(serve_public_services(config, services, lifecycle).await);
+    // A failed bind or service task still owns the authority until its shutdown and join.
+    outcome.record(authority.shutdown().await.map_err(Into::into));
+    outcome.record(
+        authority_task
+            .await
+            .map_err(|_| DaemonProcessError::AuthorityTaskStopped)
+            .and_then(|result| result.map_err(Into::into)),
+    );
+    outcome.finish()?;
     Ok(if restart_requested.load(Ordering::Acquire) {
         DaemonCycleExit::RestartRequested
     } else {
@@ -1214,9 +1220,12 @@ where
     let (stop, _) = tokio::sync::watch::channel(false);
     // Composition reads shared catalogue/observation handles. Maintenance may wait
     // for remote authority with the target lock held, so start it only after binding.
-    spawn_storage_target_reconciler(services.storage_targets);
     let serving = services.update_readiness.serving();
     let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(run_storage_target_reconciler(
+        services.storage_targets,
+        stop.subscribe(),
+    ));
     let federation_stop = stop.subscribe();
     let federation_observations = services.gateway_observations.as_ref().clone();
     tasks.spawn(async move {
@@ -1332,18 +1341,46 @@ where
     };
     // Withdraw readiness before telling any listener or worker to stop.
     drop(serving);
-    let _ = stop.send(true);
-    let ended_early = first.is_some();
+    stop.send_replace(true);
+    let mut outcome = ShutdownOutcome::default();
     if let Some(result) = first {
-        resolve_public_task(result)?;
+        outcome
+            .record(resolve_public_task(result).and(Err(DaemonProcessError::ListenerTaskStopped)));
     }
+    // Returning on the first error would abort remaining async owners while their
+    // already-started blocking IO continues without an observed completion barrier.
     while let Some(result) = tasks.join_next().await {
-        resolve_public_task(result)?;
+        outcome.record(resolve_public_task(result));
     }
-    if ended_early {
-        Err(DaemonProcessError::ListenerTaskStopped)
-    } else {
-        Ok(())
+    outcome.finish()
+}
+
+#[derive(Default)]
+struct ShutdownOutcome {
+    primary: Option<DaemonProcessError>,
+    additional_failures: u32,
+}
+
+impl ShutdownOutcome {
+    fn record(&mut self, result: Result<(), DaemonProcessError>) {
+        if let Err(error) = result {
+            if self.primary.is_none() {
+                self.primary = Some(error);
+            } else {
+                self.additional_failures = self.additional_failures.saturating_add(1);
+            }
+        }
+    }
+
+    fn finish(self) -> Result<(), DaemonProcessError> {
+        match self.primary {
+            None => Ok(()),
+            Some(primary) if self.additional_failures == 0 => Err(primary),
+            Some(primary) => Err(DaemonProcessError::Shutdown {
+                primary: Box::new(primary),
+                additional_failures: self.additional_failures,
+            }),
+        }
     }
 }
 
@@ -4241,27 +4278,35 @@ fn reconcile_storage_targets(storage_targets: &Arc<Mutex<StorageTargetRuntime>>,
     }
 }
 
-fn spawn_storage_target_reconciler(storage_targets: Arc<Mutex<StorageTargetRuntime>>) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            let Ok(now) = current_time() else {
-                if let Ok(targets) = storage_targets.lock() {
+async fn run_storage_target_reconciler(
+    storage_targets: Arc<Mutex<StorageTargetRuntime>>,
+    stop: tokio::sync::watch::Receiver<bool>,
+) -> Result<(), DaemonProcessError> {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            biased;
+            () = wait_for_shutdown(stop.clone()) => return Ok(()),
+            _ = interval.tick() => {}
+        }
+        if *stop.borrow() {
+            return Ok(());
+        }
+        let targets = Arc::clone(&storage_targets);
+        // Cancellation is observed between ticks. Dropping this JoinHandle would
+        // not cancel a running blocking closure or release its provider ownership.
+        tokio::task::spawn_blocking(move || match current_time() {
+            Ok(now) => reconcile_storage_targets(&targets, now),
+            Err(_) => {
+                if let Ok(targets) = targets.lock() {
                     targets.readiness.store_degraded(true);
                 }
-                continue;
-            };
-            let targets = Arc::clone(&storage_targets);
-            if tokio::task::spawn_blocking(move || reconcile_storage_targets(&targets, now))
-                .await
-                .is_err()
-            {
-                break;
             }
-        }
-    });
+        })
+        .await
+        .map_err(|_| DaemonProcessError::StorageTargetTaskStopped)?;
+    }
 }
 
 #[path = "appliance_data_runtime.rs"]
@@ -4271,6 +4316,15 @@ use data_runtime::RuntimeDataPlane;
 /// Closed headless-process failures which never expose claim, key or request material.
 #[derive(Debug, Error)]
 pub enum DaemonProcessError {
+    /// Shutdown preserved its original failure and observed further owner failures.
+    #[error("{primary}; daemon cleanup reported {additional_failures} additional failures")]
+    Shutdown {
+        /// The original service/startup failure, kept with its stable error kind.
+        #[source]
+        primary: Box<DaemonProcessError>,
+        /// Saturating bounded count; cleanup never accumulates arbitrary error messages.
+        additional_failures: u32,
+    },
     /// Dedicated federation socket or its owned lifecycle failed.
     #[error("daemon federation session runtime failed")]
     FederationSessions,

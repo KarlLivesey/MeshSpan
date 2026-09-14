@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::backup_export_service::BackupExportProviders;
+use std::path::Path;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn authority_restart_uses_the_committed_local_incarnation()
@@ -205,4 +206,154 @@ fn backup_provider_startup_retains_completion_and_bounds_waiting()
     startup.wait(deadline)?;
     startup.wait(deadline)?;
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn service_failure_drains_owned_blocking_receipt_before_returning()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let config = lifecycle_config(directory.path(), "127.0.0.1:0")?;
+    let local = DaemonLocalState::open(&config, current_time()?)?;
+    let (authority, authority_task, _) =
+        start_root_authority(&local, current_time()?, Arc::new(|_, _| {}))?;
+    let readiness =
+        crate::update_readiness::UpdateReadiness::new(local.state_directory(), authority.clone())
+            .map_err(|()| "readiness setup failed")?;
+    let receipt = directory.path().join("committed-receipt");
+    let (mut tasks, started, release, completed) = blocked_receipt_writer(receipt.clone());
+    tokio::time::timeout(Duration::from_secs(5), started).await??;
+    let failed = tasks.spawn(async { Err(DaemonProcessError::PrivateNetworkState) });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !failed.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    let (stop, _) = tokio::sync::watch::channel(false);
+    let cleanup_stop = stop.subscribe();
+    tasks.spawn(async move {
+        wait_for_shutdown(cleanup_stop).await;
+        Err(DaemonProcessError::Clock)
+    });
+    let supervision = supervise_services(tasks, stop, std::future::pending(), readiness.serving());
+    tokio::pin!(supervision);
+    // Both the primary failure and the still-running blocking writer are now deterministic.
+    let immediate = std::future::poll_fn(|context| {
+        std::task::Poll::Ready(match supervision.as_mut().poll(context) {
+            std::task::Poll::Ready(result) => Some(result),
+            std::task::Poll::Pending => None,
+        })
+    })
+    .await;
+    let returned_before_durable_completion = immediate.is_some();
+    let readiness_withdrawn = readiness.local_ready().await.is_err();
+    release.send(())?;
+    tokio::time::timeout(Duration::from_secs(5), completed).await??;
+    let result = match immediate {
+        Some(result) => result,
+        None => tokio::time::timeout(Duration::from_secs(5), supervision).await?,
+    };
+    authority.shutdown().await?;
+    authority_task.await??;
+    assert!(matches!(result, Err(DaemonProcessError::Shutdown {
+        primary, additional_failures: 1,
+    }) if matches!(*primary, DaemonProcessError::PrivateNetworkState)));
+    assert_eq!(std::fs::read(receipt)?, b"durable-operation-7");
+    assert!(!returned_before_durable_completion);
+    assert!(readiness_withdrawn);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_public_listener_bind_stops_and_joins_authority()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let config = lifecycle_config(directory.path(), &occupied.local_addr()?.to_string())?;
+    let now = current_time()?;
+    let mut node = initialise_daemon_node(&config, now).await?;
+    let private = start_private_authority(&mut node, &config, now).await?;
+    let observer = private.authority.clone();
+    let (restart, requests) = tokio::sync::mpsc::unbounded_channel();
+    let services = compose_appliance_services(&mut node, &private, &config, restart, now)?;
+    let shutdown = std::future::pending();
+    tokio::pin!(shutdown);
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        serve_daemon_cycle(
+            &config,
+            services,
+            private.authority,
+            private.authority_task,
+            requests,
+            shutdown,
+        ),
+    )
+    .await?;
+    let authority_survived = observer.observe().await.is_ok();
+    if authority_survived {
+        observer.shutdown().await?;
+    }
+    assert!(matches!(result, Err(DaemonProcessError::Http01(_))));
+    assert!(!authority_survived);
+    Ok(())
+}
+
+fn lifecycle_config(
+    directory: &Path,
+    http01: &str,
+) -> Result<HeadlessDaemonConfig, Box<dyn std::error::Error>> {
+    let storage = directory.join("storage");
+    std::fs::create_dir(&storage)?;
+    Ok(HeadlessDaemonConfig::parse([
+        OsString::from("--storage-path"),
+        storage.into_os_string(),
+        OsString::from("--daemon-state-dir"),
+        directory.join("state").into_os_string(),
+        OsString::from("--http01-listen"),
+        OsString::from(http01),
+        OsString::from("--https-listen"),
+        OsString::from(http01),
+        OsString::from("--smb-listen"),
+        OsString::from("127.0.0.1:0"),
+        OsString::from("--private-listen"),
+        OsString::from("127.0.0.1:0"),
+        OsString::from("--private-endpoint"),
+        OsString::from("127.0.0.1:64000"),
+    ])?)
+}
+
+type BlockedReceiptWriter = (
+    tokio::task::JoinSet<Result<(), DaemonProcessError>>,
+    tokio::sync::oneshot::Receiver<()>,
+    std::sync::mpsc::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
+
+fn blocked_receipt_writer(path: PathBuf) -> BlockedReceiptWriter {
+    let (started, startup) = tokio::sync::oneshot::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let (completed, completion) = tokio::sync::oneshot::channel();
+    let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(async move {
+        tokio::task::spawn_blocking(move || {
+            started
+                .send(())
+                .map_err(|()| DaemonProcessError::StorageTargetTaskStopped)?;
+            released
+                .recv()
+                .map_err(|_| DaemonProcessError::StorageTargetTaskStopped)?;
+            std::fs::write(&path, b"durable-operation-7")
+                .map_err(|_| DaemonProcessError::LocalStateWorker)?;
+            std::fs::File::open(path)
+                .and_then(|file| file.sync_all())
+                .map_err(|_| DaemonProcessError::LocalStateWorker)?;
+            completed
+                .send(())
+                .map_err(|()| DaemonProcessError::StorageTargetTaskStopped)
+        })
+        .await
+        .map_err(|_| DaemonProcessError::StorageTargetTaskStopped)?
+    });
+    (tasks, startup, release, completion)
 }
