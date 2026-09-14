@@ -10,6 +10,17 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Stage 10 — retained readiness diagnostics before integration
+
+The existing setup-status transport diagnostic is retained in the headless test
+client. On cancellation or completion after five seconds, it reports the phase,
+elapsed time, received byte count and bounded framing facts; it never prints
+request credentials or response bodies. It does not alter request deadlines or
+assertions. The latest native capability and enrollment tests exercised this
+client. The earlier setup timeout investigation remains unresolved; absence of
+a diagnostic line does not establish its cause. The final gate will test this
+exact client along with the assembled implementation.
+
 ## ACC-05 — ordinary SMB lease renewal and owned connection shutdown
 
 The connection owner now renews one due open per maintenance step, with a

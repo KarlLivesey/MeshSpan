@@ -2943,7 +2943,15 @@ async fn request_with_content_type(
     content_type: &str,
     additional_headers: &[(&str, &str)],
 ) -> Result<String, Box<dyn Error>> {
+    let mut timing = StatusRequestTiming {
+        address,
+        enabled: target == "/api/latest/setup/status",
+        started: Instant::now(),
+        phase: "TCP connect",
+        response: Vec::new(),
+    };
     let stream = TcpStream::connect(address).await?;
+    timing.phase = "TLS handshake";
     let connector = TlsConnector::from(Arc::new(client.clone()));
     let name = ServerName::try_from(CERTIFICATE_NAME)?.to_owned();
     let mut stream = connector.connect(name, stream).await?;
@@ -2959,14 +2967,16 @@ async fn request_with_content_type(
     for (name, value) in additional_headers.iter().rev() {
         headers.insert_str(insertion, &format!("{name}: {value}\r\n"));
     }
+    timing.phase = "request write";
     stream.write_all(headers.as_bytes()).await?;
     stream.write_all(body).await?;
     // TLS write completion can leave the final record buffered. Flush before
     // waiting for the server, which needs the complete Content-Length to reply.
     stream.flush().await?;
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).await?;
-    Ok(String::from_utf8(response)?)
+    timing.phase = "response / TLS EOF";
+    stream.read_to_end(&mut timing.response).await?;
+    timing.phase = "complete";
+    Ok(String::from_utf8(std::mem::take(&mut timing.response))?)
 }
 
 fn unused_address() -> Result<SocketAddr, std::io::Error> {
@@ -2975,4 +2985,46 @@ fn unused_address() -> Result<SocketAddr, std::io::Error> {
 
 fn unused_udp_address() -> Result<SocketAddr, std::io::Error> {
     ports::udp()
+}
+
+// Temporary cancellation-safe, secret-free readiness transport diagnostic.
+struct StatusRequestTiming {
+    address: SocketAddr,
+    enabled: bool,
+    started: Instant,
+    phase: &'static str,
+    response: Vec<u8>,
+}
+
+impl Drop for StatusRequestTiming {
+    #[expect(
+        clippy::print_stderr,
+        reason = "Temporary bounded readiness transport diagnosis"
+    )]
+    fn drop(&mut self) {
+        if !self.enabled || self.started.elapsed() < Duration::from_secs(5) {
+            return;
+        }
+        let text = String::from_utf8_lossy(&self.response);
+        let framing = text.split_once("\r\n\r\n").map(|(headers, body)| {
+            let declared = headers.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            });
+            (
+                declared,
+                body.len(),
+                body.contains("\"state\":\"configured\""),
+            )
+        });
+        eprintln!(
+            "status transport {} {:?}: phase={}, bytes={}, framing={framing:?}",
+            self.address,
+            self.started.elapsed(),
+            self.phase,
+            self.response.len()
+        );
+    }
 }
