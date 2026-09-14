@@ -499,8 +499,11 @@ the stage; publication-dependent acceptance remains held separately and visible.
     headless and later Rust targets were not reached. Task 10 and integration
     remain open. Subsequent contextual reproduction identified an expired store
     request created before unrelated federation proofs; moving each attempt's
-    deadline to its start passed all 440 daemon library tests. A new full gate is
-    running; a separate storage-snapshot `Unavailable` remains unexplained.
+    deadline to its start passed all 440 daemon library tests. The new full gate
+    passed the library and offline recovery, then failed three other headless
+    cases (federated protection, successor peer startup and executable upload).
+    Later Rust targets were not reached; the separate storage-snapshot
+    `Unavailable` also remains unexplained.
     [Headless offline verification](stage-10-evidence.md#task-10--headless-offline-backup-verification)
     now consumes the actual encrypted export, independently saved digest and
     setup recovery bundle/code, checks exact SQLite state and stored recovery
@@ -977,11 +980,13 @@ the stage; publication-dependent acceptance remains held separately and visible.
     **108 → 106**; only the assembled-stage pass remains for this task.
 
 22. **Mesh-wide rolling updates — Partial; automatic interruption-allowed installation implemented; availability-preserving coordination remains.** **7 points remaining.**
-    PR #269's failed workload-observation and two-process installation tests remain
-    unresolved. The current GNU Linux build excludes the handoff module; a zero-test
-    filtered run is not verification. A supported musl/macOS execution environment
-    is required for their existing real-executable acceptance tests. Local musl
-    tooling is now prepared on this host; the MeshSpan build and proofs are pending.
+    The Linux continuation now executes a verified static-PIE musl binary.
+    Both PR #269 handoff regressions and the single-copy restart-refusal scenario
+    passed together after measured artifact verification exposed an invalid
+    generic control-wait budget. The final bounded-HTTP-poll review passes all
+    three scenarios and musl Clippy; earlier peer-startup failures remain open
+    reliability observations.
+    Full supported-platform update and assembled-stage acceptance remain open.
     Accepted decisions §7, PER-003/006, TST-007. Provide one administrator-selected
     signed candidate, compatibility checks, availability-aware node ordering,
     durable progress and stop-on-failed-probe behaviour. Prove interrupted update

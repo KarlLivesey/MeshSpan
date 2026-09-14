@@ -67,7 +67,8 @@ async fn selected_update_automatically_replaces_two_processes_and_cold_launcher_
         processes[0].kill()?;
         processes[0].wait()?;
         processes[0] = root.start()?;
-        fixture::wait_for_status(root.address, &client, "configured").await?;
+        // Cold launch reauthenticates the retained full executable before binding services.
+        fixture::wait_for_status_with_limit(root.address, &client, "configured", super::ARTIFACT_OPERATION_WAIT).await?;
         assert_eq!(api.status(true).await?["rollout"], completed["rollout"]);
         assert_installation(&root, &digest)?;
         assert_process_image(processes[0].id(), &root, &digest)?;
@@ -110,7 +111,7 @@ async fn uninterrupted_update_prepares_and_keeps_the_only_file_copy_online()
         let candidate = candidate_artifact(&root, &signer, executable.len(), &digest)?;
         assert_eq!(candidate["action"]["allow_service_interruption"], false);
         api.manage(&candidate, "200 OK").await?;
-        let observed = wait_for_workload(&root, "local_content_unavailable").await?;
+        let observed = wait_for_workload(&root, "local_content_unavailable", 1).await?;
         assert_eq!(observed["scope"], "local_committed_content_catalogue");
         assert_eq!(observed["restart_authorised"], false);
         assert_eq!(observed["stripes_checked"], 0);
@@ -170,7 +171,7 @@ async fn authenticated_peer_reports_the_exact_uninterrupted_preparation()
             "200 OK",
         )
         .await?;
-        let local = wait_for_workload(&root, "local_content_checked").await?;
+        let local = wait_for_workload(&root, "local_content_checked", 2).await?;
         let scan = wait_for_peer_scan(&peer, &root).await?;
         assert_eq!(
             scan.state,
@@ -242,9 +243,30 @@ async fn wait_for_peer_scan(
     }
 }
 
-async fn wait_for_workload(root: &ProcessFixture, expected: &str) -> Result<Value, Box<dyn Error>> {
-    let deadline = tokio::time::Instant::now() + fixture::WAIT_LIMIT;
+async fn wait_for_workload(
+    root: &ProcessFixture,
+    expected: &str,
+    participants: u8,
+) -> Result<Value, Box<dyn Error>> {
+    let deadline = tokio::time::Instant::now() + super::ARTIFACT_OPERATION_WAIT;
+    let repository = super::readiness::repository(root)?;
+    let mut progress = 0;
     loop {
+        if let Some((rollout, counts)) = repository.update_administration_snapshot(None)?.rollout {
+            let sources = repository.update_artifact_sources(
+                rollout.rollout_id,
+                &super::target(),
+                None,
+                meshspan_metadata::PageLimit::new(usize::from(participants))?,
+            )?;
+            let current = counts.staged + u64::try_from(sources.len())?;
+            assert!(
+                current >= progress && current <= u64::from(participants) * 2,
+                "invalid preparation progress"
+            );
+            // Keep progress diagnostic and bounded; it cannot extend the absolute deadline.
+            progress = current;
+        }
         match std::fs::read(root.state_path.join("update-workload.json")) {
             Ok(bytes) => {
                 let observation: Value = serde_json::from_slice(&bytes)?;
@@ -256,7 +278,7 @@ async fn wait_for_workload(root: &ProcessFixture, expected: &str) -> Result<Valu
             Err(error) => return Err(error.into()),
         }
         if tokio::time::Instant::now() >= deadline {
-            return Err("updater did not retain its expected workload observation".into());
+            return Err(format!("updater did not retain its expected workload observation; preparation progress {progress}/{}", u64::from(participants) * 2).into());
         }
         tokio::time::sleep(fixture::RETRY_INTERVAL).await;
     }
@@ -313,12 +335,16 @@ async fn wait_for_verified(
 ) -> Result<Value, Box<dyn Error>> {
     let count = u64::try_from(nodes.len())?;
     let mut selections = vec![false; nodes.len()];
-    let mut deadline = tokio::time::Instant::now() + fixture::WAIT_LIMIT;
+    let deadline = tokio::time::Instant::now() + super::ARTIFACT_OPERATION_WAIT;
     let mut progress = 0;
     let expected = count.to_string();
     loop {
         // Connection loss during self-exec is expected under this explicit interruption policy.
-        let result = api.status(true).await;
+        let result = tokio::time::timeout_at(deadline, api.status(true))
+            .await
+            .map_err(|_| {
+                format!("installation did not verify {count} nodes before HTTP deadline")
+            })?;
         if let Ok(status) = &result {
             let current = status["rollout"]["progress"]["verified"]
                 .as_str()
@@ -342,14 +368,9 @@ async fn wait_for_verified(
                 milestone >= progress && milestone <= count * 4,
                 "invalid update progress"
             );
-            if milestone > progress {
-                // The automatic scenario includes staging and admission, unlike
-                // the former fixture starting its timer after manual admission.
-                // Durable image selection is progress between restart admission and verification.
-                // At most four forward milestones per selected node may reset it.
-                progress = milestone;
-                deadline = tokio::time::Instant::now() + fixture::WAIT_LIMIT;
-            }
+            // Durable image selection is progress between admission and verification.
+            // The absolute artifact-operation deadline never moves.
+            progress = milestone;
             if status["rollout"]["progress"]["verified"].as_str() == Some(expected.as_str()) {
                 return Ok(status.clone());
             }

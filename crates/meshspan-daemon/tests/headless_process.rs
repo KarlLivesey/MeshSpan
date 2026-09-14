@@ -2022,6 +2022,14 @@ fn smb_client_process(
         "--env",
         "MESHSPAN_SMB_COMMAND",
     ]);
+    // Native Linux Docker needs the host network to reach these loopback-only listeners.
+    #[cfg(target_os = "linux")]
+    process.args([
+        "--network",
+        "host",
+        "--add-host",
+        "host.docker.internal:127.0.0.1",
+    ]);
     if let Some(exchange) = exchange {
         process
             .arg("--volume")
@@ -2846,9 +2854,25 @@ async fn wait_for_status(
     client: &ClientConfig,
     expected: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let deadline = Instant::now() + WAIT_LIMIT;
+    wait_for_status_with_limit(address, client, expected, WAIT_LIMIT).await
+}
+
+async fn wait_for_status_with_limit(
+    address: SocketAddr,
+    client: &ClientConfig,
+    expected: &str,
+    limit: Duration,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + limit;
     loop {
-        let response = request(address, client, "GET", "/api/latest/setup/status", None).await;
+        let response = tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline),
+            request(address, client, "GET", "/api/latest/setup/status", None),
+        )
+        .await
+        .map_err(|_| {
+            format!("headless process at {address} exceeded setup state {expected:?} deadline during HTTP request")
+        })?;
         let last_observation = match response {
             Ok(response) => {
                 if response.contains(&format!("\"state\":\"{expected}\"")) {

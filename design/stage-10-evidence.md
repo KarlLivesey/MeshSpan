@@ -223,6 +223,213 @@ Cargo lane. Complete package notices must also cover the actual linked compiler/
 standard-library components, beyond the current Cargo/npm source scan; this is
 part of task 24's remaining dependency inventory, not a waived requirement.
 
+### Corrected full local gate — three later headless failures
+
+The next NVM `MESHSPAN_CHECK_WORKERS=4 CARGO_BUILD_JOBS=4 pnpm check` failed in
+**587.50 s**; its Rust lane ran **546.13 s**. Executable/test source was commit
+`2e3e6952`; the later `6efa9d0d` changes only evidence prose. All **440 daemon
+library tests passed in 37.07 s**, including the corrected federation test.
+Headless execution reached **27 passed / 3 failed / 11 ignored in 355.78 s**.
+Offline recovery passed; later Rust targets were not reached.
+
+Failures and retained local state:
+
+- `federated_backup::remote_backup_forwards_through_gateway_to_distinct_storage_process`:
+  scheduled capture remained `Recorded`, without its required protected result.
+  State: `/tmp/.tmpx0lBPz`, `/tmp/.tmpYPOX5v`, `/tmp/.tmpBH9flI`.
+- `incarnation::successor_incarnation_restarts_serves_files_and_accepts_a_new_peer`:
+  HTTPS setup never reached `configured`; its last attempt was connection refused.
+  State: `/tmp/.tmpe6cV5u`, `/tmp/.tmpjbq4bB`.
+- `updates::real_signed_executable_passes_runtime_probe_and_retains_staging_after_restart`:
+  signed executable upload exceeded the fixture's 60-second timeout.
+  State: `/tmp/.tmpVDhvzL`.
+
+Generated contracts **1.79 s**, embedded web **0.77 s**, Rust formatting **3.13 s**,
+workspace Clippy **5.37 s**, Rust licences **0.40 s**, JavaScript licences
+**1.04 s**, workspace formatting **3.91 s**, web lint **29.91 s**, web typecheck
+**7.57 s**, tooling tests **0.64 s**, and web tests **17.76 s** all passed.
+The log is `/tmp/meshspan-stage10-corrected-integration.log`. This is a failed
+integration candidate. Draft PR **#270** remains unmerged; every pushed commit
+has a locally verified and GitHub-verified signature. No publication occurred.
+
+Read-only retained-state inspection finds valid SQLite integrity on both
+incarnation nodes and the upload fixture. Both incarnation databases contain
+35 log entries and the same admitted node incarnations (root 2, peer 1), narrowing
+the failure to later startup/readiness rather than absent node admission. The
+upload left **138,205,784 bytes** in its temporary artifact; the debug executable
+is **674,825,752 bytes**. The production upload allowance is 30 minutes while this
+fixture allows 60 seconds. These are diagnostic leads, not yet explanations or
+fixes. A musl headless build is now running so the original two handoff failures
+can finally be exercised on a supported platform; no source changes accompany it.
+
+### Static musl execution and focused preparation diagnosis
+
+The first musl headless build compiled in **3m 32s**, but the locally configured
+musl compiler wrapper inserted an external ELF interpreter into Rust's static-PIE
+link. The test executable could not launch (`No such file or directory`); no
+handoff test ran in that attempt. A standalone Rust smoke executable using Rust's
+standard linker path was static PIE and ran without an interpreter. Removing only
+the local Cargo linker override rebuilt MeshSpan in **1m 36s**. `file` and
+`readelf` confirm static PIE with no `INTERP` or `NEEDED` entries. The C compiler
+remains the signature-verified local musl wrapper; repository configuration and
+source are unchanged by this tooling correction.
+
+All three musl handoff tests then **ran and failed in 47.93 s**, build **0.17 s**:
+the single-copy safety scenario lacked its expected workload observation; both
+original two-node scenarios failed earlier because the enrolled peer never became
+available over HTTPS. Retained state is `/tmp/.tmpfa9RiW`, `/tmp/.tmppUPHDv`,
+`/tmp/.tmp2NlX8P`, `/tmp/.tmpAwfK4V`, `/tmp/.tmpbzrMo4`. The two original PR #269
+handoff failures still have no passing proof.
+
+The isolated single-copy scenario also failed in **30.15 s**, build **0.09 s**,
+retaining `/tmp/.tmpbMMCQA`: the node was still pending and had advertised no
+artifact source. The read-only `verify-update` command authenticated that exact
+fixture manifest/signature/public signer and **654,393,664-byte** executable in
+**9.68 s**, without opening live mesh state. Public verification inputs are at
+`/tmp/meshspan-update-verification-2347tqjl`.
+
+A temporary test-only diagnostic deliberately preserved the original failure
+while observing 45 more seconds. It remained **failed in 46.14 s**, build
+**35.03 s**; the exact safe observation appeared **14.51 s after** the original
+15-second allowance. It still reported `restart_authorised: false`, one excluded
+target and the expected unavailable local content. State is retained at
+`/tmp/.tmpgQOiD5`; log `/tmp/meshspan-musl-workload-late-observation.log`.
+The next diagnostic is measuring durable source/staging milestones before choosing
+a fixture or product correction. No verification, timeout or safety requirement
+has been weakened to produce a pass; temporary diagnostics are not integration
+changes and must be removed before final checks.
+
+The second failure-preserving diagnostic recorded source advertisement at
+**13.69 s**, staging at **26.29 s**, and the exact safe observation at **30.48 s**
+after selection. It remained failed in **45.97 s**, build **28.86 s**, retaining
+`/tmp/.tmpZC6voM`; log `/tmp/meshspan-musl-workload-milestones.log`. Thus each
+verification made durable progress within the ordinary allowance, but the
+combined preparation exceeded the fixture's single allowance.
+
+The corrected workload waiter renews its existing **15-second** allowance only
+when the exact active rollout's verified-source or staged-node count increases.
+Progress is monotonic and capped at two advances per declared participant. The
+original expected workload, excluded-target, restart refusal and exact file-byte
+assertions remain. After correcting a `PageLimit` argument type before execution,
+the focused single-copy test **passed in 45.69 s**, build **29.21 s**. Log:
+`/tmp/meshspan-musl-workload-progress-fix.log`. A three-scenario run is checking
+this under bounded parallel load while retaining any missed peer-startup deadline
+as a failure and observing the peer's process state and later readiness.
+
+### Task 22 — bounded real-artifact preparation and handoff
+
+The progress-renewal trial above did not close the defect under parallel load:
+all three scenarios failed in **57.18 s**, build **31.98 s**. Initial source
+verification itself exceeded 15 seconds; both workload waiters observed zero
+preparation progress. The installation scenario remained pending, while both
+private readiness probes reported ready at index 32. Log:
+`/tmp/meshspan-musl-handoff-peer-diagnostic.log`. No new peer-startup failure
+occurred in that run; earlier startup failures remain unexplained.
+
+A subsequent read-position diagnostic was invalidated by `/tmp` tmpfs exhaustion
+and resulting `ENOSPC`/identity-file failures. It supplies no product conclusion.
+Nine known completed failure fixtures were archived under
+`/home/karl/.cache/meshspan-validation/failure-state`, retaining their original
+`/tmp` names as symlinks. All retained artifact digests were checked; the mapping
+is `failure-state/locations.json`. This relocation preserves diagnostic contents,
+not physical inode/location evidence. New tests use the private disk-backed
+`/home/karl/.cache/meshspan-validation/tmp` directory.
+
+The same three scenarios then failed on disk-backed scratch in **43.64 s**,
+build **0.33 s**. A read-only `/proc` file-position trace showed five workers
+actively hashing the 654,393,664-byte executable at approximately **29.5–38.7
+MiB/s**. They had reached only **412–519 MB** when the 15-second waits stopped
+them. The log and trace are `/tmp/meshspan-musl-handoff-disk-scratch.log` and
+`.jsonl`. This establishes ongoing mandatory artifact verification, rather than
+an absent worker or stalled state machine.
+
+Artifact upload, preparation, installation and cold-launch readiness now each
+have one fixed **30-minute** maximum, matching the existing production bulk
+transfer allowance. Durable progress remains diagnostic and cannot extend it.
+Ordinary control/startup waits retain 15 seconds. Mandatory cache hashing,
+signature authentication, executable probing, exact process images, preparation
+identity, single-copy restart refusal and byte comparisons are unchanged. No
+production deadline or verification was changed, and temporary tracing was removed.
+
+All three musl handoff scenarios **passed in 262.54 s**, build **20.92 s**, with
+four harness threads. This includes both originally failed PR #269 scenarios:
+the peer reported the exact preparation; both processes installed and verified
+the selected image; launching the original command retained that installation.
+The single-copy test kept its file online and denied restart. Log:
+`/tmp/meshspan-musl-handoff-artifact-operation.log`. A discarded partial-edit
+attempt was interrupted before producing a usable result and is not validation.
+
+The final review additionally binds HTTP polls to the same absolute deadlines,
+so a stalled request cannot escape a waiter's maximum. Clippy first caught an
+explicit standard-library/Tokio instant conversion missing from the new wrapper;
+that was corrected before execution. Final musl all-target/all-feature Clippy
+passed with warnings denied in **3.91 s**. All three final handoff scenarios then
+**passed in 266.38 s**, build **21.41 s**, with four threads; log
+`/tmp/meshspan-musl-handoff-final.log`. These focused passes do not close earlier
+peer-startup observations, the later GNU gate failures, availability-preserving
+coordination, packaging or assembled Stage 10/11 acceptance. No points are removed.
+
+### Tasks 22/27 — GNU upload and native Linux SMB follow-up
+
+The focused GNU run selected the three later headless failures together, with
+four threads and disk-backed scratch. It finished **2 passed / 1 failed in
+262.34 s**, build **10.35 s**; log `/tmp/meshspan-gnu-three-regressions.log`.
+Federated backup protection/permission succession and successor-incarnation
+HTTPS/new-peer admission passed. Their earlier failures remain unexplained.
+Read-only local setup records additionally show the previously failed peers had
+completed join setup; startup investigation is therefore after that durable step.
+
+The complete **672,385,840-byte** GNU executable uploaded successfully beyond
+the old 60-second allowance. A later, separate 15-second staging-status wait then
+failed while the rollout remained pending. This GNU scenario must reject the
+non-distribution target, not install it. Retained state is
+`/home/karl/.cache/meshspan-validation/tmp/.tmpxG0UKn`. A failure-preserving
+observation is measuring completion after that original staging deadline; no
+production verification or deadline has changed.
+
+The repository's existing `tests/smb-client/Dockerfile` built locally against its
+pinned Debian base. The immutable local image ID is
+`sha256:4282e160c6cc3090ee59f3b2581ee7a459fdd3f943323b7583824ea30a618eb0`;
+its client reports **Samba 4.17.12-Debian**. Docker **29.8.0** runs natively on
+this CachyOS host. Build log: `/tmp/meshspan-local-smbclient-build.log`. This is a
+test-client image, not a MeshSpan package or publication.
+
+Both a container hostname lookup and the unchanged successor SMB test fail
+because native Linux Docker does not provide the fixture's expected
+`host.docker.internal` route to the host loopback listener. The real test reports
+`NT_STATUS_UNSUCCESSFUL`, retaining `.tmpeH39af` and `.tmpgvWisS` below the
+private disk scratch directory. The combined diagnostic is still running at
+this entry; log `/tmp/meshspan-gnu-staging-and-smb-diagnostic.log`. The intended
+fixture correction uses native Linux host networking with an explicit loopback
+hostname mapping. Protocol, authentication, file-byte and restart assertions stay
+unchanged; passing SMB evidence is still pending.
+
+The failure-preserving combined diagnostic finished **0 passed / 2 failed in
+235.89 s**, build **3.47 s**. GNU verification completed **12.16 s after** the
+original 15-second staging wait: state `paused`, sequence 2, one failed node,
+zero staged/restarting/verified nodes. The original failure remains in the result;
+state is retained at `.tmp822OEU` in disk scratch. The temporary observation was
+removed before the correction.
+
+The artifact staging-status waiter now uses the same fixed 30-minute artifact
+allowance and bounds each HTTP poll by that absolute deadline. The Linux-only
+SMB client fixture uses Docker host networking and maps the existing hostname to
+127.0.0.1; daemon listen addresses and all protocol/file assertions are unchanged.
+Final GNU all-target/all-feature daemon Clippy passed in **5.30 s**. The corrected
+real SMB successor workflow has passed; the concurrent full GNU artifact upload/
+compatibility-refusal test is still running. No full gate or merge is claimed.
+
+The corrected pair **passed in 245.12 s**, build **5.57 s**, with four threads:
+GNU upload reached its required compatibility refusal, and the real SMB successor
+performed reads/writes/deletes with the existing assertions. Log:
+`/tmp/meshspan-gnu-artifact-smb-final.log`. Final musl daemon all-target/all-feature
+Clippy also passed in **1.53 s**. A six-case musl acceptance run is now checking
+successful real-artifact staging, three-node distribution, SMB authentication
+metrics, offline HTTPS/SMB recovery, three-gateway SMB and the six-process
+protection fixture. It is pending, not passing evidence. The six-process fixture
+is not a physical-machine proof. The complete integration gate still must pass
+before any merge; no dependency, schema, protocol or production deadline changed.
+
 ### Full local gate — failed; no integration
 
 `MESHSPAN_CHECK_WORKERS=4 CARGO_BUILD_JOBS=4 pnpm check`, under the configured NVM

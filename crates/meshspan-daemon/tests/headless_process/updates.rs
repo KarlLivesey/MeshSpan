@@ -10,6 +10,10 @@ use meshspan_metadata::PartitionDatabase;
 use rustls::ClientConfig;
 use serde_json::{Value, json};
 
+// Artifact transfer/admission uses the production bulk-transfer allowance. A real
+// debug executable can take longer to reverify than the ordinary control wait.
+const ARTIFACT_OPERATION_WAIT: std::time::Duration = std::time::Duration::from_mins(30);
+
 const API: &str = "/api/latest/admin/updates";
 const SIGNER: &str = "00000000-0000-4000-8000-000000000401";
 const ROLLOUT: &str = "00000000-0000-4000-8000-000000000402";
@@ -365,9 +369,13 @@ impl UpdateApi<'_> {
         phase: &str,
         count: Option<&str>,
     ) -> Result<Value, Box<dyn Error>> {
-        let deadline = tokio::time::Instant::now() + super::WAIT_LIMIT;
+        let deadline = tokio::time::Instant::now() + ARTIFACT_OPERATION_WAIT;
         loop {
-            let status = self.status(false).await?;
+            let status = tokio::time::timeout_at(deadline, self.status(false))
+                .await
+                .map_err(|_| {
+                    format!("update did not reach {state}/{phase} before HTTP deadline")
+                })??;
             let observed = status["rollout"]["progress"][phase]
                 .as_str()
                 .ok_or("progress absent")?;
@@ -386,7 +394,7 @@ impl UpdateApi<'_> {
     async fn stage(&self, bytes: &[u8], expected: &str) -> Result<Value, Box<dyn Error>> {
         let endpoint = format!("{API}/{ROLLOUT}/artifacts/{}", target());
         let response = tokio::time::timeout(
-            std::time::Duration::from_secs(60),
+            ARTIFACT_OPERATION_WAIT,
             super::request_with_content_type(
                 self.root.address,
                 self.client,
