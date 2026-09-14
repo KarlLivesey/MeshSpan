@@ -7,7 +7,9 @@ pub(crate) mod bulk_budget;
 mod capability_cache;
 mod control_connection_use;
 pub use capability_cache::{ConsensusCapabilityCacheConfig, LocalNodeCapabilityPresentation};
+mod owned;
 mod snapshot;
+pub use owned::ConsensusNetworkShutdownError;
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -134,7 +136,7 @@ pub struct PeerDataStream {
 /// Cloneable non-blocking consensus message network.
 #[derive(Clone)]
 pub struct ConsensusNetwork {
-    runtime: tokio::runtime::Handle,
+    owner: Arc<owned::NetworkOwner>,
     transport: RotatingNodeTransport,
     peers: Arc<RwLock<ConsensusPeers>>,
     control_connections: Arc<Mutex<BTreeMap<NodeId, quinn::Connection>>>,
@@ -348,8 +350,9 @@ impl ConsensusNetwork {
                     (Some(restored.path), restored.latest, restored.preimages)
                 },
             );
+        let (owner, registrations) = owned::NetworkOwner::prepare();
         let network = Self {
-            runtime: tokio::runtime::Handle::current(),
+            owner,
             transport,
             peers: Arc::new(RwLock::new(ConsensusPeers {
                 routes: peers,
@@ -376,7 +379,33 @@ impl ConsensusNetwork {
             capability_cache_path,
             capability_cache_updates: Arc::new(tokio::sync::Mutex::new(())),
         };
-        let peer_ids = network
+        let prepared = network.prepare_initial_workers(
+            server,
+            owned::IncomingChannels {
+                messages: incoming_messages,
+                controls: incoming_control,
+                snapshots: incoming_snapshots,
+                data: incoming_data,
+            },
+        );
+        if let Err(error) = prepared {
+            let closed = network.close();
+            drop(registrations);
+            closed?;
+            return Err(error);
+        }
+        network
+            .owner
+            .start(&tokio::runtime::Handle::current(), registrations);
+        Ok(network)
+    }
+
+    fn prepare_initial_workers(
+        &self,
+        server: quinn::Endpoint,
+        channels: owned::IncomingChannels,
+    ) -> Result<(), ConsensusNetworkError> {
+        let peer_ids = self
             .peers
             .read()
             .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
@@ -388,24 +417,21 @@ impl ConsensusNetwork {
         for peer in peer_ids {
             let (sender, receiver) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
             workers.push((peer, receiver));
-            network
-                .peers
+            self.peers
                 .write()
                 .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
                 .outbound
                 .insert(peer, sender);
         }
         for (peer, receiver) in workers {
-            network.spawn_outbound_worker(peer, receiver);
+            self.spawn_outbound_worker(peer, receiver)?;
         }
-        network.spawn_accept_loop(
+        self.owner.register(owned::NetworkTask::Accept {
+            network: self.clone(),
             server,
-            incoming_messages,
-            incoming_control,
-            incoming_snapshots,
-            incoming_data,
-        );
-        Ok(network)
+            channels,
+        })?;
+        Ok(())
     }
 
     /// Adds or atomically replaces one current enrolled peer route and certificate binding.
@@ -417,7 +443,8 @@ impl ConsensusNetwork {
     ///
     /// # Errors
     ///
-    /// Rejects the local node, an invalid route/certificate binding or poisoned peer state.
+    /// Rejects the local node, invalid route/certificate binding, closed admission, exhausted
+    /// worker capacity or poisoned peer state. Capacity rejection preserves the old route.
     pub fn upsert_peer(&self, peer: &ConsensusPeerConfig) -> Result<(), ConsensusNetworkError> {
         self.upsert_peer_with_overlap(peer, None)
     }
@@ -431,8 +458,9 @@ impl ConsensusNetwork {
     ///
     /// # Errors
     ///
-    /// Rejects invalid or excessive certificate material, identity collisions and poisoned
-    /// state. TLS chain validation still precedes use of either registered fingerprint.
+    /// Rejects invalid/excessive certificates, identity collisions, closed admission, exhausted
+    /// worker capacity and poisoned state. TLS validation precedes use of either fingerprint;
+    /// worker-capacity rejection leaves the previous route and outbound queue intact.
     pub fn upsert_peer_with_overlap(
         &self,
         peer: &ConsensusPeerConfig,
@@ -447,6 +475,9 @@ impl ConsensusNetwork {
             || peer.certificate_name.len() > 253
         {
             return Err(ConsensusNetworkError::InvalidConfiguration);
+        }
+        if self.owner.is_closing() {
+            return Err(ConsensusNetworkError::AuthorityStopped);
         }
         let mut peers = self
             .peers
@@ -476,6 +507,7 @@ impl ConsensusNetwork {
         }
         registry.replace_node_bindings(peer.node_id, &bindings)?;
         let (sender, receiver) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
+        self.spawn_outbound_worker(peer.node_id, receiver)?;
         peers.routes.insert(peer.node_id, peer.clone());
         match overlap {
             Some(fingerprint) => {
@@ -504,7 +536,6 @@ impl ConsensusNetwork {
             .lock()
             .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
             .remove(&peer.node_id);
-        self.spawn_outbound_worker(peer.node_id, receiver);
         Ok(())
     }
 
@@ -793,16 +824,53 @@ impl ConsensusNetwork {
 
     /// Stops listeners, connections and outbound queues shared by all clones of this network.
     ///
+    /// Initiates shutdown without waiting for owned workers. Use [`Self::shutdown`] before
+    /// replacing this generation or claiming its admitted work has finished.
+    ///
     /// # Errors
     /// Reports a poisoned queue registry after closing the transport.
     pub fn close(&self) -> Result<(), ConsensusNetworkError> {
+        let admission = self.owner.close();
         self.transport.close();
-        self.peers
-            .write()
-            .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?
-            .outbound
-            .clear();
-        Ok(())
+        let outbound = match self.peers.write() {
+            Ok(mut peers) => {
+                peers.outbound.clear();
+                Ok(())
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().outbound.clear();
+                Err(ConsensusNetworkError::InvalidConfiguration)
+            }
+        };
+        let connections = match self.control_connections.lock() {
+            Ok(mut connections) => {
+                connections.clear();
+                Ok(())
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().clear();
+                Err(ConsensusNetworkError::InvalidConfiguration)
+            }
+        };
+        admission.and(outbound).and(connections)
+    }
+
+    /// Stops new network admission and waits for every owned descendant to finish.
+    ///
+    /// All clones observe one cached terminal outcome. Canceling a waiter does not cancel
+    /// drainage. Callers must first finish externally owned control/data handlers, then drop
+    /// their network clones after this barrier to release the underlying endpoint sockets.
+    ///
+    /// # Errors
+    /// Fails closed if an owned worker/supervisor failed or admission could not be closed.
+    pub async fn shutdown(&self) -> Result<(), ConsensusNetworkShutdownError> {
+        let closed = self.close();
+        let drained = self.owner.join().await;
+        if closed.is_err() {
+            Err(ConsensusNetworkShutdownError::AdmissionFailed)
+        } else {
+            drained
+        }
     }
 
     /// Returns the exact local incarnation carried by this process's private handshakes.
@@ -859,59 +927,65 @@ impl ConsensusNetwork {
         &self,
         peer: NodeId,
         messages: mpsc::Receiver<bulk::OutboundConsensusMessage>,
-    ) {
-        let network = self.clone();
-        self.runtime.spawn(async move {
-            network.run_outbound_worker(peer, messages).await;
-        });
+    ) -> Result<(), ConsensusNetworkError> {
+        self.owner.register(owned::NetworkTask::Outbound {
+            network: self.clone(),
+            peer,
+            messages,
+        })
     }
 
-    fn spawn_accept_loop(
-        &self,
-        server: quinn::Endpoint,
-        messages: mpsc::Sender<PeerConsensusMessage>,
-        controls: Option<mpsc::Sender<PeerControlRequest>>,
-        snapshots: Option<mpsc::Sender<ReceivedConsensusSnapshot>>,
-        data: Option<mpsc::Sender<PeerDataStream>>,
-    ) {
-        let network = self.clone();
-        self.runtime.spawn(async move {
-            while let Some(incoming) = server.accept().await {
-                let Ok(connection) = incoming.await else {
-                    continue;
-                };
-                let peer = network
-                    .peers
-                    .read()
-                    .ok()
-                    .and_then(|peers| peers.registry.authenticate_connection(&connection).ok());
-                let Some(peer) = peer else {
-                    connection.close(1_u32.into(), b"unknown peer");
-                    continue;
-                };
-                let connection_network = network.clone();
-                let connection_messages = messages.clone();
-                let connection_controls = controls.clone();
-                let connection_snapshots = snapshots.clone();
-                let connection_data = data.clone();
-                connection_network.runtime.clone().spawn(async move {
-                    if connection_network
-                        .receive_connection(
-                            connection.clone(),
-                            peer,
-                            connection_messages,
-                            connection_controls,
-                            connection_snapshots,
-                            connection_data,
-                        )
-                        .await
-                        .is_err()
-                    {
-                        connection.close(2_u32.into(), b"invalid peer traffic");
-                    }
-                });
+    async fn run_accept_loop(&self, server: quinn::Endpoint, channels: owned::IncomingChannels) {
+        while let Some(incoming) = server.accept().await {
+            let result = self.owner.register(owned::NetworkTask::Connection {
+                network: self.clone(),
+                incoming: Box::new(incoming),
+                channels: channels.clone(),
+            });
+            if result.is_err() && self.owner.is_closing() {
+                break;
             }
-        });
+            // Registration owns or explicitly refuses the incoming handshake, including
+            // capacity rejection. No unbounded accepted-connection task is detached here.
+        }
+    }
+
+    async fn run_incoming_connection(
+        &self,
+        incoming: quinn::Incoming,
+        channels: owned::IncomingChannels,
+    ) {
+        let Ok(Ok(connection)) = tokio::time::timeout(PEER_OPERATION_TIMEOUT, incoming).await
+        else {
+            return;
+        };
+        let peer = self
+            .peers
+            .read()
+            .ok()
+            .and_then(|peers| peers.registry.authenticate_connection(&connection).ok());
+        let Some(peer) = peer else {
+            connection.close(1_u32.into(), b"unknown peer");
+            return;
+        };
+        let Ok(_peer_slot) = self.owner.admit_peer(peer.node_id()) else {
+            connection.close(3_u32.into(), b"peer capacity unavailable");
+            return;
+        };
+        if self
+            .receive_connection(
+                connection.clone(),
+                peer,
+                channels.messages,
+                channels.controls,
+                channels.snapshots,
+                channels.data,
+            )
+            .await
+            .is_err()
+        {
+            connection.close(2_u32.into(), b"invalid peer traffic");
+        }
     }
 
     async fn receive_connection(
@@ -967,7 +1041,7 @@ impl ConsensusNetwork {
                 outcome = streams.join_next(), if !streams.is_empty() => {
                     if let Some(Err(_)) = outcome { break Err(ConsensusNetworkError::InvalidTraffic); }
                 }
-                accepted = accept_stream(&connection) => {
+                accepted = accept_stream(&connection), if streams.len() < MAXIMUM_STREAMS as usize => {
                     let accepted = match accepted { Ok(stream) => stream, Err(error) => break Err(error.into()) };
                     let network = self.clone();
                     let connection = connection.clone();
@@ -1128,15 +1202,23 @@ impl ConsensusNetwork {
     ) -> Result<(), ConsensusNetworkError> {
         // Wait for capacity without a registry lock, then linearise admission with peer updates.
         // A request blocked on backpressure must not keep authority withdrawn while it waited.
-        let permit = sender
-            .reserve()
-            .await
-            .map_err(|_| ConsensusNetworkError::AuthorityStopped)?;
+        let mut closing = self.owner.closing();
+        if *closing.borrow() {
+            return Err(ConsensusNetworkError::AuthorityStopped);
+        }
+        let permit = tokio::select! {
+            biased;
+            _ = closing.changed() => return Err(ConsensusNetworkError::AuthorityStopped),
+            permit = sender.reserve() => permit.map_err(|_| ConsensusNetworkError::AuthorityStopped)?,
+        };
         let peers = self
             .peers
             .read()
             .map_err(|_| ConsensusNetworkError::InvalidConfiguration)?;
         peers.registry.revalidate(peer)?;
+        if self.owner.is_closing() {
+            return Err(ConsensusNetworkError::AuthorityStopped);
+        }
         permit.send(message);
         Ok(())
     }
@@ -1360,6 +1442,9 @@ impl ConsensusMessageTransport for ConsensusNetwork {
 }
 
 fn validate_config(config: &ConsensusNetworkConfig) -> Result<(), ConsensusNetworkError> {
+    if config.peers.len() > owned::MAXIMUM_OUTBOUND_WORKERS {
+        return Err(ConsensusNetworkError::NetworkBusy);
+    }
     if config.local_incarnation == 0
         || config.routing_epoch == 0
         || config.roles.is_empty()
@@ -1488,6 +1573,9 @@ fn request_identifier(value: u64) -> [u8; 16] {
 /// Closed private-network failures without certificate, key or command contents.
 #[derive(Debug, Error)]
 pub enum ConsensusNetworkError {
+    /// Bounded network worker admission is full; no operation was accepted or acknowledged.
+    #[error("consensus network worker capacity is unavailable")]
+    NetworkBusy,
     /// A bounded bulk transfer was cancelled, expired or could not reserve memory; no durable outcome is implied.
     #[error("consensus bulk transfer is unconfirmed")]
     BulkTransferUnconfirmed,

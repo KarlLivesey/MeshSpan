@@ -10,6 +10,51 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## INT-01 — configured startup retains the private generation
+
+On `8ea5586a` plus the new lifecycle regression, real first-mesh setup returned
+`CREATED`, published `Configured` and acquired its private UDP address. A forced
+public HTTP-01 bind failure then returned from `serve_daemon_cycle` and stopped
+the authority, but the private UDP address still returned `AddrInUse` after
+fixture-owned runtime references were dropped. The regression failed in
+**5.50 s** (build **37.32 s**); log:
+`/tmp/meshspan-int01-configured-bind-baseline.log`.
+
+Stage 10 tasks **10/12**, pack **INT-01**, therefore still require owned private
+network/dispatcher/topology shutdown, drainage of admitted work and cleanup after
+partial startup. This is failure evidence, not a completed lifecycle proof.
+
+The network-specific baseline also reproduced premature completion: a real
+70 KiB outbound append was admitted and blocked at its owned codec boundary;
+the old close-only path returned while that worker retained the network
+(**0.07 s**, build **5.72 s**). Log/command:
+`/tmp/meshspan-int01-network-close-baseline.txt`.
+
+The new network owner registers bounded accept, outbound and connection jobs,
+reaps them during operation and retains admission permits through success or
+panic observation. Startup prepares all initial jobs before starting its
+supervisor. Closing admission precedes transport closure; all shutdown callers
+await the same retained supervisor handle and cached result. Canceling one
+waiter does not cancel drainage. Five focused tests pass (**0.16 s**, build
+**8.53 s**), followed by all **29** network tests (**8.68 s**). They include
+admitted work, canceled waiting, exhausted-capacity route preservation, pending
+negotiation and registration racing with closure. All **135** cluster tests then
+pass (**51.67 s**); affected all-target/all-feature Clippy passes with warnings
+denied (**3.97 s**), as do scoped formatting/diff checks. Logs:
+`/tmp/meshspan-int01-cluster-tests.log` and
+`/tmp/meshspan-int01-network-clippy.log`.
+
+Worker admission has explicit operational bounds of **4096 outbound workers**,
+**4096 connection workers** and **128 connections per authenticated peer**.
+Queued, running and replaced workers retain their admission slots until reaped.
+Exhaustion rejects admission; these bounds do not confer metadata authority or
+claim availability under arbitrary resource exhaustion. Configuration validates
+the outbound capacity before starting jobs. A new typed shutdown error reports
+unknown/failed drainage; wire, persistence and dependency formats are unchanged.
+The existing synchronous close operation only initiates shutdown. Daemon and
+storage consumers still need the awaited barrier and their own admitted-worker
+drain; integrated daemon validation remains pending.
+
 ## Integration gate — retained vote-persistence failure
 
 The NVM dependency-update gate on signed/pushed `d6807f5e` failed after

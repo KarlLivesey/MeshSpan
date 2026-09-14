@@ -22,6 +22,7 @@ mod cancellation;
 mod delivery;
 mod live_identity;
 mod rotation;
+mod shutdown;
 
 #[tokio::test]
 async fn real_quinn_mtls_delivers_one_exact_authenticated_consensus_message()

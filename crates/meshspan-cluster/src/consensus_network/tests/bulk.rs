@@ -291,7 +291,10 @@ fn descriptor(
     })
 }
 
-fn append(leader: NodeId, command_bytes: usize) -> Result<CoreMessage, Box<dyn std::error::Error>> {
+pub(super) fn append(
+    leader: NodeId,
+    command_bytes: usize,
+) -> Result<CoreMessage, Box<dyn std::error::Error>> {
     Ok(CoreMessage::AppendRequest(AppendRequest {
         probe_id: AppendProbeId(17),
         term: 1,
@@ -312,7 +315,7 @@ fn append(leader: NodeId, command_bytes: usize) -> Result<CoreMessage, Box<dyn s
     }))
 }
 
-fn pair() -> Result<
+pub(super) fn pair() -> Result<
     (
         ConsensusNetwork,
         ConsensusNetwork,
