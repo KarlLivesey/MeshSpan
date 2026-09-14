@@ -10,6 +10,70 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## INT-01 — daemon drain reaches the underlying transport lifetime
+
+The first assembled daemon lifecycle run passes **7 tests** and fails **2**
+(**15.24 s**, build **66 s**). The new real private-handler proof blocks the
+existing owned admission worker for one exact metadata `CreateUser` operation,
+drops its response receiver, starts shutdown, then releases the worker. Shutdown
+waits and the original committed receipt survives reopening and exact retry.
+The two remaining failures are configured-generation UDP reuse and an invalid
+passkey origin in the new repeated-cycle fixture. Log:
+`/tmp/meshspan-int01-daemon-lifecycle.log`.
+
+After correcting that fixture and placing the runtime-ownership assertion before
+socket reuse, both configured-generation cases still fail `AddrInUse`
+(**6.82 s**). The bind-failure case explicitly reports **zero retained
+PrivateConsensusRuntime owners**. Log:
+`/tmp/meshspan-int01-private-generation-diagnostic.log`.
+
+Local Quinn source inspection identifies a separate lower-level lifetime:
+`EndpointRef::drop` wakes its internally spawned endpoint driver, which releases
+the socket on a later poll. Closing connections or waiting for idle connections
+does not join that driver. Two independent current-thread transport regressions
+reproduce `AddrInUse` (**0.05 s**): immediate socket reuse after close/drop, and
+reuse of the prepared server socket after the second socket bind fails. Neither
+test yields, sleeps or retries the required bind. Log:
+`/tmp/meshspan-int01-quinn-driver-baseline.log`.
+
+The transport owner now retains bounded Quinn driver handles. Shutdown first
+drains admitted MeshSpan workers, then closes driver admission, releases endpoint
+handles and cancels/joins residual protocol drivers. A canceled waiter preserves
+the shared join state. Driver panics and capacity rejection remain terminal
+failures; owner-requested cancellation is expected cleanup. A prepared-transport
+guard postpones driver startup through all fallible network preparation and
+synchronously releases sockets when abandoned. There are no dependency, wire or
+persistence changes.
+
+All **9** focused transport rotation/lifecycle tests pass (**0.39 s**, build
+**2.35 s**), including both previously failing immediate-rebind cases, abandonment
+after both sockets bind, canceled-waiter recovery, capacity rejection and panic
+reporting. Log: `/tmp/meshspan-int01-quinn-driver-fixed.log`. Initial compilation
+and Clippy caught scoped mutability/import issues, which were corrected.
+Affected transport/cluster/daemon all-target/all-feature Clippy passes with
+warnings denied (**15.35 s**). Log: `/tmp/meshspan-int01-assembled-clippy.log`.
+
+All **9** assembled appliance lifecycle tests now pass (**21.73 s**, build
+**78 s**), including the formerly failing configured bind-failure case, three
+controlled configured restarts with immediate socket reuse and no retained
+PrivateConsensusRuntime owner, and exact committed-receipt recovery after a
+private caller disconnects. Public and private production cleanup paths are
+directly awaited; the bounded snapshot-install worker is not a losing select
+branch. Log: `/tmp/meshspan-int01-daemon-lifecycle-fixed.log`. The broader **22** transport tests pass (**1.41 s**, build **3.25 s**) and
+**36** network tests pass (**11.43 s**, build **15.47 s**). The maximum-command
+case passes here; this does not explain its earlier full-gate timeout. Logs:
+`/tmp/meshspan-int01-transport-tests.log` and
+`/tmp/meshspan-int01-network-integrated-tests.log`.
+
+Real HTTPS mesh creation/restart and three-process join, voter promotion and
+restart both pass (**25.08 s**, build **58.98 s**); exact capability identity and
+historical strong receipts remain checked. Log:
+`/tmp/meshspan-int01-native-create-join-restart.log`. The original offline-backup
+regression is running; the update-handoff regressions require the musl target
+on Linux and are not counted by this native build. Final required integration
+gate and affected additional acceptance remain pending. No stage completion is
+claimed.
+
 ## INT-01 — configured startup retains the private generation
 
 On `8ea5586a` plus the new lifecycle regression, real first-mesh setup returned

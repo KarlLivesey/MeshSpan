@@ -70,6 +70,18 @@ impl PrivateConsensusRuntime {
         self.network.read().map_err(|_| ())?.clone().ok_or(())
     }
 
+    /// Drains the installed network while preserving the shared barrier for concurrent callers.
+    pub(crate) async fn shutdown(&self) -> Result<(), ()> {
+        let (network, poisoned) = match self.network.read() {
+            Ok(network) => (network.clone(), false),
+            Err(error) => (error.into_inner().clone(), true),
+        };
+        if let Some(network) = network {
+            network.shutdown().await.map_err(|_| ())?;
+        }
+        if poisoned { Err(()) } else { Ok(()) }
+    }
+
     /// Adds or replaces one newly admitted certificate-bound peer route.
     pub(crate) fn upsert_peer(&self, peer: &ConsensusPeerConfig) -> Result<(), ()> {
         self.network()

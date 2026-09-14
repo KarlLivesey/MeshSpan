@@ -328,7 +328,10 @@ impl ConsensusNetwork {
             CONNECTION_WINDOW,
         )?;
         let roots = roots(&config.trust_anchors)?;
-        let transport = RotatingNodeTransport::new(
+        let node_credentials = credentials(&config)?;
+        let peers = peer_map(config.peers)?;
+        let registry = peer_registry(&peers)?;
+        let prepared_transport = RotatingNodeTransport::prepare(
             NodeTransportConfig {
                 server_address: config.listen_address,
                 client_address: config.client_address,
@@ -337,11 +340,10 @@ impl ConsensusNetwork {
                 peer_roots: roots,
                 limits,
             },
-            credentials(&config)?,
+            node_credentials,
         )?;
-        let server = transport.server_endpoint();
-        let peers = peer_map(config.peers)?;
-        let registry = peer_registry(&peers)?;
+        let transport = prepared_transport.transport().clone();
+        let server = transport.server_endpoint()?;
         let (capability_cache_path, transfer_support, transfer_preimages) =
             config.capability_cache.map_or_else(
                 || (None, BTreeMap::new(), BTreeMap::new()),
@@ -394,6 +396,7 @@ impl ConsensusNetwork {
             closed?;
             return Err(error);
         }
+        drop(prepared_transport.start());
         network
             .owner
             .start(&tokio::runtime::Handle::current(), registrations);
@@ -859,17 +862,19 @@ impl ConsensusNetwork {
     ///
     /// All clones observe one cached terminal outcome. Canceling a waiter does not cancel
     /// drainage. Callers must first finish externally owned control/data handlers, then drop
-    /// their network clones after this barrier to release the underlying endpoint sockets.
+    /// every borrowed endpoint/connection handle. This barrier also releases sockets and observes
+    /// Quinn's endpoint and connection drivers.
     ///
     /// # Errors
     /// Fails closed if an owned worker/supervisor failed or admission could not be closed.
     pub async fn shutdown(&self) -> Result<(), ConsensusNetworkShutdownError> {
         let closed = self.close();
         let drained = self.owner.join().await;
+        let transport = self.transport.shutdown().await;
         if closed.is_err() {
             Err(ConsensusNetworkShutdownError::AdmissionFailed)
         } else {
-            drained
+            drained.and(transport.map_err(|_| ConsensusNetworkShutdownError::TransportFailed))
         }
     }
 

@@ -230,7 +230,7 @@ pub(super) fn control_pair() -> Result<
     // Discover addresses from live sockets rather than releasing an ephemeral
     // reservation before binding, which races concurrent network/process tests.
     let first = ConsensusNetwork::start(first_config, first_messages)?;
-    let first_address = first.transport.server_endpoint().local_addr()?;
+    let first_address = first.transport.server_endpoint()?.local_addr()?;
     let second = ConsensusNetwork::start_with_control(
         config(
             second_node,
@@ -246,7 +246,7 @@ pub(super) fn control_pair() -> Result<
     )?;
     first.upsert_peer(&peer(
         second_node,
-        second.transport.server_endpoint().local_addr()?,
+        second.transport.server_endpoint()?.local_addr()?,
         second_identity.certificate_der(),
     ))?;
     Ok((first, second, received_controls))

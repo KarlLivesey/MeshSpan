@@ -84,7 +84,7 @@ async fn network_selects_a_new_local_certificate_without_restarting_its_listener
         <[u8; 32]>::from(Sha256::digest(&leaf))
     );
     assert_eq!(
-        first.transport.server_endpoint().local_addr()?,
+        first.transport.server_endpoint()?.local_addr()?,
         first_address
     );
     confirm_rotated_control(

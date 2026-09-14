@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+#[path = "private_control_lifecycle_tests.rs"]
+mod private_control_lifecycle;
+
 use super::*;
 use crate::backup_export_service::BackupExportProviders;
 use std::path::Path;
@@ -235,7 +238,13 @@ async fn service_failure_drains_owned_blocking_receipt_before_returning()
         wait_for_shutdown(cleanup_stop).await;
         Err(DaemonProcessError::Clock)
     });
-    let supervision = supervise_services(tasks, stop, std::future::pending(), readiness.serving());
+    let supervision = supervise_services(
+        tasks,
+        stop,
+        std::future::pending(),
+        readiness.serving(),
+        PrivateGeneration::new(),
+    );
     tokio::pin!(supervision);
     // Both the primary failure and the still-running blocking writer are now deterministic.
     let immediate = std::future::poll_fn(|context| {
@@ -281,12 +290,7 @@ async fn failed_public_listener_bind_stops_and_joins_authority()
     let result = tokio::time::timeout(
         Duration::from_secs(10),
         Box::pin(serve_daemon_cycle(
-            &config,
-            services,
-            private.authority,
-            private.authority_task,
-            requests,
-            shutdown,
+            &config, services, private, requests, shutdown,
         )),
     )
     .await?;
@@ -299,9 +303,176 @@ async fn failed_public_listener_bind_stops_and_joins_authority()
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn configured_public_bind_failure_releases_private_generation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let private_socket = std::net::UdpSocket::bind("127.0.0.1:0")?;
+    let private_address = private_socket.local_addr()?;
+    let config = lifecycle_config_with_private_address(
+        directory.path(),
+        &occupied.local_addr()?.to_string(),
+        &occupied.local_addr()?.to_string(),
+        &private_address.to_string(),
+        &private_address.to_string(),
+    )?;
+    drop(private_socket);
+    let now = current_time()?;
+    let mut node = initialise_daemon_node(&config, now).await?;
+    let private = start_private_authority(&mut node, &config, now).await?;
+    let authority = private.authority.clone();
+    let generation = Arc::downgrade(&node.private_network);
+    let (restart, requests) = tokio::sync::mpsc::unbounded_channel();
+    let services = compose_appliance_services(&mut node, &private, &config, restart, now)?;
+    configure_lifecycle_mesh(&node, services.router.clone()).await?;
+    assert!(node.private_network.network().is_ok());
+    // Prove the listener was acquired before testing its release on public startup failure.
+    let occupied_private = std::net::UdpSocket::bind(private_address);
+    assert!(
+        matches!(occupied_private, Err(ref error) if error.kind() == std::io::ErrorKind::AddrInUse)
+    );
+    drop(occupied_private);
+    let shutdown = std::future::pending();
+    tokio::pin!(shutdown);
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        Box::pin(serve_daemon_cycle(
+            &config, services, private, requests, shutdown,
+        )),
+    )
+    .await?;
+    let authority_survived = authority.observe().await.is_ok();
+    if authority_survived {
+        authority.shutdown().await?;
+    }
+    drop(authority);
+    drop(node);
+    assert!(matches!(result, Err(DaemonProcessError::Http01(_))));
+    assert!(!authority_survived);
+    let retained_owners = generation.strong_count();
+    assert!(
+        generation.upgrade().is_none(),
+        "private generation survived cycle shutdown with {retained_owners} owners"
+    );
+    let rebound = std::net::UdpSocket::bind(private_address);
+    assert!(
+        rebound.is_ok(),
+        "private listener survived cycle shutdown ({retained_owners} runtime owners): {rebound:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn configured_cycles_release_old_private_generation_before_restart()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let socket = std::net::UdpSocket::bind("127.0.0.1:0")?;
+    let address = socket.local_addr()?;
+    let https = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let https_address = https.local_addr()?;
+    let config = lifecycle_config_with_private_address(
+        directory.path(),
+        "127.0.0.1:0",
+        &https_address.to_string(),
+        &address.to_string(),
+        &address.to_string(),
+    )?;
+    drop(socket);
+    drop(https);
+    for cycle in 0..3 {
+        let now = current_time()?;
+        let mut node = initialise_daemon_node(&config, now).await?;
+        if cycle > 0 {
+            assert_eq!(node.setup_state.setup_state(), SetupState::Configured);
+        }
+        let private = start_private_authority(&mut node, &config, now).await?;
+        let starter = private.network_starter.clone();
+        let generation = Arc::downgrade(&node.private_network);
+        let (restart, requests) = tokio::sync::mpsc::unbounded_channel();
+        let services =
+            compose_appliance_services(&mut node, &private, &config, restart.clone(), now)?;
+        if cycle == 0 {
+            configure_lifecycle_mesh(&node, services.router.clone()).await?;
+        }
+        restart.send(())?;
+        let shutdown = std::future::pending();
+        tokio::pin!(shutdown);
+        let exit = tokio::time::timeout(
+            Duration::from_secs(10),
+            Box::pin(serve_daemon_cycle(
+                &config, services, private, requests, shutdown,
+            )),
+        )
+        .await??;
+        assert!(matches!(exit, DaemonCycleExit::RestartRequested));
+        assert!(
+            starter.start(current_time()?).is_err(),
+            "stopped starter admitted another network"
+        );
+        drop(starter);
+        drop(node);
+        assert!(
+            generation.upgrade().is_none(),
+            "old generation retained during cycle {cycle}"
+        );
+        let rebound = std::net::UdpSocket::bind(address)?;
+        drop(rebound);
+    }
+    Ok(())
+}
+
+async fn configure_lifecycle_mesh(
+    node: &DaemonNodeRuntime,
+    router: Router,
+) -> Result<PrincipalId, Box<dyn std::error::Error>> {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    let claim = crate::ClaimFile::read(node.local_state.claim_output_path())?;
+    let operation =
+        OperationId::from_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 0x71])?;
+    let material = InitialBootstrapMaterial::derive(&claim, operation, node.local_state.node_id())?;
+    let body = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000071",
+        "claim": claim.expose_encoded().as_str(),
+        "mesh_name": "Lifecycle mesh",
+        "administrator_name": "Administrator",
+        "host_name": "Lifecycle host",
+        "node_name": "Lifecycle node"
+    }))?;
+    let response = router
+        .oneshot(
+            Request::post("/api/latest/setup/meshes")
+                .header("content-type", "application/json")
+                .body(Body::from(body))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(node.setup_state.setup_state(), SetupState::Configured);
+    Ok(material.administrator_id)
+}
+
 fn lifecycle_config(
     directory: &Path,
     http01: &str,
+) -> Result<HeadlessDaemonConfig, Box<dyn std::error::Error>> {
+    lifecycle_config_with_private_address(
+        directory,
+        http01,
+        http01,
+        "127.0.0.1:0",
+        "127.0.0.1:64000",
+    )
+}
+
+fn lifecycle_config_with_private_address(
+    directory: &Path,
+    http01: &str,
+    https: &str,
+    private_listen: &str,
+    private_endpoint: &str,
 ) -> Result<HeadlessDaemonConfig, Box<dyn std::error::Error>> {
     let storage = directory.join("storage");
     std::fs::create_dir(&storage)?;
@@ -313,13 +484,13 @@ fn lifecycle_config(
         OsString::from("--http01-listen"),
         OsString::from(http01),
         OsString::from("--https-listen"),
-        OsString::from(http01),
+        OsString::from(https),
         OsString::from("--smb-listen"),
         OsString::from("127.0.0.1:0"),
         OsString::from("--private-listen"),
-        OsString::from("127.0.0.1:0"),
+        OsString::from(private_listen),
         OsString::from("--private-endpoint"),
-        OsString::from("127.0.0.1:64000"),
+        OsString::from(private_endpoint),
     ])?)
 }
 

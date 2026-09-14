@@ -24,6 +24,9 @@ const REGISTRATION_CAPACITY: usize = MAXIMUM_OUTBOUND_WORKERS + MAXIMUM_CONNECTI
 /// Terminal failure of the shared network shutdown barrier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ConsensusNetworkShutdownError {
+    /// An owned Quinn endpoint or connection driver failed during transport drainage.
+    #[error("network shutdown transport driver failed")]
+    TransportFailed,
     /// An owned network worker panicked or was canceled before its result was observed.
     #[error("network shutdown observed {count} failed workers")]
     WorkerFailed {

@@ -41,16 +41,16 @@ async fn live_rotation_updates_both_directions_without_rebinding_or_breaking_old
             PrivatePkcs8KeyDer::from(peer_identity.private_key().to_vec()).into(),
         )?,
     )?;
-    let address = local.server.local_addr()?;
-    let client_address = local.client.local_addr()?;
+    let address = local.server_endpoint()?.local_addr()?;
+    let initial_client_address = client_address(&local)?;
     let outbound = connections(&local, &peer).await?;
     let inbound = connections(&peer, &local).await?;
     round_trip(&outbound, b"before outbound rotation").await?;
     round_trip(&inbound, b"before inbound rotation").await?;
     let old = local.current()?;
     let installed = local.install(2, fixture.credentials(&fixture.next)?)?;
-    assert_eq!(local.server.local_addr()?, address);
-    assert_eq!(local.client.local_addr()?, client_address);
+    assert_eq!(local.server_endpoint()?.local_addr()?, address);
+    assert_eq!(client_address(&local)?, initial_client_address);
     assert_eq!(installed.generation, 2);
     assert_ne!(
         installed.certificate_fingerprint,
@@ -146,11 +146,11 @@ async fn connections(
     client: &RotatingNodeTransport,
     server: &RotatingNodeTransport,
 ) -> Result<(quinn::Connection, quinn::Connection), Box<dyn Error>> {
-    let address = server.server.local_addr()?;
+    let address = server.server_endpoint()?.local_addr()?;
     Ok(tokio::time::timeout(Duration::from_secs(5), async {
         tokio::try_join!(client.connect(address, NAME), async {
             server
-                .server
+                .server_endpoint()?
                 .accept()
                 .await
                 .ok_or(TransportError::InvalidConfiguration)?
@@ -185,6 +185,103 @@ async fn round_trip(
     })
     .await??;
     Ok(())
+}
+
+#[tokio::test]
+async fn shutdown_releases_both_udp_addresses_before_returning() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let transport = fixture.transport(1, &fixture.first)?;
+    let server = transport.server_endpoint()?.local_addr()?;
+    let client = client_address(&transport)?;
+    shutdown_transport(transport).await?;
+    let _server = std::net::UdpSocket::bind(server)?;
+    let _client = std::net::UdpSocket::bind(client)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn rejected_second_bind_releases_first_socket_synchronously() -> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let reserved = std::net::UdpSocket::bind(loopback())?;
+    let first = reserved.local_addr()?;
+    drop(reserved);
+    let occupied = std::net::UdpSocket::bind(loopback())?;
+    let mut config = fixture.config(1)?;
+    config.server_address = first;
+    config.client_address = occupied.local_addr()?;
+    assert!(RotatingNodeTransport::new(config, fixture.credentials(&fixture.first)?).is_err());
+    let _rebound = std::net::UdpSocket::bind(first)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn abandoned_preparation_releases_both_sockets_and_invalidates_clones()
+-> Result<(), Box<dyn Error>> {
+    let fixture = Fixture::new()?;
+    let prepared =
+        RotatingNodeTransport::prepare(fixture.config(1)?, fixture.credentials(&fixture.first)?)?;
+    let clone = prepared.transport().clone();
+    let server = clone.server_endpoint()?.local_addr()?;
+    let client = client_address(&clone)?;
+    drop(prepared);
+    assert!(clone.server_endpoint().is_err());
+    let _server = std::net::UdpSocket::bind(server)?;
+    let _client = std::net::UdpSocket::bind(client)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn canceled_waiter_preserves_driver_drain_and_rejects_new_connections()
+-> Result<(), Box<dyn Error>> {
+    use std::future::{Future as _, poll_fn};
+    use std::task::Poll;
+
+    let fixture = Fixture::new()?;
+    let transport = fixture.transport(1, &fixture.first)?;
+    let address = transport.server_endpoint()?.local_addr()?;
+    let clone = transport.clone();
+    let mut first = Box::pin(transport.shutdown());
+    let pending = poll_fn(|cx| Poll::Ready(first.as_mut().poll(cx).is_pending())).await;
+    assert!(
+        pending,
+        "shutdown must observe the scheduled drivers before returning"
+    );
+    drop(first);
+    let mut second = Box::pin(clone.shutdown());
+    let pending = poll_fn(|cx| Poll::Ready(second.as_mut().poll(cx).is_pending())).await;
+    assert!(
+        pending,
+        "canceling one waiter must retain the driver's shared join state"
+    );
+    assert!(clone.server_endpoint().is_err());
+    assert!(matches!(
+        clone.connect(address, NAME).await,
+        Err(TransportError::InvalidConfiguration)
+    ));
+    tokio::time::timeout(Duration::from_secs(2), second).await??;
+    transport.shutdown().await?;
+    let _rebound = std::net::UdpSocket::bind(address)?;
+    Ok(())
+}
+
+async fn shutdown_transport(transport: RotatingNodeTransport) -> Result<(), TransportError> {
+    transport.shutdown().await?;
+    drop(transport);
+    Ok(())
+}
+
+fn client_address(
+    transport: &RotatingNodeTransport,
+) -> Result<std::net::SocketAddr, Box<dyn Error>> {
+    let endpoints = transport
+        .endpoints
+        .lock()
+        .map_err(|_| "endpoint state poisoned")?;
+    Ok(endpoints
+        .as_ref()
+        .ok_or("transport closed")?
+        .client
+        .local_addr()?)
 }
 
 struct Fixture {

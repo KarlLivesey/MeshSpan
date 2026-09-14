@@ -9,6 +9,12 @@ mod tests;
 #[path = "metadata_read_fence_service.rs"]
 mod metadata_read_fence_service;
 
+#[path = "private_control_runtime.rs"]
+mod private_control_runtime;
+#[path = "private_generation.rs"]
+mod private_generation;
+use private_generation::PrivateGeneration;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::future::Future;
@@ -329,155 +335,9 @@ struct PrivateNetworkStarter {
     local_private_key_pkcs8: Arc<Zeroizing<Vec<u8>>>,
     listen_address: SocketAddr,
     data_streams: tokio::sync::mpsc::Sender<PeerDataStream>,
-    topology_reconciler_started: Arc<AtomicBool>,
-}
-
-impl PrivateNetworkStarter {
-    fn start(&self, now: UnixMicros) -> Result<(), DaemonProcessError> {
-        if self.network.network().is_ok() {
-            self.spawn_topology_reconciler(now)?;
-            return Ok(());
-        }
-        let (peer_messages, mut received_peer_messages) = tokio::sync::mpsc::channel(256);
-        let (control_requests, received_control_requests) = tokio::sync::mpsc::channel(64);
-        let config = private_network_bootstrap::configuration(
-            &self.state_directory,
-            self.local_node_id,
-            &self.local_private_key_pkcs8,
-            self.listen_address,
-            now,
-        )?;
-        let network = {
-            let _entered = self.runtime.enter();
-            ConsensusNetwork::start_with_control_and_data(
-                config,
-                peer_messages,
-                control_requests,
-                self.data_streams.clone(),
-            )?
-        };
-        self.network
-            .install(network.clone())
-            .map_err(|()| DaemonProcessError::PrivateNetworkState)?;
-        self.spawn_topology_reconciler(now)?;
-        let authority = self.authority.clone();
-        self.runtime.spawn(async move {
-            while let Some(message) = received_peer_messages.recv().await {
-                if authority.receive_peer(message).await.is_err() {
-                    break;
-                }
-            }
-        });
-        self.spawn_control_runtime(network, received_control_requests);
-        Ok(())
-    }
-
-    fn spawn_topology_reconciler(&self, now: UnixMicros) -> Result<(), DaemonProcessError> {
-        if self
-            .topology_reconciler_started
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return Ok(());
-        }
-        let repository = match open_root_repository_at(&self.state_directory, now) {
-            Ok(repository) => repository,
-            Err(error) => {
-                self.topology_reconciler_started
-                    .store(false, Ordering::Release);
-                return Err(error);
-            }
-        };
-        let network = Arc::clone(&self.network);
-        let local_node_id = self.local_node_id;
-        self.runtime.spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(250));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                interval.tick().await;
-                let Ok(active_network) = network.network() else {
-                    continue;
-                };
-                let Ok(routes) = load_active_peer_routes(&repository, local_node_id) else {
-                    continue;
-                };
-                reconcile_active_peer_routes(&active_network, routes).await;
-            }
-        });
-        Ok(())
-    }
-
-    fn spawn_control_runtime(
-        &self,
-        network: ConsensusNetwork,
-        mut requests: tokio::sync::mpsc::Receiver<PeerControlRequest>,
-    ) {
-        let authority = self.authority.clone();
-        let state_directory = self.state_directory.clone();
-        let runtime = self.runtime.clone();
-        let permits = Arc::new(tokio::sync::Semaphore::new(PRIVATE_CONTROL_CONCURRENCY));
-        let mutations = Arc::new(tokio::sync::Semaphore::new(1));
-        let http01 = crate::http01_gateway::Http01PeerReader::new(&state_directory);
-        let update_readiness = self.update_readiness.clone();
-        let history = crate::native_gateway_sync::NativeGatewayHistory::new(&state_directory);
-        self.runtime.spawn(async move {
-            while let Some(request) = requests.recv().await {
-                let Ok(permit) = Arc::clone(&permits).acquire_owned().await else {
-                    break;
-                };
-                let network = network.clone();
-                let authority = authority.clone();
-                let state_directory = state_directory.clone();
-                let runtime = runtime.clone();
-                let http01 = http01.clone();
-                let update_readiness = update_readiness.clone();
-                let history = history.clone();
-                let mutation_permit = (!private_control_is_fetch(&request))
-                    .then(|| Arc::clone(&mutations).acquire_owned())
-                    .map(|permit| async move { permit.await.ok() });
-                tokio::spawn(async move {
-                    let _permit = permit;
-                    let _mutation_permit = match mutation_permit {
-                        Some(permit) => match permit.await {
-                            Some(permit) => Some(permit),
-                            None => return,
-                        },
-                        None => None,
-                    };
-                    let response = if matches!(
-                        request.envelope.as_inner().message,
-                        Some(Message::FetchHttp01Challenge(_))
-                    ) {
-                        http01
-                            .handle(&network, &request)
-                            .await
-                            .map_err(|()| DaemonProcessError::PrivateNetworkState)
-                    } else if matches!(
-                        request.envelope.as_inner().message,
-                        Some(Message::ProbeUpdateReadiness(_))
-                    ) {
-                        update_readiness
-                            .handle(&network, &request)
-                            .await
-                            .map_err(|()| DaemonProcessError::PrivateNetworkState)
-                    } else {
-                        handle_private_control(
-                            &network,
-                            &authority,
-                            &state_directory,
-                            &history,
-                            &runtime,
-                            &request,
-                        )
-                        .await
-                    };
-                    if let Ok(response) = response {
-                        let _closed = request.respond.send(response);
-                    }
-                });
-            }
-        });
-    }
+    generation: Arc<PrivateGeneration>,
+    #[cfg(test)]
+    admission_gate: Arc<Mutex<Option<crate::metadata_forwarding::AdmissionGate>>>,
 }
 
 fn private_control_is_fetch(request: &PeerControlRequest) -> bool {
@@ -625,23 +485,71 @@ where
 {
     let started_at = current_time()?;
     let node = initialise_daemon_node(config, started_at).await?;
-    let (mut node, storage_only) = tokio::task::spawn_blocking(move || {
-        storage_node_runtime::required(&node, started_at).map(|required| (node, required))
+    // A joining network already exists here; retain its cleanup owner even if the role worker panics.
+    let initial_network = Arc::clone(&node.private_network);
+    let checked = tokio::task::spawn_blocking(move || {
+        let required = storage_node_runtime::required(&node, started_at);
+        (node, required)
     })
-    .await
-    .map_err(|_| DaemonProcessError::LocalStateWorker)??;
+    .await;
+    let (mut node, storage_only) = match checked {
+        Ok(checked) => checked,
+        Err(_error) => {
+            let mut outcome = ShutdownOutcome::default();
+            outcome.record(Err(DaemonProcessError::LocalStateWorker));
+            outcome.record(
+                initial_network
+                    .shutdown()
+                    .await
+                    .map_err(|()| DaemonProcessError::PrivateNetworkState),
+            );
+            return outcome
+                .finish()
+                .and(Err(DaemonProcessError::PrivateNetworkState));
+        }
+    };
+    let storage_only = match storage_only {
+        Ok(required) => required,
+        Err(error) => {
+            let mut outcome = ShutdownOutcome::default();
+            outcome.record(Err(error));
+            outcome.record(
+                node.private_network
+                    .shutdown()
+                    .await
+                    .map_err(|()| DaemonProcessError::PrivateNetworkState),
+            );
+            return outcome
+                .finish()
+                .and(Err(DaemonProcessError::PrivateNetworkState));
+        }
+    };
     if storage_only {
         return storage_node_runtime::run(node, config, shutdown).await;
     }
     let private_authority = start_private_authority(&mut node, config, started_at).await?;
     let (restart, restart_requests) = tokio::sync::mpsc::unbounded_channel();
-    let services =
-        compose_appliance_services(&mut node, &private_authority, config, restart, started_at)?;
+    let services = match compose_appliance_services(
+        &mut node,
+        &private_authority,
+        config,
+        restart,
+        started_at,
+    ) {
+        Ok(services) => services,
+        Err(error) => {
+            let mut outcome = ShutdownOutcome::default();
+            outcome.record(Err(error));
+            private_authority.drain(&mut outcome).await;
+            return outcome
+                .finish()
+                .and(Err(DaemonProcessError::PrivateNetworkState));
+        }
+    };
     Box::pin(serve_daemon_cycle(
         config,
         services,
-        private_authority.authority,
-        private_authority.authority_task,
+        private_authority,
         restart_requests,
         shutdown,
     ))
@@ -654,7 +562,7 @@ async fn initialise_daemon_node(
 ) -> Result<DaemonNodeRuntime, DaemonProcessError> {
     let storage = config.storage().clone();
     let claim_output = config.claim_output().map(std::path::Path::to_path_buf);
-    let mut local_state = tokio::task::spawn_blocking(move || {
+    let local_state = tokio::task::spawn_blocking(move || {
         DaemonLocalState::open_paths(&storage, claim_output.as_deref(), started_at)
     })
     .await
@@ -664,76 +572,121 @@ async fn initialise_daemon_node(
     let private_endpoint = advertised_private_endpoint(config)?;
     let private_network = Arc::new(PrivateConsensusRuntime::default());
     let (data_streams, received_data_streams) = tokio::sync::mpsc::channel(128);
-    let mut joining_peer_messages = None;
-    let mut joining_control_requests = None;
-    if setup_lifecycle == SetupState::Configured {
-        remove_pending_join(&local_state.pending_interactive_join_path())
-            .map_err(|_| DaemonProcessError::InteractiveNodeJoin)?;
-    } else {
-        let pending_join = load_pending_join(
-            &local_state.pending_interactive_join_path(),
-            local_state.claim_output_path(),
-        )
-        .map_err(|_| DaemonProcessError::InteractiveNodeJoin)?;
-        let admission = if let Some(request) = pending_join.as_ref() {
-            let invitation = JoinGrantBundle::parse(&request.join_code)
-                .map_err(|_| DaemonProcessError::InteractiveNodeJoin)?;
-            Some(
-                admit_node(
-                    &mut local_state,
-                    &invitation,
-                    request.operation_id.clone(),
-                    request.host_name.clone(),
-                    request.node_name.clone(),
-                    &private_endpoint,
-                    started_at,
-                )
-                .await
-                .map_err(|_| DaemonProcessError::InteractiveNodeJoin)?,
-            )
-        } else {
-            admit_headless_node(&mut local_state, config, &private_endpoint, started_at)
-                .await
-                .map_err(|error| DaemonProcessError::HeadlessNodeJoin {
-                    phase: "admission",
-                    failure: error.to_string(),
-                })?
-        };
-        if let Some(admission) = admission {
-            let joined = activate_and_install_node(
-                &mut local_state,
-                config.private_listen(),
-                &admission,
-                data_streams.clone(),
-                current_time()?,
-            )
-            .await
-            .map_err(|error| DaemonProcessError::HeadlessNodeJoin {
-                phase: "activation and catch-up",
-                failure: error.to_string(),
-            })?;
-            private_network
-                .install(joined.network)
-                .map_err(|()| DaemonProcessError::PrivateNetworkState)?;
-            joining_peer_messages = Some(joined.peer_messages);
-            joining_control_requests = Some(joined.control_requests);
-            local_state.reconcile_setup(&setup_state)?;
-            if pending_join.is_some() {
-                remove_pending_join(&local_state.pending_interactive_join_path())
-                    .map_err(|_| DaemonProcessError::InteractiveNodeJoin)?;
-            }
-        }
-    }
-    Ok(DaemonNodeRuntime {
+    let node = DaemonNodeRuntime {
         local_state,
         setup_state,
         private_endpoint,
         private_network,
         data_streams,
         received_data_streams: Some(received_data_streams),
-        joining_peer_messages,
-        joining_control_requests,
-    })
+        joining_peer_messages: None,
+        joining_control_requests: None,
+    };
+    if setup_lifecycle == SetupState::Configured {
+        remove_pending_join(&node.local_state.pending_interactive_join_path())
+            .map_err(|_| DaemonProcessError::InteractiveNodeJoin)?;
+        Ok(node)
+    } else {
+        initialise_joining_node(node, config, started_at).await
+    }
+}
+
+async fn initialise_joining_node(
+    mut node: DaemonNodeRuntime,
+    config: &HeadlessDaemonConfig,
+    started_at: UnixMicros,
+) -> Result<DaemonNodeRuntime, DaemonProcessError> {
+    let pending_join = load_pending_join(
+        &node.local_state.pending_interactive_join_path(),
+        node.local_state.claim_output_path(),
+    )
+    .map_err(|_| DaemonProcessError::InteractiveNodeJoin)?;
+    let admission = if let Some(request) = pending_join.as_ref() {
+        let invitation = JoinGrantBundle::parse(&request.join_code)
+            .map_err(|_| DaemonProcessError::InteractiveNodeJoin)?;
+        Some(
+            admit_node(
+                &mut node.local_state,
+                &invitation,
+                request.operation_id.clone(),
+                request.host_name.clone(),
+                request.node_name.clone(),
+                &node.private_endpoint,
+                started_at,
+            )
+            .await
+            .map_err(|_| DaemonProcessError::InteractiveNodeJoin)?,
+        )
+    } else {
+        admit_headless_node(
+            &mut node.local_state,
+            config,
+            &node.private_endpoint,
+            started_at,
+        )
+        .await
+        .map_err(|error| DaemonProcessError::HeadlessNodeJoin {
+            phase: "admission",
+            failure: error.to_string(),
+        })?
+    };
+    if let Some(admission) = admission {
+        let (installed, joined) = activate_and_install_node(
+            node.local_state,
+            config.private_listen(),
+            &admission,
+            node.data_streams.clone(),
+            current_time()?,
+        )
+        .await
+        .map_err(|error| DaemonProcessError::HeadlessNodeJoin {
+            phase: "activation and catch-up",
+            failure: error.to_string(),
+        })?;
+        node.local_state = installed;
+        if node
+            .private_network
+            .install(joined.network.clone())
+            .is_err()
+        {
+            let mut outcome = ShutdownOutcome::default();
+            outcome.record(Err(DaemonProcessError::PrivateNetworkState));
+            outcome.record(
+                joined
+                    .network
+                    .shutdown()
+                    .await
+                    .map_err(|_| DaemonProcessError::PrivateNetworkState),
+            );
+            return outcome
+                .finish()
+                .and(Err(DaemonProcessError::PrivateNetworkState));
+        }
+        node.joining_peer_messages = Some(joined.peer_messages);
+        node.joining_control_requests = Some(joined.control_requests);
+        let completed = (|| {
+            node.local_state.reconcile_setup(&node.setup_state)?;
+            if pending_join.is_some() {
+                remove_pending_join(&node.local_state.pending_interactive_join_path())
+                    .map_err(|_| DaemonProcessError::InteractiveNodeJoin)?;
+            }
+            Ok::<(), DaemonProcessError>(())
+        })();
+        if let Err(error) = completed {
+            let mut outcome = ShutdownOutcome::default();
+            outcome.record(Err(error));
+            outcome.record(
+                node.private_network
+                    .shutdown()
+                    .await
+                    .map_err(|()| DaemonProcessError::PrivateNetworkState),
+            );
+            return outcome
+                .finish()
+                .and(Err(DaemonProcessError::PrivateNetworkState));
+        }
+    }
+    Ok(node)
 }
 
 async fn start_private_authority(
@@ -744,54 +697,90 @@ async fn start_private_authority(
     let consensus_transport: Arc<dyn meshspan_cluster::ConsensusMessageTransport> =
         node.private_network.clone();
     let (authority, authority_task, removal_authority_epoch) =
-        start_root_authority(&node.local_state, started_at, consensus_transport)?;
-    if let Some(mut messages) = node.joining_peer_messages.take() {
-        let joining_authority = authority.clone();
-        tokio::spawn(async move {
-            while let Some(message) = messages.recv().await {
-                if joining_authority.receive_peer(message).await.is_err() {
-                    break;
-                }
+        match start_root_authority(&node.local_state, started_at, consensus_transport) {
+            Ok(started) => started,
+            Err(error) => {
+                let mut outcome = ShutdownOutcome::default();
+                outcome.record(Err(error));
+                outcome.record(
+                    node.private_network
+                        .shutdown()
+                        .await
+                        .map_err(|()| DaemonProcessError::PrivateNetworkState),
+                );
+                return outcome
+                    .finish()
+                    .and(Err(DaemonProcessError::PrivateNetworkState));
             }
-        });
-    } else {
-        authority.begin_election().await?;
-    }
-    let private_network_starter = PrivateNetworkStarter {
-        update_readiness: crate::update_readiness::UpdateReadiness::new(
-            node.local_state.state_directory(),
-            authority.clone(),
-        )
-        .map_err(|()| DaemonProcessError::PrivateNetworkState)?,
-        runtime: tokio::runtime::Handle::current(),
-        network: Arc::clone(&node.private_network),
-        authority: authority.clone(),
-        state_directory: node.local_state.state_directory().to_path_buf(),
-        local_node_id: node.local_state.node_id(),
-        local_private_key_pkcs8: Arc::new(Zeroizing::new(
-            node.local_state.node_identity_private_key_pkcs8().to_vec(),
-        )),
-        listen_address: config.private_listen(),
-        data_streams: node.data_streams.clone(),
-        topology_reconciler_started: Arc::new(AtomicBool::new(false)),
-    };
-    if let Some(control_requests) = node.joining_control_requests.take() {
-        private_network_starter.spawn_control_runtime(
+        };
+    let Ok(update_readiness) = crate::update_readiness::UpdateReadiness::new(
+        node.local_state.state_directory(),
+        authority.clone(),
+    ) else {
+        let mut outcome = ShutdownOutcome::default();
+        outcome.record(Err(DaemonProcessError::PrivateNetworkState));
+        outcome.record(
             node.private_network
-                .network()
-                .map_err(|()| DaemonProcessError::PrivateNetworkState)?,
-            control_requests,
+                .shutdown()
+                .await
+                .map_err(|()| DaemonProcessError::PrivateNetworkState),
         );
-    }
-    if node.setup_state.setup_state() == SetupState::Configured {
-        private_network_starter.start(started_at)?;
-    }
-    Ok(PrivateAuthorityRuntime {
+        outcome.record(authority.shutdown().await.map_err(Into::into));
+        outcome.record(
+            authority_task
+                .await
+                .map_err(|_| DaemonProcessError::AuthorityTaskStopped)
+                .and_then(|result| result.map_err(Into::into)),
+        );
+        return outcome
+            .finish()
+            .and(Err(DaemonProcessError::PrivateNetworkState));
+    };
+    let private = PrivateAuthorityRuntime {
+        network_starter: PrivateNetworkStarter {
+            update_readiness,
+            runtime: tokio::runtime::Handle::current(),
+            network: Arc::clone(&node.private_network),
+            authority: authority.clone(),
+            state_directory: node.local_state.state_directory().to_path_buf(),
+            local_node_id: node.local_state.node_id(),
+            local_private_key_pkcs8: Arc::new(Zeroizing::new(
+                node.local_state.node_identity_private_key_pkcs8().to_vec(),
+            )),
+            listen_address: config.private_listen(),
+            data_streams: node.data_streams.clone(),
+            generation: PrivateGeneration::new(),
+            #[cfg(test)]
+            admission_gate: Arc::new(Mutex::new(None)),
+        },
         authority,
         authority_task,
         removal_authority_epoch,
-        network_starter: private_network_starter,
-    })
+    };
+    let joined = node.joining_peer_messages.is_some();
+    let started = async {
+        private.network_starter.start_joined_receivers(
+            node.joining_peer_messages.take(),
+            node.joining_control_requests.take(),
+        )?;
+        if !joined {
+            private.authority.begin_election().await?;
+        }
+        if node.setup_state.setup_state() == SetupState::Configured {
+            private.network_starter.start(started_at)?;
+        }
+        Ok::<(), DaemonProcessError>(())
+    }
+    .await;
+    if let Err(error) = started {
+        let mut outcome = ShutdownOutcome::default();
+        outcome.record(Err(error));
+        private.drain(&mut outcome).await;
+        return outcome
+            .finish()
+            .and(Err(DaemonProcessError::PrivateNetworkState));
+    }
+    Ok(private)
 }
 
 fn compose_appliance_services(
@@ -1199,8 +1188,7 @@ fn setup_and_enrolment_routes(
 async fn serve_daemon_cycle<F>(
     config: &HeadlessDaemonConfig,
     services: ApplianceServiceComposition,
-    authority: MetadataAuthorityHandle,
-    authority_task: JoinHandle<Result<(), MetadataAuthorityRuntimeError>>,
+    private: PrivateAuthorityRuntime,
     mut restart_requests: tokio::sync::mpsc::UnboundedReceiver<()>,
     shutdown: Pin<&mut F>,
 ) -> Result<DaemonCycleExit, DaemonProcessError>
@@ -1219,15 +1207,16 @@ where
         }
     };
     let mut outcome = ShutdownOutcome::default();
-    outcome.record(serve_public_services(config, services, lifecycle).await);
-    // A failed bind or service task still owns the authority until its shutdown and join.
-    outcome.record(authority.shutdown().await.map_err(Into::into));
     outcome.record(
-        authority_task
-            .await
-            .map_err(|_| DaemonProcessError::AuthorityTaskStopped)
-            .and_then(|result| result.map_err(Into::into)),
+        serve_public_services(
+            config,
+            services,
+            lifecycle,
+            Arc::clone(&private.network_starter.generation),
+        )
+        .await,
     );
+    private.drain(&mut outcome).await;
     outcome.finish()?;
     Ok(if restart_requested.load(Ordering::Acquire) {
         DaemonCycleExit::RestartRequested
@@ -1240,6 +1229,7 @@ async fn serve_public_services<F>(
     config: &HeadlessDaemonConfig,
     services: ApplianceServiceComposition,
     lifecycle: F,
+    generation: Arc<PrivateGeneration>,
 ) -> Result<(), DaemonProcessError>
 where
     F: Future<Output = ()> + Send,
@@ -1335,7 +1325,7 @@ where
                 _ => DaemonProcessError::Certificate,
             })
     });
-    supervise_services(tasks, stop, lifecycle, serving).await
+    supervise_services(tasks, stop, lifecycle, serving, generation).await
 }
 
 /// The SMB task owns its connection factory, per-connection measurements and cancellation.
@@ -1370,6 +1360,7 @@ async fn supervise_services<F>(
     stop: tokio::sync::watch::Sender<bool>,
     lifecycle: F,
     serving: crate::update_readiness::ServingGuard,
+    generation: Arc<PrivateGeneration>,
 ) -> Result<(), DaemonProcessError>
 where
     F: Future<Output = ()> + Send,
@@ -1378,6 +1369,7 @@ where
     let first = tokio::select! {
         biased;
         () = &mut lifecycle => None,
+        () = generation.failed() => Some(Ok(Err(DaemonProcessError::PrivateNetworkState))),
         result = tasks.join_next() => result,
     };
     // Withdraw readiness before telling any listener or worker to stop.
@@ -1388,6 +1380,7 @@ where
         outcome
             .record(resolve_public_task(result).and(Err(DaemonProcessError::ListenerTaskStopped)));
     }
+    outcome.record(generation.stop_admission());
     // Returning on the first error would abort remaining async owners while their
     // already-started blocking IO continues without an observed completion barrier.
     while let Some(result) = tasks.join_next().await {
@@ -2291,7 +2284,7 @@ async fn handle_private_control(
     authority: &MetadataAuthorityHandle,
     state_directory: &std::path::Path,
     history: &crate::native_gateway_sync::NativeGatewayHistory,
-    runtime: &tokio::runtime::Handle,
+    work: &mut private_control_runtime::PrivateControlWork,
     request: &PeerControlRequest,
 ) -> Result<ControlEnvelope, DaemonProcessError> {
     let envelope = request.envelope.as_inner();
@@ -2323,6 +2316,18 @@ async fn handle_private_control(
         .map_err(|_| DaemonProcessError::PrivateNetworkState);
     }
     if let Some(Message::MetadataCommand(_)) = envelope.message.as_ref() {
+        #[cfg(test)]
+        if let Some(gate) = work.admission_gate.take() {
+            return crate::metadata_forwarding::handle_with_admission_gate(
+                network,
+                authority,
+                state_directory,
+                request,
+                gate,
+            )
+            .await
+            .map_err(|_| DaemonProcessError::PrivateNetworkState);
+        }
         return crate::metadata_forwarding::handle(network, authority, state_directory, request)
             .await
             .map_err(|_| DaemonProcessError::PrivateNetworkState);
@@ -2349,7 +2354,7 @@ async fn handle_private_control(
                 network,
                 authority,
                 state_directory,
-                runtime,
+                work,
                 request,
                 operation_id,
                 activation,
@@ -2368,7 +2373,7 @@ async fn handle_node_activation_control(
     network: &ConsensusNetwork,
     authority: &MetadataAuthorityHandle,
     state_directory: &std::path::Path,
-    runtime: &tokio::runtime::Handle,
+    work: &mut private_control_runtime::PrivateControlWork,
     peer: &PeerControlRequest,
     operation_id: OperationId,
     activation: &meshspan_protocol::v1::NodeActivationRequest,
@@ -2377,7 +2382,7 @@ async fn handle_node_activation_control(
         network,
         authority,
         state_directory,
-        runtime,
+        &work.runtime,
         peer,
         operation_id,
         activation,
@@ -2388,7 +2393,7 @@ async fn handle_node_activation_control(
             match redistribute_activated_gateway_secrets(
                 authority,
                 state_directory,
-                runtime,
+                &work.runtime,
                 actor_principal_id,
             )
             .await
@@ -2400,12 +2405,15 @@ async fn handle_node_activation_control(
         Err(error) => Err(error),
     };
     if let Ok(commit) = &outcome {
-        spawn_learner_snapshot(
+        work.followups.spawn(prepare_and_send_learner_snapshot(
             network.clone(),
             state_directory.to_path_buf(),
             commit.record.node_id,
-        );
-        spawn_topology_broadcast(network.clone(), commit.record.revision.get());
+        ));
+        work.followups.spawn(broadcast_topology(
+            network.clone(),
+            commit.record.revision.get(),
+        ));
     }
     let (result, active_revision) = activation_result(outcome);
     let deadline_unix_micros = peer
@@ -2561,37 +2569,43 @@ async fn reconcile_active_peer_routes(network: &ConsensusNetwork, routes: Vec<Ac
     }
 }
 
-fn spawn_topology_broadcast(network: ConsensusNetwork, topology_revision: u64) {
-    tokio::spawn(async move {
-        let Ok(peers) = network.peer_routes() else {
-            return;
+async fn broadcast_topology(
+    network: ConsensusNetwork,
+    topology_revision: u64,
+) -> Result<private_control_runtime::PrivateFollowupOutcome, DaemonProcessError> {
+    use private_control_runtime::PrivateFollowupOutcome;
+    let Ok(peers) = network.peer_routes() else {
+        return Ok(PrivateFollowupOutcome::Unavailable);
+    };
+    let routes = peers
+        .iter()
+        .map(|peer| NodeRoute {
+            node_id: peer.node_id.as_bytes().to_vec(),
+            incarnation: peer.incarnation,
+            private_endpoint: peer.address.to_string(),
+            certificate_der: peer.certificate_der.clone(),
+        })
+        .collect::<Vec<_>>();
+    let mut outcome = PrivateFollowupOutcome::Completed;
+    for peer in peers {
+        let operation_id = topology_operation_id(peer.node_id, topology_revision)?;
+        let header = network.control_header(operation_id, i64::MAX)?;
+        let request = ControlEnvelope {
+            header: Some(header),
+            message: Some(Message::NodeTopologyUpdate(NodeTopologyUpdate {
+                topology_revision,
+                routes: routes.clone(),
+            })),
         };
-        let routes = peers
-            .iter()
-            .map(|peer| NodeRoute {
-                node_id: peer.node_id.as_bytes().to_vec(),
-                incarnation: peer.incarnation,
-                private_endpoint: peer.address.to_string(),
-                certificate_der: peer.certificate_der.clone(),
-            })
-            .collect::<Vec<_>>();
-        for peer in peers {
-            let Ok(operation_id) = topology_operation_id(peer.node_id, topology_revision) else {
-                continue;
-            };
-            let Ok(header) = network.control_header(operation_id, i64::MAX) else {
-                continue;
-            };
-            let request = ControlEnvelope {
-                header: Some(header),
-                message: Some(Message::NodeTopologyUpdate(NodeTopologyUpdate {
-                    topology_revision,
-                    routes: routes.clone(),
-                })),
-            };
-            let _response = network.request_control(peer.node_id, &request).await;
+        if network
+            .request_control(peer.node_id, &request)
+            .await
+            .is_err()
+        {
+            outcome = PrivateFollowupOutcome::Unavailable;
         }
-    });
+    }
+    Ok(outcome)
 }
 
 fn topology_operation_id(
@@ -2617,19 +2631,25 @@ fn topology_result_digest(topology_revision: u64) -> [u8; 32] {
     digest.finalize().into()
 }
 
-fn spawn_learner_snapshot(network: ConsensusNetwork, state_directory: PathBuf, learner: NodeId) {
-    tokio::spawn(async move {
-        let prepared = tokio::task::spawn_blocking(move || {
-            prepare_learner_snapshot(&state_directory, learner)
-        })
-        .await;
-        let Ok(Ok(snapshot)) = prepared else {
-            return;
-        };
-        let snapshot_path = snapshot.path.clone();
-        let _sent = network.send_snapshot(learner, &snapshot).await;
-        let _removed = tokio::fs::remove_file(snapshot_path).await;
-    });
+async fn prepare_and_send_learner_snapshot(
+    network: ConsensusNetwork,
+    state_directory: PathBuf,
+    learner: NodeId,
+) -> Result<private_control_runtime::PrivateFollowupOutcome, DaemonProcessError> {
+    use private_control_runtime::PrivateFollowupOutcome;
+    let prepared =
+        tokio::task::spawn_blocking(move || prepare_learner_snapshot(&state_directory, learner))
+            .await
+            .map_err(|_| DaemonProcessError::LocalStateWorker)?;
+    let Ok(snapshot) = prepared else {
+        return Ok(PrivateFollowupOutcome::Unavailable);
+    };
+    let sent = network.send_snapshot(learner, &snapshot).await;
+    tokio::fs::remove_file(snapshot.path).await?;
+    Ok(match sent {
+        Ok(()) => PrivateFollowupOutcome::Completed,
+        Err(_error) => PrivateFollowupOutcome::Unavailable,
+    })
 }
 
 fn prepare_learner_snapshot(
