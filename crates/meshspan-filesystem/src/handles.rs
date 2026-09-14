@@ -38,8 +38,8 @@ pub use lease::{
 };
 pub(crate) use lease::{close, renew, resolve_close_request};
 pub use locks::{
-    ByteRange, LockRangeReceipt, LockRangeRequest, RangeLockKind, RangeLockLifetime, UnlockRangeReceipt,
-    UnlockRangeRequest,
+    ByteRange, LockRangeReceipt, LockRangeRequest, RangeLockKind, RangeLockLifetime,
+    UnlockRangeReceipt, UnlockRangeRequest,
 };
 pub(crate) use locks::{lock_range, unlock_range};
 pub(crate) use read::{HandleReadPlan, prepare_read};
