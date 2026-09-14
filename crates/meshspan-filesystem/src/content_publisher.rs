@@ -415,6 +415,11 @@ impl<P: StorageProvider, R: RandomSource, K: VolumeContentKeys> DurableContentPu
         {
             return Ok(None);
         }
+        // Completed catalog entries remain resolvable after expiry, but prepared recovery
+        // performs provider IO and must use the fresh attempt time supplied by the caller.
+        if request.observed_at >= request.deadline {
+            return Err(ContentPublicationError::InvalidInput);
+        }
         let mut file = self.spools.open(spool_name(request.operation_id))?;
         let manifest = self.publish_pending(request, &mut file)?;
         drop(file);

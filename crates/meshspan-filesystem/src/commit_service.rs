@@ -390,17 +390,48 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         &mut self,
         request: &crate::UploadCommitRequest,
     ) -> Result<crate::UploadCommitReceipt, FilesystemCommitError> {
+        self.commit_upload_at(request, request.observed_at)
+    }
+
+    pub(crate) fn commit_upload_at(
+        &mut self,
+        request: &crate::UploadCommitRequest,
+        attempted_at: UnixMicros,
+    ) -> Result<crate::UploadCommitReceipt, FilesystemCommitError> {
         let transition =
             crate::upload_service::begin_commit(&mut self.uploads, &mut self.stages, request)?;
-        let publication = self.commit_root_file(&request.publication)?;
+        let publication = self.commit_root_file_at(&request.publication, attempted_at)?;
         let acknowledgement = self
             .content
             .acknowledgement_evidence(request.publication.content_publication_request())?
             .branch_committed();
         let session = crate::upload_service::finish_commit(&mut self.uploads, transition)?;
+        let plan = &request.publication;
+        if publication.file_version_id != plan.version_id
+            || publication.namespace_commit_id != plan.namespace_commit_id
+        {
+            return Err(FilesystemCommitError::InvalidInput);
+        }
+        let object = crate::NamespaceObjectStat {
+            namespace_commit_id: publication.namespace_commit_id,
+            object_id: plan.object_id,
+            object_revision_id: plan.file_object_revision_id,
+            name: plan
+                .path
+                .path()
+                .components()
+                .last()
+                .cloned()
+                .ok_or(FilesystemCommitError::InvalidInput)?,
+            entry_generation: plan.entry_generation,
+            kind: crate::DirectoryEntryKind::File,
+            file_version_id: Some(publication.file_version_id),
+            logical_length: Some(plan.completion.final_length),
+        };
         Ok(crate::UploadCommitReceipt {
             session,
             publication,
+            object,
             acknowledgement,
         })
     }
@@ -881,7 +912,7 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
                 self.stages.stream_complete(request.completion, &mut sink)?
             };
             (
-                self.finish_root_content(request, sink, completed)?,
+                self.finish_root_content(request, content_request, sink, completed)?,
                 Some(completed),
             )
         };
@@ -1087,15 +1118,29 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
         &mut self,
         request: &RootFileCommitRequest,
     ) -> Result<NamespacePublicationReceipt, FilesystemCommitError> {
+        self.commit_root_file_at(request, request.completion.observed_at)
+    }
+
+    fn commit_root_file_at(
+        &mut self,
+        request: &RootFileCommitRequest,
+        attempted_at: UnixMicros,
+    ) -> Result<NamespacePublicationReceipt, FilesystemCommitError> {
         validate_request(request)?;
-        let content_request = request.content_publication_request();
+        let content_request = ContentPublicationRequest {
+            observed_at: attempted_at,
+            ..request.content_publication_request()
+        };
         let (manifest, completed) = if let Some(manifest) = self.content.resolve(content_request)? {
             (manifest, None)
         } else {
+            if attempted_at >= content_request.deadline {
+                return Err(ContentPublicationError::Unavailable.into());
+            }
             let mut sink = self.content.begin(content_request)?;
             let completed = self.stages.stream_complete(request.completion, &mut sink)?;
             (
-                self.finish_root_content(request, sink, completed)?,
+                self.finish_root_content(request, content_request, sink, completed)?,
                 Some(completed),
             )
         };

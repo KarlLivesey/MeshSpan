@@ -10,6 +10,24 @@ use meshspan_metadata::{
 use super::NativeFilesystemRuntimeError;
 use crate::ConsensusAuthenticationAuthority;
 
+pub(crate) fn verify_committed_receipt(
+    store: &meshspan_filesystem::VersionPublicationStore,
+    receipt: meshspan_filesystem::NamespacePublicationReceipt,
+) -> Result<(), NativeFilesystemRuntimeError> {
+    let committed = store
+        .resolve_namespace_publication(receipt.operation_id)
+        .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?;
+    let expected = meshspan_filesystem::NamespacePublicationReceipt {
+        disposition: meshspan_filesystem::PublicationDisposition::Replayed,
+        ..receipt
+    };
+    if committed == Some(expected) {
+        Ok(())
+    } else {
+        Err(NativeFilesystemRuntimeError::StrongBarrierFailed)
+    }
+}
+
 pub(crate) fn commit_publication_head(
     authority: &ConsensusAuthenticationAuthority,
     context: CommandContext,

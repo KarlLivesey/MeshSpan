@@ -12,10 +12,10 @@ impl<P: DurableContentPublisher> FilesystemCommitService<P> {
     pub(super) fn finish_root_content(
         &mut self,
         request: &RootFileCommitRequest,
+        intent: super::ContentPublicationRequest,
         sink: P::Sink,
         completed: CompletedStage,
     ) -> Result<ManifestPublication, FilesystemCommitError> {
-        let intent = request.content_publication_request();
         if let Some(selected) = self
             .publications
             .selected_content_reuse(intent.operation_id)?

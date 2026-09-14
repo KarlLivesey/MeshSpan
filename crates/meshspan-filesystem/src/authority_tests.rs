@@ -378,8 +378,9 @@ fn resumable_upload_reauthorises_the_stable_parent_before_every_range()
     seed_file(directory.path())?;
     let allowed = Rc::new(Cell::new(true));
     let authority = TestAuthority::new(Rc::clone(&allowed), PrincipalId::from_bytes([18; 16])?);
+    let publisher = TestPublisher::default();
     let service =
-        FilesystemCommitService::open(directory.path(), UnixMicros::new(2), TestPublisher)?;
+        FilesystemCommitService::open(directory.path(), UnixMicros::new(2), publisher.clone())?;
     let mut service = AuthorisedFilesystemService::new(service, authority);
     let begin = AdapterUploadBeginRequest {
         operation_id: OperationId::from_bytes([70; 16])?,
@@ -455,16 +456,145 @@ fn resumable_upload_reauthorises_the_stable_parent_before_every_range()
         committed.publication.disposition,
         PublicationDisposition::Applied
     );
-    let replayed = service.adapter_commit_upload(
-        BranchId::from_bytes([11; 16])?,
-        context(commit.observed_at)?,
-        commit,
-        policy,
-    )?;
+    assert_upload_commit_retries(&mut service, &allowed, commit, policy, &publisher)?;
+    assert_unfinished_upload_cutoff(&mut service, &begin, policy, &publisher)?;
+    Ok(())
+}
+
+fn assert_upload_commit_retries(
+    service: &mut AuthorisedFilesystemService<TestPublisher, TestAuthority>,
+    allowed: &Cell<bool>,
+    commit: AdapterUploadCommitRequest,
+    policy: FilesystemAdapterPolicy,
+    publisher: &TestPublisher,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let branch = BranchId::from_bytes([11; 16])?;
+    service.authority.identity_revision.set(Revision::new(2));
+    service.authority.expires_at.set(UnixMicros::new(150));
+    // Both original cutoffs have elapsed; current authority still permits receipt recovery.
+    let retry = AdapterUploadCommitRequest {
+        observed_at: UnixMicros::new(110),
+        content_deadline: UnixMicros::new(180),
+        ..commit
+    };
+    allowed.set(false);
+    assert!(matches!(
+        service.adapter_commit_upload(branch, context(retry.observed_at)?, retry, policy),
+        Err(AuthorisedFilesystemError::Authority(TestAuthorityError))
+    ));
+    allowed.set(true);
+    for changed in [
+        AdapterUploadCommitRequest {
+            stage_fence: 2,
+            ..retry
+        },
+        AdapterUploadCommitRequest {
+            expected_sequence: 2,
+            ..retry
+        },
+        AdapterUploadCommitRequest {
+            final_length: 5,
+            ..retry
+        },
+        AdapterUploadCommitRequest {
+            expected_content_digest: Some([99; 32]),
+            ..retry
+        },
+    ] {
+        assert!(matches!(
+            service.adapter_commit_upload(branch, context(changed.observed_at)?, changed, policy),
+            Err(AuthorisedFilesystemError::Handle(
+                HandleError::OperationConflict
+            ))
+        ));
+    }
+    let before = publisher.state.borrow().begin_calls;
+    let replayed =
+        service.adapter_commit_upload(branch, context(retry.observed_at)?, retry, policy)?;
     assert_eq!(
         replayed.publication.disposition,
         PublicationDisposition::Replayed
     );
+    assert_eq!(publisher.state.borrow().begin_calls, before);
+    let last = publisher
+        .state
+        .borrow()
+        .attempts
+        .last()
+        .copied()
+        .ok_or("no publication attempt")?;
+    assert_eq!(last.observed_at, UnixMicros::new(110));
+    assert_eq!(last.deadline, UnixMicros::new(80));
+    assert_eq!(last.authorization_revision, Revision::new(1));
+    Ok(())
+}
+
+fn assert_unfinished_upload_cutoff(
+    service: &mut AuthorisedFilesystemService<TestPublisher, TestAuthority>,
+    begin: &AdapterUploadBeginRequest,
+    policy: FilesystemAdapterPolicy,
+    publisher: &TestPublisher,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let branch = BranchId::from_bytes([11; 16])?;
+    let begin = AdapterUploadBeginRequest {
+        operation_id: OperationId::from_bytes([75; 16])?,
+        upload_id: UploadId::from_bytes([76; 16])?,
+        stage_id: StageId::from_bytes([77; 16])?,
+        path: NamespacePath::from_components(["unfinished.bin"], NamespaceLimits::PORTABLE)?,
+        observed_at: UnixMicros::new(111),
+        expires_at: UnixMicros::new(200),
+        ..begin.clone()
+    };
+    service.adapter_begin_upload(branch, context(begin.observed_at)?, &begin)?;
+    let attempt = AdapterUploadCommitRequest {
+        operation_id: OperationId::from_bytes([78; 16])?,
+        upload_id: begin.upload_id,
+        stage_fence: 1,
+        expected_sequence: 0,
+        final_length: 0,
+        sparse: false,
+        expected_content_digest: Some(blake3::hash(&[]).into()),
+        observed_at: UnixMicros::new(112),
+        content_deadline: UnixMicros::new(113),
+    };
+    let (session, grant) =
+        service.authorise_upload(context(attempt.observed_at)?, attempt.upload_id)?;
+    let plan = service
+        .filesystem
+        .prepare_upload_publication(branch, &session, attempt, policy, grant)?;
+    let retry = AdapterUploadCommitRequest {
+        observed_at: UnixMicros::new(114),
+        content_deadline: UnixMicros::new(180),
+        ..attempt
+    };
+    let before = publisher.state.borrow().begin_calls;
+    assert!(matches!(
+        service.adapter_commit_upload(branch, context(retry.observed_at)?, retry, policy),
+        Err(AuthorisedFilesystemError::Commit(
+            FilesystemCommitError::Content(ContentPublicationError::Unavailable)
+        ))
+    ));
+    assert_eq!(publisher.state.borrow().begin_calls, before);
+    assert!(service.filesystem.resolve(retry.operation_id)?.is_none());
+    // Model interruption after durable content but before its namespace publication.
+    let content = plan.content_publication_request();
+    publisher.state.borrow_mut().durable.insert(
+        content.operation_id,
+        (
+            content,
+            ManifestPublication {
+                manifest_id: content.manifest_id,
+                format_version: content.format_version,
+                logical_length: 0,
+                content_digest: blake3::hash(&[]).into(),
+                root_digest: blake3::hash(&[]).into(),
+            },
+        ),
+    );
+    let recovered =
+        service.adapter_commit_upload(branch, context(retry.observed_at)?, retry, policy)?;
+    assert_eq!(recovered.session.state, UploadState::Committed);
+    assert_eq!(publisher.state.borrow().begin_calls, before);
     Ok(())
 }
 
@@ -479,6 +609,8 @@ struct TestAuthority {
     allowed: Rc<Cell<bool>>,
     principal_id: PrincipalId,
     last_request: Cell<Option<RecordedRequest>>,
+    identity_revision: Cell<Revision>,
+    expires_at: Cell<UnixMicros>,
 }
 
 impl TestAuthority {
@@ -487,6 +619,8 @@ impl TestAuthority {
             allowed,
             principal_id,
             last_request: Cell::new(None),
+            identity_revision: Cell::new(Revision::new(1)),
+            expires_at: Cell::new(UnixMicros::new(90)),
         }
     }
 }
@@ -513,11 +647,11 @@ impl FilesystemAccessAuthority for TestAuthority {
             volume_id: request.volume_id,
             object_id: request.object_id,
             requested_rights: request.requested_rights,
-            identity_revision: Revision::new(1),
+            identity_revision: self.identity_revision.get(),
             namespace_revision: Revision::new(1),
             object_revision: Revision::new(1),
             gateway_revision: Revision::new(1),
-            expires_at: UnixMicros::new(90),
+            expires_at: self.expires_at.get(),
             evidence_digest: [7; 32],
         })
     }
@@ -715,7 +849,18 @@ fn publish_additional_file(
 
 struct UnusedPublisher;
 
-struct TestPublisher;
+#[derive(Clone, Default)]
+struct TestPublisher {
+    state: Rc<std::cell::RefCell<TestPublisherState>>,
+}
+
+#[derive(Default)]
+struct TestPublisherState {
+    durable:
+        std::collections::BTreeMap<OperationId, (ContentPublicationRequest, ManifestPublication)>,
+    attempts: Vec<ContentPublicationRequest>,
+    begin_calls: usize,
+}
 
 struct SeedPublisher {
     content: PublishedContentReference,
@@ -842,15 +987,28 @@ impl DurableContentPublisher for TestPublisher {
 
     fn resolve(
         &mut self,
-        _request: ContentPublicationRequest,
+        request: ContentPublicationRequest,
     ) -> Result<Option<ManifestPublication>, ContentPublicationError> {
-        Ok(None)
+        let mut state = self.state.borrow_mut();
+        state.attempts.push(request);
+        state
+            .durable
+            .get(&request.operation_id)
+            .map(|(original, manifest)| {
+                if original.same_intent(request) {
+                    Ok(*manifest)
+                } else {
+                    Err(ContentPublicationError::Conflict)
+                }
+            })
+            .transpose()
     }
 
     fn begin(
         &mut self,
         _request: ContentPublicationRequest,
     ) -> Result<Self::Sink, ContentPublicationError> {
+        self.state.borrow_mut().begin_calls += 1;
         Ok(Vec::new())
     }
 
@@ -865,12 +1023,17 @@ impl DurableContentPublisher for TestPublisher {
         {
             return Err(ContentPublicationError::Corrupt);
         }
-        Ok(ManifestPublication {
+        let manifest = ManifestPublication {
             manifest_id: request.manifest_id,
             format_version: request.format_version,
             logical_length: completed.logical_length,
             content_digest: completed.content_digest,
             root_digest: blake3::hash(&sink).into(),
-        })
+        };
+        self.state
+            .borrow_mut()
+            .durable
+            .insert(request.operation_id, (request, manifest));
+        Ok(manifest)
     }
 }

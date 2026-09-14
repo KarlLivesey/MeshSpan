@@ -4,43 +4,37 @@
 
 use super::*;
 
+#[path = "user_enrollment/sharing.rs"]
+mod sharing;
+
 const REDEEM_PATH: &str = "/api/latest/user-enrollments/api-keys";
 const BOB_LABEL: &str = "Bob's first key";
 
 #[tokio::test]
 async fn native_user_enrollment_replays_and_signs_in_independently_after_restart()
 -> Result<(), Box<dyn Error>> {
-    let fixture = ProcessFixture::new()?;
+    let mut fixture = ProcessFixture::new()?;
+    // Preserve private evidence if an assertion unwinds before the result handler.
+    fixture.temporary.disable_cleanup(true);
     let mut processes = ProcessCleanup(vec![fixture.start()?]);
     let proof = tokio::time::timeout(Duration::from_secs(120), async {
-        let claim = wait_for_claim(&fixture.claim_path).await?;
         let client = wait_for_client(&fixture.identity_path).await?;
-        wait_for_status(fixture.address, &client, "claim_required").await?;
-        let administrator = bootstrap_administrator_id(&claim, &fixture.identity_path)?;
-        let created = create_process_mesh(&fixture, &client, &claim).await?;
-        let key = created["api_key"]
-            .as_str()
-            .ok_or("missing initial API key")?;
-        save_and_verify_recovery_bundle(&fixture, &client, key, &created).await?;
-        let bob = create_bob(fixture.address, &client, key).await?;
-        assert_ne!(bob.principal_id, administrator);
-        let administrator = recent_administrator(fixture.address, &client, key).await?;
-        let invitation = issue_invitation(fixture.address, &client, &administrator, &bob).await?;
-        let redemption = serde_json::json!({
-            "operation_id": "00000000-0000-4000-8000-000000000604",
-            "token": invitation["token"],
-            "label": BOB_LABEL,
-            "scopes": ["https_session", "headless_api"],
-            "expires_at_epoch_micros": null
-        });
-        let receipt = redeem_exactly(fixture.address, &client, &redemption).await?;
+        let EnrolledBob {
+            bob,
+            redemption,
+            receipt,
+            ..
+        } = enroll_bob(&fixture, &client).await?;
         assert_redemption_retries(fixture.address, &client, &redemption, &receipt).await?;
         assert_independent_sign_in(fixture.address, &client, &bob, &receipt, 606).await?;
+        let key = receipt["secret"].as_str().ok_or("missing Bob key")?;
+        assert_own_method_inventory(fixture.address, &client, key, &[&receipt]).await?;
 
         stop_processes(&mut processes.0);
         processes.0.push(fixture.start()?);
         wait_for_status(fixture.address, &client, "configured").await?;
         assert_independent_sign_in(fixture.address, &client, &bob, &receipt, 607).await?;
+        assert_own_method_inventory(fixture.address, &client, key, &[&receipt]).await?;
         let recovered = redeem_exactly(fixture.address, &client, &redemption).await?;
         // Secret-bearing values must never appear in assertion diagnostics.
         assert!(
@@ -53,7 +47,49 @@ async fn native_user_enrollment_replays_and_signs_in_independently_after_restart
     .map_err(|_| -> Box<dyn Error> { "native user enrollment exceeded its 120s deadline".into() })
     .and_then(std::convert::identity);
     drop(processes);
+    fixture.temporary.disable_cleanup(false);
     retain_failure_state(proof, [fixture.temporary])
+}
+
+struct EnrolledBob {
+    bob: Recipient,
+    redemption: serde_json::Value,
+    receipt: serde_json::Value,
+    administrator_key: String,
+    administrator_id: String,
+}
+
+async fn enroll_bob(
+    fixture: &ProcessFixture,
+    client: &ClientConfig,
+) -> Result<EnrolledBob, Box<dyn Error>> {
+    let claim = wait_for_claim(&fixture.claim_path).await?;
+    wait_for_status(fixture.address, client, "claim_required").await?;
+    let administrator_id = bootstrap_administrator_id(&claim, &fixture.identity_path)?;
+    let created = create_process_mesh(fixture, client, &claim).await?;
+    let key = created["api_key"]
+        .as_str()
+        .ok_or("missing initial API key")?;
+    save_and_verify_recovery_bundle(fixture, client, key, &created).await?;
+    let bob = create_bob(fixture.address, client, key).await?;
+    assert_ne!(bob.principal_id, administrator_id);
+    let administrator = recent_administrator(fixture.address, client, key).await?;
+    let invitation = issue_invitation(fixture.address, client, &administrator, &bob).await?;
+    let redemption = serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000604",
+        "token": invitation["token"],
+        "label": BOB_LABEL,
+        "scopes": ["https_session", "headless_api"],
+        "expires_at_epoch_micros": null
+    });
+    let receipt = redeem_exactly(fixture.address, client, &redemption).await?;
+    Ok(EnrolledBob {
+        bob,
+        redemption,
+        receipt,
+        administrator_key: key.to_owned(),
+        administrator_id,
+    })
 }
 
 struct Recipient {
@@ -89,6 +125,40 @@ async fn create_bob(
             .as_u64()
             .ok_or("missing Bob revision")?,
     })
+}
+
+async fn issue_bob_smb_key(
+    address: SocketAddr,
+    client: &ClientConfig,
+    session: &BrowserSessionHeaders,
+) -> Result<serde_json::Value, Box<dyn Error>> {
+    let request = serde_json::to_vec(&serde_json::json!({
+        "operation_id": "00000000-0000-4000-8000-000000000608",
+        "label": "Bob encrypted SMB", "scopes": ["smb_session"],
+        "expires_at_epoch_micros": null
+    }))?;
+    let response = request_with_headers(
+        address,
+        client,
+        "POST",
+        "/api/latest/users/current/authentication-methods/api-keys",
+        Some(&request),
+        &session.mutation_headers(),
+    )
+    .await?;
+    require_redacted_status(&response, "201 Created", "issue Bob SMB key")?;
+    let receipt: meshspan_api_contract::CreateApiKeyResponse =
+        serde_json::from_str(response_body(&response)?)?;
+    assert_eq!(
+        receipt.operation_id.as_str(),
+        "00000000-0000-4000-8000-000000000608"
+    );
+    assert_eq!(
+        receipt.scopes,
+        [meshspan_api_contract::ApiKeyScope::SmbSession]
+    );
+    assert!(receipt.secret.starts_with("meshspan-key-v1."));
+    Ok(serde_json::to_value(receipt)?)
 }
 
 async fn recent_administrator(
@@ -241,7 +311,7 @@ async fn assert_independent_sign_in(
     bob: &Recipient,
     receipt: &serde_json::Value,
     operation: u64,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<BrowserSessionHeaders, Box<dyn Error>> {
     let key = receipt["secret"]
         .as_str()
         .ok_or("enrollment omitted Bob key")?;
@@ -269,7 +339,7 @@ async fn assert_independent_sign_in(
     )
     .await?;
     require_redacted_status(&denied, "403 Forbidden", "deny Bob administration")?;
-    assert_own_method_inventory(address, client, key, receipt).await
+    Ok(session)
 }
 
 async fn sign_in(
@@ -293,7 +363,7 @@ async fn assert_own_method_inventory(
     address: SocketAddr,
     client: &ClientConfig,
     key: &str,
-    receipt: &serde_json::Value,
+    receipts: &[&serde_json::Value],
 ) -> Result<(), Box<dyn Error>> {
     let authorization = format!("Bearer {key}");
     let response = request_with_headers(
@@ -310,17 +380,15 @@ async fn assert_own_method_inventory(
     let methods = value["methods"]
         .as_array()
         .ok_or("missing credential inventory")?;
-    assert_eq!(
-        methods.len(),
-        1,
-        "redemption retries must not create extra credentials"
-    );
-    let method = methods
-        .first()
-        .ok_or("Bob credential inventory was empty")?;
-    assert_eq!(method["method_id"], receipt["method_id"]);
-    assert_eq!(method["label"], BOB_LABEL);
-    assert_eq!(method["state"], "active");
+    assert_eq!(methods.len(), receipts.len(), "unexpected credential count");
+    for receipt in receipts {
+        let method = methods
+            .iter()
+            .find(|method| method["method_id"] == receipt["method_id"])
+            .ok_or("Bob credential inventory omitted an issued method")?;
+        assert_eq!(method["state"], "active");
+    }
+    assert!(methods.iter().any(|method| method["label"] == BOB_LABEL));
     assert!(value["next_page_url"].is_null());
     Ok(())
 }
@@ -334,6 +402,10 @@ fn require_redacted_status(
         Ok(())
     } else {
         // Even an unexpected success response may carry a credential: never dump the body.
-        Err(format!("{operation}: expected HTTP {expected}").into())
+        let actual = response
+            .split_whitespace()
+            .nth(1)
+            .and_then(|status| status.parse::<u16>().ok());
+        Err(format!("{operation}: expected HTTP {expected}, actual status {actual:?}").into())
     }
 }

@@ -24,7 +24,10 @@ static void authenticate(SMBCCTX *context, const char *server, const char *share
     (void)server;
     (void)share;
     if (domain_size > 0) snprintf(domain, (size_t)domain_size, "MESHSPAN");
-    if (username_size > 0) snprintf(username, (size_t)username_size, "Administrator");
+    const char *configured_username = getenv("MESHSPAN_SMB_USERNAME");
+    if (configured_username == NULL) configured_username = "Administrator";
+    if (username_size > 0)
+        snprintf(username, (size_t)username_size, "%s", configured_username);
     if (password_size > 0)
         snprintf(password, (size_t)password_size, "%s",
                  (const char *)smbc_getOptionUserData(context));

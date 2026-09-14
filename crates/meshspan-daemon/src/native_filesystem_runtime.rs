@@ -521,9 +521,7 @@ impl NativeFilesystemRuntime {
             .clone();
         let store = VersionPublicationStore::open(&state_directory, observed_at)
             .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?;
-        let verified = store
-            .verify_publication_head(receipt)
-            .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?;
+        publication::verify_committed_receipt(&store, receipt)?;
         let content = store
             .published_content_for_version(receipt.file_version_id)
             .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?
@@ -536,6 +534,9 @@ impl NativeFilesystemRuntime {
             .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?
             .branch_committed();
         let result = if acknowledgement.acknowledged_class == ContentAcknowledgementClass::Strong {
+            let verified = store
+                .verify_publication_head(receipt)
+                .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?;
             let deadline = catalogue
                 .committed_strong_wait_deadline(content)
                 .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?;

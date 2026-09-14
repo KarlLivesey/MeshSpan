@@ -36,8 +36,6 @@ mod passkey_support;
 mod private_certificates;
 #[path = "headless_process/protection_metrics.rs"]
 mod protection_metrics;
-#[path = "headless_process/smb_lease.rs"]
-mod smb_lease;
 #[path = "headless_process/recovery_certificate_transport.rs"]
 mod recovery_certificate_transport;
 #[path = "headless_process/recovery_consensus_permission.rs"]
@@ -76,6 +74,8 @@ mod recovery_storage_control;
 mod recovery_storage_io;
 #[path = "headless_process/recovery_targets.rs"]
 mod recovery_targets;
+#[path = "headless_process/smb_lease.rs"]
+mod smb_lease;
 #[path = "headless_process/stage10.rs"]
 mod stage10;
 #[path = "headless_process/stage8.rs"]
@@ -2026,6 +2026,8 @@ fn smb_client_process(
         "--env",
         "MESHSPAN_SMB_PASSWORD",
         "--env",
+        "MESHSPAN_SMB_USERNAME",
+        "--env",
         "MESHSPAN_SMB_COMMAND",
     ]);
     // Native Linux Docker needs the host network to reach these loopback-only listeners.
@@ -2045,6 +2047,7 @@ fn smb_client_process(
         .arg(image)
         .args(["-ec", script, "smb-proof", &port.to_string()])
         .env("MESHSPAN_SMB_PASSWORD", api_key)
+        .env("MESHSPAN_SMB_USERNAME", "Administrator")
         .env("MESHSPAN_SMB_COMMAND", "");
     Ok(process)
 }
@@ -2062,7 +2065,7 @@ const fn real_smb_command_script() -> &'static str {
     r#"
 set -eu
 port="$1"
-printf 'username = Administrator\npassword = %s\n' "$MESHSPAN_SMB_PASSWORD" > /tmp/credentials
+printf 'username = %s\npassword = %s\n' "$MESHSPAN_SMB_USERNAME" "$MESHSPAN_SMB_PASSWORD" > /tmp/credentials
 chmod 600 /tmp/credentials
 smbclient '//host.docker.internal/process-files' \
   --port "$port" \
@@ -2202,6 +2205,26 @@ async fn upload_named_file(
     volume_id: &str,
     proof: FileUploadProof<'_>,
 ) -> Result<serde_json::Value, Box<dyn Error>> {
+    Ok(
+        upload_named_file_with_receipt(address, client, api_key, volume_id, proof)
+            .await?
+            .response,
+    )
+}
+
+struct CommittedUploadProof {
+    path: String,
+    request: Vec<u8>,
+    response: serde_json::Value,
+}
+
+async fn upload_named_file_with_receipt(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    volume_id: &str,
+    proof: FileUploadProof<'_>,
+) -> Result<CommittedUploadProof, Box<dyn Error>> {
     let content = proof.content;
     let write_operation = format!(
         "00000000-0000-4000-8000-{:012x}",
@@ -2278,7 +2301,11 @@ async fn upload_named_file(
     if committed["upload"]["state"] != "committed" {
         return Err("native upload did not return a committed file".into());
     }
-    Ok(committed)
+    Ok(CommittedUploadProof {
+        path: format!("/api/latest/uploads/{upload_id}/commits"),
+        request: commit_body,
+        response: committed,
+    })
 }
 
 async fn assign_single_node_strong_acknowledgement(

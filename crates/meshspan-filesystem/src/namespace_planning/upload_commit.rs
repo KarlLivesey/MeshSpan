@@ -24,12 +24,37 @@ pub(crate) fn prepare(
     grant: FilesystemAuthorityGrant,
 ) -> Result<RootFileCommitRequest, HandleError> {
     validate(branch_id, session, request, policy, grant)?;
-    let request_digest = request_digest(branch_id, session, request, policy, grant);
-    if let Some(plan) = load(connection, session, request, request_digest)? {
+    let replay_digest = |plan: &RootFileCommitRequest| {
+        let original = AdapterUploadCommitRequest {
+            observed_at: plan.completion.observed_at,
+            content_deadline: plan.content_deadline,
+            ..request
+        };
+        let original_policy = FilesystemAdapterPolicy {
+            retain_superseded_history: plan.retain_superseded_history,
+            retention_policy_sequence: plan.retention_policy_sequence,
+            manifest_format_version: plan.manifest_format_version,
+        };
+        let original_grant = FilesystemAuthorityGrant {
+            identity_revision: plan.content_authorization_revision,
+            ..grant
+        };
+        request_digest(
+            branch_id,
+            session,
+            original,
+            original_policy,
+            original_grant,
+        )
+    };
+    if let Some(plan) = load(connection, session, request, replay_digest)? {
         return Ok(plan);
     }
+    if request.observed_at >= session.expires_at {
+        return Err(HandleError::InvalidInput);
+    }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if let Some(plan) = load(&transaction, session, request, request_digest)? {
+    if let Some(plan) = load(&transaction, session, request, replay_digest)? {
         return Ok(plan);
     }
     reject_collision(&transaction, session, request.operation_id)?;
@@ -42,6 +67,7 @@ pub(crate) fn prepare(
     )?;
     let plan = build(branch_id, session, request, policy, grant, &current)?;
     let encoded = codec::encode(&plan)?;
+    let request_digest = request_digest(branch_id, session, request, policy, grant);
     let result_digest = result_digest(request_digest, &encoded);
     transaction.execute(
         "INSERT INTO upload_publication_plans(
@@ -69,7 +95,6 @@ fn validate(
     if request.upload_id != session.upload_id
         || request.stage_fence == 0
         || request.final_length > session.maximum_bytes
-        || request.observed_at >= session.expires_at
         || request.content_deadline <= request.observed_at
         || grant.principal_id != session.principal_id
         || grant.volume_id != session.volume_id
@@ -201,7 +226,7 @@ fn load(
     connection: &Connection,
     session: &UploadSession,
     request: AdapterUploadCommitRequest,
-    request_digest: [u8; 32],
+    expected_digest: impl FnOnce(&RootFileCommitRequest) -> [u8; 32],
 ) -> Result<Option<RootFileCommitRequest>, HandleError> {
     type Stored = (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>);
     let stored: Option<Stored> = connection
@@ -215,13 +240,19 @@ fn load(
     let Some((upload, digest, encoded, result)) = stored else {
         return Ok(None);
     };
-    if upload.as_slice() != session.upload_id.as_bytes()
-        || digest.as_slice() != request_digest
-        || result.as_slice() != result_digest(request_digest, &encoded)
+    let stored_digest: [u8; 32] = digest
+        .as_slice()
+        .try_into()
+        .map_err(|_| HandleError::Corrupt)?;
+    if result.as_slice() != result_digest(stored_digest, &encoded) {
+        return Err(HandleError::Corrupt);
+    }
+    let plan = codec::decode(&encoded, session.path.clone())?;
+    if upload.as_slice() != session.upload_id.as_bytes() || stored_digest != expected_digest(&plan)
     {
         return Err(HandleError::OperationConflict);
     }
-    codec::decode(&encoded, session.path.clone()).map(Some)
+    Ok(Some(plan))
 }
 
 fn reject_collision(
