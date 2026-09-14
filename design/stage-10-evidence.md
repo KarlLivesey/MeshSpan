@@ -10,6 +10,21 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## ACC-01 — registration after another user is created
+
+The native enrollment test reached a real server defect: TOTP challenge creation
+returned 401 after Bob's creation. The active administrator session carried the
+mesh identity revision (5), while the registration profile returned the unchanged
+administrator principal revision (1). The shared TOTP/passkey registration profile
+now returns the mesh identity revision; the recipient creation remains before
+registration in the process test.
+
+A focused metadata regression failed with revision 1 instead of 2 before the fix
+(6.64-second build, 1.15-second test). All four registration-profile tests passed
+afterward (4.60-second build, 2.13-second tests), using four build/test workers.
+Formatting and diff checks passed. No schema, wire or dependency changes. The
+native HTTPS rerun and affected lint remain pending; this does not close ACC-01.
+
 ## CORE-02 — per-peer framing of replication backlogs
 
 A peer's declared framing budget now limits both ordinary append and historical

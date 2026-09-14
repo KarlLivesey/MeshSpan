@@ -5,7 +5,7 @@ use tempfile::tempdir;
 
 use super::authentication_method_tests::{bootstrap, context, position};
 use super::{AuthoritativeRepository, RepositoryError};
-use crate::PartitionDatabase;
+use crate::{AuthoritativeCommand, CreateUser, PartitionDatabase, RecordName};
 
 #[test]
 fn registration_profile_returns_current_user_and_bounded_active_passkeys()
@@ -51,6 +51,48 @@ fn registration_profile_returns_current_user_and_bounded_active_passkeys()
         repository.passkey_registration_profile(PrincipalId::from_bytes([99; 16])?)?,
         None
     );
+    Ok(())
+}
+
+#[test]
+fn registration_profiles_follow_mesh_identity_revision_after_another_user_is_created()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let partition_id = PartitionId::from_bytes([1; 16])?;
+    let administrator = PrincipalId::from_bytes([2; 16])?;
+    let database = PartitionDatabase::open(
+        &directory
+            .path()
+            .join("registration-identity-revision.sqlite3"),
+        partition_id,
+        UnixMicros::new(1),
+    )?;
+    let mut repository = AuthoritativeRepository::new(database);
+    bootstrap(&mut repository, administrator)?;
+    repository.apply_committed(
+        position(2),
+        context(6, administrator, 7, 11, None)?,
+        &AuthoritativeCommand::CreateUser(CreateUser {
+            principal_id: PrincipalId::from_bytes([3; 16])?,
+            name: RecordName::new("Bob")?,
+        }),
+    )?;
+    assert_eq!(
+        repository
+            .principal(administrator)?
+            .ok_or("missing administrator")?
+            .revision,
+        Revision::new(1),
+    );
+    let totp_profile = repository
+        .authentication_registration_profile(administrator)?
+        .ok_or("missing TOTP registration profile")?;
+    let passkey_profile = repository
+        .passkey_registration_profile(administrator)?
+        .ok_or("missing passkey registration profile")?;
+    // Session capabilities bind the mesh identity revision, not this user's last edit.
+    assert_eq!(totp_profile.identity_revision, Revision::new(2));
+    assert_eq!(passkey_profile.identity_revision, Revision::new(2));
     Ok(())
 }
 

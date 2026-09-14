@@ -26,7 +26,7 @@ pub struct AuthenticationRegistrationProfile {
     pub user_name: String,
     /// Current human-readable display name.
     pub display_name: String,
-    /// Identity revision bound into the registration ceremony.
+    /// Mesh-wide identity revision shared with browser session capabilities.
     pub identity_revision: Revision,
 }
 
@@ -39,7 +39,7 @@ pub struct PasskeyRegistrationProfile {
     pub user_name: String,
     /// Current human-readable display name shown to the authenticator.
     pub display_name: String,
-    /// Identity revision bound into the registration challenge.
+    /// Mesh-wide identity revision shared with browser session capabilities.
     pub identity_revision: Revision,
     /// Bounded existing credential identities supplied only as browser exclusion hints.
     pub exclude_credential_ids: Vec<Vec<u8>>,
@@ -116,11 +116,21 @@ pub(super) fn authentication_profile(
     if principal.kind != PrincipalKind::User || principal.state != ACTIVE {
         return Ok(None);
     }
+    let stored_revision: i64 = database.connection().query_row(
+        "SELECT identity_revision FROM meshes WHERE (SELECT COUNT(*) FROM meshes) = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    let identity_revision = u64::try_from(stored_revision)
+        .ok()
+        .filter(|revision| *revision > 0)
+        .map(Revision::new)
+        .ok_or(RepositoryError::CorruptState)?;
     Ok(Some(AuthenticationRegistrationProfile {
         principal_id,
         user_name: principal.canonical_name,
         display_name: principal.display_name,
-        identity_revision: principal.revision,
+        identity_revision,
     }))
 }
 
