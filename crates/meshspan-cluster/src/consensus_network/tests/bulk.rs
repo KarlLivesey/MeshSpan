@@ -15,9 +15,11 @@ async fn bulk_consensus_delivers_exact_maximum_generic_command_and_keeps_queued_
     let (first, second, mut incoming) = pair()?;
     let peer = second.local_node_id();
     let expected = append(first.local_node_id(), 16 * 1024 * 1024)?;
+    let started = std::time::Instant::now();
     first.send(peer, expected.clone());
     let received = tokio::time::timeout(Duration::from_secs(15), incoming.recv())
-        .await?
+        .await
+        .map_err(|_| bulk_delivery_timeout(&first, &second, &incoming, started))?
         .ok_or("bulk append absent")?;
     assert_eq!(received.message, expected);
     // The receive task may already have returned its ingress receipt. Ownership in the
@@ -38,6 +40,56 @@ async fn bulk_consensus_delivers_exact_maximum_generic_command_and_keeps_queued_
     first.close()?;
     second.close()?;
     Ok(())
+}
+
+// These facts are sampled only after the original receive deadline has expired. They do not
+// extend that deadline, retry the send, or print command/credential bytes.
+fn bulk_delivery_timeout(
+    first: &ConsensusNetwork,
+    second: &ConsensusNetwork,
+    incoming: &mpsc::Receiver<PeerConsensusMessage>,
+    started: std::time::Instant,
+) -> std::io::Error {
+    let first_state = bulk_delivery_state(first, second.local_node_id());
+    let second_state = bulk_delivery_state(second, first.local_node_id());
+    let (incoming_len, incoming_closed) = (incoming.len(), incoming.is_closed());
+    let first_closed = first.close().map_err(|_| "network close failed");
+    let second_closed = second.close().map_err(|_| "network close failed");
+    std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        format!(
+            "maximum bulk receive exceeded 15s after {}ms; sender={first_state}; \
+             receiver={second_state}; incoming_len={incoming_len}; incoming_closed={incoming_closed}; \
+             sender_close={first_closed:?}; receiver_close={second_closed:?}",
+            started.elapsed().as_millis(),
+        ),
+    )
+}
+
+fn bulk_delivery_state(network: &ConsensusNetwork, peer: NodeId) -> String {
+    let (outbound, authenticated) = match network.peers.read() {
+        Ok(peers) => (
+            peers.outbound.get(&peer).map(|sender| {
+                (
+                    sender.max_capacity() - sender.capacity(),
+                    sender.is_closed(),
+                )
+            }),
+            Some(peers.transfer_support.contains_key(&peer)),
+        ),
+        Err(_) => (None, None),
+    };
+    let maximum_reservation_available = network
+        .bulk_budgets
+        .reserve(peer, MAXIMUM_CONSENSUS_BULK_BODY_BYTES)
+        .is_ok();
+    format!(
+        "request_sequence={}, outbound_used_slots_and_closed={outbound:?}, \
+         authenticated_support_cached={authenticated:?}, codec_permits={}, \
+         maximum_reservation_available={maximum_reservation_available}",
+        network.next_request.load(Ordering::Relaxed),
+        network.bulk_codecs.available_permits(),
+    )
 }
 
 #[tokio::test]

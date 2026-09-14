@@ -516,7 +516,9 @@ pub enum ClusterDriverError {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use meshspan_consensus::{CoreConfig, MemberIncarnations, compile_plan, flat_plan};
+    use meshspan_consensus::{
+        CoreConfig, MemberIncarnations, VoteRequest, VoteResponse, compile_plan, flat_plan,
+    };
     use meshspan_domain::{
         AuditEventId, HostId, MeshId, OperationId, PartitionId, PrincipalId, QuorumPlanId,
         Revision, RoleId,
@@ -608,6 +610,112 @@ mod tests {
                 message: CoreMessage::VoteRequest(_)
             } if *to == peer
         )));
+        Ok(())
+    }
+
+    #[test]
+    fn higher_term_without_vote_allows_one_durable_candidate_across_restart()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let database_path = directory.path().join("authority.sqlite3");
+        let local = NodeId::from_bytes([41; 16])?;
+        let candidate = NodeId::from_bytes([42; 16])?;
+        let competing = NodeId::from_bytes([43; 16])?;
+        let partition = PartitionId::from_bytes([44; 16])?;
+        let plan = compile_plan(flat_plan(
+            QuorumPlanId::from_bytes([45; 16])?,
+            1,
+            BTreeSet::from([local, candidate, competing]),
+            BTreeSet::new(),
+        )?)?;
+        let digest = plan.proof_digest();
+        let member_incarnations = MemberIncarnations::new(
+            BTreeMap::from([(local, 1), (candidate, 1), (competing, 1)]),
+            &plan,
+        )?;
+        let config = CoreConfig {
+            partition_id: partition,
+            local_node_id: local,
+            local_incarnation: 1,
+            plan,
+            member_incarnations,
+        };
+        let mut repository = AuthoritativeRepository::new(PartitionDatabase::open(
+            &database_path,
+            partition,
+            UnixMicros::new(1),
+        )?);
+        repository.initialise_consensus_quorum_plan(&config.plan, UnixMicros::new(2))?;
+        let mut driver =
+            PartitionConsensusDriver::new(ConsensusCore::new(config.clone())?, repository);
+        let higher_term = VoteResponse {
+            term: 7,
+            granted: false,
+            membership_epoch: 1,
+            plan_digest: digest,
+        };
+        driver.step(
+            CoreInput::Message {
+                from: candidate,
+                sender_incarnation: 1,
+                message: CoreMessage::VoteResponse(higher_term),
+            },
+            UnixMicros::new(3),
+        )?;
+        let observed = driver.persistence().load_consensus_state(1)?;
+        assert_eq!(observed.current_term, 7);
+        assert_eq!(observed.voted_for, None);
+        let request = |candidate| CoreInput::Message {
+            from: candidate,
+            sender_incarnation: 1,
+            message: CoreMessage::VoteRequest(VoteRequest {
+                term: 7,
+                candidate,
+                candidate_incarnation: 1,
+                last_log: LogPosition::GENESIS,
+                membership_epoch: 1,
+                plan_digest: digest,
+            }),
+        };
+        let granted = driver.step(request(candidate), UnixMicros::new(4))?;
+        // The SQL vote must already be durable when the driver exposes its network reply.
+        let persisted = driver.persistence().load_consensus_state(1)?;
+        assert_eq!(persisted.current_term, 7);
+        assert_eq!(persisted.voted_for, Some(candidate));
+        assert_eq!(
+            granted,
+            vec![DriverEffect::Send {
+                to: candidate,
+                message: CoreMessage::VoteResponse(VoteResponse {
+                    granted: true,
+                    ..higher_term
+                }),
+            }]
+        );
+        drop(driver);
+        let repository = AuthoritativeRepository::new(PartitionDatabase::open(
+            &database_path,
+            partition,
+            UnixMicros::new(5),
+        )?);
+        let recovered = repository.load_consensus_state(1)?;
+        assert_eq!(recovered, persisted);
+        let mut restored =
+            PartitionConsensusDriver::new(ConsensusCore::restore(config, recovered)?, repository);
+        let denied = restored.step(request(competing), UnixMicros::new(6))?;
+        assert_eq!(
+            denied,
+            vec![DriverEffect::Send {
+                to: competing,
+                message: CoreMessage::VoteResponse(higher_term),
+            }]
+        );
+        assert_eq!(restored.persistence().load_consensus_state(1)?, persisted);
+        assert_eq!(
+            restored.step(request(candidate), UnixMicros::new(7))?,
+            granted
+        );
+        assert_eq!(restored.persistence().load_consensus_state(1)?, persisted);
         Ok(())
     }
 

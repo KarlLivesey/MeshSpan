@@ -10,6 +10,50 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Integration gate — retained vote-persistence failure
+
+The NVM dependency-update gate on signed/pushed `d6807f5e` failed after
+**244.92 s**. Advisory scans, generated drift, embedded web build, workspace
+format/lint, TypeScript, both licence checks, tooling and web tests passed.
+The Rust lane stopped in `meshspan-cluster`: **127 passed, 2 failed, 62.93 s**;
+later Rust targets were not reached. Log:
+`/tmp/meshspan-dependency-update-d6807f5e.log`.
+
+The three-voter maximum-provider regression now retains the actual failure:
+authority 1 exited with `Driver(Persistence(InvalidMutation))`. Its database
+at `/home/karl/.cache/meshspan-validation/tmp/.tmpTcnUxl/quinn-node-1.sqlite3`
+has term **10**, no vote, log through index **8** and applied index **7**.
+The persistence adapter rejects a same-term transition from no vote to a first
+candidate, although the deterministic core legitimately emits that transition.
+A new durable restart regression reproduced `InvalidMutation` before the fix
+(**1.22 s**, build **17.90 s**). Permitting only that first vote makes all eight
+consensus-store tests pass (**3.91 s**, build **3.45 s**), including restart,
+idempotent repeat, rejected vote clearing/switching and rejected term rollback.
+This is a source-confirmed persistence defect consistent with the retained
+failure; the original failing mutation itself was not captured.
+
+The separate maximum-generic-command transport test reached its existing
+15-second receive deadline. Its outbound send currently hides the typed send
+failure from the fixture, so slow delivery and an early transfer error remain
+unresolved alternatives. Neither a passing retry nor the vote fix closes that
+transport failure. Its fixture now reports bounded queue, authenticated-support,
+codec and reservation observations on the original timeout, then closes both
+endpoints. It neither retries the message nor extends the receive deadline.
+
+A real core/SQL driver regression also failed before the vote fix with
+`Persistence(InvalidMutation)` (**1.07 s**, build **13.89 s**). It observes a
+higher term without voting, grants the first candidate only after SQL durability,
+reopens both SQL and the core, rejects a competing candidate and permits an exact
+repeat by the original candidate. With the fix, all **130** affected cluster
+tests pass (**56.08 s**), including both previously failing maximum-command
+scenarios. The unexplained transport failure remains open. No stage or full
+integration gate is declared complete.
+
+Final affected metadata/cluster all-target/all-feature Clippy passes with warnings
+denied (**3.44 s**); workspace Rustfmt and diff checks pass. The driver regression
+passes again after test-only lint cleanup (**1.15 s**). No persistence schema,
+wire format, dependency or publication change is required for the vote fix.
+
 ## ACC-02 — historical strong receipt recovery
 
 The daemon can now distinguish verified immutable publication facts from a
