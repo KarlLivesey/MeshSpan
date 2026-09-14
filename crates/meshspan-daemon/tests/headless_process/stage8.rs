@@ -33,7 +33,9 @@ async fn six_nodes_apply_one_protection_contract_through_https_and_smb()
         for (index, fixture) in fixtures[1..].iter().enumerate() {
             processes.push(fixture.start_join(&join_code)?);
             let client = wait_for_client(&fixture.identity_path).await?;
-            wait_for_status(fixture.address, &client, "configured").await?;
+            wait_for_status(fixture.address, &client, "configured")
+                .await
+                .map_err(|error| format!("joined node {} HTTPS setup: {error}", index + 2))?;
             if let Err(error) = wait_for_live_provider(fixture).await {
                 return Err(format!(
                     "joined node {} provider: {error}; {}",
@@ -98,7 +100,13 @@ async fn six_nodes_apply_one_protection_contract_through_https_and_smb()
     }
     .await;
     stop_processes(&mut processes);
-    proof
+    let directories = fixtures
+        .into_iter()
+        .map(|fixture| fixture.temporary)
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|_| "six proof directories required")?;
+    retain_failure_state::<6>(proof, directories)
 }
 
 async fn wait_for_stage8_voter_plan(

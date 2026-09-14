@@ -527,14 +527,18 @@ impl NativeFilesystemRuntime {
             .published_content_for_version(receipt.file_version_id)
             .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?
             .ok_or(NativeFilesystemRuntimeError::StrongBarrierFailed)?;
-        let acknowledgement =
+        let catalogue =
             meshspan_filesystem::DurableContentCatalog::open(&state_directory, observed_at)
-                .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?
-                .committed_acknowledgement_evidence(content)
-                .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?
-                .branch_committed();
+                .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?;
+        let acknowledgement = catalogue
+            .committed_acknowledgement_evidence(content)
+            .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?
+            .branch_committed();
         let result = if acknowledgement.acknowledged_class == ContentAcknowledgementClass::Strong {
-            self.commit_converged_head(verified, observed_at)?;
+            let deadline = catalogue
+                .committed_strong_wait_deadline(content)
+                .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?;
+            self.commit_converged_head(verified, observed_at, deadline)?;
             acknowledgement
                 .globally_converged()
                 .ok_or(NativeFilesystemRuntimeError::StrongBarrierFailed)
@@ -551,6 +555,7 @@ impl NativeFilesystemRuntime {
         &self,
         verified: VerifiedPublicationHead,
         observed_at: UnixMicros,
+        deadline: Option<UnixMicros>,
     ) -> Result<(), NativeFilesystemRuntimeError> {
         let authority = self
             .lock()?
@@ -576,7 +581,7 @@ impl NativeFilesystemRuntime {
             occurred_at: verified.created_at(),
             expected_revision: None,
         };
-        publication::commit_publication_head(&authority, context, command)
+        publication::commit_publication_head(&authority, context, command, deadline)
     }
 }
 

@@ -1149,7 +1149,13 @@ the stage; publication-dependent acceptance remains held separately and visible.
     fixed independently reproduced directory-fsync failures in folder and backup
     providers; all 72 affected provider tests pass. Corrected full Linux offline
     recovery passes in **139.28 s**, but a separate post-restart timeout remains
-    unexplained. No packaged-platform closure is claimed.
+    unexplained. The local Linux SMB client now reaches loopback listeners;
+    real successor IO, authentication metrics, three-gateway file work and
+    offline HTTPS/SMB recovery pass. The six-process protection fixture instead
+    has exposed setup readiness, strong-publication confirmation and delayed
+    immutable-history transfer failures. The confirmation correction is under
+    focused validation; the readiness and transfer evidence remains open. These
+    development-binary results do not close packaged-platform acceptance.
     Stage 10 exit gate, TST-004/007/009, REL-003. Run complete real-client file
     cycles, backup/recovery and upgrade paths using the accepted native/container
     artefacts, including Linux-only, macOS-only and mixed-host meshes. Keep local

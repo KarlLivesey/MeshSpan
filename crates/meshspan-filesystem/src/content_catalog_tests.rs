@@ -105,7 +105,7 @@ fn protected_stripe_plan_and_receipts_survive_restart_before_commit()
 }
 
 #[test]
-fn strong_deadline_never_silently_falls_back_and_persists_an_explicit_eventual_receipt()
+fn strong_deadline_preserves_the_selected_pending_or_failure_policy()
 -> Result<(), Box<dyn std::error::Error>> {
     for fallback in [
         ContentStrongFallback::RemainPending,
@@ -142,6 +142,12 @@ fn strong_deadline_never_silently_falls_back_and_persists_an_explicit_eventual_r
         ));
     }
 
+    Ok(())
+}
+
+#[test]
+fn explicit_eventual_fallback_retains_the_original_strong_deadline_and_receipt()
+-> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
     let (request, stripe) = protected_fixture()?;
     let mut catalog = DurableContentCatalog::open(directory.path(), UnixMicros::new(1))?;
@@ -178,6 +184,14 @@ fn strong_deadline_never_silently_falls_back_and_persists_an_explicit_eventual_r
     };
     assert_eq!(catalog.finish_eventual_fallback(at_deadline)?, manifest);
     let evidence = catalog.protected_acknowledgement_evidence(at_deadline)?;
+    let content = PublishedContentReference {
+        publication_operation_id: request.operation_id,
+        manifest,
+    };
+    assert_eq!(
+        catalog.committed_strong_wait_deadline(content)?,
+        Some(UnixMicros::new(15))
+    );
     assert_eq!(
         evidence.configured_class,
         ContentAcknowledgementClass::Strong
@@ -196,6 +210,21 @@ fn strong_deadline_never_silently_falls_back_and_persists_an_explicit_eventual_r
         reopened.protected_acknowledgement_evidence(at_deadline)?,
         evidence
     );
+    assert_eq!(
+        reopened.committed_strong_wait_deadline(content)?,
+        Some(UnixMicros::new(15))
+    );
+    let changed = PublishedContentReference {
+        manifest: crate::ManifestPublication {
+            root_digest: [0; 32],
+            ..manifest
+        },
+        ..content
+    };
+    assert!(matches!(
+        reopened.committed_strong_wait_deadline(changed),
+        Err(ContentCatalogError::Conflict)
+    ));
     Ok(())
 }
 

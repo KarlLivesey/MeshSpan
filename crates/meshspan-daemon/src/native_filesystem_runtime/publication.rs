@@ -2,6 +2,7 @@
 
 //! Completes a strong publication against replicated namespace authority.
 
+use meshspan_domain::{Clock as _, UnixMicros};
 use meshspan_metadata::{
     AuthoritativeCommand, CommandContext, CommitConvergedVolumeHead, EntityKind,
 };
@@ -13,6 +14,7 @@ pub(crate) fn commit_publication_head(
     authority: &ConsensusAuthenticationAuthority,
     context: CommandContext,
     publication: CommitConvergedVolumeHead,
+    deadline: Option<UnixMicros>,
 ) -> Result<(), NativeFilesystemRuntimeError> {
     let confirmed = || {
         authority
@@ -34,7 +36,7 @@ pub(crate) fn commit_publication_head(
             if confirmed()? {
                 return Ok(());
             }
-            return Err(match error {
+            let failure = match error {
                 meshspan_cluster::MetadataAuthorityRequestError::NotLeader { .. }
                 | meshspan_cluster::MetadataAuthorityRequestError::Unavailable
                 | meshspan_cluster::MetadataAuthorityRequestError::Conflict
@@ -45,7 +47,13 @@ pub(crate) fn commit_publication_head(
                 | meshspan_cluster::MetadataAuthorityRequestError::Failed => {
                     NativeFilesystemRuntimeError::StrongBarrierFailed
                 }
-            });
+            };
+            if matches!(failure, NativeFilesystemRuntimeError::StrongBarrierPending)
+                && wait_for_committed_publication(authority, &publication, deadline)?
+            {
+                return Ok(());
+            }
+            return Err(failure);
         }
     };
     if committed.entity.kind != EntityKind::Volume
@@ -61,4 +69,39 @@ pub(crate) fn commit_publication_head(
         return Err(NativeFilesystemRuntimeError::StrongBarrierFailed);
     }
     Ok(())
+}
+
+// The native filesystem caller owns a blocking worker. Poll only exact committed history;
+// a rejected proposal supplies neither permission to resubmit nor evidence of success.
+fn wait_for_committed_publication(
+    authority: &ConsensusAuthenticationAuthority,
+    publication: &CommitConvergedVolumeHead,
+    deadline: Option<UnixMicros>,
+) -> Result<bool, NativeFilesystemRuntimeError> {
+    use std::time::{Duration, Instant};
+    let remaining = deadline
+        .and_then(|deadline| {
+            deadline
+                .get()
+                .checked_sub(crate::OperatingSystemClock.now().get())
+        })
+        .and_then(|micros| u64::try_from(micros).ok())
+        .map_or(Duration::ZERO, Duration::from_micros);
+    let until = Instant::now()
+        .checked_add(remaining)
+        .ok_or(NativeFilesystemRuntimeError::StrongBarrierFailed)?;
+    loop {
+        if authority
+            .reader()
+            .namespace_publication_is_committed(publication)
+            .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?
+        {
+            return Ok(true);
+        }
+        let remaining = until.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(false);
+        }
+        std::thread::sleep(remaining.min(Duration::from_millis(25)));
+    }
 }

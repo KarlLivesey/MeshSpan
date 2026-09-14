@@ -48,7 +48,7 @@ async fn strong_publication_accepts_background_first_and_later_head_without_repu
             .converged_volume_head(volume)?
             .ok_or("head")?;
         assert_eq!(original.metadata_operation_id, background.operation_id);
-        commit_publication_head(&authority, foreground, publication)?;
+        commit_publication_head(&authority, foreground, publication, None)?;
         assert_eq!(
             authority.reader().converged_volume_head(volume)?,
             Some(original)
@@ -68,9 +68,10 @@ async fn strong_publication_accepts_background_first_and_later_head_without_repu
             &authority,
             command_context(fixture.administrator_id, 92, 95, 62, None)?,
             later,
+            None,
         )?;
         let revision = authority.reader().current_revision()?;
-        commit_publication_head(&authority, foreground, publication)?;
+        commit_publication_head(&authority, foreground, publication, None)?;
         assert_eq!(authority.reader().current_revision()?, revision);
         assert_eq!(
             authority
@@ -85,7 +86,7 @@ async fn strong_publication_accepts_background_first_and_later_head_without_repu
             ..publication
         };
         assert!(matches!(
-            commit_publication_head(&authority, foreground, substituted),
+            commit_publication_head(&authority, foreground, substituted, Some(UnixMicros::new(0))),
             Err(crate::native_filesystem_runtime::NativeFilesystemRuntimeError::StrongBarrierPending)
         ));
         assert_eq!(authority.reader().current_revision()?, revision);

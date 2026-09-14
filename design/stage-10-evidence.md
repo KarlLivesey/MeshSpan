@@ -430,6 +430,91 @@ protection fixture. It is pending, not passing evidence. The six-process fixture
 is not a physical-machine proof. The complete integration gate still must pass
 before any merge; no dependency, schema, protocol or production deadline changed.
 
+### Tasks 22/27 and Stage 8 — broader musl acceptance
+
+The final six-case musl run finished **5 passed / 1 failed in 346.16 s**, build
+**21.02 s**, using four threads. Log:
+`/tmp/meshspan-musl-artifact-smb-acceptance.log`. The source was subsequently
+committed as **960fe0f4**, signed and pushed; both `git verify-commit` and GitHub
+report a valid signature, and the remote branch matches that commit. PR #270
+remains draft/unmerged.
+
+Passing workflows are successful real-executable staging with exact retained
+report after restart; three-daemon signed artifact distribution/restart;
+real SMB authentication-rejection metrics/restart; three-gateway SMB file work;
+and offline recovery through HTTPS and real SMB, storage restart and cleanup
+interruption windows. These are development-binary, local-process proofs.
+
+The six-process protection fixture failed during `configured` setup at
+127.0.0.1:16412: an in-flight HTTP request reached the absolute 15-second deadline.
+It did not reach the protection assertions. Its old cleanup dropped failed
+fixture directories, so this run has only the log, not retained databases.
+The fixture is being changed to use the existing failure-retention helper and
+label the joining node. Temporary startup/listener-phase timing is being used
+with the six-process and three-gateway workflows; it must be removed before
+final checks. No startup allowance is increased and no full gate has been rerun.
+
+### Task 27 / Stage 8 — strong publication confirmation and retained visibility failure
+
+Startup-phase diagnostics did not reproduce the earlier HTTP readiness failure:
+all six joining listeners became ready in approximately 9–12 seconds, with
+listener binding and spawning taking approximately 1 millisecond. The diagnostic
+pair nevertheless failed both workflows in **69.74 s**: three-gateway SMB file
+visibility and the six-process strong HTTPS upload. Log:
+`/tmp/meshspan-stage8-startup-diagnostic.log`. Temporary startup tracing was
+removed; the six-process fixture now retains all failed directories and labels
+the joining node. The original readiness failure remains unexplained.
+
+The strong upload returned HTTP 503 despite all eight required shard receipts
+and a committed local content publication. Retained databases passed SQLite
+integrity checks. The root had committed the exact publication through its
+background publisher at log index 119; the uploading gateway held that entry
+but had applied only through 118. Its competing foreground proposal returned a
+conflict before local application exposed the already committed outcome.
+
+The foreground strong barrier now uses the catalogue's persisted strong cutoff
+to await only the exact committed publication history after a retryable proposal
+error. It neither resubmits the proposal nor treats the error as success. Missing
+or expired cutoffs grant no additional wait, and retries cannot renew the cutoff.
+The acknowledgement class, required receipts, authority proof and fallback policy
+remain unchanged. There is no schema, wire or dependency change.
+
+The catalogue's exact-reference, persisted-cutoff and existing publication cases
+passed **14 tests in 1.42 s**. The daemon's background-first/later-head authority
+regression passed **1 test in 1.21 s**, build **22.81 s**. An earlier incorrectly
+qualified filter selected zero tests and supplies no evidence. Subsequent Clippy
+caught the expanded catalogue test's function length; its independent pending/
+failure policy case and explicit eventual-receipt case are now separate tests.
+Final affected lint and the corrected test inventory remain pending here.
+
+With the strong-barrier correction, the focused six-process workflow completed
+its strong HTTPS upload and origin SMB write/read, then failed on another
+gateway's file visibility: **73.45 s**, build **70 s**. Log:
+`/tmp/meshspan-stage8-strong-confirmation.log`. All six replicas held the final
+committed metadata head; the failed reader still lacked 97 and 110 immutable
+bodies in two ongoing 209-record import sessions. This is an incomplete namespace
+transfer at the fixture's 15-second observation cutoff, not evidence of a missing
+committed authority head. A failure-preserving late-observation diagnostic is in
+progress; no fixture allowance or production transfer deadline has been increased.
+No complete gate, merge, publication or physical-machine proof is claimed.
+
+The failure-preserving diagnostic then passed the isolated six-process workflow
+in **66.04 s**, build **33.18 s**, and the paired six-process/three-gateway
+workflows in **83.89 s**, build **0.08 s**, with four harness threads. Neither run
+entered the late-observation window. Logs:
+`/tmp/meshspan-stage8-visibility-diagnostic.log` and
+`/tmp/meshspan-stage8-visibility-pair-diagnostic.log`. These passes exercise exact
+HTTPS/SMB content and simulated two-node loss, but do not explain the earlier
+visibility failure. The temporary late-observation diagnostic was removed;
+startup and namespace visibility allowances are unchanged. The historical
+readiness/visibility failures remain open; repeated passing retries are not
+being used to close them.
+The final catalogue inventory passed **15 tests in 1.18 s**; affected filesystem/
+daemon all-target/all-feature Clippy passed in **1.15 s**, warnings denied.
+Workspace Rust formatting and diff checks passed. These checks include removal
+of the temporary diagnostic; no production edit followed the successful paired
+proof. The complete local integration gate is still required before merge.
+
 ### Full local gate — failed; no integration
 
 `MESHSPAN_CHECK_WORKERS=4 CARGO_BUILD_JOBS=4 pnpm check`, under the configured NVM
