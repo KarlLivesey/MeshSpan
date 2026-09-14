@@ -63,7 +63,7 @@ impl ConsensusCore {
                 .ok_or(CoreError::InvalidInput)?
                 .entry_digest()
         };
-        let entries = self.replication_entries(next, end);
+        let entries = self.replication_entries(peer, next, end);
         let sent_through = entries
             .last()
             .map_or(previous.index, |entry| entry.position.index);

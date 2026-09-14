@@ -77,3 +77,58 @@ fn request_to(effects: &[CoreEffect], peer: u8) -> Result<&AppendRequest, Box<dy
         })
         .ok_or_else(|| io::Error::other("missing append request").into())
 }
+
+#[test]
+fn peer_frame_budget_limits_small_command_backlog_and_continues() -> Result<(), Box<dyn Error>> {
+    let mut leader = elected_core(3, 2)?;
+    leader.set_replication_budgets(
+        crate::ReplicationBatchBudget::new(64 * 1_024 - 1_024, 128)?,
+        BTreeMap::from([(node(3)?, crate::ReplicationBatchBudget::default())]),
+    )?;
+    for id in 1..=3 {
+        persist_only_effect(&mut leader, proposal(id, vec![42; 32 * 1_024])?)?;
+    }
+    let effects = leader.step(CoreInput::Heartbeat)?;
+    let legacy = request_to(&effects, 2)?;
+    assert_eq!(legacy.entries.len(), 1);
+    assert_eq!(legacy.entries[0].position.index, 1);
+    assert_eq!(request_to(&effects, 3)?.entries.len(), 3);
+    let reply = reply_to(&effects, 2, true)?;
+    leader.step(message(2, CoreMessage::AppendResponse(reply))?)?;
+    let effects = leader.step(CoreInput::Heartbeat)?;
+    let next = request_to(&effects, 2)?;
+    assert_eq!(next.previous.index, 1);
+    assert_eq!(next.entries.len(), 1);
+    assert_eq!(next.entries[0].position.index, 2);
+    Ok(())
+}
+
+#[test]
+fn peer_frame_budget_includes_entry_overhead_at_the_exact_boundary() -> Result<(), Box<dyn Error>> {
+    let budget = crate::ReplicationBatchBudget::new(1_024, 128)?;
+    assert!(budget.permits_command(896));
+    assert!(!budget.permits_command(897));
+    assert!(!budget.permits_command(usize::MAX));
+    let mut leader = elected_core(3, 2)?;
+    leader.set_replication_budgets(budget, BTreeMap::new())?;
+    for id in 1..=2 {
+        persist_only_effect(&mut leader, proposal(id, vec![42; 384])?)?;
+    }
+    assert_eq!(
+        request_to(&leader.step(CoreInput::Heartbeat)?, 2)?
+            .entries
+            .len(),
+        2
+    );
+    leader.set_replication_budgets(
+        crate::ReplicationBatchBudget::new(1_023, 128)?,
+        BTreeMap::new(),
+    )?;
+    assert_eq!(
+        request_to(&leader.step(CoreInput::Heartbeat)?, 2)?
+            .entries
+            .len(),
+        1
+    );
+    Ok(())
+}

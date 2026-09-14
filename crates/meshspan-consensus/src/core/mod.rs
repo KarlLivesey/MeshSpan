@@ -4,6 +4,7 @@
 
 mod append_probes;
 mod membership_history;
+mod replication_budget;
 mod state;
 mod types;
 
@@ -13,6 +14,7 @@ mod tests;
 #[cfg(test)]
 mod simulation_tests;
 
+pub use replication_budget::ReplicationBatchBudget;
 pub use state::ConsensusCore;
 pub use types::{
     AppendProbeId, AppendRequest, AppendResponse, CommittedPrefix, CoreConfig, CoreEffect,

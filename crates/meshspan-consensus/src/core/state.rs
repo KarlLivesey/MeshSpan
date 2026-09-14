@@ -10,6 +10,7 @@ use meshspan_domain::{NodeId, OperationId};
 
 use super::append_probes::{AppendProbes, ProbeResult};
 use super::membership_history::MembershipHistory;
+use super::replication_budget::ReplicationBatchBudget;
 
 use super::types::{
     AppendProbeId, AppendRequest, AppendResponse, CoreConfig, CoreEffect, CoreError, CoreInput,
@@ -87,6 +88,8 @@ pub struct ConsensusCore {
     pending: Option<PendingPersistence>,
     next_persistence_id: u64,
     next_append_probe_id: u64,
+    replication_default: ReplicationBatchBudget,
+    replication_peers: BTreeMap<NodeId, ReplicationBatchBudget>,
 }
 
 impl ConsensusCore {
@@ -134,6 +137,8 @@ impl ConsensusCore {
             pending: None,
             next_persistence_id: 1,
             next_append_probe_id: 1,
+            replication_default: ReplicationBatchBudget::default(),
+            replication_peers: BTreeMap::new(),
         })
     }
 
@@ -159,6 +164,28 @@ impl ConsensusCore {
             MembershipHistory::restore(&core.log, core.applied_index, &active_plan)?;
         core.active_plan = active_plan;
         Ok(core)
+    }
+
+    /// Replaces the runtime's framing limits for current members.
+    ///
+    /// Unknown peers use the default. All overrides are revoked when a membership phase is
+    /// activated, so a changed incarnation cannot inherit old capability evidence.
+    ///
+    /// # Errors
+    ///
+    /// Rejects overrides for nodes outside the currently active membership.
+    pub fn set_replication_budgets(
+        &mut self,
+        default: ReplicationBatchBudget,
+        peers: BTreeMap<NodeId, ReplicationBatchBudget>,
+    ) -> Result<(), CoreError> {
+        let members = self.active_members();
+        if peers.keys().any(|peer| !members.contains(peer)) {
+            return Err(CoreError::InvalidConfiguration);
+        }
+        self.replication_default = default;
+        self.replication_peers = peers;
+        Ok(())
     }
 
     /// Returns current volatile role.
@@ -976,6 +1003,7 @@ impl ConsensusCore {
             .record(self.active_plan.clone(), committed_position);
         self.active_plan = active_plan;
         self.config.member_incarnations = member_incarnations;
+        self.replication_peers.clear();
         let members = self.active_members();
         let last_index = self.last_position().index;
         let next_index = last_index.checked_add(1).ok_or(CoreError::Exhausted)?;
@@ -1173,17 +1201,27 @@ impl ConsensusCore {
         })
     }
 
-    fn replication_entries(&self, start: u64, end: u64) -> Vec<LogEntry> {
+    fn replication_entries(&self, peer: NodeId, start: u64, end: u64) -> Vec<LogEntry> {
+        let budget = self
+            .replication_peers
+            .get(&peer)
+            .copied()
+            .unwrap_or(self.replication_default);
         self.log
             .iter()
             .filter(|entry| entry.position.index >= start && entry.position.index <= end)
             .take(MAXIMUM_APPEND_ENTRIES)
-            .scan(MAXIMUM_APPEND_COMMAND_BYTES, |remaining, entry| {
-                *remaining = remaining.checked_sub(entry.command.len())?;
-                // Cloning only shares immutable log bytes. Transport reserves byte credit
-                // before constructing an independently owned wire representation.
-                Some(entry.clone())
-            })
+            .scan(
+                (MAXIMUM_APPEND_COMMAND_BYTES, budget.max_bytes),
+                |remaining, entry| {
+                    let framed_bytes = entry.command.len().checked_add(budget.entry_overhead)?;
+                    remaining.0 = remaining.0.checked_sub(entry.command.len())?;
+                    remaining.1 = remaining.1.checked_sub(framed_bytes)?;
+                    // Cloning only shares immutable log bytes. Transport reserves byte credit
+                    // before constructing an independently owned wire representation.
+                    Some(entry.clone())
+                },
+            )
             .collect()
     }
 
@@ -1211,7 +1249,7 @@ impl ConsensusCore {
                 .map(LogEntry::entry_digest)
                 .ok_or(CoreError::InvalidInput)?
         };
-        let entries = self.replication_entries(next, u64::MAX);
+        let entries = self.replication_entries(peer, next, u64::MAX);
         let request = AppendRequest {
             probe_id: AppendProbeId(self.next_append_probe_id),
             term: self.current_term,

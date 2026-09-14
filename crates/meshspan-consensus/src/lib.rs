@@ -25,7 +25,7 @@ pub use core::{
     AppendProbeId, AppendRequest, AppendResponse, CommittedPrefix, ConsensusCore, CoreConfig,
     CoreEffect, CoreError, CoreInput, CoreMessage, DurableCoreState, DurableMutation,
     DurableQuorumPlan, LogEntry, LogPosition, MemberIncarnations, PersistenceId, ProposalId,
-    ReadBarrierId, Role, VoteRequest, VoteResponse,
+    ReadBarrierId, ReplicationBatchBudget, Role, VoteRequest, VoteResponse,
 };
 
 pub use quorum::{

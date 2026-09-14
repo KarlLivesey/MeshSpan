@@ -10,6 +10,27 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## CORE-02 — per-peer framing of replication backlogs
+
+A peer's declared framing budget now limits both ordinary append and historical
+committed-prefix batches before entry cloning. A conservative per-entry cost is
+included alongside the existing 16 MiB command-byte and 64-entry limits. The
+outer runtime supplies explicit, volatile budgets; membership activation clears
+all peer overrides before emitting replication, including when an identity's
+incarnation changes. This does not change durable records or weaken quorum proof.
+
+Two focused regressions failed before batch selection used the new policy:
+three individually legal small commands were sent together where only one fit;
+two entries crossed the exact framing boundary where only one fit. After the
+fix, `CARGO_BUILD_JOBS=4 cargo test -p meshspan-consensus --lib --
+--test-threads=4` passed all 43 tests in 3.97 seconds. Affected all-target,
+all-feature Clippy passed in 0.57 seconds; package formatting and diff checks
+passed. Tested tree: `1b34523b` plus this core change. No dependencies changed.
+
+Runtime capability admission, automatic presentation refresh, real distributed
+acceptance and the complete integration gate remain separate unfinished work.
+This is a progress slice, not closure of CORE-02 or Stage 10.
+
 ## Viability pack adoption and CORE-01 prefix proof
 
 The owner adopted the pack on 2026-09-14. Archive SHA-256:
