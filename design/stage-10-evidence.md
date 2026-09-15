@@ -10,6 +10,23 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 codec compatibility fixture follows version 21
+
+The archive-recovery follow-up was signed and pushed as
+`aaa88e8d15be1d437e7c0638760d68f4e99fd8b9` (tree
+`c303f1392697121d25040f5da2e842baedae8f0b`), with local SSH and GitHub signature
+verification. Its full gate was stopped early (exit **143**) when review found a
+remaining compatibility fixture that still classified version 21 as unsupported.
+The focused codec target reproduced that mismatch: **47 passed, one failed** in
+**0.23 s** (`/tmp/meshspan-repair-generations-codec-boundary-baseline.log`).
+The fixture now explicitly accepts versions 18–21 and rejects 22, while retaining
+the other malformed/unknown-version cases. Runtime checks were not changed.
+All **48 codec tests pass** in **0.17 s**
+(`/tmp/meshspan-repair-generations-codec-boundary-fixed.log`).
+A fresh full gate remains required; `/tmp/meshspan-check-aaa88e8d.log` is an
+incomplete run, not a passing result. PR #274 is still a draft and Stage 10 task
+16 / DATA-02 remains open.
+
 ## DATA-02 preserve archived recovery across physical generations
 
 The physical-generation checkpoint was signed and pushed as
