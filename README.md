@@ -93,6 +93,12 @@ nodes or workers exercised inside each case. Regenerate the committed OpenAPI, T
 native-Fetch and Zod artefacts with
 `npm run generate:api`.
 
+Local builds retain incremental compilation and debug checks. The crypto-provider
+crate alone uses optimization level 2, with debug symbols, assertions and overflow
+checks retained: measured unoptimized cipher work otherwise consumes most of the
+maximum-transfer test's deadline. All other crates keep the ordinary debug profile.
+See the [measurement and validation evidence](design/stage-10-evidence.md#measured-packet-cryptography-cost-in-local-validation).
+
 Early development uses local verification only. There are deliberately no GitHub Actions yet.
 
 Build the self-contained development daemon with `pnpm build:daemon` after activating

@@ -10,6 +10,63 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Measured packet cryptography cost in local validation
+
+The maximum-transfer investigation now has a reproducible packet-cost comparison
+in `meshspan-rustls-provider::quic::tests::cached_aes_packet_cost`, explicitly
+ignored by ordinary tests because it is a manual measurement, not a transport
+acceptance proof. Run it with `cargo test -p meshspan-rustls-provider --lib
+cached_aes_packet_cost -- --ignored --nocapture --test-threads=4`. It compares
+cached direct AES-GCM with the actual packet adapter, encrypting and decrypting
+13,981 packets of 1,200 bytes per round, using unique nonces and verifying the
+final original payload. It reports aggregate times only.
+
+On parent `d707ca127a08e8c1494c20e110b8e6cb28c62fbe`, the temporary equivalent
+fixture measured direct calls at **6.172/6.022 s** and adapter calls at
+**5.949/6.225 s** (`/tmp/meshspan-packet-cost-baseline.log`). There is no measured
+adapter overhead to justify rewriting its crypto boundary. A benchmark-only
+provider `opt-level=1` override did not improve reliably: **4.827–8.029 s**
+(`/tmp/meshspan-packet-cost-opt1.log`). Cargo documents that lower optimization
+levels can share generic instantiations across crates; level 2 avoids importing
+those instances ([Cargo profiles](https://doc.rust-lang.org/cargo/reference/profiles.html#overrides-and-generics)).
+With level 2 scoped to this provider and debug assertions/overflow checks
+explicitly retained, direct calls took **0.307/0.304 s**, adapter calls
+**0.302/0.298 s** (`/tmp/meshspan-packet-cost-opt2.log`).
+
+After removing the temporary fixture, the actual maximum-size transfer passed
+with the same CLI-only override in **3.31 s**, retaining its original 15-second
+deadline, exact bytes and queued-allocation checks
+(`/tmp/meshspan-bulk-provider-opt2.log`). Four concurrent independent transfers
+then passed in **2.412–2.488 s**, consuming **2.359–2.383 s** user CPU each
+(`/tmp/meshspan-bulk-provider-opt2-load-{1,2,3,4}.log`). This is a measured
+improvement over the earlier unoptimized **12.06–12.23 s** concurrent runs and
+the retained cluster-wide failures, not a passing retry of an unchanged build.
+
+The candidate now keeps this narrow Cargo development-profile override for
+`meshspan-rustls-provider` only. Test builds inherit it. Debug symbols,
+assertions, overflow checks and incremental compilation are explicitly retained;
+all other workspace crates retain the ordinary debug profile. This is an
+evidence-backed exception for packet cryptography to the normal debug-build
+preference: debugger stepping/inlining differs inside this crate. It is not an
+unoptimized whole-workspace test claim. No dependency, algorithm, release
+profile, deadline, assertion or test target changed. Canonical concurrent
+consumer tests and the complete gate remain required before integration.
+
+The canonical all-target/all-feature rebuild completed in **4 min 06 s**
+(`/tmp/meshspan-provider-profile-canonical-build.log`). Its cluster artifact
+`meshspan_cluster-b2bad129668d4490` passes **all 138 tests with four threads in
+98.34 s**, including the previously failing maximum transfer
+(`/tmp/meshspan-provider-profile-cluster.log`). Provider checks pass: **five
+unit tests** (the manual benchmark is ignored here), **two real TLS handshakes**
+and **four external-chain cases**, including denied names, expiry, roots and
+tampering (`/tmp/meshspan-provider-profile-{unit,handshake,chains}.log`). The
+manual benchmark is then explicitly executed: **0.299/0.300 s** through the
+adapter and **0.313/0.317 s** directly, **1.233 s** overall
+(`/tmp/meshspan-provider-profile-packet-cost.log`). Affected all-target/all-feature
+Clippy passes in **4.200 s**; workspace Rust and document formatting pass.
+The complete integration gate is still required; the historical federation
+timeout is not declared explained by this packet-cost measurement.
+
 ## Bounded-runner gate — maximum consensus transfer still fails
 
 The complete gate on signed, GitHub-verified commit
