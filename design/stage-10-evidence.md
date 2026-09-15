@@ -10,6 +10,44 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 integration gate — historical migration fixtures
+
+The complete NVM gate on signed, locally/GitHub-verified `c2f42993` failed after
+**1291.59 s** (`/tmp/meshspan-check-c2f42993.log`). Static/licence/tooling lanes,
+headless process tests and filesystem targets passed. Web tests passed in
+**16.32 s**. Metadata finished **583 passed, two failed** in **380.39 s**; later
+Rust targets were not reached. PR #272 remains unmerged.
+
+Both failures are legacy-fixture assumptions invalidated by partition migration
+120. The backup-root fixture restored schema 109 but retained migration 120's
+`maintenance_repair_effects_scope_order` index, so replay correctly rejected an
+already-existing index. Its focused baseline fails in **1.36 s**. The fixture now
+removes that post-109 index along with the other successor schema objects; the
+same exact retained-root and integrity assertions pass in **1.64 s**. The node
+capability fixture expected schema 119 after applying all current migrations.
+It now applies exactly migration 119, preserving its original activation,
+no-invented-support, prior-digest, schema-119 and integrity assertions, then reopens
+through the current schema and additionally verifies the current version. It
+passes in **3.31 s**. No production migration or assertion was weakened.
+
+Logs: `/tmp/meshspan-data02-backup-root-migration-baseline.log`,
+`/tmp/meshspan-data02-backup-root-migration-fixed.log`,
+`/tmp/meshspan-data02-node-capability-migration-fixed.log`. The previously
+unreached Rust packages after metadata are being run with canonical all-target,
+all-feature flags and four test threads before the next complete integration gate.
+
+All previously unreached workspace packages after metadata pass with the canonical
+`--all-targets --all-features --quiet -- --test-threads 4` flags: **302 tests across
+26 targets, zero failed or ignored**. Package selection came from current workspace
+metadata and includes OTP, passkey, placement, protobuf/protocol, Quinn/Rustls,
+recovery/secret envelopes, SMB, storage, transport, work and support crates.
+Per-target durations are retained in
+`/tmp/meshspan-data02-remaining-rust-targets.log`. Affected metadata
+all-target/all-feature Clippy passes in **9.43 s**
+(`/tmp/meshspan-data02-migration-fixtures-clippy.log`); formatting/diff checks pass.
+Only test fixtures and evidence changed after the latest full-gate failure. A new
+complete NVM gate is still required on the signed corrected candidate.
+
 ## DATA-02 integration gate — recovered cleanup transport failure
 
 Signed metrics fix `12d1fa0098711f8c80f99d145d15d01b60c5deee` is pushed and
