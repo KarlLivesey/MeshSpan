@@ -360,6 +360,9 @@ fn assert_repair_completes_when_destination_returns(
     // The real configured-folder reconciler admits and opens the additional
     // provider, then runs the now-eligible repair through the same maintenance tick.
     runtime.configured_paths.push(folder);
+    // The scheduler fixture advances authority time explicitly; use the same controlled clock
+    // for physical repair instead of comparing its future tick with the host clock.
+    runtime.maintenance_clock = Arc::new(MaintenanceClock(eligible_at));
     runtime.reconcile(eligible_at);
     assert_eq!(runtime.active.len(), 3);
     let reopened = open_root_repository_at(&runtime.state_directory, eligible_at)?;
@@ -429,6 +432,7 @@ fn assert_repair_completes_when_destination_returns(
         eligible_at,
     )?;
     super::super::repair::assert_committed_effect_recovery(runtime, &transition, eligible_at)?;
+    super::super::repair::assert_saved_attempt_takeover(runtime, &transition, eligible_at)?;
     Ok(())
 }
 
@@ -533,5 +537,12 @@ impl meshspan_domain::RandomSource for FenceEntropy {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), meshspan_domain::EntropyError> {
         destination.fill(self.0.ok_or(meshspan_domain::EntropyError)?);
         Ok(())
+    }
+}
+
+struct MaintenanceClock(UnixMicros);
+impl meshspan_domain::Clock for MaintenanceClock {
+    fn now(&self) -> UnixMicros {
+        self.0
     }
 }

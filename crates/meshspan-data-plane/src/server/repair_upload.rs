@@ -59,7 +59,16 @@ impl<P: StorageProvider> RemoteShardService<P> {
         };
         tokio::time::timeout_at(
             time.deadline,
-            self.serve_authorised_repair(stream, limits, intent, authority, time),
+            self.serve_authorised_repair(
+                stream,
+                limits,
+                AuthorisedRepairUpload {
+                    intent,
+                    authority,
+                    time,
+                    admission_only: request.admission_only,
+                },
+            ),
         )
         .await
         .map_err(|_| DataPlaneError::Contract(ContractError::DeadlineExceeded))?
@@ -69,10 +78,14 @@ impl<P: StorageProvider> RemoteShardService<P> {
         &mut self,
         stream: &mut AcceptedStream,
         limits: WireLimits,
-        intent: ShardPutIntent,
-        authority: ShardWritePermit,
-        time: UploadLifetime,
+        upload: AuthorisedRepairUpload,
     ) -> Result<(), DataPlaneError> {
+        let AuthorisedRepairUpload {
+            intent,
+            authority,
+            time,
+            admission_only,
+        } = upload;
         let payload = VersionedPayload {
             format_version: 1,
             canonical_bytes: meshspan_contracts::encode_shard_put_intent_v1(intent).to_vec(),
@@ -116,6 +129,13 @@ impl<P: StorageProvider> RemoteShardService<P> {
             }),
         )
         .await?;
+        if admission_only {
+            stream
+                .send
+                .finish()
+                .map_err(meshspan_transport::TransportError::from)?;
+            return Ok(());
+        }
         let bytes = receive_put_payload(
             &mut stream.receive,
             (intent.expected_length, intent.expected_digest),
@@ -175,6 +195,13 @@ impl<P: StorageProvider> RemoteShardService<P> {
         }
         Ok(authority)
     }
+}
+
+struct AuthorisedRepairUpload {
+    intent: ShardPutIntent,
+    authority: ShardWritePermit,
+    time: UploadLifetime,
+    admission_only: bool,
 }
 
 async fn send_admission(

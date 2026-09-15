@@ -2,17 +2,13 @@
 
 //! Own one fenced repair attempt from planning through physical work or durable deferral.
 
-use super::{
-    MAINTENANCE_LEASE_MICROS, StorageTargetRuntime, current_stripe_targets,
-    random_maintenance_context, random_operation_id,
-};
+use super::{MAINTENANCE_LEASE_MICROS, StorageTargetRuntime, random_maintenance_context};
 use crate::OperatingSystemRandom;
 use crate::{
     MaintenanceDispatchAssignment, MaintenanceMetadataAuthority, ShardRepairExecution,
     execute_shard_repair,
 };
-use meshspan_contracts::{ContractError, ContractVersion, RepairPlacementPlan, RequestContext};
-use meshspan_domain::{DurationMicros, Revision, UnixMicros};
+use meshspan_domain::{DurationMicros, UnixMicros};
 use meshspan_filesystem::{
     CommittedProtectedStripe, DurableContentCatalog, PublishedContentReference,
     ShardRepairCandidate,
@@ -24,8 +20,18 @@ use meshspan_metadata::{
 use meshspan_work::{WorkSubject, WorkUrgency};
 use sha2::{Digest, Sha256};
 
+#[path = "appliance_repair_plan.rs"]
+mod planning;
+
 #[path = "appliance_repair_recovery.rs"]
 mod recovery;
+
+#[cfg(test)]
+#[path = "appliance_repair_resume_tests.rs"]
+mod resume_tests;
+
+#[cfg(test)]
+pub(super) use resume_tests::assert_saved_attempt_takeover;
 
 #[cfg(test)]
 pub(super) use recovery::assert_committed_effect_recovery;
@@ -42,52 +48,29 @@ impl StorageTargetRuntime {
         let mut source = RepairSource::load(self, assignment, now)?;
         let attempt = RepairAttempt::claim(self, assignment, now)?;
         let targets = self.active.values().cloned().collect::<Vec<_>>();
-        let configuration = self
-            .native_filesystem
-            .maintenance_protection_configuration(&targets, source.candidate.volume_id, now)
-            .map_err(|_| ())?;
+        let Some(plan) = attempt.plan(self, &source, &targets, now)? else {
+            attempt.defer(self, RepairDeferralReason::NoEligibleDestination)?;
+            return Err(());
+        };
         let authorization_revision = self
             .maintenance_authority
             .reader()
             .current_revision()
             .map_err(|_| ())?;
-        let current_targets = current_stripe_targets(&source.stripe)?;
-        let placement = configuration.plan_repair(
-            &meshspan_placement::FaultAwarePlacement::new(),
-            RequestContext {
-                contract_version: ContractVersion::V1_0,
-                operation_id: random_operation_id(&mut OperatingSystemRandom)?,
-                deadline: attempt.claim.lease_expires_at,
-                expected_revision: Some(authorization_revision),
-            },
-            source.stripe.stripe.coding_layout(),
-            source.candidate.source_receipt.shard.shard_index,
-            &current_targets,
-        );
-        let placement = match placement {
-            Ok(placement) => placement,
-            // This planner has not called a provider. A durable Retry is safe only
-            // here; a failed physical attempt may already have an unknown effect.
-            Err(ContractError::ResourceExhausted) => {
-                attempt.defer(self, RepairDeferralReason::NoEligibleDestination)?;
-                return Err(());
-            }
-            Err(_) => return Err(()),
-        };
-        if placement.topology_revision != configuration.topology_revision()
-            || placement.capacity_revision != configuration.capacity_revision()
-        {
-            return Err(());
-        }
-        let execution = attempt.execution(&source, &placement, authorization_revision)?;
+        let execution = attempt.execution(&source, &plan, authorization_revision);
         let mut repairer = self
             .native_filesystem
             .maintenance_repairer(&targets, now)
             .map_err(|_| ())?;
         // The worker replays the exact already committed claim; it cannot create a
         // different fence or second attempt between planning and provider admission.
-        let receipt = execute_shard_repair(&self.maintenance_authority, &mut repairer, &execution)
-            .map_err(|_| ())?;
+        let receipt = execute_shard_repair(
+            &self.maintenance_authority,
+            &mut repairer,
+            &execution,
+            self.maintenance_clock.as_ref(),
+        )
+        .map_err(|_| ())?;
         source
             .catalogue
             .install_shard_repair(source.content, &receipt.transition)
@@ -262,38 +245,6 @@ impl RepairAttempt {
                     retry_at,
                 },
             },
-        })
-    }
-
-    fn execution<'a>(
-        &self,
-        source: &'a RepairSource,
-        placement: &RepairPlacementPlan,
-        authorization_revision: Revision,
-    ) -> Result<ShardRepairExecution<'a>, ()> {
-        let mut random = OperatingSystemRandom;
-        Ok(ShardRepairExecution {
-            claim_context: self.claim_context,
-            effect_context: random_maintenance_context(
-                &mut random,
-                self.claim_context.actor_principal_id,
-                self.claim_context.occurred_at,
-            )?,
-            completion_context: self.completion_context,
-            claim: self.claim,
-            volume_id: source.candidate.volume_id,
-            manifest_id: source.candidate.manifest_id,
-            source_layout_generation: source.candidate.source_layout_generation,
-            physical: meshspan_filesystem::ShardRepairRequest {
-                replacement_operation_id: random_operation_id(&mut random)?,
-                source_receipt: source.candidate.source_receipt,
-                replacement_target_id: placement.replacement_target_id,
-                replacement_target_generation: placement.replacement_target_generation,
-                authorization_revision,
-                deadline: self.claim.lease_expires_at,
-                observed_at: self.claim_context.occurred_at,
-            },
-            stripe: &source.stripe,
         })
     }
 }

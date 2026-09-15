@@ -66,6 +66,8 @@ message ResumeShardPutRequest {
   uint64 target_generation = 3;
   VersionedPayload intent = 4;
   bytes write_capability = 5;
+  // Return and close after admission so reconstruction does not hold a network worker.
+  bool admission_only = 6;
 }
 
 message ResumeShardPutReady {

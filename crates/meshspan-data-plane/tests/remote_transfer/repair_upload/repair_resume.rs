@@ -55,6 +55,10 @@ async fn serve(
     observed: &Arc<ObservedWrites>,
 ) -> Result<(), Box<dyn Error>> {
     let (mut service, marker) = provider;
+    let admission = accept_stream(connection).await?;
+    service
+        .serve_stream(admission, peer, limits, UnixMicros::new(9_000_000))
+        .await?;
     for (time, cancelled) in [(9_000_000, true), (15_000_000, false)] {
         let stream = accept_stream(connection).await?;
         let result = service
@@ -116,6 +120,12 @@ async fn client(
     };
     let clock = TestClock(Cell::new(9_000_000));
     let client = ShardUploadClient::new(connection, limits, &clock);
+    let meshspan_contracts::RepairPutAdmission::Prepared(admitted) = client
+        .prepare_repair_put(header.clone(), intent, authority)
+        .await?
+    else {
+        return Err("new admission unexpectedly verified".into());
+    };
     let RepairShardUpload::Prepared(prepared) = client
         .resume_repair_upload(header.clone(), intent, authority)
         .await?
@@ -124,6 +134,7 @@ async fn client(
     };
     let original = prepared.identity();
     assert_eq!(original.intent(), intent);
+    assert_eq!(original, admitted);
     drop(prepared);
     clock.0.set(15_000_000);
     authority.expires_at = UnixMicros::new(20_000_000);

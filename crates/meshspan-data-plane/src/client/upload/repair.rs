@@ -42,12 +42,57 @@ impl ShardUploadClient<'_> {
         intent: ShardPutIntent,
         authority: ShardWritePermit,
     ) -> Result<RepairShardUpload, DataPlaneError> {
+        self.repair_admission(header, intent, authority, false)
+            .await
+    }
+
+    /// Completes an admission-only exchange, releasing the server before reconstruction reads.
+    /// The immutable intent must already be durable; a lost reply remains recoverable by it.
+    /// # Errors
+    /// Rejects expired/contradictory authority, substituted admission and transport failure.
+    pub async fn prepare_repair_put(
+        &self,
+        header: RequestHeader,
+        intent: ShardPutIntent,
+        authority: ShardWritePermit,
+    ) -> Result<meshspan_contracts::RepairPutAdmission, DataPlaneError> {
+        match self
+            .repair_admission(header, intent, authority, true)
+            .await?
+        {
+            RepairShardUpload::Prepared(prepared) => Ok(
+                meshspan_contracts::RepairPutAdmission::Prepared(prepared.identity()),
+            ),
+            RepairShardUpload::Verified(receipt) => {
+                Ok(meshspan_contracts::RepairPutAdmission::Verified(receipt))
+            }
+        }
+    }
+
+    async fn repair_admission(
+        &self,
+        header: RequestHeader,
+        intent: ShardPutIntent,
+        authority: ShardWritePermit,
+        admission_only: bool,
+    ) -> Result<RepairShardUpload, DataPlaneError> {
         validate_request(&header, intent, authority)?;
         let expires_at = UnixMicros::new(header.deadline_unix_micros);
         let deadline = deadline_at(expires_at, self.clock.now())?;
+        let request = ResumeShardPutRequest {
+            header: Some(header),
+            target_id: intent.target_id.as_bytes().to_vec(),
+            target_generation: intent.target_generation,
+            intent: Some(VersionedPayload {
+                format_version: 1,
+                canonical_bytes: encode_shard_put_intent_v1(intent).to_vec(),
+            }),
+            write_capability: encode_write_permit(authority),
+            admission_only,
+        };
         let admission = tokio::time::timeout_at(
             deadline,
-            admit(self.connection, header, intent, authority, self.limits),
+            admit(self.connection, request, intent, self.limits),
         )
         .await
         .map_err(|_| expired())??;
@@ -69,26 +114,20 @@ enum Admission {
 
 async fn admit(
     connection: &quinn::Connection,
-    header: RequestHeader,
+    request: ResumeShardPutRequest,
     intent: ShardPutIntent,
-    authority: ShardWritePermit,
     limits: WireLimits,
 ) -> Result<Admission, DataPlaneError> {
-    let original_intent = VersionedPayload {
-        format_version: 1,
-        canonical_bytes: encode_shard_put_intent_v1(intent).to_vec(),
-    };
+    let admission_only = request.admission_only;
+    let original_intent = request
+        .intent
+        .clone()
+        .ok_or(DataPlaneError::InvalidMessage)?;
     let (mut send, mut receive) = open_stream(connection, StreamKind::Data).await?;
     send_data_control(
         &mut send,
         &DataControlEnvelope {
-            message: Some(Message::ResumeShardPutRequest(ResumeShardPutRequest {
-                header: Some(header),
-                target_id: intent.target_id.as_bytes().to_vec(),
-                target_generation: intent.target_generation,
-                intent: Some(original_intent.clone()),
-                write_capability: encode_write_permit(authority),
-            })),
+            message: Some(Message::ResumeShardPutRequest(request)),
         },
         limits,
     )
@@ -101,6 +140,18 @@ async fn admit(
     };
     if result.intent.as_ref() != Some(&original_intent) {
         return Err(DataPlaneError::InvalidMessage);
+    }
+    if admission_only {
+        let mut trailing = [0; 1];
+        if receive
+            .read(&mut trailing)
+            .await
+            .map_err(quinn::ReadExactError::from)
+            .map_err(meshspan_transport::TransportError::from)?
+            .is_some()
+        {
+            return Err(DataPlaneError::InvalidMessage);
+        }
     }
     match result.outcome.ok_or(DataPlaneError::InvalidMessage)? {
         Outcome::Rejection(error) => Err(remote_rejection(&error)?),

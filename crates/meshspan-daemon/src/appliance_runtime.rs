@@ -3045,6 +3045,7 @@ struct StorageTargetRuntime {
     data_permits:
         StoragePermitLoadingService<ConsensusAuthenticationAuthority, crate::LocalWrappingKey>,
     maintenance_authority: ConsensusAuthenticationAuthority,
+    maintenance_clock: Arc<dyn meshspan_domain::Clock + Send + Sync>,
     maintenance_progress: LocalDatabase,
     backup_worker: crate::MetadataBackupWorker,
     backup_retention: crate::metadata_backup_retention::MetadataBackupRetentionWorker,
@@ -3122,6 +3123,7 @@ impl StorageTargetRuntime {
             opening: services.opening,
             data_permits: services.data_permits,
             maintenance_authority: services.maintenance_authority,
+            maintenance_clock: Arc::new(crate::OperatingSystemClock),
             maintenance_progress: services.maintenance_progress,
             backup_worker: crate::MetadataBackupWorker::default(),
             backup_retention:

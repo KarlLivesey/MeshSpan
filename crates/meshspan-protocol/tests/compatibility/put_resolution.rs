@@ -62,6 +62,7 @@ fn repair_resume_frames_bind_exact_original_intent_and_admission()
             target_generation: 3,
             intent: Some(resume_payload(152)),
             write_capability: vec![2; 159],
+            admission_only: true,
         }),
         DataMessage::ResumeShardPutResult(ResumeShardPutResult {
             intent: Some(resume_payload(152)),

@@ -10,6 +10,57 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 daemon resumes the consensus-owned physical attempt
+
+The daemon now commits `PlanShardRepair` before provider admission, reloads the
+same physical intent on claim takeover, and refreshes only the claim's control
+identities and read/write authority. A verified replacement is recovered before
+reconstruction, so loss of the original inputs does not cause a second write.
+The worker validates the exact returned provider operation, destination and byte
+identity before committing its effect, and checks live time before each durable
+transition. Production uses the operating-system clock; the scheduler fixture
+supplies its controlled clock when advancing synthetic authority time.
+
+Native admission has a terminal `admission_only` exchange. The client waits for
+stream completion before reconstructing, freeing the provider's bounded worker
+for the reads needed by that reconstruction. Payload upload uses a separate
+bounded stream and the same saved intent/admission. Existing ordinary writes and
+offline reconstruction keep their original paths. This checkpoint adds no
+migration or dependency beyond the preceding signed metadata/native checkpoints.
+The new optional native protobuf flag defaults to the existing upload behavior.
+
+Focused local evidence (four Cargo build jobs and four test threads):
+
+- A substituted provider-operation regression failed before the worker binding:
+  `/tmp/meshspan-data02-worker-receipt-baseline.log`. All four worker tests then
+  passed, covering exact evidence, physical failure, substituted receipts and
+  expiry at the claim/effect/completion boundaries:
+  `/tmp/meshspan-data02-worker-resume-tests.log` (0.00 s tests; 50.10 s build).
+- Real-folder resumption recovered the identical write after its original
+  deadline with insufficient surviving reconstruction inputs: 1.05 s,
+  `/tmp/meshspan-data02-filesystem-resume-test.log`.
+- Real mTLS admission/upload/lost-result/reopen proof passed in 0.69 s, including
+  terminal admission before reconstruction and one observed physical write:
+  `/tmp/meshspan-data02-admission-terminal-test.log`.
+- The three-process automatic repair / stale-gateway restart proof passed in
+  35.85 s and now requires the earlier committed plan to match the exact effect:
+  `/tmp/meshspan-data02-daemon-plan-projection-test.log`.
+- The maintenance consumer initially remained Claimed when a synthetic future
+  tick met the real-clock guard. Explicit clock injection preserved the production
+  expiry checks and restored the fixture (10.19 s). The extended fixture then
+  passed saved-plan and already-written worker-state loss, reopened metadata and
+  next-claim completion with the original physical identity (10.02 s):
+  `/tmp/meshspan-data02-daemon-attempt-takeover-test-fixed.log`.
+- Affected data-plane/filesystem/daemon Clippy, all targets/features with warnings
+  denied, passed in 11.56 s:
+  `/tmp/meshspan-data02-daemon-resume-clippy-final.log`.
+
+The worker-state-loss fixture uses controlled time and real local persistence;
+it is not an OS process-kill or hardware proof. Full candidate integration,
+remaining real-process interruption cuts, obsolete/superseded attempt cleanup and
+whole-stripe generation changes still need acceptance. Stage 10 task 16 / DATA-02
+remain open; no Stage 11 or publication completion is claimed.
+
 ## DATA-02 consensus-owned repair attempt — metadata progress
 
 Native resumption is signed/pushed as `0abea90626979c29bf520f78f707e2fd666fc119`,

@@ -352,6 +352,31 @@ fn committed_repair(
     let Some(effect) = page.items.first().copied() else {
         return Ok(None);
     };
+    let retained = repository
+        .shard_repair_attempt(effect.work_id)?
+        .ok_or("repair performed IO without retaining its original plan")?;
+    assert!(retained.revision < effect.revision);
+    assert_eq!(retained.plan.source_receipt, effect.source_receipt);
+    assert_eq!(
+        retained.plan.source_layout_generation,
+        effect.source_layout_generation
+    );
+    assert_eq!(
+        retained.plan.effect_context.operation_id,
+        effect.effect_operation_id
+    );
+    let intent = retained.plan.intent;
+    assert_eq!(
+        effect.replacement_receipt,
+        ShardReceipt {
+            operation_id: intent.context.operation_id,
+            shard: intent.shard,
+            target_id: intent.target_id,
+            target_generation: intent.target_generation,
+            length: intent.expected_length,
+            digest: intent.expected_digest,
+        }
+    );
     let work = repository
         .maintenance_work(effect.work_id)?
         .ok_or("repair work missing")?;

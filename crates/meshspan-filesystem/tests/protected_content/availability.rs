@@ -334,6 +334,24 @@ impl ContentShardRouter for ReadOnlySurvivors {
         Err(ContractError::InternalContract)
     }
 
+    fn prepare_repair_put(
+        &mut self,
+        _intent: meshspan_contracts::ShardPutIntent,
+        _authority: meshspan_contracts::ShardWritePermit,
+        _observed_at: UnixMicros,
+    ) -> Result<meshspan_contracts::RepairPutAdmission, ContractError> {
+        Err(ContractError::InternalContract)
+    }
+
+    fn finish_repair_put(
+        &mut self,
+        _request: PutShardRequest,
+        _authority: meshspan_contracts::ShardWritePermit,
+        _observed_at: UnixMicros,
+    ) -> Result<ShardReceipt, ContractError> {
+        Err(ContractError::InternalContract)
+    }
+
     fn get_exact(
         &self,
         context: RequestContext,

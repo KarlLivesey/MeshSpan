@@ -867,7 +867,11 @@ the stage; publication-dependent acceptance remains held separately and visible.
     reuses replacement receipts, scrub/reconciliation checkpoints and effects,
     rebalance pages and safe-drain state. Missing remote-worker evidence remains
     explicit; checkpoints and effects are not double-counted. Finish underlying
-    shared-pool attribution and assembled acceptance. Execution budgets are not bytes left to transfer; filesystem
+    shared-pool attribution and assembled acceptance.
+    [Consensus-owned repair resumption](stage-10-evidence.md#data-02-daemon-resumes-the-consensus-owned-physical-attempt)
+    now connects saved physical selection, fresh admission and claim takeover;
+    remaining process interruptions and superseded-attempt cleanup remain open.
+    Execution budgets are not bytes left to transfer; filesystem
     totals do not prove independent underlying pool
     capacity. [Evidence](stage-10-evidence.md#task-16--filesystem-space-and-durable-maintenance-jobs).
     [Target IO evidence](stage-10-evidence.md#task-16--target-io-and-integrity-observations).
