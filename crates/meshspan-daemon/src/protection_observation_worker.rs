@@ -89,9 +89,16 @@ impl Pass {
         let page = catalogue
             .committed_volume_stripes(volume, after, PAGE_ITEMS)
             .map_err(|_| ())?;
-        let configuration = filesystem
-            .maintenance_protection_configuration(targets, volume, now)
-            .ok();
+        // Remote repair planning can use retained topology without any open local provider.
+        // A catalogue observation must still report unknown when its provider context is absent;
+        // retained receipts alone cannot establish that the configured folders are available.
+        let configuration = if targets.is_empty() {
+            None
+        } else {
+            filesystem
+                .maintenance_protection_configuration(targets, volume, now)
+                .ok()
+        };
         let placement = meshspan_placement::FaultAwarePlacement::new();
         for record in page.stripes.as_slice() {
             let missing = u64::from(record.stripe.stripe.coding_layout().total_slices())

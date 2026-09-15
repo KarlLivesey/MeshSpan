@@ -10,6 +10,45 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 integration regression — provider-loss observations
+
+The complete NVM `pnpm check` on signed `4f4e1b4c` failed after **941.78 s**
+(`/tmp/meshspan-check-4f4e1b4c.log`). Static and licence lanes passed; web tests
+passed in **18.85 s**. The headless Rust target finished **32 passed, one failed,
+13 ignored** in **517.12 s**; later Rust targets were not reached. PR #272 remains
+a draft and unmerged. This is not a passing integration gate.
+
+Stage 10 task 15's provider-folder-loss test failed because the remote-capable
+maintenance policy also serves the catalogue observer. With no opened provider,
+retained Active target metadata still produced a policy assessment. The retained
+fixture had its storage folder disconnected and no repair effects; the projector
+was not waiting on provider IO. An unchanged focused reproduction failed in
+**26.51 s**. Better deadline diagnostics then captured the exact mismatch:
+expected `[0, 1, 0, 0, 0, 0]`, observed `[1, 0, 0, 0, 1, 0]` (**26.69 s**).
+The expected vector is assessed, unknown, missing receipts, insufficient receipts,
+protection debt and locality debt. Both failed fixtures are retained.
+
+The observation owner now explicitly withholds assessment when there are no
+opened provider handles. Historical receipts still contribute catalogue counts,
+but cannot substitute for the absent provider context. Remote maintenance keeps
+its global planning policy. Update workload consumers additionally acquire a
+repair reader and probe exact content; their evidence is not this metrics pass.
+The same real-process test now passes in **17.09 s** (build **18.21 s**), including
+folder loss/restoration, restarts, exact bytes and operation/lifecycle metrics.
+No assertion or deadline was relaxed. Logs:
+`/tmp/meshspan-data02-protection-metrics-focused.log`,
+`/tmp/meshspan-data02-protection-metrics-diagnostic.log`,
+`/tmp/meshspan-data02-protection-metrics-fixed.log`.
+
+Affected daemon all-target/all-feature Clippy passes with warnings denied
+(**6.32 s**). The composed blocked-repair test, including remote-only planning,
+fresh gateway import and interrupted-effect completion, passes in **8.88 s**.
+An initial module-path filter selected zero tests; that command is not evidence
+and was corrected to the exact test name. Logs:
+`/tmp/meshspan-data02-observation-clippy.log` and
+`/tmp/meshspan-data02-observation-composed-fixed-filter.log`.
+Formatting and diff checks pass. A new complete gate is required before merge.
+
 ## DATA-02 continuation — committed repair projection
 
 PR #271 merged as `44bf2e5263d6cd9f6a87af74298d8c1f26df2721`. Its GitHub
