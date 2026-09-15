@@ -26,9 +26,10 @@ pub use availability::{
 };
 pub use protection::{
     CommittedProtectedStripe, PendingProtectedShardPage, PreparedProtectedShard,
-    PreparedProtectedStripe, ProtectedShardCursor, ShardRepairCandidate, ShardRepairTransition,
-    TargetShardCursor, TargetShardPage, TargetShardRoute, VolumeStripeCursor, VolumeStripePage,
-    VolumeStripeRecord,
+    PreparedProtectedStripe, ProtectedShardCursor, RepairProjectionCursor,
+    RepairProjectionManifest, RepairProjectionManifestPage, ShardRepairCandidate,
+    ShardRepairTransition, TargetShardCursor, TargetShardPage, TargetShardRoute,
+    VolumeStripeCursor, VolumeStripePage, VolumeStripeRecord,
 };
 pub use transfer::CommittedContentLayoutTransfer;
 

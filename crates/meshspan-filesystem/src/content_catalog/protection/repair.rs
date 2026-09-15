@@ -105,7 +105,21 @@ pub(super) fn install(
     transition: &ShardRepairTransition,
 ) -> Result<(), ContentCatalogError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if let Some(stored) = load_effect(&transaction, transition.effect_operation_id)? {
+    install_in_transaction(&transaction, request, content, transition)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+pub(super) fn install_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    request: ContentPublicationRequest,
+    content: PublishedContentReference,
+    transition: &ShardRepairTransition,
+) -> Result<(), ContentCatalogError> {
+    if transition.source_receipt.shard.manifest_digest != content.manifest.root_digest {
+        return Err(ContentCatalogError::InvalidInput);
+    }
+    if let Some(stored) = load_effect(transaction, transition.effect_operation_id)? {
         return if stored == *transition {
             Ok(())
         } else {
@@ -113,18 +127,18 @@ pub(super) fn install(
         };
     }
     let source = transition.source_receipt;
-    let stripe = load_protected_stripe(&transaction, request, source.shard.stripe_index)?;
+    let stripe = load_protected_stripe(transaction, request, source.shard.stripe_index)?;
     let planned = stripe
         .shards()
         .get(usize::from(source.shard.shard_index))
         .copied()
         .ok_or(ContentCatalogError::InvalidInput)?;
-    let original = original_receipt(&transaction, content, source.shard.stripe_index, planned)?;
+    let original = original_receipt(transaction, content, source.shard.stripe_index, planned)?;
     let (active, route_generation) =
-        active_receipt(&transaction, content.publication_operation_id, original)?
+        active_receipt(transaction, content.publication_operation_id, original)?
             .unwrap_or((original, 1));
     let active_generation = stripe_generation(
-        &transaction,
+        transaction,
         content.publication_operation_id,
         source.shard.stripe_index,
     )?;
@@ -136,9 +150,8 @@ pub(super) fn install(
         active,
         active_generation,
     )?;
-    insert_effect(&transaction, content, transition)?;
-    replace_route(&transaction, content, transition, route_generation)?;
-    transaction.commit()?;
+    insert_effect(transaction, content, transition)?;
+    replace_route(transaction, content, transition, route_generation)?;
     Ok(())
 }
 
@@ -371,7 +384,7 @@ fn replace_route(
     }
 }
 
-fn load_effect(
+pub(super) fn load_effect(
     connection: &rusqlite::Connection,
     effect_operation_id: OperationId,
 ) -> Result<Option<ShardRepairTransition>, ContentCatalogError> {

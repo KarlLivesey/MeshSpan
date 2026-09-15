@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+#[path = "content_repair_projection_tests.rs"]
+mod repair_projection;
+
 use meshspan_contracts::{
     BoundedBytes, CodingLayout, ShardAcknowledgement, ShardIdentity, ShardReceipt, VersionedPayload,
 };

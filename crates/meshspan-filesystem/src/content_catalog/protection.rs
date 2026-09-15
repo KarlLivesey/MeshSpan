@@ -24,10 +24,14 @@ use crate::{
 };
 
 mod repair;
+mod repair_projection;
 mod target_inventory;
 mod volume_inventory;
 
 pub use repair::{ShardRepairCandidate, ShardRepairTransition};
+pub use repair_projection::{
+    RepairProjectionCursor, RepairProjectionManifest, RepairProjectionManifestPage,
+};
 pub use target_inventory::{TargetShardCursor, TargetShardPage, TargetShardRoute};
 pub use volume_inventory::{VolumeStripeCursor, VolumeStripePage, VolumeStripeRecord};
 
