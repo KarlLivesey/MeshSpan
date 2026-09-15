@@ -152,6 +152,56 @@ with the exact committed source. No deadlines, assertions or safety checks were
 changed. Both original failures remain unresolved; unchanged test repetitions
 are paused pending a discriminating boundary reproduction.
 
+A controlled provider-lifetime regression now demonstrates a separate concrete
+failure: after a real forwarded read returns exact bytes, receipt and terminal
+FIN, its worker can still retain the physical catalogue slot. Pausing that
+completed worker makes the next sequential read fail `Unavailable`, with no
+result received. The added regression failed against the previous implementation
+in **4.52 s**, wall **60.899 s** including compilation
+(`/tmp/meshspan-provider-completion-baseline.log`). This proves the lifetime
+boundary defect; it does not establish the cause of either earlier process-test
+failure.
+
+The candidate binds the admitted object through the existing provider registry
+and holds its exclusive slot for each physical provider call, including all
+source/sink IO. Final authority validation, result and FIN follow slot release.
+Exact-object binding is checked before access; genuine physical overlap still
+fails closed. Direct and forwarded execution use this same facade. No wire,
+schema, dependency, deadline or authority requirement changes.
+
+The first corrected focused run failed later in **8.06 s**
+(`/tmp/meshspan-provider-completion-fixed.log`). Phase context then located the
+failure after the new lifetime assertions, at deletion replay, operation 173,
+nonce marker 184 (**8.46 s**, `/tmp/meshspan-provider-completion-context.log`).
+A temporary server probe identified `Transport(ReplayedFederationMessage)`
+(**7.28 s**, `/tmp/meshspan-provider-capability-probe.log`): the existing authority
+fetch fixture already used `[184; 32]`, and the expanded backup client counter
+reached that same nonce. The fixture now reserves a distinct backup-client nonce
+domain while preserving all replay-denial checks. The diagnostic probes were
+removed. This is a test-fixture correction, not a relaxation of replay protection.
+
+With the fixture correction, the real-TLS proof passes **13.19 s**, wall
+**50.250 s** including compilation
+(`/tmp/meshspan-provider-lifetime-final-focused.log`). It covers sequential
+completion, exact receipts/bytes, physical overlap rejection without emitted bytes,
+wrong-object rejection before provider access, and the existing interruption,
+quota, renewal, deletion and replay checks. Review added bounded gate waits under
+the existing proof/request deadline and observation of both owner workers before
+propagating either join error. Initial Clippy rejected the enlarged test exchange
+at 107/100 lines (`/tmp/meshspan-provider-lifetime-clippy.log`); separating owned
+wire-response verification from worker setup preserves the complete oracle.
+All-target/all-feature daemon Clippy then passes **9.551 s**
+(`/tmp/meshspan-provider-lifetime-clippy-final.log`).
+
+After that test-only ownership refactor, the focused real-TLS proof passes again
+in **13.29 s**, wall **58.964 s** including compilation
+(`/tmp/meshspan-provider-lifetime-reviewed-focused.log`). The uninstrumented real
+three-process federated-backup proof passes **23.29 s**, wall **82.706 s** including
+compilation (`/tmp/meshspan-provider-lifetime-headless.log`), using headless binary
+`headless_process-64660018bd3ffeed`. These checks used NVM-selected Node 26.8.2,
+Cargo/test workers **4**, and the validation TMPDIR. The completed source awaits a
+new canonical gate; neither focused pass retroactively clears the earlier failures.
+
 CORE-03 and Stage 10 task 17 remain incomplete; PR #275 is unmerged. The separate
 real HTTPS/Samba proof has not run on this candidate. No hardware, soak or
 lifetime-capacity proof is claimed. CORE-04

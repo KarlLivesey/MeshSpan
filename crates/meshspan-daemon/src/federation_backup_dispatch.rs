@@ -113,15 +113,12 @@ impl FederationSessions {
                 if admitted.scope().provider_node_id != self.node {
                     return self.forward_backup(&service, &authenticated, stream, io);
                 }
-                self.backup_providers.with_provider(
-                    admitted.scope(),
-                    admitted.request().object(),
-                    |provider| {
-                        service
-                            .execute_stream(&authenticated, provider, stream, &io)
-                            .map_err(Into::into)
-                    },
-                )
+                let mut provider = self
+                    .backup_providers
+                    .bind(admitted.scope(), admitted.request().object())?;
+                service
+                    .execute_stream(&authenticated, &mut provider, stream, &io)
+                    .map_err(Into::into)
             })
         })
         .await
