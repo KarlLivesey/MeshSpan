@@ -353,6 +353,15 @@ impl<P> InterruptSecondPut<P> {
 }
 
 impl<P: StorageProvider> StorageProvider for InterruptSecondPut<P> {
+    fn resolve_put(
+        &mut self,
+        original: meshspan_contracts::ShardPutIdentity,
+        authority: meshspan_contracts::ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<meshspan_contracts::ShardPutResolution, ContractError> {
+        self.inner.resolve_put(original, authority, observed_at)
+    }
+
     fn describe(&self) -> ImplementationDescriptor {
         self.inner.describe()
     }

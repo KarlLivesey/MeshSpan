@@ -504,6 +504,16 @@ pub trait StorageProvider {
         observed_at: UnixMicros,
     ) -> Result<ShardReceipt, ContractError>;
 
+    /// Resolves an original write under fresh authority without admitting another byte upload.
+    /// # Errors
+    /// Rejects altered original identities, stale authority and inconsistent or corrupt evidence.
+    fn resolve_put(
+        &mut self,
+        original: crate::ShardPutIdentity,
+        authority: ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<crate::ShardPutResolution, ContractError>;
+
     /// Reads and verifies one exact shard after validating the authority capability.
     ///
     /// # Errors

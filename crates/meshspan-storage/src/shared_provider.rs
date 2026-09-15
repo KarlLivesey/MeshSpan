@@ -183,6 +183,35 @@ impl<P> StorageProvider for SharedStorageProvider<P>
 where
     P: StorageProvider,
 {
+    fn resolve_put(
+        &mut self,
+        original: meshspan_contracts::ShardPutIdentity,
+        authority: meshspan_contracts::ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<meshspan_contracts::ShardPutResolution, ContractError> {
+        // Resolution verifies stored bytes but returns no file payload to a reader.
+        let attempt = IoAttempt::new(self.observer.clone(), StorageIoKind::Scrub);
+        let result = self
+            .lock()
+            .and_then(|mut provider| provider.resolve_put(original, authority, observed_at));
+        let payload_bytes = match &result {
+            Ok(meshspan_contracts::ShardPutResolution::Verified(receipt)) => receipt.length,
+            Ok(
+                meshspan_contracts::ShardPutResolution::Unknown
+                | meshspan_contracts::ShardPutResolution::Prepared,
+            )
+            | Err(_) => 0,
+        };
+        attempt.finish(
+            &result,
+            Some(StorageIoCounts {
+                payload_bytes,
+                corruption_reports: 0,
+            }),
+        );
+        result
+    }
+
     fn describe(&self) -> ImplementationDescriptor {
         self.descriptor
     }

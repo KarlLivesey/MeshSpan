@@ -3,8 +3,8 @@
 //! Prepared/committed shard transitions, recovery and bounded inventory reads.
 
 use meshspan_contracts::{
-    BoundedBytes, BoundedItems, InventoryEntry, InventoryPage, ShardIdentity, ShardReceipt,
-    StorageReservation,
+    BoundedBytes, BoundedItems, InventoryEntry, InventoryPage, ShardIdentity, ShardPutIdentity,
+    ShardReceipt, StorageReservation,
 };
 use meshspan_domain::{OperationId, UnixMicros};
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
@@ -84,6 +84,53 @@ pub struct PendingPutPage {
 }
 
 impl TargetJournal {
+    /// Looks up the original admission without creating, renewing or consuming a reservation.
+    pub(crate) fn resolve_put(
+        &self,
+        original: ShardPutIdentity,
+        now: UnixMicros,
+    ) -> Result<Option<PreparePutResult>, TargetJournalError> {
+        let request = JournalPutRequest {
+            reservation: original.reservation,
+            request_digest: original.request_digest(),
+            shard: original.shard,
+            expected_length: original.expected_length,
+            expected_digest: original.expected_digest,
+            now,
+        };
+        validate_put_request(self, request)?;
+        let transaction = self.connection.unchecked_transaction()?;
+        let reservation = super::load_reservation(&transaction, original.context.operation_id)?;
+        let has_reservation = reservation.is_some();
+        if let Some(reservation) = reservation {
+            let digest = super::reservation_request_digest(
+                original.context,
+                original.reservation.target_id,
+                original.reservation.target_generation,
+                original.reservation.class,
+                original.reservation.maximum_bytes,
+            );
+            let recorded = super::resolve_existing(
+                reservation,
+                digest,
+                self.marker,
+                original.context.operation_id,
+            )?;
+            if recorded != original.reservation {
+                return Err(TargetJournalError::OperationConflict);
+            }
+        }
+        let operation = load_provider_operation(&transaction, original.context.operation_id)?;
+        if operation.is_some() && !has_reservation {
+            return Err(TargetJournalError::CorruptState);
+        }
+        let result = operation
+            .map(|operation| resolve_provider_operation(operation, request))
+            .transpose()?;
+        transaction.commit()?;
+        Ok(result)
+    }
+
     /// Records or resolves one exact put before touching provider bytes.
     ///
     /// # Errors
