@@ -24,6 +24,28 @@ pub struct CommittedContentLayoutTransfer<'a> {
 }
 
 impl CommittedContentLayoutTransfer<'_> {
+    /// Loads the immutable protected plan and its recorded original durability receipts.
+    ///
+    /// These receipts prove historical publication, not current provider availability.
+    /// Receivers import this canonical layout before replaying authoritative repair effects;
+    /// replacing its destinations would change the immutable manifest's layout digest.
+    ///
+    /// # Errors
+    /// Rejects missing, malformed or contradictory committed stripe records.
+    pub fn publication_stripe(
+        &self,
+        chunk_index: u64,
+    ) -> Result<super::CommittedProtectedStripe, ContentCatalogError> {
+        self.catalog.publication_protected_stripe(
+            self.request,
+            PublishedContentReference {
+                publication_operation_id: self.request.operation_id,
+                manifest: self.header.manifest,
+            },
+            chunk_index,
+        )
+    }
+
     /// Loads one archived stripe and its validated physical receipts for offline restoration.
     /// This is immutable layout evidence, not permission to read or write a provider.
     /// # Errors

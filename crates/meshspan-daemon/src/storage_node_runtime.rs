@@ -281,7 +281,7 @@ async fn wait_task<T>(task: &mut Option<JoinHandle<T>>) -> Result<T, tokio::task
     }
 }
 
-async fn start_network(
+pub(super) async fn start_network(
     node: &mut DaemonNodeRuntime,
     config: ConsensusNetworkConfig,
 ) -> Result<
@@ -293,6 +293,7 @@ async fn start_network(
     DaemonProcessError,
 > {
     if let Ok(network) = node.private_network.network() {
+        initialise_peer_routes(node, &network).await?;
         return Ok((
             network,
             node.joining_peer_messages
@@ -324,7 +325,26 @@ async fn start_network(
             .finish()
             .and(Err(DaemonProcessError::PrivateNetworkState));
     }
+    initialise_peer_routes(node, &network).await?;
     Ok((network, received_peers, received_controls))
+}
+
+/// Bootstrap transport starts without peers. Try committed routes before HTTPS exposes setup
+/// status; periodic maintenance still retries unavailable routes and refreshes certificate overlap.
+async fn initialise_peer_routes(
+    node: &DaemonNodeRuntime,
+    network: &ConsensusNetwork,
+) -> Result<(), DaemonProcessError> {
+    let directory = node.local_state.state_directory().to_path_buf();
+    let local = node.local_state.node_id();
+    let routes = tokio::task::spawn_blocking(move || {
+        let repository = open_root_repository_at(&directory, current_time()?)?;
+        load_active_peer_routes(&repository, local)
+    })
+    .await
+    .map_err(|_| DaemonProcessError::LocalStateWorker)??;
+    reconcile_active_peer_routes(network, routes).await;
+    Ok(())
 }
 
 fn spawn_reconcile(

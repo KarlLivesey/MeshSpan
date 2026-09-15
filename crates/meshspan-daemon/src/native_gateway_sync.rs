@@ -11,6 +11,9 @@ mod source;
 pub(crate) use history::NativeGatewayHistory;
 pub(crate) use sender::NamespaceDeliveryWorker;
 
+#[cfg(test)]
+pub(crate) use receiver::assert_fresh_repaired_import;
+
 use meshspan_cluster::{ConsensusNetwork, PeerControlRequest};
 use meshspan_domain::OperationId;
 use meshspan_protocol::v1::control_envelope::Message;

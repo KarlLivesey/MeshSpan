@@ -325,7 +325,10 @@ pub(super) async fn submit(
             })),
         })),
     };
-    let response = network.request_control(destination, &request).await?;
+    let response = network
+        .request_control(destination, &request)
+        .await
+        .map_err(|error| format!("submit recovery control operation: {error:?}"))?;
     let Some(Message::OperationStatusResponse(response)) = response.as_inner().message.as_ref()
     else {
         return Err("wrong control response".into());

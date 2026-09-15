@@ -2,8 +2,8 @@
 
 //! Atomic copy-on-write transitions for repaired shard locations.
 
-use meshspan_contracts::{ShardIdentity, ShardReceipt};
-use meshspan_domain::{OperationId, Revision, UnixMicros, WorkId};
+use meshspan_contracts::ShardReceipt;
+use meshspan_domain::{ContentManifestId, OperationId, Revision, UnixMicros, VolumeId, WorkId};
 use meshspan_work::WorkSubject;
 use rusqlite::{OptionalExtension, Transaction, params};
 
@@ -17,6 +17,10 @@ use crate::{CommandContext, CommitShardRepair};
 /// Exact authoritative copy-on-write transition for one repaired shard location.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ShardRepairEffectRecord {
+    /// Exact owning volume selected by the repair claim.
+    pub volume_id: VolumeId,
+    /// Exact immutable manifest selected by the repair claim.
+    pub manifest_id: ContentManifestId,
     /// Committed effect operation linked by work completion.
     pub effect_operation_id: OperationId,
     /// Claimed repair job that authorised this transition.
@@ -33,6 +37,17 @@ pub struct ShardRepairEffectRecord {
     pub committed_at: UnixMicros,
     /// Authoritative effect revision.
     pub revision: Revision,
+}
+
+mod read;
+
+/// Stable position in one exact volume and manifest's immutable repair-effect history.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ShardRepairEffectCursor {
+    /// Authoritative effect revision.
+    pub revision: Revision,
+    /// Stable tie-breaker within the revision.
+    pub effect_operation_id: OperationId,
 }
 
 pub(super) fn commit(
@@ -386,73 +401,18 @@ pub(super) fn load(
     connection: &rusqlite::Connection,
     effect_operation_id: OperationId,
 ) -> Result<Option<ShardRepairEffectRecord>, RepositoryError> {
-    connection
-        .query_row(
-            "SELECT work_id, manifest_digest, stripe_index, shard_index, shard_generation,
-                    source_layout_generation, replacement_layout_generation,
-                    source_provider_operation_id, source_target_id, source_target_generation,
-                    replacement_provider_operation_id, replacement_target_id,
-                    replacement_target_generation, expected_length, expected_digest,
-                    committed_at, revision
-             FROM maintenance_repair_effects WHERE effect_operation_id = ?1",
-            [effect_operation_id.as_bytes().as_slice()],
-            |row| {
-                let shard = ShardIdentity {
-                    manifest_digest: exact_sql(row.get(1)?)?,
-                    stripe_index: positive_or_zero_sql(row.get(2)?)?,
-                    shard_index: u16::try_from(row.get::<_, i64>(3)?)
-                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                    generation: u32::try_from(positive_sql(row.get(4)?)?)
-                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                };
-                let length = positive_sql(row.get(13)?)?;
-                let digest = exact_sql(row.get(14)?)?;
-                Ok(ShardRepairEffectRecord {
-                    effect_operation_id,
-                    work_id: WorkId::from_bytes(exact_sql(row.get(0)?)?)
-                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                    source_receipt: ShardReceipt {
-                        operation_id: OperationId::from_bytes(exact_sql(row.get(7)?)?)
-                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                        shard,
-                        length,
-                        digest,
-                        target_id: meshspan_domain::TargetId::from_bytes(exact_sql(row.get(8)?)?)
-                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                        target_generation: positive_sql(row.get(9)?)?,
-                    },
-                    replacement_receipt: ShardReceipt {
-                        operation_id: OperationId::from_bytes(exact_sql(row.get(10)?)?)
-                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                        shard,
-                        length,
-                        digest,
-                        target_id: meshspan_domain::TargetId::from_bytes(exact_sql(row.get(11)?)?)
-                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                        target_generation: positive_sql(row.get(12)?)?,
-                    },
-                    source_layout_generation: positive_sql(row.get(5)?)?,
-                    replacement_layout_generation: positive_sql(row.get(6)?)?,
-                    committed_at: UnixMicros::new(row.get(15)?),
-                    revision: Revision::new(positive_sql(row.get(16)?)?),
-                })
-            },
-        )
-        .optional()
-        .map_err(RepositoryError::from)
+    read::load(connection, effect_operation_id)
 }
 
-fn exact_sql<const LENGTH: usize>(value: Vec<u8>) -> rusqlite::Result<[u8; LENGTH]> {
-    value.try_into().map_err(|_| rusqlite::Error::InvalidQuery)
-}
-
-fn positive_sql(value: i64) -> rusqlite::Result<u64> {
-    u64::try_from(value)
-        .ok()
-        .filter(|value| *value > 0)
-        .ok_or(rusqlite::Error::InvalidQuery)
-}
-
-fn positive_or_zero_sql(value: i64) -> rusqlite::Result<u64> {
-    u64::try_from(value).map_err(|_| rusqlite::Error::InvalidQuery)
+pub(super) fn page(
+    connection: &rusqlite::Connection,
+    volume_id: VolumeId,
+    manifest_id: ContentManifestId,
+    after: Option<ShardRepairEffectCursor>,
+    limit: crate::repository::PageLimit,
+) -> Result<
+    crate::repository::Page<ShardRepairEffectRecord, ShardRepairEffectCursor>,
+    RepositoryError,
+> {
+    read::page(connection, volume_id, manifest_id, after, limit)
 }

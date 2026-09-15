@@ -2,6 +2,13 @@
 
 //! Receiver-side native gateway convergence.
 
+#[cfg(test)]
+#[path = "receiver_repair_tests.rs"]
+mod repair_tests;
+
+#[cfg(test)]
+pub(crate) use repair_tests::assert_fresh_repaired_import;
+
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -80,6 +87,7 @@ pub(super) async fn publish_head(
             route,
         )
         .await?;
+        project_received_layout(history, advertised.volume_id, route).await?;
     }
     adopt_received_head(network.local_node_id(), history, &advertised).await?;
     Ok(accepted(advertised.result_digest()))
@@ -518,6 +526,72 @@ async fn receive_content_layout(
             .map_err(|_| NativeGatewaySyncError::Invalid)?;
     }
     Ok(())
+}
+
+async fn project_received_layout(
+    history: &NativeGatewayHistory,
+    volume: VolumeId,
+    route: &ParsedContentRoute,
+) -> Result<(), NativeGatewaySyncError> {
+    let state_directory = history.state_directory.clone();
+    let route = *route;
+    // The existing control worker owns this blocking operation through completion.
+    // A bounded unfinished page remains durable and retries through the committed-layout
+    // fast path; namespace adoption must not acknowledge that pending route coverage.
+    history
+        .execute(move |_| {
+            let now = current_time()?;
+            let mut catalogue = open_catalog(&state_directory, now)?;
+            let database = PartitionDatabase::open_existing(
+                &state_directory.join("root-authority.sqlite3"),
+                now,
+            )
+            .map_err(|_| NativeGatewaySyncError::Unavailable)?;
+            project_received_manifest(
+                &AuthoritativeRepository::new(database),
+                &mut catalogue,
+                volume,
+                &route,
+            )
+        })
+        .await
+}
+
+fn project_received_manifest(
+    authority: &AuthoritativeRepository,
+    catalogue: &mut DurableContentCatalog,
+    volume: VolumeId,
+    route: &ParsedContentRoute,
+) -> Result<(), NativeGatewaySyncError> {
+    let content = catalogue
+        .committed_content_by_manifest(route.manifest_id)
+        .map_err(|_| NativeGatewaySyncError::Invalid)?
+        .ok_or(NativeGatewaySyncError::Unavailable)?;
+    let transfer = catalogue
+        .committed_layout_transfer(content)
+        .map_err(|_| NativeGatewaySyncError::Invalid)?;
+    if content.publication_operation_id != route.publication_operation_id
+        || transfer.volume_id() != volume
+    {
+        return Err(NativeGatewaySyncError::Invalid);
+    }
+    if content.manifest.format_version != 2 {
+        return Ok(());
+    }
+    let progress = crate::appliance_runtime::project_repair_manifest(
+        authority,
+        catalogue,
+        meshspan_filesystem::RepairProjectionManifest {
+            volume_id: volume,
+            content,
+        },
+    )
+    .map_err(|_| NativeGatewaySyncError::Unavailable)?;
+    if progress.pending {
+        Err(NativeGatewaySyncError::Unavailable)
+    } else {
+        Ok(())
+    }
 }
 
 fn has_committed_layout(

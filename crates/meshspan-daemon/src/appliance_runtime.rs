@@ -10,6 +10,9 @@ mod tests;
 mod maintenance_selection;
 #[path = "appliance_repair.rs"]
 mod repair;
+#[path = "appliance_repair_projection.rs"]
+mod repair_projection;
+pub(crate) use repair_projection::project_manifest as project_repair_manifest;
 
 #[path = "metadata_read_fence_service.rs"]
 mod metadata_read_fence_service;
@@ -3072,6 +3075,7 @@ struct StorageTargetRuntime {
     next_rebalance_admission_at: Option<UnixMicros>,
     scope_drain_cursor: Option<StorageScopeDrainCursor>,
     maintenance_cursors: BTreeMap<WorkKind, meshspan_metadata::MaintenanceWorkCursor>,
+    repair_projection_after: Option<OperationId>,
     readiness: Arc<RuntimeReadiness>,
 }
 
@@ -3156,6 +3160,7 @@ impl StorageTargetRuntime {
             next_rebalance_admission_at: None,
             scope_drain_cursor: None,
             maintenance_cursors: BTreeMap::new(),
+            repair_projection_after: None,
             readiness,
         }
     }
@@ -3873,6 +3878,10 @@ impl StorageTargetRuntime {
                 }
                 Err(_) => failures = failures.saturating_add(1),
             }
+        }
+        // Route projection belongs to every gateway, even without a local storage target.
+        if self.project_one_repair_manifest(now).is_err() {
+            failures = failures.saturating_add(1);
         }
         if !self.active.is_empty() {
             let targets = self.active.values().cloned().collect::<Vec<_>>();

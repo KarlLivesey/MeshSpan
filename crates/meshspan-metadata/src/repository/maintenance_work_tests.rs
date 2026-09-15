@@ -23,6 +23,9 @@ use crate::{
 #[path = "maintenance_retry_tests.rs"]
 mod retry;
 
+#[path = "repair_effect_feed_tests.rs"]
+mod repair_effect_feed;
+
 #[test]
 fn work_is_deduplicated_leased_retried_and_fenced() -> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = Fixture::new()?;

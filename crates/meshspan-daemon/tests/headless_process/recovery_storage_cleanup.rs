@@ -46,11 +46,21 @@ pub(crate) async fn prove_committed_cleanup(
         let client = CleanupClient::new(io, gateway, VolumeId::parse(&volume.replace('-', ""))?)?;
         let result = async {
             client.wait_for_routes().await?;
-            let cleanup = authority::prepare_cleanup(&client).await?;
-            let receipt = client.remove(cleanup, storage, storage_process).await?;
+            let cleanup = authority::prepare_cleanup(&client)
+                .await
+                .map_err(|error| format!("prepare committed cleanup: {error}"))?;
+            let receipt = client
+                .remove(cleanup, storage, storage_process)
+                .await
+                .map_err(|error| format!("remove and account cleanup: {error}"))?;
             harness::recovery_runtime::restart(storage, storage_process).await?;
             assert_eq!(
-                client.reclaim(receipt.tombstone).await?,
+                client
+                    .reclaim(receipt.tombstone)
+                    .await
+                    .map_err(|error| format!(
+                        "resolve accounted reclamation after restart: {error}"
+                    ))?,
                 receipt,
                 "restart changed reclamation receipt"
             );
@@ -297,11 +307,7 @@ impl CleanupClient {
             .repository
             .version_cleanup_permit_attempt(cleanup, 0)?
             .ok_or("permit missing")?;
-        let connection = self
-            .io
-            .network
-            .connect_data_peer(self.io.destination)
-            .await?;
+        let connection = self.connect_ready_storage().await?;
         let header = self
             .io
             .network
@@ -323,11 +329,7 @@ impl CleanupClient {
         // Recovery must resolve the same permit, not create a second deletion.
         drop(connection);
         harness::recovery_runtime::restart(storage, process).await?;
-        let connection = self
-            .io
-            .network
-            .connect_data_peer(self.io.destination)
-            .await?;
+        let connection = self.connect_ready_storage().await?;
         assert_eq!(
             meshspan_data_plane::tombstone_shard(
                 &connection,
@@ -395,11 +397,7 @@ impl CleanupClient {
         &self,
         tombstone: TombstoneReceipt,
     ) -> Result<ReclamationReceipt, Box<dyn Error>> {
-        let connection = self
-            .io
-            .network
-            .connect_data_peer(self.io.destination)
-            .await?;
+        let connection = self.connect_ready_storage().await?;
         let deadline = OperatingSystemClock
             .now()
             .get()
@@ -416,6 +414,31 @@ impl CleanupClient {
             self.io.network.wire_limits(),
         )
         .await?)
+    }
+
+    /// Configuration status is not private readiness. Only retry the authenticated handshake;
+    /// the caller retains this connection and sends its exact mutation once.
+    async fn connect_ready_storage(&self) -> Result<quinn::Connection, Box<dyn Error>> {
+        let deadline = tokio::time::Instant::now() + harness::WAIT_LIMIT;
+        let mut last_failure = None;
+        loop {
+            let attempt = tokio::time::timeout_at(
+                deadline,
+                self.io.network.connect_data_peer(self.io.destination),
+            )
+            .await
+            .map_err(|_| {
+                format!("cleanup storage handshake deadline; last failure: {last_failure:?}")
+            })?;
+            match attempt {
+                Ok(connection) => return Ok(connection),
+                Err(error) => last_failure = Some(format!("{error:?}")),
+            }
+            tokio::time::sleep_until(
+                (tokio::time::Instant::now() + harness::RETRY_INTERVAL).min(deadline),
+            )
+            .await;
+        }
     }
 }
 

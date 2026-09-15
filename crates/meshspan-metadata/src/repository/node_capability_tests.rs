@@ -284,7 +284,7 @@ fn node_capability_migration_119_preserves_immutable_activation_without_inventin
         [],
         |row| row.get(0),
     )?;
-    crate::migration::migrate_partition(&mut connection, 3)?;
+    crate::migration::migrate_partition_through(&mut connection, 119, 3)?;
     let activation: (i64, Vec<u8>, i64) = connection.query_row(
         "SELECT incarnation,capability_digest,revision FROM node_activations",
         [],
@@ -324,6 +324,10 @@ fn node_capability_migration_119_preserves_immutable_activation_without_inventin
     drop(connection);
     let mut reopened = rusqlite::Connection::open(path)?;
     crate::migration::migrate_partition(&mut reopened, 4)?;
+    assert_eq!(
+        reopened.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))?,
+        PartitionDatabase::supported_schema_version()
+    );
     assert_eq!(
         reopened.query_row("SELECT COUNT(*) FROM node_activations", [], |row| row
             .get::<_, i64>(0))?,

@@ -311,6 +311,7 @@ async fn wait_for_counts(
     expected: [u64; 6],
 ) -> Result<(), Box<dyn Error>> {
     let deadline = Instant::now() + WAIT_LIMIT;
+    let mut last_observed = None;
     loop {
         let response = tokio::time::timeout_at(
             deadline.into(),
@@ -323,7 +324,10 @@ async fn wait_for_counts(
                 &[("Authorization", &format!("Bearer {key}"))],
             ),
         )
-        .await??;
+        .await
+        .map_err(|_| {
+            format!("protection counts expected {expected:?}, last observed {last_observed:?}")
+        })??;
         require_status(&response, "200 OK", "read protection observations")?;
         let body = response_body(&response)?;
         let actual = [
@@ -340,6 +344,7 @@ async fn wait_for_counts(
                 .find_map(|line| line.strip_prefix(&prefix))
                 .and_then(|value| value.parse::<u64>().ok())
         });
+        last_observed = Some(actual);
         if actual == expected.map(Some) {
             return Ok(());
         }

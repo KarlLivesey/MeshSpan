@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #[path = "appliance_maintenance_setup.rs"]
-mod setup;
+pub(super) mod setup;
 
 use setup::{
     claimed_bootstrap_backup, save_and_verify_maintenance_recovery, upload_maintenance_fixture,
@@ -80,6 +80,8 @@ fn prove_scrub_progress(
     volume: VolumeId,
 ) -> Result<(), Box<dyn Error>> {
     let now = current_time()?;
+    let stale = super::super::repair_projection::snapshot_repair_catalogue(runtime)?;
+    assert_remote_maintenance_policy(runtime, volume, now)?;
     let drain = setup::queue_empty_target_drain(runtime, now)?;
     let setup::QueuedMaintenanceFixture {
         unavailable_repair,
@@ -147,7 +149,26 @@ fn prove_scrub_progress(
     );
     assert_empty_target_drain_completed(&reopened, runtime.local_node_id, drain, now)?;
     assert_bootstrap_backup_protected(&reopened, backup, now)?;
-    assert_repair_retry_schedule(runtime, repair, now)?;
+    assert_repair_retry_schedule(runtime, repair, now, stale.path())?;
+    Ok(())
+}
+
+fn assert_remote_maintenance_policy(
+    runtime: &StorageTargetRuntime,
+    volume: VolumeId,
+    now: UnixMicros,
+) -> Result<(), Box<dyn Error>> {
+    use meshspan_filesystem::ProtectionPolicySource;
+    let policy = crate::native_protection::NativeProtectionPolicySource::new(
+        open_root_repository_at(&runtime.state_directory, now)?,
+        Vec::new(),
+    );
+    assert!(
+        policy.configuration(volume).is_err(),
+        "foreground publication still requires a local writable target"
+    );
+    policy.maintenance_configuration(volume)
+        .map_err(|_| "maintenance must build the authoritative remote candidate set without a writable local target")?;
     Ok(())
 }
 
@@ -266,6 +287,7 @@ fn assert_repair_retry_schedule(
     runtime: &mut StorageTargetRuntime,
     repair: WorkId,
     now: UnixMicros,
+    stale_catalogue: &std::path::Path,
 ) -> Result<(), Box<dyn Error>> {
     let first_retry = persisted_retry_time(runtime, repair, 1, now)?;
     assert_retry_state(runtime, repair, 1, first_retry)?;
@@ -314,7 +336,12 @@ fn assert_repair_retry_schedule(
         .run_maintenance_tick(next_tick)
         .map_err(|_| "next independent tick failed")?;
     assert_retry_state(runtime, repair, 2, second_retry)?;
-    assert_repair_completes_when_destination_returns(runtime, repair, second_retry)?;
+    assert_repair_completes_when_destination_returns(
+        runtime,
+        repair,
+        second_retry,
+        stale_catalogue,
+    )?;
     Ok(())
 }
 
@@ -322,6 +349,7 @@ fn assert_repair_completes_when_destination_returns(
     runtime: &mut StorageTargetRuntime,
     repair: WorkId,
     eligible_at: UnixMicros,
+    stale_catalogue: &std::path::Path,
 ) -> Result<(), Box<dyn Error>> {
     let folder = runtime
         .state_directory
@@ -365,6 +393,17 @@ fn assert_repair_completes_when_destination_returns(
     );
     assert_eq!(transition.source_layout_generation, 1);
     assert_eq!(transition.replacement_layout_generation, 2);
+    crate::native_gateway_sync::assert_fresh_repaired_import(
+        &runtime.state_directory,
+        &transition,
+        eligible_at,
+    )?;
+    super::super::repair_projection::assert_stale_catalogue_replays(
+        runtime,
+        stale_catalogue,
+        &transition,
+        eligible_at,
+    )?;
     let catalogue = runtime
         .native_filesystem
         .maintenance_catalogue(eligible_at)?;
@@ -389,6 +428,7 @@ fn assert_repair_completes_when_destination_returns(
         },
         eligible_at,
     )?;
+    super::super::repair::assert_committed_effect_recovery(runtime, &transition, eligible_at)?;
     Ok(())
 }
 
