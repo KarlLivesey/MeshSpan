@@ -11,10 +11,10 @@ use meshspan_storage::{RecoveryFolder, RecoveryInventory};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
-struct SurvivingPacks {
-    inventory: RecoveryInventory,
-    queried: usize,
-    corrupt_candidates: bool,
+pub(super) struct SurvivingPacks {
+    pub(super) inventory: RecoveryInventory,
+    pub(super) queried: usize,
+    pub(super) corrupt_candidates: bool,
 }
 
 struct SurvivingMedia {
@@ -38,7 +38,7 @@ impl RecoveryShardSource for SurvivingPacks {
                 .map_err(|_| ContentReadError::Corrupt);
         }
         self.inventory
-            .read_exact(shard, length, digest)
+            .read_content_shard(shard, length, digest)
             .map_err(|_| ContentReadError::Unavailable)
     }
 }

@@ -434,7 +434,7 @@ impl RecoveryShardSource for ContentCheck {
         digest: [u8; 32],
     ) -> Result<Option<BoundedBytes>, ContentReadError> {
         self.inventory
-            .read_exact(shard, length, digest)
+            .read_content_shard(shard, length, digest)
             .map_err(|_| ContentReadError::Unavailable)
     }
 }

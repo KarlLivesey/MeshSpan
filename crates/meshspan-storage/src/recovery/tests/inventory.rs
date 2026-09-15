@@ -252,3 +252,139 @@ fn index_tries_another_copy_after_ciphertext_damage() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn archived_content_recovers_from_newer_physical_generation() -> TestResult {
+    let fixture = fixture(false)?;
+    let source = RecoveryFolder::open(&fixture.storage, fixture.fingerprint)?;
+    let mut inventory = RecoveryInventory::create(
+        &fixture.directory.path().join("newer-copy"),
+        SCOPE,
+        1024 * 1024,
+    )?;
+    inventory.capture_pack(&source, 1)?;
+    let archived = meshspan_contracts::ShardIdentity {
+        generation: fixture.shard.generation - 1,
+        ..fixture.shard
+    };
+    let recovered = inventory.read_content_shard(
+        archived,
+        PAYLOAD.len() as u64,
+        blake3::hash(PAYLOAD).into(),
+    )?;
+    assert_eq!(
+        recovered.as_ref().map(BoundedBytes::as_slice),
+        Some(PAYLOAD)
+    );
+    assert!(
+        inventory
+            .read_exact(archived, PAYLOAD.len() as u64, blake3::hash(PAYLOAD).into())?
+            .is_none()
+    );
+    for wrong in [
+        ShardIdentity {
+            manifest_digest: [44; 32],
+            ..archived
+        },
+        ShardIdentity {
+            stripe_index: 9,
+            ..archived
+        },
+        ShardIdentity {
+            shard_index: 9,
+            ..archived
+        },
+    ] {
+        assert!(
+            inventory
+                .read_content_shard(wrong, PAYLOAD.len() as u64, blake3::hash(PAYLOAD).into())?
+                .is_none()
+        );
+    }
+    assert!(
+        inventory
+            .read_content_shard(
+                archived,
+                PAYLOAD.len() as u64 + 1,
+                blake3::hash(PAYLOAD).into()
+            )?
+            .is_none()
+    );
+    assert!(
+        inventory
+            .read_content_shard(archived, PAYLOAD.len() as u64, [44; 32])?
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn content_lookup_tries_another_generation_in_the_same_pack() -> TestResult {
+    let fixture = fixture(false)?;
+    let folder = RegisteredFolder::reopen(
+        &fixture.storage,
+        FolderRegistration {
+            mesh_id: MeshId::from_bytes([1; 16])?,
+            target_id: TargetId::from_bytes([2; 16])?,
+            generation: 3,
+            usage_limit: UsageLimit::DEFAULT,
+        },
+        fixture.fingerprint,
+    )?;
+    let mut pack = PackStore::open(&folder, 1, UnixMicros::new(3))?;
+    let bytes = BoundedBytes::copy_from(PAYLOAD, 1024)?;
+    pack.put_exact(PackPutRequest {
+        operation_id: OperationId::from_bytes([18; 16])?,
+        request_digest: [19; 32],
+        shard: ShardIdentity {
+            generation: 8,
+            ..fixture.shard
+        },
+        expected_digest: blake3::hash(PAYLOAD).into(),
+        bytes: &bytes,
+        now: UnixMicros::new(4),
+    })?;
+    drop(pack);
+    drop(folder);
+    let source = RecoveryFolder::open(&fixture.storage, fixture.fingerprint)?;
+    let work = fixture.directory.path().join("same-pack-generations");
+    let mut inventory = RecoveryInventory::create(&work, SCOPE, 1024 * 1024)?;
+    inventory.capture_pack(&source, 1)?;
+    let connection = rusqlite::Connection::open(work.join("pack-0000000000000001/pack.sqlite3"))?;
+    connection.execute(
+        "UPDATE shards SET stored_bytes = zeroblob(stored_length) WHERE shard_generation = 7",
+        [],
+    )?;
+    let archived = ShardIdentity {
+        generation: 6,
+        ..fixture.shard
+    };
+    let recovered = inventory.read_content_shard(
+        archived,
+        PAYLOAD.len() as u64,
+        blake3::hash(PAYLOAD).into(),
+    )?;
+    assert_eq!(
+        recovered.as_ref().map(BoundedBytes::as_slice),
+        Some(PAYLOAD)
+    );
+    assert!(
+        inventory
+            .read_exact(
+                fixture.shard,
+                PAYLOAD.len() as u64,
+                blake3::hash(PAYLOAD).into()
+            )?
+            .is_none()
+    );
+    connection.execute(
+        "UPDATE shards SET stored_bytes = zeroblob(stored_length) WHERE shard_generation = 8",
+        [],
+    )?;
+    assert!(
+        inventory
+            .read_content_shard(archived, PAYLOAD.len() as u64, blake3::hash(PAYLOAD).into())?
+            .is_none()
+    );
+    Ok(())
+}

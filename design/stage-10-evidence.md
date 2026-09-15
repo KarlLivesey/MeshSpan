@@ -10,6 +10,68 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 preserve archived recovery across physical generations
+
+The physical-generation checkpoint was signed and pushed as
+`ec6c303dcd3a0f370398bee7bb058a8142979c2b` (tree
+`0a316bf4c76e1f741199aaf57e7bb465a92d27dd`); both local SSH verification and
+GitHub verification pass. Draft [PR #274](https://github.com/KarlLivesey/MeshSpan/pull/274)
+contains this work. It has **not** merged.
+
+Assembled review found an additional consumer boundary: an archive can name an
+older physical generation even though identical immutable bytes survive in a
+repair copy. The running `pnpm check` on `ec6c303d` was deliberately terminated
+(exit **143**) to fix this before integration. Generated drift, embedded web,
+Rust/web static checks, tooling and both dependency licence lanes had passed;
+the Rust/web test stage did not produce a completed result. This is **not a passing
+integration gate**. Log: `/tmp/meshspan-check-ec6c303d.log`.
+
+The focused archive regression returned **None** instead of the independently
+expected bytes when the surviving pack held a newer generation (**0.16 s**;
+`/tmp/meshspan-repair-generations-archive-baseline.log`). Recovery now has a distinct
+`RecoveryInventory::read_content_shard` operation. It selects only the archived
+manifest, coding position, length and digest; every candidate is read under its
+actual physical identity and its bytes are independently checked. It returns no
+placement receipt, write authority or deletion authority. Existing `read_exact`
+remains generation-exact. Both daemon recovery checking and physical restoration
+use the content operation through the existing filesystem recovery boundary.
+
+The existing inventory schema and schema digest are unchanged. An ordered cursor
+includes physical identity and pack ID, so a corrupt generation cannot hide a
+valid later generation in the same pack. Lookup first selects the next generation,
+then an exact copy, using the existing covering index and pack primary key. The
+SQLite query-plan regression passes without a table scan or temporary sort. The
+initial range query did require a temporary sort; the failed plans and diagnosis
+are retained in `/tmp/meshspan-repair-generations-recovery-tests-final.log`,
+`/tmp/meshspan-repair-generations-recovery-index-fixed.log`, and
+`/tmp/meshspan-repair-generations-index-diagnosis-2.log`.
+
+Seventeen storage recovery tests pass (**1.55 s**;
+`/tmp/meshspan-repair-generations-recovery-generation-lookup.log`), covering strict
+physical lookup, different manifest/stripe/shard/length/digest rejection, corrupt
+copies, same-pack generation fallback, and the indexed lookup. The real-folder
+round-trip proof now additionally verifies that the reclaimed original physical
+copy is absent and that offline recovery still decrypts the exact original file
+from repair copies (**1.40 s**;
+`/tmp/meshspan-repair-generations-offline-real-folders-fixed.log`). All fifteen
+protected-content tests pass (**9.76 s**;
+`/tmp/meshspan-repair-generations-offline-protected-suite.log`). Affected storage,
+filesystem and daemon Clippy passes across all targets/features (**14.73 s**;
+`/tmp/meshspan-repair-generations-recovery-clippy-final.log`). The separate real
+HTTPS/Samba recovery-and-storage-restart proof passes in **130.63 s** under NVM,
+four Cargo build jobs and four Rust test threads
+(`/tmp/meshspan-repair-generations-https-smb-recovery.log`). It used the existing
+local `meshspan-smbclient-test:bookworm` image
+`sha256:4282e160c6cc3090ee59f3b2581ee7a459fdd3f943323b7583824ea30a618eb0`;
+no image was downloaded or published. Workspace Rust formatting passes.
+A new complete integration gate is still required before merge.
+
+Stage 10 task 16 / DATA-02 remains open for automatic obsolete-placement cleanup
+admission/reference fencing, superseded/orphan handling, destination reselection
+and remaining actual process interruption/takeover cuts. No Stage 10/11 completion,
+publication, hardware, physical power-loss, soak or independent-review proof is
+claimed.
+
 ## DATA-02 physical generations before obsolete-copy cleanup
 
 PR [#273](https://github.com/KarlLivesey/MeshSpan/pull/273) merged the prior

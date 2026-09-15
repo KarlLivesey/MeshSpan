@@ -19,7 +19,9 @@ use crate::{
 /// Implementations own location lookup and may try multiple copies. A locator alone grants no
 /// authority: the orchestrator must already hold explicit offline recovery authorisation.
 pub trait RecoveryShardSource {
-    /// Returns a candidate for the exact encrypted identity or `None` when none survives.
+    /// Returns exact encrypted content bytes or `None` when none survives. An offline source
+    /// may use another physical generation with the same manifest, coding position, length and
+    /// digest; it verifies that copy under its actual identity and returns no placement receipt.
     /// The filesystem independently checks length and digest, even after source verification.
     ///
     /// # Errors

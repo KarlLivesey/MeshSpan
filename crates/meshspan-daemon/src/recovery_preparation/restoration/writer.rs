@@ -158,7 +158,7 @@ impl RecoveryShardSource for Inventory {
         digest: [u8; 32],
     ) -> Result<Option<BoundedBytes>, ContentReadError> {
         self.0
-            .read_exact(shard, length, digest)
+            .read_content_shard(shard, length, digest)
             .map_err(|_| ContentReadError::Corrupt)
     }
 }

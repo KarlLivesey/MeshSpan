@@ -66,6 +66,7 @@ fn repair_returns_to_reclaimed_target_and_old_removal_cannot_delete_replacement(
         "immutable content layout remains unchanged"
     );
     assert_eq!(current.receipts.as_slice()[0], returned);
+    assert_offline_recovery(root.path(), &reopened, content, &router, &bytes)?;
     Ok(())
 }
 
@@ -112,5 +113,72 @@ fn retire_copy(
     let tombstone = StorageProvider::tombstone(provider, permit, UnixMicros::new(40))?;
     let reclaimed = StorageProvider::unlink_tombstoned(provider, tombstone, UnixMicros::new(41))?;
     assert_eq!(reclaimed.tombstone.shard, receipt.shard);
+    Ok(())
+}
+
+fn assert_offline_recovery(
+    root: &std::path::Path,
+    publisher: &TestProtectedPublisher,
+    content: PublishedContentReference,
+    router: &TestRouter,
+    bytes: &[u8],
+) -> TestResult {
+    use meshspan_filesystem::VolumeContentKeys as _;
+    use meshspan_storage::{RecoveryFolder, RecoveryInventory};
+
+    let mut state = router.lock()?;
+    let mut survivors = Vec::new();
+    for index in 0..4_u8 {
+        let target = TargetId::from_bytes([20 + index; 16])?;
+        if !state.offline.contains(&target) {
+            let provider = state.providers.get(&target).ok_or("surviving provider")?;
+            survivors.push((index, provider.target_marker().fingerprint()));
+        }
+    }
+    state.providers.clear();
+    drop(state);
+    let mut inventory =
+        RecoveryInventory::create(&root.join("offline-repairs"), [192; 32], 16 * 1024 * 1024)?;
+    for (index, marker) in survivors {
+        let folder = RecoveryFolder::open(&root.join(format!("storage-{index}")), marker)?;
+        for sequence in folder.pack_sequences()? {
+            inventory.capture_pack(&folder, sequence?)?;
+        }
+    }
+    let layout = publisher.catalog().committed_layout_transfer(content)?;
+    let original = layout.publication_stripe(0)?.receipts.as_slice()[0];
+    assert_eq!(original.shard.generation, 1);
+    assert!(
+        inventory
+            .read_exact(original.shard, original.length, original.digest)?
+            .is_none(),
+        "the original physical copy was reclaimed"
+    );
+    let mut source = super::recovery::SurvivingPacks {
+        inventory,
+        queried: 0,
+        corrupt_candidates: false,
+    };
+    let volume = VolumeId::from_bytes([181; 16])?;
+    let keys = VolumeContentKeyring::new(volume, VolumeKeyEncryptionKey::from_bytes(1, [182; 32])?);
+    let key = keys.unwrap_content_key(
+        volume,
+        content.manifest.manifest_id,
+        layout.header().wrapped_key,
+    )?;
+    let mut output = Vec::new();
+    layout.recover_to(
+        RequestContext {
+            contract_version: meshspan_contracts::ContractVersion::V1_0,
+            operation_id: OperationId::from_bytes([193; 16])?,
+            deadline: UnixMicros::new(1000),
+            expected_revision: None,
+        },
+        key,
+        &ReedSolomonCoding::new(),
+        &mut source,
+        &mut output,
+    )?;
+    assert_eq!(output, bytes);
     Ok(())
 }
