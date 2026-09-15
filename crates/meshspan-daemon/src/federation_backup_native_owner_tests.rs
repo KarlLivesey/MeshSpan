@@ -191,7 +191,12 @@ impl OwnerConnection {
         })
         .await;
         worker.await??;
-        result?
+        result.map_err(|error| {
+            format!(
+                "native backup owner exchange for operation {:?}: {error}",
+                request.context().operation_id
+            )
+        })?
     }
 }
 

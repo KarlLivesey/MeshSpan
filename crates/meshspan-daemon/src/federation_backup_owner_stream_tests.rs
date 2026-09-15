@@ -211,5 +211,6 @@ async fn cycle(
     .await;
     let (provider, completed) = worker.await?;
     completed?;
-    Ok((provider, result??))
+    let result = result.map_err(|error| format!("forwarded backup owner stream: {error}"))??;
+    Ok((provider, result))
 }

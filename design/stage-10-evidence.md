@@ -10,6 +10,44 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 integration gate blocked by federation backup timeout
+
+The full local gate on signed commit
+`87e595af34824949e1c47851ab5d94e834262cd0` (tree
+`3f0115fb6b7b9a73c152d0fb18588abe3729de62`) **failed**, exit 1, after
+**366.50 s** under NVM with four scheduler workers, Cargo build jobs and Rust
+test threads. Generated drift, embedded web, formatting, Rust/web lint, type
+checking, tooling and both dependency licence checks passed. Web tests passed
+in **19.02 s**. The Rust lane stopped at the daemon library: **471 passed,
+one failed, one ignored** in **140.03 s**. The failing
+`federation_connection_recovers_lost_approval_reply_over_real_tls` reported
+`federation backup capability proof: deadline has elapsed`. Later Rust targets
+were not reached. Log: `/tmp/meshspan-check-87e595af.log`.
+
+The isolated federation workflow passed in **14.75 s**
+(`/tmp/meshspan-federation-backup-timeout-focused.log`). Test-only diagnostics now
+identify the request/operation and control, execution or owner exchange when a
+deadline expires; they do not log credentials or change deadlines or assertions.
+Four concurrent independent reproductions also passed in **15.23–15.40 s**
+(`/tmp/meshspan-federation-backup-load-{1,2,3,4}.log`). The original timeout remains
+unexplained and open; these passing retries do not close it.
+
+The diagnostic daemon-library run had **471 passed, one failed, one ignored** in
+**128.12 s** (`/tmp/meshspan-federation-backup-daemon-diagnostic.log`). Federation
+passed, but `backup_provider_snapshot_is_independent_of_storage_maintenance_lock`
+failed because its five-second deadline began before daemon/database setup and
+was already expired by **1.38 s**. That fixture now starts its unchanged
+five-second deadline immediately before the wait. The real maintenance mutex
+remains held throughout the proof, and the independent expired-deadline and
+retained-completion assertions remain unchanged. Both focused startup tests pass
+in **2.18 s** (`/tmp/meshspan-backup-startup-deadline-fixed.log`); daemon Clippy
+passes across all targets/features in **12.11 s**
+(`/tmp/meshspan-federation-diagnostics-clippy.log`). Rust formatting passes.
+
+A complete gate on the updated candidate is still required. PR #274 remains a
+draft and unmerged. Stage 10 task 16 / DATA-02 remains open; Stage 11 has not
+started.
+
 ## DATA-02 codec compatibility fixture follows version 21
 
 The archive-recovery follow-up was signed and pushed as

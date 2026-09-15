@@ -96,7 +96,8 @@ impl<'a, 'identity> Client<'a, 'identity> {
             std::time::Duration::from_secs(3),
             self.control_during_stalled_upload(&store),
         )
-        .await??;
+        .await
+        .map_err(|error| format!("control during stalled backup upload: {error}"))??;
         assert!(matches!(failed, Outcome::Rejection(error)
             if error.code == i32::from(meshspan_protocol::v1::ErrorCode::Unavailable)));
         interruption::assert_usage(fixture, self.scope, 0, object.byte_length)?;
@@ -445,7 +446,13 @@ impl<'a, 'identity> Client<'a, 'identity> {
             std::time::Duration::from_secs(3),
             self.execute(&outbound, request, source),
         )
-        .await?
+        .await
+        .map_err(|error| {
+            format!(
+                "native backup execution for operation {:?}: {error}",
+                request.context().operation_id
+            )
+        })?
     }
 
     async fn permit(

@@ -235,7 +235,13 @@ async fn exchange(
         send.finish()?;
         receive_federation(&mut receive, session.limits.wire).await
     })
-    .await?)
+    .await
+    .map_err(|error| {
+        format!(
+            "native backup control exchange for request {:?}: {error}",
+            envelope.header.as_ref().map(|header| &header.request_id)
+        )
+    })?)
 }
 
 fn provision(
