@@ -105,6 +105,16 @@ debug-assertions = true
 overflow-checks = true
 incremental = true
 
+# Retain SQLite's native checks while avoiding measured native -O0 startup cost.
+# Its compile options and the real concurrent workflow comparison are recorded in
+# design/stage-10-evidence.md; this changes native debugger stepping, not validation.
+[profile.dev.package.libsqlite3-sys]
+opt-level = 2
+debug = true
+debug-assertions = true
+overflow-checks = true
+incremental = true
+
 [workspace.lints.rust]
 missing_docs = "deny"
 unsafe_code = "deny"

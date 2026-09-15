@@ -464,6 +464,27 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Manual database-open measurement, not a process acceptance or hardware benchmark"]
+    #[expect(
+        clippy::print_stderr,
+        reason = "Report bounded aggregate manual measurements only"
+    )]
+    fn measure_reopened_partition_validation_cost() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("measured.sqlite3");
+        let partition_id = PartitionId::from_bytes([18; 16])?;
+        let database = PartitionDatabase::open(&path, partition_id, UnixMicros::new(1))?;
+        drop(database);
+        for _ in 0..5 {
+            let started = std::time::Instant::now();
+            let reopened = PartitionDatabase::open_existing(&path, UnixMicros::new(2))?;
+            assert_eq!(reopened.partition_id(), partition_id);
+            eprintln!("verified partition reopen: {:?}", started.elapsed());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn partition_database_migrates_reopens_and_rejects_another_identity()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempdir()?;

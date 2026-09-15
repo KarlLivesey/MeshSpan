@@ -93,11 +93,13 @@ nodes or workers exercised inside each case. Regenerate the committed OpenAPI, T
 native-Fetch and Zod artefacts with
 `npm run generate:api`.
 
-Local builds retain incremental compilation and debug checks. The crypto-provider
-crate alone uses optimization level 2, with debug symbols, assertions and overflow
-checks retained: measured unoptimized cipher work otherwise consumes most of the
-maximum-transfer test's deadline. All other crates keep the ordinary debug profile.
-See the [measurement and validation evidence](design/stage-10-evidence.md#measured-packet-cryptography-cost-in-local-validation).
+Local Rust builds retain incremental compilation, debug symbols, Rust assertions
+and overflow checks. The crypto provider and bundled SQLite use optimization level 2 to address
+measured packet and database-validation costs in concurrent process proofs. SQLite's
+compile options remain unchanged. All other crates keep the ordinary debug profile;
+debugger stepping and inlining differ inside these two components. See the
+[packet measurements](design/stage-10-evidence.md#measured-packet-cryptography-cost-in-local-validation)
+and [database measurements](design/stage-10-evidence.md#sqlite-startup-cost-experiment).
 
 Early development uses local verification only. There are deliberately no GitHub Actions yet.
 

@@ -95,6 +95,57 @@ unresolved; passing retries do not erase the earlier failures. Affected headless
 Clippy passes with warnings denied in **20.309 s**
 (`/tmp/meshspan-join-diagnostics-clippy.log`).
 
+### SQLite startup-cost experiment
+
+The original bundled SQLite object's compiler metadata confirms `-O0` with debug
+symbols. The startup experiment changed only `libsqlite3-sys` to optimization
+level 2 through command-line Cargo overrides, explicitly retaining debug symbols,
+Rust assertions and overflow checks. An equivalent five-open fixture used the same private database
+copy and executes the real opening, migration, identity and integrity paths.
+After the immutable-hash fix, migration verification takes **0.238–0.317 ms**
+(`/tmp/meshspan-sqlite-cost-baseline.log`).
+
+The two compiled variants were then executed in baseline/experimental/
+experimental/baseline order. Baseline opening took **7.688–8.743 ms** and integrity
+checks **5.543–6.709 ms**; experimental opening took **3.149–3.256 ms** and
+integrity checks **2.859–3.399 ms**. Logs:
+`/tmp/meshspan-sqlite-abba-{1-baseline,2-opt2,3-opt2,4-baseline}.log`. All **51**
+SQLite compile options match exactly, including API armour. Compiler metadata
+confirms the new native object retains `-g` and changes to `-O2`. This comparison
+does not substitute for real process acceptance or release performance evidence.
+
+All **53 database regressions pass in 7.41 s** with the experimental artifact
+(`/tmp/meshspan-sqlite-opt2-database-tests.log`). The temporary benchmark source
+was removed before the canonical all-target/all-feature experimental rebuild,
+which passed in **220.769 s** (`/tmp/meshspan-sqlite-opt2-canonical-build.log`).
+All **11 workflows that failed the last full gate pass together in 86.65 s**
+with four test threads and unchanged deadlines
+(`/tmp/meshspan-sqlite-opt2-headless-eleven.log`). This tests production source
+`3656a3927a8bc916374db4b276764275ad4e22a6` with the scoped CLI profile override;
+it does not replace the required final integration gate.
+
+The candidate now retains this measured override in `Cargo.toml`. Rust assertions,
+overflow checks and incremental compilation apply to Rust; they do not enable
+SQLite C assertions or incremental C compilation. SQLite's native compile options,
+including API armour, are unchanged. Native optimization changes debugger stepping
+and inlining. No migration, integrity check, dependency, lockfile, process deadline
+or acceptance assertion was weakened.
+
+A retained manual fixture creates its own real migrated database and verifies
+identity through five complete reopens. Run `cargo test -p meshspan-metadata --lib
+database::tests::measure_reopened_partition_validation_cost -- --exact --ignored
+--nocapture --test-threads=4`. It passed in **0.77 s**, reporting **5.367–8.055 ms**
+per reopen (`/tmp/meshspan-sqlite-retained-manual-fixed.log`). This fresh fixture
+is a different dataset from the private-database comparison above and has no timing
+acceptance threshold. The earlier invocation with an incomplete exact filter ran
+zero tests (`/tmp/meshspan-sqlite-retained-manual.log`) and is not passing evidence.
+Affected metadata all-target/all-feature Clippy passes with warnings denied in
+**14.049 s** (`/tmp/meshspan-sqlite-retained-clippy.log`); Rust formatting,
+document formatting and diff checks pass. Independent source review found no
+semantic defect and prompted the explicit Rust/native-check distinction above.
+The retained candidate still requires the complete local gate and a fresh separate
+real HTTPS/SMB recovery proof before integration.
+
 ## Measured packet cryptography cost in local validation
 
 The maximum-transfer investigation now has a reproducible packet-cost comparison
