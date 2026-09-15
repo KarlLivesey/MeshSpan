@@ -76,10 +76,10 @@ pub(in crate::repository) fn plan(
     }
     transaction.execute("INSERT INTO maintenance_repair_attempts(work_id, provider_operation_id,
         effect_operation_id, completion_operation_id, plan_operation_id, command_version, command_bytes, revision)
-        VALUES (?1, ?2, ?3, ?4, ?5, 20, ?6, ?7)
+        VALUES (?1, ?2, ?3, ?4, ?5, 21, ?6, ?7)
         ON CONFLICT(work_id) DO UPDATE SET effect_operation_id = excluded.effect_operation_id,
         completion_operation_id = excluded.completion_operation_id, plan_operation_id = excluded.plan_operation_id,
-        command_bytes = excluded.command_bytes, revision = excluded.revision",
+        command_version = excluded.command_version, command_bytes = excluded.command_bytes, revision = excluded.revision",
         params![value.claim.work_id.as_bytes().as_slice(), value.intent.context.operation_id.as_bytes().as_slice(),
             value.effect_context.operation_id.as_bytes().as_slice(), value.completion_context.operation_id.as_bytes().as_slice(),
             context.operation_id.as_bytes().as_slice(), bytes, to_i64(revision.get())?])?;
@@ -145,7 +145,7 @@ fn load(
     let Some((operation, provider, effect, completion, version, bytes, revision)) = row else {
         return Ok(None);
     };
-    if version != 20 {
+    if !matches!(version, 20 | 21) {
         return Err(RepositoryError::CorruptState);
     }
     let decoded = decode_authoritative_command(&bytes.ok_or(RepositoryError::CorruptState)?)
@@ -153,7 +153,8 @@ fn load(
     let AuthoritativeCommand::PlanShardRepair(plan) = decoded.command else {
         return Err(RepositoryError::CorruptState);
     };
-    if plan.claim.work_id != work
+    if (version == 20 && plan.intent.shard != plan.source_receipt.shard)
+        || plan.claim.work_id != work
         || decoded.context.operation_id.as_bytes().as_slice() != operation
         || plan.intent.context.operation_id.as_bytes().as_slice() != provider
         || plan.effect_context.operation_id.as_bytes().as_slice() != effect
@@ -205,7 +206,7 @@ fn validate_source(
         || source_generation != value.source_layout_generation
         || source.shard.stripe_index != stripe_index
         || source.shard.shard_index != shard_index
-        || source.shard != intent.shard
+        || !super::repair::valid_replacement_identity(source.shard, intent.shard)
         || source.length != intent.expected_length
         || intent.maximum_bytes != intent.expected_length
         || source.digest != intent.expected_digest

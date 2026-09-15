@@ -181,7 +181,7 @@ fn validate_transition(
     if transition.source_layout_generation != active_generation
         || transition.replacement_layout_generation != next
         || source != active
-        || source.shard != replacement.shard
+        || !valid_replacement_identity(source.shard, replacement.shard)
         || source.length != replacement.length
         || source.digest != replacement.digest
         || source.operation_id == replacement.operation_id
@@ -190,7 +190,7 @@ fn validate_transition(
         || source.shard.manifest_digest != content.manifest.root_digest
         || source.shard.stripe_index != chunk_index
         || source.shard.shard_index != planned.shard_index
-        || source.shard.generation != planned.shard_generation
+        || source.shard.generation < planned.shard_generation
         || source.length != planned.expected_length
         || source.digest != planned.expected_digest
         || replacement.target_generation == 0
@@ -263,7 +263,9 @@ fn active_receipt(
     connection
         .query_row(
             "SELECT provider_operation_id, target_id, target_generation, shard_generation,
-                    expected_length, expected_digest, layout_generation
+                    expected_length, expected_digest, layout_generation,
+                    (SELECT replacement_shard_generation FROM content_shard_repair_effects
+                     WHERE effect_operation_id = content_shard_repair_routes.effect_operation_id)
              FROM content_shard_repair_routes
              WHERE publication_operation_id = ?1 AND chunk_index = ?2 AND shard_index = ?3",
             params![
@@ -286,7 +288,15 @@ fn active_receipt(
                     target_id: decode_target(&row.get::<_, Vec<u8>>(1)?)?,
                     target_generation: from_sql(row.get(2)?)?,
                 };
-                if receipt.shard != original.shard
+                if receipt.shard
+                    != (meshspan_contracts::ShardIdentity {
+                        generation: receipt.shard.generation,
+                        ..original.shard
+                    })
+                    || row.get::<_, Option<i64>>(7)? != Some(i64::from(receipt.shard.generation))
+                    || receipt.shard.generation < original.shard.generation
+                    || u64::from(receipt.shard.generation) - u64::from(original.shard.generation)
+                        >= from_sql(row.get(6)?)?
                     || receipt.length != original.length
                     || receipt.digest != original.digest
                 {
@@ -313,8 +323,8 @@ fn insert_effect(
             source_provider_operation_id, source_target_id, source_target_generation,
             replacement_provider_operation_id, replacement_target_id,
             replacement_target_generation, shard_generation, expected_length, expected_digest,
-            committed_revision
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            committed_revision, replacement_shard_generation
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         params![
             transition.effect_operation_id.as_bytes().as_slice(),
             content.publication_operation_id.as_bytes().as_slice(),
@@ -332,6 +342,7 @@ fn insert_effect(
             to_i64(source.length)?,
             source.digest.as_slice(),
             to_i64(transition.committed_revision.get())?,
+            i64::from(replacement.shard.generation),
         ],
     )?;
     Ok(())
@@ -398,7 +409,7 @@ pub(super) fn load_effect(
                     effects.shard_generation, effects.expected_length, effects.expected_digest,
                     effects.committed_revision,
                     (SELECT root_digest FROM content_publications
-                     WHERE operation_id = effects.publication_operation_id)
+                     WHERE operation_id = effects.publication_operation_id), effects.replacement_shard_generation
              FROM content_shard_repair_effects AS effects WHERE effect_operation_id = ?1",
             [effect_operation_id.as_bytes().as_slice()],
             |row| {
@@ -410,6 +421,13 @@ pub(super) fn load_effect(
                     generation: u32::try_from(row.get::<_, i64>(10)?)
                         .map_err(|_| rusqlite::Error::InvalidQuery)?,
                 };
+                let replacement_shard = meshspan_contracts::ShardIdentity {
+                    generation: u32::try_from(row.get::<_, i64>(15)?).map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    ..shard
+                };
+                if shard.generation == 0 || !valid_replacement_identity(shard, replacement_shard) {
+                    return Err(rusqlite::Error::InvalidQuery);
+                }
                 let length = from_sql(row.get(11)?)?;
                 let digest = copy_array(&row.get::<_, Vec<u8>>(12)?)?;
                 Ok(ShardRepairTransition {
@@ -426,7 +444,7 @@ pub(super) fn load_effect(
                     },
                     replacement_receipt: ShardReceipt {
                         operation_id: decode_operation(&row.get::<_, Vec<u8>>(7)?)?,
-                        shard,
+                        shard: replacement_shard,
                         length,
                         digest,
                         target_id: decode_target(&row.get::<_, Vec<u8>>(8)?)?,
@@ -442,4 +460,17 @@ pub(super) fn load_effect(
 
 fn decode_operation(bytes: &[u8]) -> rusqlite::Result<OperationId> {
     OperationId::from_bytes(copy_array(bytes)?).map_err(|_| rusqlite::Error::InvalidQuery)
+}
+
+fn valid_replacement_identity(
+    source: meshspan_contracts::ShardIdentity,
+    replacement: meshspan_contracts::ShardIdentity,
+) -> bool {
+    replacement
+        == meshspan_contracts::ShardIdentity {
+            generation: replacement.generation,
+            ..source
+        }
+        && (replacement.generation == source.generation
+            || source.generation.checked_add(1) == Some(replacement.generation))
 }

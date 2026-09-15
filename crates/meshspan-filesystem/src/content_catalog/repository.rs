@@ -31,6 +31,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../schema/content/011_target_shard_inventory.sql"),
     include_str!("../../schema/content/012_content_reuse.sql"),
     include_str!("../../schema/content/013_repair_projection.sql"),
+    include_str!("../../schema/content/014_repair_shard_generations.sql"),
 ];
 pub(super) const SCHEMA_VERSION: usize = MIGRATIONS.len();
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;

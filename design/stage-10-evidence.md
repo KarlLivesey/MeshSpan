@@ -10,6 +10,78 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 physical generations before obsolete-copy cleanup
+
+PR [#273](https://github.com/KarlLivesey/MeshSpan/pull/273) merged the prior
+repair-resumption candidate into `main` as
+`df6a824ac403c77924b13cc535fb481e4dd1cc39`. Its GitHub merge signature is verified,
+local/remote main agreed after fast-forward, and the merged branch was removed.
+The earlier full-gate evidence below remains evidence for that candidate only.
+
+Stage 10 task 16 / DATA-02 remains open. The next cleanup boundary exposed that
+repair reused the original physical shard generation: tombstoning an obsolete
+copy would prevent a later repair from returning to the same target. New live
+plans now select exactly the next physical generation. Recovered plans retain
+what was committed, including legacy same-generation attempts. Offline restoration
+also retains its independently selected identity. Immutable manifest bytes,
+coding geometry and expected byte digests do not change.
+
+Partition migration 122 and content-catalogue migration 14 retain the source and
+replacement generations separately, copying historical same-generation effects
+without rewriting their receipts. Metadata command version 21 gates generation
+advancement; versions 18–20 retain their prior interpretation and reject an
+advancing repair mislabeled as an older command. Projection revalidates a route's
+physical generation against its exact stored effect and survives catalogue reopen.
+No public HTTP schema, dependency or licence changes are involved.
+
+The existing real-folder repair regression failed before implementation with
+actual generation **1**, expected **2** (**1.00 s**;
+`/tmp/meshspan-repair-generation-baseline.log`). The new real-folder round-trip
+proof retires the original copy, returns a repair to that same target as generation
+3, replays its old removal permit, removes the superseded replacement, reopens the
+catalogue and reads exact bytes with other targets unavailable. Its immutable
+content layout stays identical. This test supplies explicit fixture removal
+authority: it proves physical generation isolation, **not** automatic cleanup
+admission or distributed reference attestation.
+
+Focused validation so far: ten metadata repair/migration/version/replay tests
+pass (**6.71 s**, `/tmp/meshspan-repair-generations-migration-tests.log`); eight
+catalogue repair/projection/migration tests pass (**0.59 s**,
+`/tmp/meshspan-repair-generations-projection-fixed.log`); all fifteen real-folder
+protected-content tests pass (**9.98 s**,
+`/tmp/meshspan-repair-generations-protected-fixed.log`); the affected backup-root
+upgrade fixture passes (**1.73 s**,
+`/tmp/meshspan-repair-generations-backup-fixture.log`). Final affected all-target/all-feature
+Clippy passed in **6.76 s** (`/tmp/meshspan-repair-generations-clippy-final.log`);
+workspace Rust formatting also passes.
+
+Historical schema fixtures required explicit removal of the new additive column:
+the original projection upgrade fixture failed with `QueryReturnedNoRows`, and the
+protected reuse upgrade fixture failed with `Unavailable` (fourteen other tests
+passed, **9.55 s**). Both reconstructed an invalid migration gap after the new
+migration. Correcting their historical schema reconstruction preserves the original
+assertions; production migration behavior was not weakened. Failed logs remain at
+`/tmp/meshspan-repair-generations-projection-tests.log` and
+`/tmp/meshspan-repair-generations-protected-tests.log`. An initial metadata focused
+run also exposed an erroneous SQL column-list edit; that implementation error was
+corrected before the passing metadata tests.
+
+The daemon controlled-clock maintenance/claim-takeover proof passes in **9.79 s**
+(`/tmp/meshspan-repair-generations-daemon-fixed.log`). Its old committed-effect
+fixture initially tried to reinstall a lower physical generation and was correctly
+rejected (**10.19 s**, `/tmp/meshspan-repair-generations-daemon-tests.log`). The
+fixture now writes a real replacement before committing its effect and interrupting
+completion; it does not fabricate a receipt or permit generation rollback.
+The real three-daemon stale-gateway restart/provider-loss proof passes in
+**29.21 s**, explicitly checking the next physical generation and original bytes
+(`/tmp/meshspan-repair-generations-process-proof.log`).
+
+The final integration gate is still pending for this candidate. Automatic obsolete-placement authority, reference/fence checks,
+superseded/orphan attempt cleanup, unavailable-destination reselection, and the
+remaining real process interruption/takeover cuts remain required. Stage 10 and
+Stage 11 are not complete. Publication remains prohibited; no hardware, physical
+power-loss, soak or independent-review proof is claimed here.
+
 ## DATA-02 repair-resumption candidate — complete local gate passes
 
 The complete NVM `pnpm check` passes on signed, locally/GitHub-verified

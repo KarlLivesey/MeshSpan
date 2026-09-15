@@ -9,6 +9,7 @@ fn committed_effect_and_cursor_replay_after_catalogue_reopen()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
     let mut fixture = ProjectionFixture::new(directory.path())?;
+    fixture.effect.replacement_receipt.shard.generation = 2;
     fixture
         .catalog
         .install_shard_repair(fixture.content, &fixture.effect)?;
@@ -282,13 +283,14 @@ fn projection_schema_upgrades_existing_committed_content_without_rewriting_histo
         [],
         |row| row.get(0),
     )?;
-    // Recreate schema 12 by removing only migration 13's additive objects. Retain
+    // Recreate schema 12 by removing the subsequent additive objects. Retain
     // a committed protected manifest and all prior immutable migration records.
     fixture.catalog.connection.execute_batch(
         "BEGIN IMMEDIATE;
          DROP TABLE content_repair_projection_cursors;
          DROP INDEX content_publications_repair_projection;
-         DELETE FROM schema_migrations WHERE version = 13;
+         ALTER TABLE content_shard_repair_effects DROP COLUMN replacement_shard_generation;
+         DELETE FROM schema_migrations WHERE version >= 13;
          COMMIT;",
     )?;
     drop(fixture.catalog);
@@ -324,6 +326,71 @@ fn projection_schema_upgrades_existing_committed_content_without_rewriting_histo
             .connection
             .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))?,
         "ok"
+    );
+    Ok(())
+}
+
+#[test]
+fn migration14_preserves_legacy_repair_route_and_exact_replay()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let mut fixture = ProjectionFixture::new(directory.path())?;
+    fixture
+        .catalog
+        .install_shard_repair(fixture.content, &fixture.effect)?;
+    // This fixture uses the original same-generation effect representation.
+    fixture.catalog.connection.execute_batch(
+        "BEGIN;
+        ALTER TABLE content_shard_repair_effects DROP COLUMN replacement_shard_generation;
+        DELETE FROM schema_migrations WHERE version = 14;
+        COMMIT;",
+    )?;
+    drop(fixture.catalog);
+    let mut reopened = DurableContentCatalog::open(directory.path(), UnixMicros::new(10))?;
+    reopened.install_shard_repair(fixture.content, &fixture.effect)?;
+    let replacement = fixture.effect.replacement_receipt;
+    let current = reopened
+        .shard_repair_candidate(
+            replacement.target_id,
+            replacement.target_generation,
+            replacement.shard,
+        )?
+        .ok_or("route missing")?;
+    assert_eq!(current.source_receipt, replacement);
+    assert_eq!(current.source_receipt.shard.generation, 1);
+    assert_eq!(
+        reopened
+            .connection
+            .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))?,
+        "ok"
+    );
+    assert!(
+        !reopened
+            .connection
+            .prepare("PRAGMA foreign_key_check")?
+            .exists([])?
+    );
+    Ok(())
+}
+
+#[test]
+fn route_generation_must_match_its_committed_effect() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let mut fixture = ProjectionFixture::new(directory.path())?;
+    fixture
+        .catalog
+        .install_shard_repair(fixture.content, &fixture.effect)?;
+    fixture.catalog.connection.execute(
+        "UPDATE content_shard_repair_routes SET shard_generation = 2",
+        [],
+    )?;
+    let mut receipt = fixture.effect.replacement_receipt;
+    receipt.shard.generation = 2;
+    assert!(
+        fixture
+            .catalog
+            .shard_repair_candidate(receipt.target_id, receipt.target_generation, receipt.shard)
+            .is_err()
     );
     Ok(())
 }

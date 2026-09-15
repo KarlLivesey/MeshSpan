@@ -260,6 +260,7 @@ fn requests_for(stripe: &CommittedProtectedStripe) -> TestResult<Vec<ShardRepair
                 source_receipt: *receipt,
                 replacement_target_id: TargetId::from_bytes([100 + index; 16])?,
                 replacement_target_generation: 1,
+                replacement_shard_generation: receipt.shard.generation,
                 authorization_revision: Revision::new(2),
                 deadline: UnixMicros::new(1000),
                 observed_at: UnixMicros::new(100),

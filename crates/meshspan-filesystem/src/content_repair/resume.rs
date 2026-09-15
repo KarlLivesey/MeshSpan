@@ -14,6 +14,15 @@ use super::{
 };
 
 impl ShardRepairRequest {
+    /// Exact physical identity selected for this attempt, independent of immutable content bytes.
+    #[must_use]
+    pub const fn replacement_shard(self) -> meshspan_contracts::ShardIdentity {
+        meshspan_contracts::ShardIdentity {
+            generation: self.replacement_shard_generation,
+            ..self.source_receipt.shard
+        }
+    }
+
     /// Selects the original physical intent before any provider IO, without claiming admission.
     #[must_use]
     pub const fn physical_intent(self) -> ShardPutIntent {
@@ -23,7 +32,7 @@ impl ShardRepairRequest {
             target_generation: self.replacement_target_generation,
             reservation_class: ReservationClass::Repair,
             maximum_bytes: self.source_receipt.length,
-            shard: self.source_receipt.shard,
+            shard: self.replacement_shard(),
             expected_length: self.source_receipt.length,
             expected_digest: self.source_receipt.digest,
         }
@@ -86,7 +95,7 @@ impl<Router: ContentShardRouter, Coding: CodingScheme> ProtectedShardRepairer<Ro
             mesh_id: self.mesh_id,
             target_id: request.replacement_target_id,
             target_generation: request.replacement_target_generation,
-            shard: request.source_receipt.shard,
+            shard: request.replacement_shard(),
             reservation_class: ReservationClass::Repair,
             maximum_bytes: request.source_receipt.length,
             authorization_revision: request.authorization_revision,

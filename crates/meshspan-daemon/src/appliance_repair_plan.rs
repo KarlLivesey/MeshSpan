@@ -108,6 +108,13 @@ impl RepairAttempt {
                 source_receipt: source.candidate.source_receipt,
                 replacement_target_id: placement.replacement_target_id,
                 replacement_target_generation: placement.replacement_target_generation,
+                replacement_shard_generation: source
+                    .candidate
+                    .source_receipt
+                    .shard
+                    .generation
+                    .checked_add(1)
+                    .ok_or(())?,
                 authorization_revision: revision,
                 deadline: context.deadline,
                 observed_at: now,
@@ -136,6 +143,7 @@ impl RepairAttempt {
                 source_receipt: plan.source_receipt,
                 replacement_target_id: plan.intent.target_id,
                 replacement_target_generation: plan.intent.target_generation,
+                replacement_shard_generation: plan.intent.shard.generation,
                 authorization_revision,
                 deadline: self.claim.lease_expires_at,
                 observed_at: self.claim_context.occurred_at,

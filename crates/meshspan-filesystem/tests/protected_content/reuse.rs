@@ -135,8 +135,8 @@ fn reuse_rechecks_availability_volume_and_complete_upload_after_catalogue_upgrad
     let source = publish(&mut publisher, publication_request(volume, 80)?, &bytes)?;
     let original_usage = physical_payload(&fixture.router)?;
     drop(publisher);
-    // Recreate schema 11 with its committed content intact. Both later tables are
-    // empty here; dropping only the alias table would leave an invalid migration gap.
+    // Recreate schema 11 with its committed content intact. Later tables are empty;
+    // remove their objects and the newer physical-generation column together.
     let database = rusqlite::Connection::open(state.join("filesystem-content.sqlite3"))?;
     let later_rows: i64 = database.query_row(
         "SELECT (SELECT COUNT(*) FROM content_reuse) +
@@ -150,7 +150,8 @@ fn reuse_rechecks_availability_volume_and_complete_upload_after_catalogue_upgrad
         DROP TABLE content_repair_projection_cursors;
         DROP INDEX content_publications_repair_projection;
         DROP TABLE content_reuse;
-        DELETE FROM schema_migrations WHERE version IN (12, 13);
+        ALTER TABLE content_shard_repair_effects DROP COLUMN replacement_shard_generation;
+        DELETE FROM schema_migrations WHERE version >= 12;
         PRAGMA user_version = 11;
         COMMIT;",
     )?;

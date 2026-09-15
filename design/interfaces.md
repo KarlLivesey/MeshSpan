@@ -217,6 +217,12 @@ inventory(cursor, limit) -> local_entries
 scrub(cursor, budget) -> observations
 ```
 
+A fresh repair advances the physical shard generation while retaining its immutable
+manifest, coding position, length and digest. The authoritative plan retains that
+exact identity before IO; takeover reuses it. Committed effects preserve both
+receipt generations, so replaying an old removal permit cannot delete a later
+replacement at the same target. Historical same-generation plans remain replayable.
+
 The provider never sees paths, users, ACLs, volumes-as-shares or placement
 policy. It cannot decide that a shard is authoritative or safe to delete.
 Packfiles, one-file records or a future device backend remain private choices.

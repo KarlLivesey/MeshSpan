@@ -14,7 +14,7 @@ const EFFECT_SELECT: &str =
     e.source_provider_operation_id, e.source_target_id, e.source_target_generation,
     e.replacement_provider_operation_id, e.replacement_target_id, e.replacement_target_generation,
     e.expected_length, e.expected_digest, e.committed_at, e.revision,
-    e.volume_id, e.manifest_id, e.effect_operation_id, j.subject_payload
+    e.volume_id, e.manifest_id, e.effect_operation_id, j.subject_payload, e.replacement_shard_generation
     FROM maintenance_repair_effects e
     LEFT JOIN maintenance_work_jobs j ON j.work_id = e.work_id";
 const FEED_RANGE: &str = " WHERE e.volume_id = ?1 AND e.manifest_id = ?2
@@ -115,7 +115,11 @@ fn decode(row: &Row<'_>) -> rusqlite::Result<ShardRepairEffectRecord> {
         replacement_receipt: ShardReceipt {
             operation_id: OperationId::from_bytes(exact_sql(row.get(10)?)?)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?,
-            shard,
+            shard: ShardIdentity {
+                generation: u32::try_from(positive_sql(row.get(21)?)?)
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                ..shard
+            },
             length,
             digest,
             target_id: meshspan_domain::TargetId::from_bytes(exact_sql(row.get(11)?)?)
@@ -137,6 +141,10 @@ fn decode(row: &Row<'_>) -> rusqlite::Result<ShardRepairEffectRecord> {
             shard_index: record.source_receipt.shard.shard_index,
             source_generation: record.source_layout_generation,
         })
+        || !super::valid_replacement_identity(
+            record.source_receipt.shard,
+            record.replacement_receipt.shard,
+        )
         || !super::valid_receipt(record.source_receipt)
         || !super::valid_receipt(record.replacement_receipt)
         || record.source_layout_generation.checked_add(1)

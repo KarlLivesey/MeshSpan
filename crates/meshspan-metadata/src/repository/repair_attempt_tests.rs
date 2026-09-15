@@ -11,7 +11,8 @@ fn repair_attempt_retains_physical_identity_across_reopen_and_claim_takeover()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("repair.sqlite3");
-    let (mut fixture, plan) = prepare(&path)?;
+    let (mut fixture, mut plan) = prepare(&path)?;
+    plan.intent.shard.generation = 2;
     fixture.apply(6, 62, &AuthoritativeCommand::PlanShardRepair(plan))?;
     let retained = fixture
         .repository
@@ -327,6 +328,51 @@ fn prepare(
     Ok((fixture, plan))
 }
 
+#[test]
+fn repair_generation_advance_is_exact_persisted_and_version_fenced()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("generations.sqlite3");
+    let (mut fixture, mut plan) = prepare(&path)?;
+    plan.intent.shard.generation = 3;
+    assert!(
+        fixture
+            .apply(6, 62, &AuthoritativeCommand::PlanShardRepair(plan))
+            .is_err()
+    );
+    assert_eq!(fixture.repository.current_revision()?, Revision::new(5));
+    plan.intent.shard.generation = 2;
+    fixture.apply(6, 62, &AuthoritativeCommand::PlanShardRepair(plan))?;
+    let effect = effect(&fixture, &plan)?;
+    let command = AuthoritativeCommand::CommitShardRepair(effect);
+    fixture.repository.apply_committed(
+        LogPosition { index: 7, term: 1 },
+        plan.effect_context,
+        &command,
+    )?;
+    for command in [AuthoritativeCommand::PlanShardRepair(plan), command] {
+        let bytes = encode_authoritative_command(plan.effect_context, &command)?;
+        assert!(matches!(
+            crate::decode_authoritative_entry_for_version(20, &bytes),
+            Err(crate::MetadataCommandCodecError::Unsupported)
+        ));
+        assert_eq!(
+            crate::decode_authoritative_entry_for_version(21, &bytes)?.command,
+            command
+        );
+    }
+    fixture = reopen(fixture, &path)?;
+    let stored = fixture
+        .repository
+        .shard_repair_effect(plan.effect_context.operation_id)?
+        .ok_or("effect missing")?;
+    assert_eq!(stored.source_receipt, plan.source_receipt);
+    assert_eq!(stored.replacement_receipt, effect.replacement_receipt);
+    assert_eq!(stored.source_receipt.shard.generation, 1);
+    assert_eq!(stored.replacement_receipt.shard.generation, 2);
+    Ok(())
+}
+
 fn control(
     fixture: &Fixture,
     operation: u8,
@@ -361,4 +407,55 @@ fn reopen(fixture: Fixture, path: &std::path::Path) -> Result<Fixture, Box<dyn s
         host,
         volume,
     })
+}
+
+#[test]
+fn migration122_preserves_legacy_repair_plan_and_both_original_receipts()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("legacy.sqlite3");
+    let (mut fixture, plan) = prepare(&path)?;
+    fixture.apply(6, 62, &AuthoritativeCommand::PlanShardRepair(plan))?;
+    let effect = effect(&fixture, &plan)?;
+    fixture.repository.apply_committed(
+        LogPosition { index: 7, term: 1 },
+        plan.effect_context,
+        &AuthoritativeCommand::CommitShardRepair(effect),
+    )?;
+    // Reconstruct the exact preceding schema: the command and receipts use the legacy
+    // same-generation representation, so removing only migration122 loses no information.
+    let database = &mut fixture.repository.database;
+    let transaction = database.connection_mut().transaction()?;
+    transaction.execute_batch(
+        "ALTER TABLE maintenance_repair_effects DROP COLUMN replacement_shard_generation;
+        ALTER TABLE maintenance_repair_attempts RENAME TO legacy_repair_attempts;",
+    )?;
+    transaction.execute_batch(include_str!(
+        "../../schema/partition/121_repair_attempts.sql"
+    ))?;
+    transaction.execute_batch(
+        "INSERT INTO maintenance_repair_attempts
+        SELECT work_id, provider_operation_id, effect_operation_id, completion_operation_id,
+            plan_operation_id, 20, command_bytes, revision FROM legacy_repair_attempts;
+        DROP TABLE legacy_repair_attempts;
+        DELETE FROM schema_migrations WHERE version = 122;",
+    )?;
+    transaction.commit()?;
+    fixture = reopen(fixture, &path)?;
+    assert_eq!(
+        fixture
+            .repository
+            .shard_repair_attempt(plan.claim.work_id)?
+            .ok_or("plan missing")?
+            .plan,
+        plan
+    );
+    let stored = fixture
+        .repository
+        .shard_repair_effect(plan.effect_context.operation_id)?
+        .ok_or("effect missing")?;
+    assert_eq!(stored.source_receipt, effect.source_receipt);
+    assert_eq!(stored.replacement_receipt, effect.replacement_receipt);
+    assert_eq!(stored.replacement_receipt.shard.generation, 1);
+    Ok(())
 }

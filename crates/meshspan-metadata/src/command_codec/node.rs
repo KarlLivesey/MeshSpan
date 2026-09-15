@@ -21,7 +21,7 @@ pub struct DecodedAuthoritativeEntry {
 /// Whether the exact metadata command version has a compatibility decoder.
 #[must_use]
 pub const fn is_supported_metadata_command_version(version: u16) -> bool {
-    matches!(version, 18..=20)
+    matches!(version, 18..=21)
 }
 
 /// Decodes a closed supported version without treating new commands as historical entries.
@@ -43,6 +43,14 @@ pub fn decode_authoritative_entry_for_version(
     }
     let decoded = super::decode_authoritative_command(bytes)?;
     if version < 20 && matches!(decoded.command, AuthoritativeCommand::PlanShardRepair(_)) {
+        return Err(MetadataCommandCodecError::Unsupported);
+    }
+    let replaces_physical_generation = matches!(&decoded.command,
+        AuthoritativeCommand::PlanShardRepair(plan) if plan.source_receipt.shard != plan.intent.shard)
+        || matches!(&decoded.command,
+            AuthoritativeCommand::CommitShardRepair(effect)
+                if effect.source_receipt.shard != effect.replacement_receipt.shard);
+    if version < 21 && replaces_physical_generation {
         return Err(MetadataCommandCodecError::Unsupported);
     }
     if version == 18
