@@ -10,13 +10,95 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-01 — independent maintenance progression and durable retry
+
+The assembled implementation evaluates all nine bounded maintenance families
+sequentially and aggregates their failures. Repair claims precede destination
+planning; a placement-only `ResourceExhausted` persists an urgency-bounded retry
+with a versioned reason digest. Successful planning reuses the exact claim for
+provider execution. Uncertain provider effects are not automatically requeued.
+This implements part of Stage 9 autonomous healing and Stage 10 tasks 16/17;
+DATA-01 and the stage remain open pending the remaining accepted workflow proofs.
+
+Metadata coalescing now preserves an attempted job's retry delay unless urgency
+increases or a newly earlier deadline requires another attempt. The file-backed
+regression first failed with eligibility **10** instead of **200**; after the fix,
+all **11** maintenance-work tests pass (**4.76 s**, build **5.76 s**). They verify
+reopened eligibility at 200 but not 199, stable deduplicated identity, merged
+signals, and continued urgent/unattempted admission. Logs:
+`/tmp/meshspan-data01-coalescing-baseline.log` and
+`/tmp/meshspan-data01-coalescing-fixed.log`. No schema or dependency changed.
+Metadata all-target/all-feature Clippy also passes with warnings denied
+(**12.81 s**; `/tmp/meshspan-data01-metadata-clippy.log`). This metadata change is
+ready for a signed progress commit; the assembled daemon validation below remains
+open and no full-gate or stage completion is claimed.
+
+The expanded daemon fixture is undergoing focused validation. Its first compile
+reported test-only SQL `u64` conversions and imports left behind when repair
+ownership moved; checked SQLite integer conversions and removal of the unused
+imports fix these findings. The first assembled run still fails (**5.94 s**, build
+**54.69 s**): the scrub remains Queued and the tick reports three failed families.
+Log: `/tmp/meshspan-data01-integrated-repair-fixed-fixture.log`. Source tracing
+finds that repair, scrub/reconciliation, drain and rebalance builders generate
+full-width random `u64` fences, while claim persistence requires positive SQLite
+integers. A deterministic high-bit regression is being checked before changing
+this shared generator. The deterministic high-bit test then fails at the required
+SQLite representation assertion (**0.00 s**, build **34.09 s**), preserving the
+defect in `/tmp/meshspan-data01-fence-baseline.log`. All four maintenance builders
+now use one private generator retaining 63 random bits, matching the existing
+backup-claim convention; zero or failed entropy remains an error. The composed
+workflow is being rerun with this fix. No runtime pass is claimed yet.
+
+The range-fixed run passes the deterministic fence test and the original exact
+scrub-effect/first-retry assertions, then fails at the next tick (**6.25 s**,
+build **24.00 s**; `/tmp/meshspan-data01-integrated-fence-fixed.log`). Narrow
+temporary diagnostics identify metadata-backup preparation as the sole remaining
+failed family during that tick: snapshot and restore succeed, but retained
+history verification reports `Metadata(CorruptState)`. The fixture composes
+services without starting the normal namespace-delivery/convergence owner; its
+eventual upload therefore lacks the converged head required by archive closure.
+The fixture is being completed with that real owned worker and exact convergence
+readiness. This explanation remains to be verified by the next focused run.
+Diagnostic logs end in `family-diagnostic`, `backup-phase-diagnostic`,
+`backup-error-diagnostic`, `capture-diagnostic`, and `history-error-diagnostic`
+under `/tmp/meshspan-data01-`. Temporary diagnostic printing has been removed.
+
+### Fail-before preparation
+
+The new real composed-runtime fixture creates a mesh, a volume and uploaded
+provider-backed content, then intends to queue an unrepairable stripe alongside
+an independently executable scrub. It checks exact persisted scrub work, effect,
+target generation and verified byte count after the actual maintenance tick.
+Production maintenance code was unchanged for this baseline.
+
+Initial fixture compilation exposed an extra dereference of a by-value ID byte
+array; correcting that test-only error allows compilation. The first runtime
+attempt fails **before maintenance**: volume creation returns HTTP **500** instead
+of **201** (**4.64 s**, build **65 s**). This is not yet a behavioral fail-before
+proof of starvation. Source tracing identifies the missing real prerequisite:
+volume-key recipient selection requires a saved/verified recovery bundle. The
+fixture omitted that existing public save/verify workflow; there is no evidence
+for the initially considered stale-generation explanation. The recovery
+prerequisite is being added without changing production safeguards.
+Logs: `/tmp/meshspan-data01-starvation-fixture-build.log` and
+`/tmp/meshspan-data01-starvation-baseline.log`.
+
+After adding that prerequisite, the regression reaches the intended failure:
+repair placement is explicitly `ResourceExhausted`; the actual tick returns an
+error and independently reopened scrub work remains **Queued**, where **Complete**
+with an exact verified effect is required. This is the behavioral fail-before
+proof (**5.30 s**, build **33.68 s**), recorded in
+`/tmp/meshspan-data01-starvation-recovery-baseline.log`. The implementation slice
+now covers independent family progression and durable pre-provider planning
+deferral; restart must retain the exact retry and prevent premature re-admission.
+
 ## CORE-02 — measured packet cost and compatible cipher preference
 
 The provider now prefers its existing AES-128-GCM suite on x86/x86_64 only when
 runtime AES, AVX and PCLMULQDQ support is present, matching the installed AES and
 POLYVAL backend requirements. Other architectures retain ChaCha preference. Both
 suites, TLS 1.3, P-256 identity/key-exchange restrictions, packet limits and every
-integrity check remain intact. There is no dependency, wire or persistence change.
+integrity check remain intact. There is no dependency, wire-format or persistence change.
 This follows the measured **8.42 → 6.48 s** isolated maximum-transfer result below;
 it is not a claim about other hardware or a full-gate pass.
 
@@ -35,8 +117,12 @@ Validation on `17e2e344` plus the uninstrumented preference change:
 - Provider/transport/cluster all-target/all-feature Clippy: **passes**, **2.70 s**;
   `/tmp/meshspan-core02-cipher-clippy.log`. Formatting and diff checks pass.
 
-The required integration gate and additional opt-in acceptance remain open.
-Temporary AEAD timing code and unconditional AES-first experiments are removed.
+The subsequent full affected cluster target passes **136/136 tests** in
+**55.81 s**, including the unchanged maximum generic transfer, with four workers:
+`/tmp/meshspan-core02-cipher-cluster-tests.log`. This validates the assembled
+cluster behavior; the required workspace integration gate and additional opt-in
+acceptance remain open. Temporary AEAD timing code and unconditional AES-first
+experiments are removed.
 
 ## CORE-02 — large append contact and correlation investigation
 
@@ -51,7 +137,6 @@ codec admission used approximately **14.1 s**; this is not a stuck dispatch queu
 or an unobserved codec worker. Later Rust targets were not reached. The full log
 is `/tmp/meshspan-dependency-update-17e2e344.log`. No merge or integration pass is
 claimed; the contact/correlation fix is signed and remotely verified.
-
 
 A reduced canonical network run passes **29 tests** (**8.88 s**, **11.96 s user /
 0.11 s system CPU**), retaining four harness workers and the same temporary
