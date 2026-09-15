@@ -10,6 +10,37 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 final gate blocked by maximum-size consensus transfer
+
+The next full local gate on signed commit
+`bea4533f318a099a97b255d951afe17597db869b` (tree
+`4bc0d542069868254c20ec8ebd00f47e24a5659f`) **failed**, exit 1, after
+**306.50 s**, under NVM with four scheduler workers, Cargo build jobs and Rust
+test threads. All generated, embedded-web, formatting, lint, type, tooling and
+licence lanes passed. Web tests passed in **29.61 s**. The cluster library had
+**137 passed, one failed** in **110.87 s**; daemon and later Rust targets were
+not reached. Log: `/tmp/meshspan-check-bea4533f.log`.
+
+`bulk_consensus_delivers_exact_maximum_generic_command_and_keeps_queued_lease`
+exceeded its unchanged 15-second deadline. Its retained receiver observation was
+`ReceivingBody`, **13,753 ms** into that stage; the application queue was empty
+and open. Both network close requests succeeded. This reopens the previously
+observed maximum-transfer stability failure; the cipher preference evidence
+below does not explain this recurrence. The separate federation timeout in the
+following section remains unexplained. PR #274 remains a draft, and no stage
+completion is claimed.
+
+The exact canonical cluster test artifact passes the isolated maximum transfer
+in **7.64 s**, consuming **7.58 s user CPU**, **0.03 s system CPU** and zero major
+page faults (`/tmp/meshspan-bulk-bea4533f-focused.log`). Four concurrent independent
+instances, each with its original 15-second deadline, pass in **12.06–12.23 s**;
+each consumes **11.92–12.00 s user CPU**, with zero major page faults
+(`/tmp/meshspan-bulk-bea4533f-load-{1,2,3,4}.log`). This measures increased CPU cost
+under concurrent load, but does not establish why the original gate exceeded
+its deadline. No transport deadline, cipher, integrity check, test assertion or
+production implementation was changed. Focused diagnosis remains required before
+another complete gate.
+
 ## DATA-02 integration gate blocked by federation backup timeout
 
 The full local gate on signed commit
