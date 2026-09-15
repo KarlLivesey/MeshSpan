@@ -68,6 +68,33 @@ checks pass. Review confirms that live history validation and prefix-migration
 alignment remain intact. Real concurrent startup validation and the full gate
 remain required; these focused passes do not close the headless gate failures.
 
+Signed, GitHub-verified commit `37d5996d2d64f04ac131be34e2f3293ca89af7c0`
+(tree `5a407f96f4dba2143c8de443c8bbfd34c2733fba`) rebuilt the canonical
+all-target/all-feature artifacts in **234.703 s**
+(`/tmp/meshspan-migration-hash-canonical-build.log`). The same four-workflow
+reproduction then **passed all four in 58.46 s**, including exact repaired bytes,
+certificate rotation, incarnation-aware capability refresh and namespace replay
+(`/tmp/meshspan-join-four-37d5996d.log`). The other seven previously failing cases
+ran with four threads and failed **four passed, three failed in 106.02 s**:
+external certificate installation, notification gateway setup and three-node
+failover setup (`/tmp/meshspan-join-seven-37d5996d.log`). No new full gate was run.
+
+The external-certificate fixture contains both exact installation acknowledgements
+for the current recipient secret generation, and its live identity switch occurs
+before acknowledgement. Its old failure message suppressed the status/transport
+distinction. Test diagnostics now retain only the validated source/state/counts
+and source-match boolean, report long certificate-status transport phases, and
+preserve the previous setup observation at a request deadline. No credentials,
+certificate keys, arbitrary certificate response bodies, deadlines or assertions
+were added or changed. This test-only candidate rebuilt in **8.312 s**, then the
+same seven cases yielded **six passed, one failed in 89.36 s**
+(`/tmp/meshspan-join-seven-diagnostics.log`). The incarnation workflow repeatedly
+received **connection refused** before its configured deadline. No long
+status-response/EOF diagnostic was emitted. The changing failure set remains
+unresolved; passing retries do not erase the earlier failures. Affected headless
+Clippy passes with warnings denied in **20.309 s**
+(`/tmp/meshspan-join-diagnostics-clippy.log`).
+
 ## Measured packet cryptography cost in local validation
 
 The maximum-transfer investigation now has a reproducible packet-cost comparison

@@ -3004,6 +3004,7 @@ async fn wait_for_status_with_limit(
     limit: Duration,
 ) -> Result<(), Box<dyn Error>> {
     let deadline = Instant::now() + limit;
+    let mut last_observation = "no completed request".to_owned();
     loop {
         let response = tokio::time::timeout_at(
             tokio::time::Instant::from_std(deadline),
@@ -3011,9 +3012,9 @@ async fn wait_for_status_with_limit(
         )
         .await
         .map_err(|_| {
-            format!("headless process at {address} exceeded setup state {expected:?} deadline during HTTP request")
+            format!("headless process at {address} exceeded setup state {expected:?} deadline during HTTP request; previous observation: {last_observation}")
         })?;
-        let last_observation = match response {
+        last_observation = match response {
             Ok(response) => {
                 if response.contains(&format!("\"state\":\"{expected}\"")) {
                     return Ok(());
@@ -3079,7 +3080,10 @@ async fn request_with_content_type(
 ) -> Result<String, Box<dyn Error>> {
     let mut timing = StatusRequestTiming {
         address,
-        enabled: target == "/api/latest/setup/status",
+        enabled: matches!(
+            target,
+            "/api/latest/setup/status" | "/api/latest/admin/certificates/status"
+        ),
         started: Instant::now(),
         phase: "TCP connect",
         response: Vec::new(),
