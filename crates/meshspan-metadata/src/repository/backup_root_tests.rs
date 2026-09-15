@@ -20,7 +20,8 @@ fn backup_root_migration_retains_surviving_legacy_history() -> TestResult {
         fixture.repository.database.connection(),
     )?;
     fixture.repository.database.connection().execute_batch(
-        "ALTER TABLE maintenance_repair_effects DROP COLUMN replacement_shard_generation;
+        "DROP TABLE consensus_log_accounting;
+         ALTER TABLE maintenance_repair_effects DROP COLUMN replacement_shard_generation;
          DROP TABLE maintenance_repair_attempts;
          DROP INDEX maintenance_repair_effects_scope_order;
          DROP TABLE node_capability_presentations;
@@ -82,9 +83,20 @@ fn backup_keeps_snapshot_removed_after_capture() -> TestResult {
     let mut source = capture::captured(&fixture, backup, destination, claim);
     source.state_revision = fixture.repository.current_revision()?;
     source.last_log_index = source.state_revision.get();
-    fixture.repository.database.connection().execute(
+    let transaction = fixture
+        .repository
+        .database
+        .connection()
+        .unchecked_transaction()?;
+    transaction.execute(
         "INSERT INTO consensus_log(log_index, term, entry_kind, entry_version, payload, payload_digest)
          VALUES (?1, 1, 1, 1, x'01', zeroblob(32))", [i64::try_from(source.last_log_index)?])?;
+    transaction.execute(
+        "UPDATE consensus_log_accounting SET entry_count = entry_count + 1,
+        payload_bytes = payload_bytes + 1, revision = revision + 1 WHERE singleton = 1",
+        [],
+    )?;
+    transaction.commit()?;
     apply(
         &mut fixture,
         &AuthoritativeCommand::RequestVolumeSnapshotExpiry(RequestVolumeSnapshotExpiry {
@@ -144,9 +156,20 @@ fn backup_admission_seals_exact_source_roots_and_survives_reopen() -> TestResult
     source.state_revision = fixture.repository.current_revision()?;
     source.last_log_index = source.state_revision.get();
     // Direct command fixtures retain the exact historical log coordinate explicitly.
-    fixture.repository.database.connection().execute(
+    let transaction = fixture
+        .repository
+        .database
+        .connection()
+        .unchecked_transaction()?;
+    transaction.execute(
         "INSERT INTO consensus_log(log_index, term, entry_kind, entry_version, payload, payload_digest)
          VALUES (?1, 1, 1, 1, x'01', zeroblob(32))", [i64::try_from(source.last_log_index)?])?;
+    transaction.execute(
+        "UPDATE consensus_log_accounting SET entry_count = entry_count + 1,
+        payload_bytes = payload_bytes + 1, revision = revision + 1 WHERE singleton = 1",
+        [],
+    )?;
+    transaction.commit()?;
     advance(&mut fixture, volume, Some(200), 201)?;
     advance(&mut fixture, volume, Some(201), 202)?;
     assert_eq!(pinned(&fixture, volume)?, [200, 201, 202]);

@@ -283,6 +283,7 @@ pub use cluster::{
     ActiveNodeCertificate, JoinGrantRecord, NodeActivationCandidate, NodeActivationRecord,
     NodeEnrolmentRecord,
 };
+pub(crate) use consensus::accounting::verify as verify_consensus_log_accounting;
 pub use consensus::{ConsensusStoreError, PartitionConsensusPersistence};
 pub use external_certificate::{
     ExternalCertificateInstallationRecord, ExternalCertificatePublicationRecord,

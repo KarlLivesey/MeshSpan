@@ -10,6 +10,58 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## CORE-03 — transactional log accounting and request admission
+
+PR #274 merged as GitHub-verified `e00300954f60b7941de0dcde11236d53e7219d0c`
+after the full gate and real HTTPS/Samba proof below. Local main fast-forwarded
+to that exact remote merge, whose tree matches the checked branch plus its
+evidence-only commit. The merged feature branch was removed. New work starts
+from that main revision on `codex/consensus-accounting-admission`.
+
+The persistence slice adds partition migration **123**, preserving migration 122
+verbatim and the immutable expected-migration-digest cache. Exact entry/payload
+counters are updated in the same transaction as append, suffix replacement and
+recovery activation. Vote-only writes do not change counters. An independent
+aggregate at migration, opening, load and explicit integrity boundaries rejects
+missing or corrupt accounting without silently resetting it. Existing retained
+entry/byte limits are unchanged; this is not CORE-04 snapshot compaction.
+
+A controlled whole-log aggregate in the actual persistence accounting read
+caused the new fixed-append regression to fail at 1,000 entries: **999 full-scan
+steps and 5,029 SQLite VM steps**, against a zero-scan requirement. This is an
+explicit cost control, not a claim of executing the unchanged old source.
+Log `/tmp/meshspan-core03-scan-control-compiled.log`, test **0.78 s**. An initial
+fixture compilation error using unsigned SQL row decoding is retained separately
+in `/tmp/meshspan-core03-scan-control.log`; it is not defect evidence. The oracle
+now reads SQLite integers and independently checks their unsigned conversion.
+
+After removing the control, all **five accounting regressions pass in 6.17 s**
+(`/tmp/meshspan-core03-accounting-fixed.log`): fixed append/vote accounting does
+constant bounded work at 1k/10k/100k entries, suffix access is indexed, migration
+backfills an existing schema-122 database, exact counters survive rollback/retry/
+restart, and corruption fails load/integrity/reopen. Existing database, consensus
+and recovery-activation tests pass **64 tests, one manual test ignored, 14.31 s**
+(`/tmp/meshspan-core03-accounting-consumers.log`). Backup/snapshot checks first
+passed eight and failed one in **4.42 s** because the legacy-schema fixture left
+the new table behind while removing migration history
+(`/tmp/meshspan-core03-accounting-backup-snapshot.log`). Removing that post-109
+table as part of constructing the real old schema fixes the exact regression:
+**1.14 s**, `/tmp/meshspan-core03-legacy-backup-fixed.log`. Migration rejection
+and the independent history/byte assertions remain unchanged.
+Metadata all-target/all-feature Clippy passes with warnings denied in **4.157 s**
+(`/tmp/meshspan-core03-accounting-final-clippy.log`); metadata Rust formatting,
+document formatting and diff checks pass.
+
+Review also identified the important integration gap: forwarded mutation
+admission and pre/post read-fence admission reopen authority databases. Merely
+moving the aggregate out of persistence would still scan history on each such
+open. The existing metadata owner must supply fresh typed admission reads through
+its bounded queue, retaining certificate/incarnation/role/deadline checks and
+post-fence revalidation. That consumer work and its actual-request regressions
+are in progress; CORE-03 and Stage 10 task 17 remain incomplete. No final gate
+has run for this new candidate, and no hardware, soak or lifetime-capacity proof
+is claimed.
+
 ## Physical-generation candidate gate — multi-daemon setup failures
 
 ### Final retained candidate gate

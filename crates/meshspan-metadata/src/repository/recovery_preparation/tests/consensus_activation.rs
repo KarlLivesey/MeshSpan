@@ -195,8 +195,15 @@ fn inject_unapplied_tail(repository: &AuthoritativeRepository) -> TestResult {
     )?;
     let mut payload = operation.as_bytes().to_vec();
     payload.extend_from_slice(&[7, 8, 9]);
-    repository.database.connection().execute("INSERT INTO consensus_log (log_index, term, entry_kind, entry_version, payload, payload_digest)
+    let transaction = repository.database.connection().unchecked_transaction()?;
+    transaction.execute("INSERT INTO consensus_log (log_index, term, entry_kind, entry_version, payload, payload_digest)
         VALUES (2, 1, 1, 1, ?1, ?2)", rusqlite::params![payload, entry.entry_digest().as_slice()])?;
+    transaction.execute(
+        "UPDATE consensus_log_accounting SET entry_count = entry_count + 1,
+        payload_bytes = payload_bytes + 19, revision = revision + 1 WHERE singleton = 1",
+        [],
+    )?;
+    transaction.commit()?;
     Ok(())
 }
 
