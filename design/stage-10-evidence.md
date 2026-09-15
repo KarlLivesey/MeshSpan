@@ -105,9 +105,56 @@ real-owner admission regressions pass in **1.49 s**
 regressions pass in **3.08 s**
 (`/tmp/meshspan-core03-admission-negative-final.log`). No test control remains.
 
-The assembled candidate still requires final validation and integration; CORE-03
-and Stage 10 task 17 remain incomplete. No final gate has run for this new
-candidate, and no hardware, soak or lifetime-capacity proof is claimed. CORE-04
+The assembled candidate is signed and GitHub-verified at
+`fe411cc66eefe0958955cd0d4f5a91cbd161c8cf`, tree
+`044fb6e33a6c87c366d2c1ba4b9691b811579783`, in draft PR #275. Its full
+`pnpm check:dependency-update` gate **failed**, exit **1**, wall **719.625 s**
+(`/tmp/meshspan-check-fe411cc6.log`), with a clean checkout at start and end.
+NVM selected Node 26.8.2/pnpm 11.19.0; scheduler, Cargo and Rust test workers
+were bounded at four, with the existing validation TMPDIR. Both advisory scans,
+generated drift, embedded web, all Rust/web static checks, dependency licences
+and tooling tests passed; web tests passed in **39.17 s**. Cluster library tests
+passed **141 in 53.94 s**, daemon library **476 passed, one ignored, 66.20 s**.
+Headless tests passed **32, failed one, ignored 13, 259.51 s**; later Rust
+targets were not reached. The exact failure was
+`federated_backup::remote_backup_forwards_through_gateway_to_distinct_storage_process`:
+the export TLS stream closed after response headers, with a declared 4,191,038-byte
+body and zero body bytes received, during permission-succession verification.
+Private fixture state remains at `.tmpZK6bbi`, `.tmpUsSdn8` and `.tmpk5Du1J`
+under `/home/karl/.cache/meshspan-validation/tmp`. This failure is not cleared
+by the earlier focused admission passes. Investigation now uses the exact
+canonical headless executable observed in that gate,
+`target/debug/deps/headless_process-ac32a18f1c274d87`.
+
+The unchanged-candidate exact focused reproduction did **not** reach export:
+it failed private node activation/catch-up, then timed out waiting for configured
+status (**19.73 s**, `/tmp/meshspan-fe411cc6-federated-backup-focused.log`). Its
+fixtures remain at `.tmpdr1wng`, `.tmpxdtrfZ` and `.tmpE5SBNz` in the same
+validation TMPDIR. This is separate evidence, not a reproduced export failure
+or a passing retry. No implementation fix or full-gate retry has been attempted.
+
+Temporary closed-error/phase probes in export-provider reads, federation scope
+refresh/execution and private join distinguished failures without logging keys,
+headers or content. The instrumented exact test passed **24.08 s** after a
+**62 s** build (`/tmp/meshspan-fe411cc6-federated-backup-probe.log`); its only
+reported denial was the expected read after revocation. Four isolated concurrent
+instances all passed in **27.799–30.919 s**
+(`/tmp/meshspan-federated-probe-bounded-{1,2,3,4}.log`). A matching group of
+federated backup, external certificates, incarnation restart and local trust
+passed **4 tests in 22.73 s**
+(`/tmp/meshspan-fe411cc6-federated-neighbours-probe.log`). The preceding
+headless ACME/backup cohort, retaining the gate's four-worker environment,
+passed **9 tests, seven opt-in tests ignored, 53.33 s**
+(`/tmp/meshspan-fe411cc6-early-headless-probe.log`). These runs used instrumented
+executable `target/debug/deps/headless_process-64660018bd3ffeed`; they are not a
+new canonical gate or evidence of a fix. All probes were removed by comparison
+with the exact committed source. No deadlines, assertions or safety checks were
+changed. Both original failures remain unresolved; unchanged test repetitions
+are paused pending a discriminating boundary reproduction.
+
+CORE-03 and Stage 10 task 17 remain incomplete; PR #275 is unmerged. The separate
+real HTTPS/Samba proof has not run on this candidate. No hardware, soak or
+lifetime-capacity proof is claimed. CORE-04
 must still introduce safe snapshot anchors, prefix reclamation and lagging-replica
 installation before lifetime log bounds can be closed.
 
