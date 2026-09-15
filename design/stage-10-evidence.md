@@ -10,6 +10,54 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Bounded-runner gate — maximum consensus transfer still fails
+
+The complete gate on signed, GitHub-verified commit
+`4431f935d06d06244ff75a65c6e70578166034c1` (tree
+`986200004844050c96b3afda97c06a00b63d555f`) failed with exit **1** after
+**274.51 s** under NVM, four scheduler workers, four Cargo build jobs and
+explicit four-worker Rust/JavaScript test harnesses. All static, generated,
+licence and tooling lanes passed; web tests passed in **56.08 s**. The cluster
+library had **137 passed, one failed** in **127.06 s**. Daemon and later Rust
+targets were not reached. Log: `/tmp/meshspan-check-4431f935-bounded-js.log`.
+
+The maximum generic-command transfer again exceeded its unchanged 15-second
+deadline: the receiver reported `ReceivingBody` for **14,044 ms**, with no
+message in the application queue. The current diagnostic groups descriptor,
+frame and FIN waits into that stage, so it does not yet identify the stalled
+boundary. The worker-limit fix did not resolve this failure. No further full
+gate is justified until focused evidence identifies the next change; PR #274
+remains a draft. Neither this failure nor the earlier federation timeout is
+closed by isolated passing runs.
+
+Focused investigation adds only test-build observations distinguishing descriptor,
+payload and FIN waits, with fixed-size expected/received byte counts fenced to
+the latest transfer. Rebuilding canonical test artefacts took **39.940 s**
+(`/tmp/meshspan-bulk-byte-diagnostic-build.log`). The cluster-only four-thread
+reproduction fails **137 passed, one failed in 121.89 s**, receiving
+**15,073,280 of 16,777,311 bytes** before the original deadline. It is waiting
+for remaining payload, not the descriptor or FIN
+(`/tmp/meshspan-bulk-byte-diagnostic-cluster.log`).
+
+Three GDB stack samples of the original isolated test all found packet encryption
+on the test's runtime thread: two inside `hybrid_array::Default/from_fn` invoked
+by `ctr::gen_par_ks_blocks`, and one inside `aes_gcm::init_ctr` through the QUIC
+packet adapter. That diagnostic run finishes in **11.06 s**; debugger pauses
+make it unsuitable as an uninstrumented performance baseline
+(`/tmp/meshspan-bulk-stack-sampling.log`). These observations narrow investigation
+to concurrent transfer throughput; they do not justify changing cryptography,
+deadlines or accepted safety requirements.
+
+The initial diagnostic Clippy run rejected an unnecessary post-receipt stage
+because it pushed the receive operation over its function-size ceiling. That
+redundant observation was removed without splitting runtime work or suppressing
+the lint. Final cluster all-target/all-feature Clippy passes in **6.474 s**;
+workspace Rust formatting passes. After rebuilding, the seven focused bulk tests
+pass with four threads in **12.94 s**
+(`/tmp/meshspan-bulk-byte-diagnostic-focused.log`). This confirms the diagnostic
+change preserves those vectors; it does not close the reproduced cluster-wide
+failure. No crypto, dependency, profile, timeout or assertion changes were made.
+
 ## Integration diagnostics — bounded JavaScript test runners
 
 The gate on signed commit `4177ab55970132f06e102e19059a353bd9b81727`
