@@ -10,6 +10,64 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Physical-generation candidate gate — multi-daemon setup failures
+
+The advisory-plus-full local gate on signed, GitHub-verified commit
+`e96b0e4ec6436ad742f079a65b109c89c3bbe0a8` (tree
+`a794e61273ead55aa0c65db6db9a2f756ed085a3`) failed with exit **1** after
+**978.970 s**, under NVM and four scheduler, Cargo and test workers. Rust and
+JavaScript advisory scans, generated drift, embedded web, all static checks,
+both dependency licence checks and tooling tests passed. Web tests passed in
+**43.83 s**. Log: `/tmp/meshspan-check-e96b0e4e.log`.
+
+The cluster library passed **138 tests in 109.26 s**, including the previous
+maximum-transfer failure. The daemon library passed **473 tests, one ignored,
+in 123.20 s**. Headless process tests failed: **22 passed, 11 failed, 13 ignored,
+473.50 s**. Later Rust targets were not reached. The failures cover external
+certificate distribution, federated backup, incarnation restart, local trust,
+two namespace-delivery workflows, node capabilities, notification gateways,
+three-node failover, stale-gateway repair projection and three-node candidate
+distribution. Most failed waiting for a joined node to become configured;
+the local-trust peer exited during private activation/catch-up. Their retained
+private fixture paths are in the log. These failures are not cleared by earlier
+focused passes, and PR #274 remains unmerged.
+
+The exact canonical stale-gateway repair test then passed alone in **37.07 s**
+(`/tmp/meshspan-repair-projection-e96-focused.log`). This proves that run's
+byte-recovery behavior, not concurrency or stage acceptance. The focused
+four-workflow run then failed **one passed, three failed in 51.32 s**: repair,
+local trust and capabilities timed out while namespace delivery passed
+(`/tmp/meshspan-join-four-e96-focused.log`). Retained repair state from the full
+gate shows all three nodes completed durable setup and reached log index 49;
+initial snapshot receipt alone therefore does not explain that timeout.
+Debugger attachment was denied by process protection and produced no stack
+evidence. No deadline, assertion or worker bound has been weakened.
+
+Temporary phase-only startup timings reproduced **one passed, three failed in
+51.04 s** (`/tmp/meshspan-join-four-startup-timing.log`). Initial service
+composition took **6.754–6.912 s** before the public listener could bind. Across
+the whole run, **1,213** authority opens consumed **115.507 s** aggregate elapsed
+time; this is overlapping work across processes, not wall time. A separate
+five-open measurement on a private copy of a retained database isolated
+**16.578–20.145 ms** per migration-history pass, in addition to connection open
+and integrity checks (`/tmp/meshspan-existing-partition-cost.log`). Both temporary
+source probes have been removed.
+
+The migration runner now initializes bounded expected-digest arrays once from
+embedded immutable SQL. It still reads each connection's live migration rows,
+checks contiguous versions and every recorded digest, and performs the same
+identity and integrity checks. It does not cache database validity. The new
+reopen regression first failed with **122** repeated hashes rather than zero
+(**1.93 s**, `/tmp/meshspan-migration-hash-baseline.log`), then passed with no
+repeated hashing and rejection of subsequent persisted digest tampering
+(**1.97 s**, `/tmp/meshspan-migration-hash-fixed.log`). All **53 database tests**
+pass in **22.73 s** (`/tmp/meshspan-migration-hash-database-tests.log`); affected
+all-target/all-feature Clippy passes with warnings denied in **13.685 s**
+(`/tmp/meshspan-migration-hash-clippy.log`). Rust/document formatting and diff
+checks pass. Review confirms that live history validation and prefix-migration
+alignment remain intact. Real concurrent startup validation and the full gate
+remain required; these focused passes do not close the headless gate failures.
+
 ## Measured packet cryptography cost in local validation
 
 The maximum-transfer investigation now has a reproducible packet-cost comparison

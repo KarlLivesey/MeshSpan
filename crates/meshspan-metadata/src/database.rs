@@ -433,6 +433,37 @@ mod tests {
     };
 
     #[test]
+    fn reopened_partition_rechecks_live_history_without_rehashing_sql()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("reopened.sqlite3");
+        let database = PartitionDatabase::open(
+            &path,
+            PartitionId::from_bytes([17; 16])?,
+            UnixMicros::new(1),
+        )?;
+        drop(database);
+        crate::migration::take_migration_hashes();
+        let database = PartitionDatabase::open_existing(&path, UnixMicros::new(2))?;
+        assert_eq!(
+            crate::migration::take_migration_hashes(),
+            0,
+            "reopening must compare live history against the already hashed immutable catalogue"
+        );
+        database.connection().execute(
+            "UPDATE schema_migrations SET migration_digest = zeroblob(32) WHERE version = 1",
+            [],
+        )?;
+        drop(database);
+        assert!(matches!(
+            PartitionDatabase::open_existing(&path, UnixMicros::new(3)),
+            Err(MetadataStoreError::MigrationDigestMismatch { version: 1 })
+        ));
+        assert_eq!(crate::migration::take_migration_hashes(), 0);
+        Ok(())
+    }
+
+    #[test]
     fn partition_database_migrates_reopens_and_rejects_another_identity()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempdir()?;
