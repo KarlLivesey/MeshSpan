@@ -1,7 +1,19 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 
 import {
   readWorkerCount,
@@ -69,4 +81,98 @@ test("scheduler rejects invalid limits before starting work", async () => {
     /positive safe integer/,
   );
   assert.equal(started, false);
+});
+
+// Execute the real launcher with only its process boundary replaced. No command below
+// runs a build or a nested test suite; recording preserves its actual argument composition.
+async function recordCheckCommands(context, workers) {
+  const root = await mkdtemp(join(tmpdir(), "meshspan-check-budget-"));
+  context.after(async () => rm(root, { recursive: true, force: true }));
+  const scripts = join(root, "scripts");
+  await mkdir(scripts);
+  for (const name of ["check.mjs", "scheduler.mjs"]) {
+    await copyFile(new URL(name, import.meta.url), join(scripts, name));
+  }
+  await writeFile(
+    join(scripts, "process.mjs"),
+    String.raw`// SPDX-License-Identifier: GPL-2.0-only
+import { appendFile } from "node:fs/promises";
+export async function runProcess(command, arguments_) {
+  await appendFile(new URL("commands.jsonl", import.meta.url), JSON.stringify([command, arguments_]) + "\n");
+  return { exitCode: 0, output: "" };
+}
+`,
+  );
+  const { stdout } = await promisify(execFile)(
+    process.execPath,
+    [join(scripts, "check.mjs")],
+    {
+      env: { ...process.env, MESHSPAN_CHECK_WORKERS: String(workers) },
+      timeout: 10_000,
+      maxBuffer: 1_048_576,
+    },
+  );
+  assert.match(stdout, new RegExp(`with ${workers} workers`));
+  const records = await readFile(join(scripts, "commands.jsonl"), "utf8");
+  return records
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
+
+test("actual check launcher bounds every test runner without omitting lanes", async (context) => {
+  for (const workers of [2, 32]) {
+    const commands = await recordCheckCommands(context, workers);
+    assert.equal(
+      commands.length,
+      12,
+      "all generation, build, static and test lanes run",
+    );
+    assert.deepEqual(
+      commands.find(([command]) => command === "web/node_modules/.bin/vitest"),
+      [
+        "web/node_modules/.bin/vitest",
+        ["run", "--root", "web", "--maxWorkers", String(workers)],
+      ],
+    );
+    assert.deepEqual(
+      commands.find(
+        ([command, arguments_]) =>
+          command === process.execPath && arguments_[0] === "--test",
+      ),
+      [
+        process.execPath,
+        [
+          "--test",
+          `--test-concurrency=${workers}`,
+          "scripts/javascript-licence-policy.test.mjs",
+          "scripts/scheduler.test.mjs",
+          "scripts/local-package.test.mjs",
+          "scripts/package-compliance.test.mjs",
+          "scripts/update-candidate.test.mjs",
+          "tooling/eslint/compatibility.test.mjs",
+          "tooling/api-codegen/fetch-contract.test.mjs",
+        ],
+      ],
+    );
+    assert.deepEqual(
+      commands.find(
+        ([command, arguments_]) =>
+          command === "cargo" && arguments_[0] === "test",
+      ),
+      [
+        "cargo",
+        [
+          "test",
+          "--workspace",
+          "--all-targets",
+          "--all-features",
+          "--quiet",
+          "--",
+          "--test-threads",
+          String(workers),
+        ],
+      ],
+    );
+  }
 });

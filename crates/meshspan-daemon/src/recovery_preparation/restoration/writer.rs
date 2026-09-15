@@ -117,6 +117,7 @@ impl RestorationWriter<'_> {
             source_receipt: receipt,
             replacement_target_id: self.target.target_id,
             replacement_target_generation: self.target.generation,
+            replacement_shard_generation: receipt.shard.generation,
             authorization_revision: self.target.authorization.claims().source_revision,
             // A local durable recovery intent, not a remotely usable expiring capability.
             deadline: UnixMicros::new(i64::MAX),
@@ -157,7 +158,7 @@ impl RecoveryShardSource for Inventory {
         digest: [u8; 32],
     ) -> Result<Option<BoundedBytes>, ContentReadError> {
         self.0
-            .read_exact(shard, length, digest)
+            .read_content_shard(shard, length, digest)
             .map_err(|_| ContentReadError::Corrupt)
     }
 }

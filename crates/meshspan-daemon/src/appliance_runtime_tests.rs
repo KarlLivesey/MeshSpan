@@ -108,7 +108,8 @@ async fn backup_provider_snapshot_is_independent_of_storage_maintenance_lock()
         let _maintenance = runtime.targets.lock().map_err(|_| "runtime poisoned")?;
         assert!(snapshot.snapshot()?.is_empty());
         let startup = Arc::clone(&snapshot.startup);
-        let deadline = now
+        // The wait starts after daemon/database setup, which is outside this proof's budget.
+        let deadline = current_time()?
             .checked_add(DurationMicros::new(5_000_000))
             .ok_or("deadline overflow")?;
         let waiter = std::thread::spawn(move || snapshot.wait_until_initialised(deadline));

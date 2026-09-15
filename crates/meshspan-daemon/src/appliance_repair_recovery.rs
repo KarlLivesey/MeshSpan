@@ -121,7 +121,8 @@ pub(in super::super) fn assert_committed_effect_recovery(
     use meshspan_metadata::{MaintenanceWorkState, PageLimit};
 
     let source = previous.replacement_receipt;
-    let (attempt, effect) = commit_retained_route_without_completion(runtime, previous, now)?;
+    let (attempt, effect, replacement) =
+        commit_replacement_without_completion(runtime, previous, now)?;
     let mut catalogue = runtime.native_filesystem.maintenance_catalogue(now)?;
     let content = catalogue
         .committed_content_by_manifest(previous.manifest_id)?
@@ -202,17 +203,24 @@ pub(in super::super) fn assert_committed_effect_recovery(
             .committed_protected_stripe(content, source.shard.stripe_index)?
             .receipts
             .as_slice(),
-        &[previous.source_receipt],
+        &[replacement],
     );
     Ok(())
 }
 
 #[cfg(test)]
-fn commit_retained_route_without_completion(
+fn commit_replacement_without_completion(
     runtime: &StorageTargetRuntime,
     previous: &meshspan_metadata::ShardRepairEffectRecord,
     now: UnixMicros,
-) -> Result<(RepairAttempt, meshspan_metadata::CommandReceipt), Box<dyn std::error::Error>> {
+) -> Result<
+    (
+        RepairAttempt,
+        meshspan_metadata::CommandReceipt,
+        meshspan_contracts::ShardReceipt,
+    ),
+    Box<dyn std::error::Error>,
+> {
     use super::{OperatingSystemRandom, claim_deferral_fixture, random_maintenance_context};
     use meshspan_metadata::CommitShardRepair;
 
@@ -225,9 +233,35 @@ fn commit_retained_route_without_completion(
         source_generation: 2,
     };
     let attempt = claim_deferral_fixture(runtime, subject, now, 126)?;
-    // Both real providers still retain these exact immutable bytes. This fixture
-    // commits a route back to the original durable receipt, then interrupts before
-    // terminal work completion; it does not fabricate a new provider acknowledgement.
+    // A later repair must never rewind a physical generation. Materialize the exact
+    // replacement before committing its route and interrupting terminal completion.
+    let catalogue = runtime.native_filesystem.maintenance_catalogue(now)?;
+    let content = catalogue
+        .committed_content_by_manifest(previous.manifest_id)?
+        .ok_or("repair content")?;
+    let stripe = catalogue.committed_protected_stripe(content, source.shard.stripe_index)?;
+    let targets = runtime.active.values().cloned().collect::<Vec<_>>();
+    let mut repairer = runtime
+        .native_filesystem
+        .maintenance_repairer(&targets, now)?;
+    let replacement = repairer.repair(
+        meshspan_filesystem::ShardRepairRequest {
+            replacement_operation_id: super::super::random_operation_id(&mut OperatingSystemRandom)
+                .map_err(|()| "repair operation")?,
+            source_receipt: source,
+            replacement_target_id: previous.source_receipt.target_id,
+            replacement_target_generation: previous.source_receipt.target_generation,
+            replacement_shard_generation: source
+                .shard
+                .generation
+                .checked_add(1)
+                .ok_or("generation exhausted")?,
+            authorization_revision: runtime.maintenance_authority.reader().current_revision()?,
+            deadline: attempt.claim.lease_expires_at,
+            observed_at: now,
+        },
+        &stripe,
+    )?;
     let effect = runtime.maintenance_authority.commit(
         random_maintenance_context(
             &mut OperatingSystemRandom,
@@ -245,8 +279,8 @@ fn commit_retained_route_without_completion(
             manifest_id: previous.manifest_id,
             source_layout_generation: 2,
             source_receipt: source,
-            replacement_receipt: previous.source_receipt,
+            replacement_receipt: replacement,
         }),
     )?;
-    Ok((attempt, effect))
+    Ok((attempt, effect, replacement))
 }

@@ -88,8 +88,10 @@ fn bulk_delivery_state(network: &ConsensusNetwork, peer: NodeId) -> String {
             || "none".to_owned(),
             |progress| {
                 format!(
-                    "{:?}, total_ms={}, stage_ms={}",
+                    "{:?}, expected_bytes={:?}, received_bytes={}, total_ms={}, stage_ms={}",
                     progress.stage,
+                    progress.expected_bytes,
+                    progress.received_bytes,
                     progress.started.elapsed().as_millis(),
                     progress.stage_started.elapsed().as_millis()
                 )

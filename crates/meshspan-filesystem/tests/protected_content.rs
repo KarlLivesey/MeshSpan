@@ -45,6 +45,9 @@ mod deadline;
 #[path = "protected_content/reuse.rs"]
 mod reuse;
 
+#[path = "protected_content/repair_generation.rs"]
+mod repair_generation;
+
 #[path = "protected_content/repair_resume.rs"]
 mod repair_resume;
 
@@ -159,7 +162,22 @@ fn real_folders_reconstruct_exact_shards_and_reuse_the_repaired_copy()
         repair_request(first_source, original[1].target_id, 70)?,
         &committed,
     )?;
-    assert_eq!(first_replacement.shard, first_source.shard);
+    assert_eq!(
+        first_replacement.shard.generation,
+        first_source.shard.generation + 1
+    );
+    assert_eq!(
+        first_replacement.shard.manifest_digest,
+        first_source.shard.manifest_digest
+    );
+    assert_eq!(
+        first_replacement.shard.stripe_index,
+        first_source.shard.stripe_index
+    );
+    assert_eq!(
+        first_replacement.shard.shard_index,
+        first_source.shard.shard_index
+    );
     assert_eq!(first_replacement.length, first_source.length);
     assert_eq!(first_replacement.digest, first_source.digest);
 
@@ -203,7 +221,10 @@ fn real_folders_reconstruct_exact_shards_and_reuse_the_repaired_copy()
         repair_request(second_source, original[3].target_id, 71)?,
         &repaired_routes,
     )?;
-    assert_eq!(second_replacement.shard, second_source.shard);
+    assert_eq!(
+        second_replacement.shard.generation,
+        second_source.shard.generation + 1
+    );
     assert_eq!(second_replacement.length, second_source.length);
     assert_eq!(second_replacement.digest, second_source.digest);
     Ok(())
@@ -705,12 +726,17 @@ fn repair_request(
     source_receipt: ShardReceipt,
     replacement_target_id: TargetId,
     operation: u8,
-) -> Result<ShardRepairRequest, meshspan_domain::IdentifierError> {
+) -> Result<ShardRepairRequest, Box<dyn std::error::Error>> {
     Ok(ShardRepairRequest {
         replacement_operation_id: OperationId::from_bytes([operation; 16])?,
         source_receipt,
         replacement_target_id,
         replacement_target_generation: 1,
+        replacement_shard_generation: source_receipt
+            .shard
+            .generation
+            .checked_add(1)
+            .ok_or("generation exhausted")?,
         authorization_revision: Revision::new(1),
         deadline: UnixMicros::new(1_000),
         observed_at: UnixMicros::new(30),

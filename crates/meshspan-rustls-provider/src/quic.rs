@@ -272,7 +272,8 @@ mod tests {
     use std::error::Error as StdError;
 
     use aes::cipher::KeyInit as _;
-    use rustls::crypto::cipher::Iv;
+    use aes_gcm::aead::AeadInOut as _;
+    use rustls::crypto::cipher::{Iv, Nonce};
     use rustls::quic::{HeaderProtectionKey as _, PacketKey as _};
 
     use super::{AesHeaderKey, ChachaHeaderKey, PacketCipher, QuicPacketKey};
@@ -376,6 +377,59 @@ mod tests {
             [first, packet_number[0], packet_number[1], packet_number[2]],
             [0x4c, 0xfe, 0x41, 0x89,]
         );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "manual 16 MiB packet-cost comparison; not a transport acceptance proof"]
+    #[expect(
+        clippy::print_stderr,
+        reason = "diagnostic prints aggregate timings only"
+    )]
+    fn cached_aes_packet_cost() -> Result<(), Box<dyn StdError>> {
+        let direct = aes_gcm::Aes128Gcm::new(&[3_u8; 16].into());
+        let adapter = QuicPacketKey {
+            cipher: PacketCipher::Aes128(Box::new(direct.clone())),
+            iv: Iv::from([5_u8; 12]),
+            confidentiality_limit: 1 << 23,
+            integrity_limit: 1 << 52,
+        };
+        let packets = 16 * 1024 * 1024 / 1200;
+        for (round, through_adapter) in [false, true, true, false].into_iter().enumerate() {
+            let mut payload = vec![7_u8; 1200];
+            let header = [9_u8; 22];
+            let started = std::time::Instant::now();
+            for packet in 0..packets {
+                let number = u64::try_from(round * packets + packet)?;
+                if through_adapter {
+                    let tag = adapter.encrypt_in_place(number, &header, &mut payload)?;
+                    payload.extend_from_slice(tag.as_ref());
+                    adapter.decrypt_in_place(number, &header, &mut payload)?;
+                    payload.truncate(1200);
+                } else {
+                    let nonce = Nonce::new(&Iv::from([5_u8; 12]), number).0;
+                    let tag = direct.encrypt_inout_detached(
+                        &nonce.into(),
+                        &header,
+                        payload.as_mut_slice().into(),
+                    )?;
+                    direct.decrypt_inout_detached(
+                        &nonce.into(),
+                        &header,
+                        payload.as_mut_slice().into(),
+                        &tag,
+                    )?;
+                }
+                std::hint::black_box(&payload);
+            }
+            let elapsed = started.elapsed();
+            assert_eq!(payload, vec![7_u8; 1200]);
+            eprintln!(
+                "packet_cost adapter={through_adapter} round={round} packets={packets} bytes={} elapsed_ms={}",
+                packets * 1200,
+                elapsed.as_millis()
+            );
+        }
         Ok(())
     }
 

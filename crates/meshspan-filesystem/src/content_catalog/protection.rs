@@ -78,7 +78,9 @@ pub struct PreparedProtectedStripe {
 pub struct CommittedProtectedStripe {
     /// Immutable coding and placement record.
     pub stripe: PreparedProtectedStripe,
-    /// Durable receipts for every required shard and any completed eventual shard.
+    /// Current durable receipts for every required shard and any completed eventual shard.
+    /// Committed repair effects may advance physical generations; the immutable stripe still
+    /// binds the coding positions, lengths and byte digests shared by every replacement.
     pub receipts: BoundedItems<ShardReceipt>,
 }
 

@@ -17,7 +17,7 @@ use meshspan_contracts::{BoundedBytes, ShardIdentity};
 
 mod manifest;
 mod repository;
-use repository::Repository;
+use repository::{CandidateMatch, Repository};
 
 /// One exclusively owned, restartable inventory bound to an independently selected backup scope.
 /// This stages encrypted source copies, not live providers or proof of file recoverability.
@@ -145,13 +145,50 @@ impl RecoveryInventory {
         length: u64,
         digest: [u8; 32],
     ) -> Result<Option<BoundedBytes>, Error> {
+        self.read_matching(CandidateMatch::Exact(shard), length, digest)
+    }
+
+    /// Recovers independently expected immutable bytes across physical repair generations.
+    /// Only manifest identity, coding position, length and digest select candidates. Each copy
+    /// is then read under its actual physical identity and reverified. Returned bytes confer no
+    /// placement, deletion or write authority, and never claim that an older receipt survived.
+    /// # Errors
+    /// Rejects malformed identities/lengths, catalogue/path corruption and IO failures.
+    pub fn read_content_shard(
+        &self,
+        shard: ShardIdentity,
+        length: u64,
+        digest: [u8; 32],
+    ) -> Result<Option<BoundedBytes>, Error> {
+        if shard.generation == 0 || shard.manifest_digest == [0; 32] || digest == [0; 32] {
+            return Err(Error::InvalidInput);
+        }
+        self.read_matching(CandidateMatch::Content(shard), length, digest)
+    }
+
+    /// Returns copy/locator counts only if no reserved pack is incomplete.
+    /// # Errors
+    /// Rejects pending work, malformed accounting or database failures.
+    pub fn summary(&self) -> Result<RecoveryInventorySummary, Error> {
+        self.repository.summary()
+    }
+
+    fn read_matching(
+        &self,
+        selection: CandidateMatch,
+        length: u64,
+        digest: [u8; 32],
+    ) -> Result<Option<BoundedBytes>, Error> {
         if length == 0 || length > 64 * 1024 * 1024 {
             return Err(Error::InvalidInput);
         }
-        let mut after = 0;
-        while let Some(candidate) = self.repository.candidate(shard, length, digest, after)? {
-            after = candidate.id;
-            let directory = pack_directory(&self.directory, candidate.id)?;
+        let mut after = None;
+        while let Some(candidate) = self
+            .repository
+            .candidate(selection, length, digest, after)?
+        {
+            after = Some((candidate.shard, candidate.pack.id));
+            let directory = pack_directory(&self.directory, candidate.pack.id)?;
             match validate_copy(&directory) {
                 Ok(()) => {}
                 Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => continue,
@@ -159,12 +196,12 @@ impl RecoveryInventory {
             }
             let Ok(pack) = PackStore::open_recovery(
                 &directory.join("pack.sqlite3"),
-                candidate.marker,
-                candidate.sequence,
+                candidate.pack.marker,
+                candidate.pack.sequence,
             ) else {
                 continue;
             };
-            match pack.recover_bytes(shard) {
+            match pack.recover_bytes(candidate.shard) {
                 Ok(bytes)
                     if u64::try_from(bytes.len()).ok() == Some(length)
                         && blake3::hash(bytes.as_slice()).as_bytes() == &digest =>
@@ -175,13 +212,6 @@ impl RecoveryInventory {
             }
         }
         Ok(None)
-    }
-
-    /// Returns copy/locator counts only if no reserved pack is incomplete.
-    /// # Errors
-    /// Rejects pending work, malformed accounting or database failures.
-    pub fn summary(&self) -> Result<RecoveryInventorySummary, Error> {
-        self.repository.summary()
     }
 }
 

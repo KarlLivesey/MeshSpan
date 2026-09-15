@@ -46,6 +46,8 @@ pub struct ShardRepairRequest {
     pub replacement_target_id: TargetId,
     /// Exact destination incarnation fence.
     pub replacement_target_generation: u64,
+    /// Physical shard generation retained in the authoritative repair plan.
+    pub replacement_shard_generation: u32,
     /// Authorization revision under which the repair was admitted.
     pub authorization_revision: Revision,
     /// Authoritative deadline shared by reads, reservation and write.
@@ -263,7 +265,10 @@ fn validate_request(
         || source.digest == [0; 32]
         || source.shard.manifest_digest == [0; 32]
         || planned.shard_index != source.shard.shard_index
-        || planned.shard_generation != source.shard.generation
+        || source.shard.generation < planned.shard_generation
+        || !stripe.receipts.as_slice().contains(&source)
+        || !(request.replacement_shard_generation == source.shard.generation
+            || source.shard.generation.checked_add(1) == Some(request.replacement_shard_generation))
         || planned.expected_length != source.length
         || planned.expected_digest != source.digest
         || stripe.stripe.chunk().chunk_index != source.shard.stripe_index
@@ -291,7 +296,7 @@ fn validate_receipts(
             || index >= total
             || receipt.shard.manifest_digest != manifest_digest
             || receipt.shard.stripe_index != stripe.stripe.chunk().chunk_index
-            || receipt.shard.generation != planned.shard_generation
+            || receipt.shard.generation < planned.shard_generation
             || receipt.length != planned.expected_length
             || receipt.digest != planned.expected_digest
             || receipt.target_generation == 0
@@ -398,7 +403,7 @@ fn store_replacement(
         PutShardRequest {
             context,
             reservation,
-            shard: request.source_receipt.shard,
+            shard: request.replacement_shard(),
             expected_length: request.source_receipt.length,
             expected_digest: request.source_receipt.digest,
             bytes,
@@ -414,7 +419,7 @@ fn validate_replacement_receipt(
     receipt: ShardReceipt,
 ) -> Result<(), ContractError> {
     if receipt.operation_id == request.replacement_operation_id
-        && receipt.shard == request.source_receipt.shard
+        && receipt.shard == request.replacement_shard()
         && receipt.length == request.source_receipt.length
         && receipt.digest == request.source_receipt.digest
         && receipt.target_id == request.replacement_target_id

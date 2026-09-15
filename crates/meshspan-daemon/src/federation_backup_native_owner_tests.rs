@@ -166,7 +166,7 @@ impl OwnerConnection {
                 )
                 .await
         });
-        let result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), async move {
             let ready = receive_data_control(&mut receive, limits)
                 .await?
                 .into_inner();
@@ -190,8 +190,22 @@ impl OwnerConnection {
             Ok::<_, Box<dyn std::error::Error>>(result.outcome.ok_or("outcome")?)
         })
         .await;
-        worker.await??;
-        result?
+        let completed = worker.await?;
+        let result = result.map_err(|error| {
+            format!(
+                "native backup owner exchange for operation {:?}: {error}",
+                request.context().operation_id
+            )
+        });
+        match (result, completed) {
+            (Err(error), Err(completion)) => {
+                Err(format!("{error}; native owner completion: {completion}").into())
+            }
+            (result, completion) => {
+                completion?;
+                result?
+            }
+        }
     }
 }
 

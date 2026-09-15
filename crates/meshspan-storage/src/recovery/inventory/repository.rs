@@ -8,7 +8,27 @@ use meshspan_contracts::ShardIdentity;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use super::{Error, RecoveryInventorySummary, RecoveryShardRetention};
-use crate::{TargetMarker, recovery::RecoveryShardRecord, shard::encode_shard};
+use crate::{
+    TargetMarker,
+    recovery::RecoveryShardRecord,
+    shard::{decode_shard, encode_shard},
+};
+
+// Choose the next physical generation first, then use the exact-key suffix to order copies.
+// SQLite otherwise sorts the copy suffix after a generation range, despite fixed length/digest.
+const CANDIDATE_QUERY: &str =
+    "SELECT packs.id, packs.sequence, CASE WHEN length(packs.marker) = 116 THEN packs.marker END,
+                CASE WHEN length(shard_identity) = 46 THEN shard_identity END
+     FROM shards INDEXED BY shards_exact JOIN packs ON packs.id = shards.pack_id
+     WHERE shard_identity = (
+        SELECT MIN(candidate.shard_identity) FROM shards AS candidate INDEXED BY shards_exact
+        WHERE candidate.shard_identity BETWEEN ?1 AND ?2
+            AND candidate.stored_length = ?3 AND candidate.digest = ?4
+            AND (candidate.shard_identity, candidate.pack_id) > (?5, ?6)
+            AND EXISTS (SELECT 1 FROM packs WHERE id = candidate.pack_id AND complete = 1)
+     ) AND stored_length = ?3 AND digest = ?4
+        AND (shard_identity, pack_id) > (?5, ?6) AND complete = 1
+     ORDER BY pack_id LIMIT 1";
 
 const SCHEMA: &str = "
 CREATE TABLE inventory_state (
@@ -48,10 +68,21 @@ pub(super) struct ReservedPack {
     pub complete: bool,
 }
 
-pub(super) struct Candidate {
+#[derive(Clone, Copy)]
+pub(super) enum CandidateMatch {
+    Exact(ShardIdentity),
+    Content(ShardIdentity),
+}
+
+pub(super) struct CopiedPack {
     pub id: i64,
     pub marker: TargetMarker,
     pub sequence: u64,
+}
+
+pub(super) struct ShardCandidate {
+    pub shard: ShardIdentity,
+    pub pack: CopiedPack,
 }
 
 impl Repository {
@@ -174,23 +205,49 @@ impl Repository {
 
     pub(super) fn candidate(
         &self,
-        shard: ShardIdentity,
+        selection: CandidateMatch,
         length: u64,
         digest: [u8; 32],
-        after: i64,
-    ) -> Result<Option<Candidate>, Error> {
-        let row: Option<(i64, i64, Vec<u8>)> = self.connection.query_row(
-            "SELECT packs.id, packs.sequence, CASE WHEN length(packs.marker) = 116 THEN packs.marker END
-             FROM shards INDEXED BY shards_exact JOIN packs ON packs.id = shards.pack_id
-             WHERE shard_identity = ?1 AND stored_length = ?2 AND digest = ?3 AND pack_id > ?4 AND complete = 1
-             ORDER BY pack_id LIMIT 1",
-            params![encode_shard(shard).as_slice(), sql(length)?, digest.as_slice(), after],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional()?;
-        row.map(|(id, sequence, bytes)| {
-            Ok(Candidate {
-                id,
-                sequence: u64::try_from(sequence).map_err(|_| Error::Corrupt)?,
-                marker: TargetMarker::decode(&bytes).map_err(|_| Error::Corrupt)?,
+        after: Option<(ShardIdentity, i64)>,
+    ) -> Result<Option<ShardCandidate>, Error> {
+        let (first, last) = match selection {
+            CandidateMatch::Exact(shard) => (encode_shard(shard), encode_shard(shard)),
+            CandidateMatch::Content(shard) => (
+                encode_shard(ShardIdentity {
+                    generation: 1,
+                    ..shard
+                }),
+                encode_shard(ShardIdentity {
+                    generation: u32::MAX,
+                    ..shard
+                }),
+            ),
+        };
+        let (after_shard, after_pack) =
+            after.map_or((first, 0), |(shard, pack)| (encode_shard(shard), pack));
+        let row: Option<(i64, i64, Vec<u8>, Vec<u8>)> = self
+            .connection
+            .query_row(
+                CANDIDATE_QUERY,
+                params![
+                    first.as_slice(),
+                    last.as_slice(),
+                    sql(length)?,
+                    digest.as_slice(),
+                    after_shard.as_slice(),
+                    after_pack
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        row.map(|(id, sequence, bytes, shard)| {
+            Ok(ShardCandidate {
+                shard: decode_shard(&shard).map_err(|_| Error::Corrupt)?,
+                pack: CopiedPack {
+                    id,
+                    sequence: u64::try_from(sequence).map_err(|_| Error::Corrupt)?,
+                    marker: TargetMarker::decode(&bytes).map_err(|_| Error::Corrupt)?,
+                },
             })
         })
         .transpose()
@@ -217,7 +274,7 @@ impl Repository {
 
     pub(super) fn visit_packs(
         &self,
-        mut visit: impl FnMut(Candidate) -> Result<(), Error>,
+        mut visit: impl FnMut(CopiedPack) -> Result<(), Error>,
     ) -> Result<(), Error> {
         let mut statement = self.connection.prepare("SELECT id, sequence, CASE WHEN length(marker) = 116 THEN marker END FROM packs WHERE complete = 1 ORDER BY mesh_id, target_id, generation, sequence")?;
         let mut rows = statement.query([])?;
@@ -226,7 +283,7 @@ impl Repository {
             if sequence == 0 {
                 return Err(Error::Corrupt);
             }
-            visit(Candidate {
+            visit(CopiedPack {
                 id: row.get(0)?,
                 sequence,
                 marker: TargetMarker::decode(&row.get::<_, Vec<u8>>(2)?)
@@ -255,4 +312,60 @@ fn connect(file: &Path) -> Result<Connection, Error> {
 
 fn sql(value: u64) -> Result<i64, Error> {
     i64::try_from(value).map_err(|_| Error::InvalidInput)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generation_range_uses_the_existing_shard_index_without_sorting()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let inventory = super::super::RecoveryInventory::create(
+            &directory.path().join("inventory"),
+            [1; 32],
+            1024,
+        )?;
+        let repository = &inventory.repository;
+        let first = ShardIdentity {
+            manifest_digest: [2; 32],
+            stripe_index: 3,
+            shard_index: 4,
+            generation: 1,
+        };
+        let last = ShardIdentity {
+            generation: u32::MAX,
+            ..first
+        };
+        let mut statement = repository
+            .connection
+            .prepare(&format!("EXPLAIN QUERY PLAN {CANDIDATE_QUERY}"))?;
+        let details = statement
+            .query_map(
+                params![
+                    encode_shard(first).as_slice(),
+                    encode_shard(last).as_slice(),
+                    100_i64,
+                    [5_u8; 32].as_slice(),
+                    encode_shard(first).as_slice(),
+                    0_i64
+                ],
+                |row| row.get::<_, String>(3),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.contains("SEARCH shards USING COVERING INDEX shards_exact")),
+            "{details:?}"
+        );
+        assert!(
+            details
+                .iter()
+                .all(|detail| !detail.contains("TEMP B-TREE") && !detail.contains("SCAN")),
+            "{details:?}"
+        );
+        Ok(())
+    }
 }

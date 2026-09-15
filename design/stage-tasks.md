@@ -871,6 +871,9 @@ the stage; publication-dependent acceptance remains held separately and visible.
     [Consensus-owned repair resumption](stage-10-evidence.md#data-02-daemon-resumes-the-consensus-owned-physical-attempt)
     now connects saved physical selection, fresh admission and claim takeover;
     remaining process interruptions and superseded-attempt cleanup remain open.
+    [Physical replacement generations](stage-10-evidence.md#data-02-physical-generations-before-obsolete-copy-cleanup)
+    now preserve exact bytes when a repaired shard returns to a reclaimed target;
+    automatic obsolete-copy cleanup authority is still required.
     Execution budgets are not bytes left to transfer; filesystem
     totals do not prove independent underlying pool
     capacity. [Evidence](stage-10-evidence.md#task-16--filesystem-space-and-durable-maintenance-jobs).

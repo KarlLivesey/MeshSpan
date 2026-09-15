@@ -483,6 +483,7 @@ mod tests {
             source_receipt: source,
             replacement_target_id: target(23)?,
             replacement_target_generation: 1,
+            replacement_shard_generation: source.shard.generation,
             authorization_revision: Revision::new(1),
             deadline: UnixMicros::new(100),
             observed_at: UnixMicros::new(10),

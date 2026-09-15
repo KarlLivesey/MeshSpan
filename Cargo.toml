@@ -95,6 +95,26 @@ x509-parser = { version = "0.18.1", default-features = false }
 [patch.crates-io]
 sync_wrapper = { path = "crates/meshspan-sync-wrapper" }
 
+# Keep packet cryptography practical in local process proofs; the measured generic
+# code-generation cost and debug tradeoff are recorded in design/stage-10-evidence.md.
+# All other workspace crates retain the ordinary incremental debug profile.
+[profile.dev.package.meshspan-rustls-provider]
+opt-level = 2
+debug = true
+debug-assertions = true
+overflow-checks = true
+incremental = true
+
+# Retain SQLite's native checks while avoiding measured native -O0 startup cost.
+# Its compile options and the real concurrent workflow comparison are recorded in
+# design/stage-10-evidence.md; this changes native debugger stepping, not validation.
+[profile.dev.package.libsqlite3-sys]
+opt-level = 2
+debug = true
+debug-assertions = true
+overflow-checks = true
+incremental = true
+
 [workspace.lints.rust]
 missing_docs = "deny"
 unsafe_code = "deny"

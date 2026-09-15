@@ -3,6 +3,7 @@
 //! Numbered transactional migration runner with immutable digest verification.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
@@ -14,10 +15,10 @@ mod http01;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 121;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 122;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 17;
 
-const PARTITION_MIGRATIONS: [Migration; 121] = [
+const PARTITION_MIGRATIONS: [Migration; 122] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -499,8 +500,12 @@ const PARTITION_MIGRATIONS: [Migration; 121] = [
         sql: include_str!("../schema/partition/120_repair_effect_feed.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 121,
         sql: include_str!("../schema/partition/121_repair_attempts.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/122_repair_shard_generations.sql"),
     },
 ];
 
@@ -575,6 +580,13 @@ const LOCAL_MIGRATIONS: [Migration; 17] = [
     },
 ];
 
+// Only expected hashes of embedded, immutable SQL are shared. Every connection still
+// reads and validates its own live history, identity, schema and relational integrity.
+static PARTITION_MIGRATION_DIGESTS: LazyLock<[[u8; 32]; PARTITION_MIGRATIONS.len()]> =
+    LazyLock::new(|| PARTITION_MIGRATIONS.map(|migration| migration_digest(migration.sql)));
+static LOCAL_MIGRATION_DIGESTS: LazyLock<[[u8; 32]; LOCAL_MIGRATIONS.len()]> =
+    LazyLock::new(|| LOCAL_MIGRATIONS.map(|migration| migration_digest(migration.sql)));
+
 #[derive(Clone, Copy)]
 struct Migration {
     version: u32,
@@ -617,6 +629,7 @@ pub(crate) fn migrate_partition(
     apply_migrations(
         connection,
         &PARTITION_MIGRATIONS,
+        PARTITION_MIGRATION_DIGESTS.as_slice(),
         applied_at,
         partition_data_migration,
     )
@@ -626,7 +639,13 @@ pub(crate) fn migrate_local(
     connection: &mut Connection,
     applied_at: i64,
 ) -> Result<(), MetadataStoreError> {
-    apply_migrations(connection, &LOCAL_MIGRATIONS, applied_at, |_, _| Ok(()))
+    apply_migrations(
+        connection,
+        &LOCAL_MIGRATIONS,
+        LOCAL_MIGRATION_DIGESTS.as_slice(),
+        applied_at,
+        |_, _| Ok(()),
+    )
 }
 
 #[cfg(test)]
@@ -638,7 +657,16 @@ pub(crate) fn migrate_partition_through(
     let migrations = PARTITION_MIGRATIONS
         .get(..version)
         .ok_or(MetadataStoreError::InvalidMigrationHistory)?;
-    apply_migrations(connection, migrations, applied_at, partition_data_migration)
+    let digests = PARTITION_MIGRATION_DIGESTS
+        .get(..version)
+        .ok_or(MetadataStoreError::InvalidMigrationHistory)?;
+    apply_migrations(
+        connection,
+        migrations,
+        digests,
+        applied_at,
+        partition_data_migration,
+    )
 }
 
 #[cfg(test)]
@@ -650,22 +678,29 @@ pub(crate) fn migrate_local_through(
     let migrations = LOCAL_MIGRATIONS
         .get(..version)
         .ok_or(MetadataStoreError::InvalidMigrationHistory)?;
-    apply_migrations(connection, migrations, applied_at, |_, _| Ok(()))
+    let digests = LOCAL_MIGRATION_DIGESTS
+        .get(..version)
+        .ok_or(MetadataStoreError::InvalidMigrationHistory)?;
+    apply_migrations(connection, migrations, digests, applied_at, |_, _| Ok(()))
 }
 
 fn apply_migrations(
     connection: &mut Connection,
     migrations: &[Migration],
+    expected_digests: &[[u8; 32]],
     applied_at: i64,
     transform: fn(&rusqlite::Transaction<'_>, u32) -> Result<(), MetadataStoreError>,
 ) -> Result<(), MetadataStoreError> {
     validate_migration_catalogue(migrations)?;
+    if migrations.len() != expected_digests.len() {
+        return Err(MetadataStoreError::InvalidMigrationHistory);
+    }
     let applied = read_applied_migrations(connection)?;
     validate_applied_history(&applied, migrations)?;
 
-    for migration in migrations {
+    for (migration, expected_digest) in migrations.iter().zip(expected_digests) {
         if let Some(digest) = applied.get(&migration.version) {
-            if digest.as_slice() != migration_digest(migration.sql) {
+            if digest.as_slice() != expected_digest {
                 return Err(MetadataStoreError::MigrationDigestMismatch {
                     version: migration.version,
                 });
@@ -812,6 +847,8 @@ fn validate_migration_catalogue(migrations: &[Migration]) -> Result<(), Metadata
 }
 
 fn migration_digest(sql: &str) -> [u8; 32] {
+    #[cfg(test)]
+    MIGRATION_HASHES.with(|count| count.set(count.get() + 1));
     Sha256::digest(sql.as_bytes()).into()
 }
 
@@ -1198,4 +1235,15 @@ pub(crate) fn local_maintenance_scrub_progress_migration_digest() -> [u8; 32] {
 #[cfg(test)]
 pub(crate) fn local_metadata_backup_staging_migration_digest() -> [u8; 32] {
     migration_digest(LOCAL_MIGRATIONS[12].sql)
+}
+
+// Per-thread work measurement leaves parallel database fixtures independent.
+#[cfg(test)]
+std::thread_local! {
+    static MIGRATION_HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_migration_hashes() -> usize {
+    MIGRATION_HASHES.with(|count| count.replace(0))
 }

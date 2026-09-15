@@ -35,7 +35,10 @@ const ENVELOPE_ENCODING_OVERHEAD: usize = 1024;
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub(super) enum BulkReceiveStage {
+    WaitingForDescriptor,
     ReceivingBody,
+    WaitingForFin,
+    BodyReceived,
     WaitingForCodec,
     DecodingProtocol,
     DecodingMessage,
@@ -48,6 +51,8 @@ pub(super) struct BulkReceiveProgress {
     pub(super) started: std::time::Instant,
     pub(super) stage_started: std::time::Instant,
     pub(super) stage: BulkReceiveStage,
+    pub(super) expected_bytes: Option<usize>,
+    pub(super) received_bytes: usize,
 }
 
 #[cfg(test)]
@@ -62,11 +67,36 @@ fn record_receive_stage(
             .as_ref()
             .is_none_or(|previous| previous.started <= started)
     {
+        let (expected_bytes, received_bytes) = latest
+            .as_ref()
+            .filter(|previous| previous.started == started)
+            .map_or((None, 0), |previous| {
+                (previous.expected_bytes, previous.received_bytes)
+            });
         *latest = Some(BulkReceiveProgress {
             started,
             stage_started: std::time::Instant::now(),
             stage,
+            expected_bytes,
+            received_bytes,
         });
+    }
+}
+
+#[cfg(test)]
+fn record_receive_bytes(
+    latest: &super::Mutex<Option<BulkReceiveProgress>>,
+    started: std::time::Instant,
+    expected: usize,
+    received: usize,
+) {
+    // A late frame from an older transfer must not alter the current transfer's snapshot.
+    if let Ok(mut latest) = latest.lock()
+        && let Some(progress) = latest.as_mut()
+        && progress.started == started
+    {
+        progress.expected_bytes = Some(expected);
+        progress.received_bytes = received;
     }
 }
 
@@ -255,12 +285,19 @@ impl ConsensusNetwork {
         record_receive_stage(
             &self.latest_bulk_receive,
             receive_started,
-            BulkReceiveStage::ReceivingBody,
+            BulkReceiveStage::WaitingForDescriptor,
         );
-        let (start, bytes, allocation) =
-            tokio::time::timeout_at(deadline, self.receive_bulk_bytes(&mut stream, ingress.peer))
-                .await
-                .map_err(|_| ConsensusNetworkError::BulkTransferUnconfirmed)??;
+        let (start, bytes, allocation) = tokio::time::timeout_at(
+            deadline,
+            self.receive_bulk_bytes(
+                &mut stream,
+                ingress.peer,
+                #[cfg(test)]
+                receive_started,
+            ),
+        )
+        .await
+        .map_err(|_| ConsensusNetworkError::BulkTransferUnconfirmed)??;
         let receipt = ConsensusBulkReceipt {
             request_id: start
                 .header
@@ -354,6 +391,7 @@ impl ConsensusNetwork {
         &self,
         stream: &mut AcceptedStream,
         peer: meshspan_transport::AuthenticatedPeer,
+        #[cfg(test)] receive_started: std::time::Instant,
     ) -> Result<(ConsensusBulkStart, Vec<u8>, Arc<ConsensusByteReservation>), ConsensusNetworkError>
     {
         let envelope = receive_data_control(&mut stream.receive, self.wire_limits)
@@ -377,7 +415,14 @@ impl ConsensusNetwork {
             .bulk_budgets
             .reserve(peer.node_id(), length)
             .map_err(|_| ConsensusNetworkError::BulkTransferUnconfirmed)?;
-        let bytes = receive_body(&mut stream.receive, length, self.wire_limits).await?;
+        let bytes = receive_body(
+            &mut stream.receive,
+            length,
+            self.wire_limits,
+            #[cfg(test)]
+            (&self.latest_bulk_receive, receive_started),
+        )
+        .await?;
         Ok((start, bytes, allocation))
     }
 }
@@ -447,7 +492,16 @@ async fn receive_body(
     receive: &mut quinn::RecvStream,
     length: usize,
     limits: WireLimits,
+    #[cfg(test)] progress: (
+        &super::Mutex<Option<BulkReceiveProgress>>,
+        std::time::Instant,
+    ),
 ) -> Result<Vec<u8>, ConsensusNetworkError> {
+    #[cfg(test)]
+    {
+        record_receive_stage(progress.0, progress.1, BulkReceiveStage::ReceivingBody);
+        record_receive_bytes(progress.0, progress.1, length, 0);
+    }
     let mut bytes = Vec::with_capacity(length);
     while bytes.len() < length {
         let frame = receive_data_frame(receive, limits).await?.into_inner();
@@ -455,11 +509,17 @@ async fn receive_body(
             return Err(ConsensusNetworkError::InvalidTraffic);
         }
         bytes.extend_from_slice(&frame.bytes);
+        #[cfg(test)]
+        record_receive_bytes(progress.0, progress.1, length, bytes.len());
     }
+    #[cfg(test)]
+    record_receive_stage(progress.0, progress.1, BulkReceiveStage::WaitingForFin);
     receive
         .read_to_end(0)
         .await
         .map_err(|_| ConsensusNetworkError::InvalidTraffic)?;
+    #[cfg(test)]
+    record_receive_stage(progress.0, progress.1, BulkReceiveStage::BodyReceived);
     Ok(bytes)
 }
 

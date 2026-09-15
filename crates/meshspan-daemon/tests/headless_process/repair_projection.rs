@@ -269,7 +269,17 @@ async fn wait_for_repair(
             assert_eq!(effect.manifest_id, manifest.content.manifest.manifest_id);
             assert_eq!(effect.source_layout_generation, 1);
             assert_eq!(effect.replacement_layout_generation, 2);
-            assert_eq!(effect.replacement_receipt.shard, source.shard);
+            assert_eq!(
+                effect.replacement_receipt.shard,
+                meshspan_contracts::ShardIdentity {
+                    generation: source
+                        .shard
+                        .generation
+                        .checked_add(1)
+                        .ok_or("generation exhausted")?,
+                    ..source.shard
+                }
+            );
             assert_eq!(effect.replacement_receipt.length, source.length);
             assert_eq!(effect.replacement_receipt.digest, source.digest);
             assert_ne!(effect.replacement_receipt.target_id, source.target_id);

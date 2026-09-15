@@ -196,6 +196,7 @@ async fn wait_for_installed(
     gateways: u64,
 ) -> Result<(), Box<dyn Error>> {
     let deadline = Instant::now() + WAIT_LIMIT;
+    let mut last_status = "no successful status response".to_owned();
     let expected_source: String =
         serde_json::from_value(serde_json::to_value(&publication.publication_id)?)?;
     loop {
@@ -211,22 +212,36 @@ async fn wait_for_installed(
             ),
         )
         .await;
-        if let Ok(Ok(response)) = response {
-            require_status(&response, "200 OK", "read external installation")?;
-            let value: CertificateStatusResponse = serde_json::from_str(response_body(&response)?)?;
-            if value.certificate.is_some_and(|value| {
-                value.source == CertificateStatusSource::External
-                    && value.source_id == expected_source
-                    && value.state == CertificateOperationalState::Active
-                    && value.required_gateway_count == gateways
-                    && value.installed_gateway_count == gateways
-            }) {
-                return verify_selected_leaf(fixture.address, client, &expected.leaf).await;
+        let transport = match response {
+            Ok(Ok(response)) => {
+                require_status(&response, "200 OK", "read external installation")?;
+                let value: CertificateStatusResponse =
+                    serde_json::from_str(response_body(&response)?)?;
+                last_status = value.certificate.as_ref().map_or_else(
+                    || "no selected certificate".to_owned(),
+                    |value| format!(
+                        "source={:?}, expected_source={}, state={:?}, required={}, installed={}",
+                        value.source, value.source_id == expected_source, value.state,
+                        value.required_gateway_count, value.installed_gateway_count
+                    ),
+                );
+                if value.certificate.is_some_and(|value| {
+                    value.source == CertificateStatusSource::External
+                        && value.source_id == expected_source
+                        && value.state == CertificateOperationalState::Active
+                        && value.required_gateway_count == gateways
+                        && value.installed_gateway_count == gateways
+                }) {
+                    return verify_selected_leaf(fixture.address, client, &expected.leaf).await;
+                }
+                "status response"
             }
-        }
+            Ok(Err(_)) => "transport failure",
+            Err(_) => "request deadline",
+        };
         if Instant::now() >= deadline {
             return Err(
-                format!("external certificate not installed at {}", fixture.address).into(),
+                format!("external certificate not installed at {}; transport={transport}; last_status={last_status}; expected_gateways={gateways}", fixture.address).into(),
             );
         }
         sleep(RETRY_INTERVAL).await;

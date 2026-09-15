@@ -10,6 +10,563 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Physical-generation candidate gate — multi-daemon setup failures
+
+### Final retained candidate gate
+
+The advisory-plus-full local gate now **passes** on signed, GitHub-verified commit
+`2bb9e08d3779708652086fcff6b96e70e5515306`, tree
+`8034f55f65636e88f581ab9335f2e9b35500fd82`, with a clean checkout at start and
+completion. Command: `pnpm check:dependency-update`, after `nvm use`, with
+`MESHSPAN_CHECK_WORKERS=4`, `CARGO_BUILD_JOBS=4`, `RUST_TEST_THREADS=4` and
+`TMPDIR=/home/karl/.cache/meshspan-validation/tmp`. Selected tools were Node
+26.8.2, pnpm 11.19.0 and Rust 1.98.0. Exit **0**, wall **1,007.907 s**;
+log `/tmp/meshspan-check-2bb9e08d.log`.
+
+Both advisory scans, generated drift, embedded web, Rust formatting and workspace
+all-target/all-feature Clippy, Rust and JavaScript dependency licences, web
+format/lint/typecheck and tooling tests passed. All canonical Rust workspace test
+targets passed in **911.43 s**; web tests passed in **40.34 s**. The normal gate
+does not run ignored/manual/environment-specific proofs. This resolves the
+candidate's earlier full-gate failures after the measured startup and packet-cost
+changes documented below; the failed runs remain retained. The separate real
+HTTPS/Samba recovery-and-storage-restart proof also **passes in 117.18 s** against
+the same canonical headless executable, confirmed from the running gate's process:
+`target/debug/deps/headless_process-ac32a18f1c274d87`. Run the exact test
+`offline_backup::original_file_recovers_through_https_and_real_smb_after_storage_restart`
+with `--exact --ignored --test-threads=4`, under the same NVM/TMPDIR environment.
+Exit **0**; log `/tmp/meshspan-2bb9e08d-https-smb-recovery.log`. The existing pinned
+local Samba image was used without download or publication. Documentation-only
+evidence additions after these checks do not change the tested implementation.
+Stage 10 task 16 / DATA-02
+still requires automatic obsolete-placement cleanup and the remaining interruption
+cuts. This is not Stage 10/11 completion, physical power-loss, hardware, soak or
+independent-review evidence.
+
+The advisory-plus-full local gate on signed, GitHub-verified commit
+`e96b0e4ec6436ad742f079a65b109c89c3bbe0a8` (tree
+`a794e61273ead55aa0c65db6db9a2f756ed085a3`) failed with exit **1** after
+**978.970 s**, under NVM and four scheduler, Cargo and test workers. Rust and
+JavaScript advisory scans, generated drift, embedded web, all static checks,
+both dependency licence checks and tooling tests passed. Web tests passed in
+**43.83 s**. Log: `/tmp/meshspan-check-e96b0e4e.log`.
+
+The cluster library passed **138 tests in 109.26 s**, including the previous
+maximum-transfer failure. The daemon library passed **473 tests, one ignored,
+in 123.20 s**. Headless process tests failed: **22 passed, 11 failed, 13 ignored,
+473.50 s**. Later Rust targets were not reached. The failures cover external
+certificate distribution, federated backup, incarnation restart, local trust,
+two namespace-delivery workflows, node capabilities, notification gateways,
+three-node failover, stale-gateway repair projection and three-node candidate
+distribution. Most failed waiting for a joined node to become configured;
+the local-trust peer exited during private activation/catch-up. Their retained
+private fixture paths are in the log. These failures are not cleared by earlier
+focused passes, and PR #274 remains unmerged.
+
+The exact canonical stale-gateway repair test then passed alone in **37.07 s**
+(`/tmp/meshspan-repair-projection-e96-focused.log`). This proves that run's
+byte-recovery behavior, not concurrency or stage acceptance. The focused
+four-workflow run then failed **one passed, three failed in 51.32 s**: repair,
+local trust and capabilities timed out while namespace delivery passed
+(`/tmp/meshspan-join-four-e96-focused.log`). Retained repair state from the full
+gate shows all three nodes completed durable setup and reached log index 49;
+initial snapshot receipt alone therefore does not explain that timeout.
+Debugger attachment was denied by process protection and produced no stack
+evidence. No deadline, assertion or worker bound has been weakened.
+
+Temporary phase-only startup timings reproduced **one passed, three failed in
+51.04 s** (`/tmp/meshspan-join-four-startup-timing.log`). Initial service
+composition took **6.754–6.912 s** before the public listener could bind. Across
+the whole run, **1,213** authority opens consumed **115.507 s** aggregate elapsed
+time; this is overlapping work across processes, not wall time. A separate
+five-open measurement on a private copy of a retained database isolated
+**16.578–20.145 ms** per migration-history pass, in addition to connection open
+and integrity checks (`/tmp/meshspan-existing-partition-cost.log`). Both temporary
+source probes have been removed.
+
+The migration runner now initializes bounded expected-digest arrays once from
+embedded immutable SQL. It still reads each connection's live migration rows,
+checks contiguous versions and every recorded digest, and performs the same
+identity and integrity checks. It does not cache database validity. The new
+reopen regression first failed with **122** repeated hashes rather than zero
+(**1.93 s**, `/tmp/meshspan-migration-hash-baseline.log`), then passed with no
+repeated hashing and rejection of subsequent persisted digest tampering
+(**1.97 s**, `/tmp/meshspan-migration-hash-fixed.log`). All **53 database tests**
+pass in **22.73 s** (`/tmp/meshspan-migration-hash-database-tests.log`); affected
+all-target/all-feature Clippy passes with warnings denied in **13.685 s**
+(`/tmp/meshspan-migration-hash-clippy.log`). Rust/document formatting and diff
+checks pass. Review confirms that live history validation and prefix-migration
+alignment remain intact. Real concurrent startup validation and the full gate
+remain required; these focused passes do not close the headless gate failures.
+
+Signed, GitHub-verified commit `37d5996d2d64f04ac131be34e2f3293ca89af7c0`
+(tree `5a407f96f4dba2143c8de443c8bbfd34c2733fba`) rebuilt the canonical
+all-target/all-feature artifacts in **234.703 s**
+(`/tmp/meshspan-migration-hash-canonical-build.log`). The same four-workflow
+reproduction then **passed all four in 58.46 s**, including exact repaired bytes,
+certificate rotation, incarnation-aware capability refresh and namespace replay
+(`/tmp/meshspan-join-four-37d5996d.log`). The other seven previously failing cases
+ran with four threads and failed **four passed, three failed in 106.02 s**:
+external certificate installation, notification gateway setup and three-node
+failover setup (`/tmp/meshspan-join-seven-37d5996d.log`). No new full gate was run.
+
+The external-certificate fixture contains both exact installation acknowledgements
+for the current recipient secret generation, and its live identity switch occurs
+before acknowledgement. Its old failure message suppressed the status/transport
+distinction. Test diagnostics now retain only the validated source/state/counts
+and source-match boolean, report long certificate-status transport phases, and
+preserve the previous setup observation at a request deadline. No credentials,
+certificate keys, arbitrary certificate response bodies, deadlines or assertions
+were added or changed. This test-only candidate rebuilt in **8.312 s**, then the
+same seven cases yielded **six passed, one failed in 89.36 s**
+(`/tmp/meshspan-join-seven-diagnostics.log`). The incarnation workflow repeatedly
+received **connection refused** before its configured deadline. No long
+status-response/EOF diagnostic was emitted. The changing failure set remains
+unresolved; passing retries do not erase the earlier failures. Affected headless
+Clippy passes with warnings denied in **20.309 s**
+(`/tmp/meshspan-join-diagnostics-clippy.log`).
+
+### SQLite startup-cost experiment
+
+The original bundled SQLite object's compiler metadata confirms `-O0` with debug
+symbols. The startup experiment changed only `libsqlite3-sys` to optimization
+level 2 through command-line Cargo overrides, explicitly retaining debug symbols,
+Rust assertions and overflow checks. An equivalent five-open fixture used the same private database
+copy and executes the real opening, migration, identity and integrity paths.
+After the immutable-hash fix, migration verification takes **0.238–0.317 ms**
+(`/tmp/meshspan-sqlite-cost-baseline.log`).
+
+The two compiled variants were then executed in baseline/experimental/
+experimental/baseline order. Baseline opening took **7.688–8.743 ms** and integrity
+checks **5.543–6.709 ms**; experimental opening took **3.149–3.256 ms** and
+integrity checks **2.859–3.399 ms**. Logs:
+`/tmp/meshspan-sqlite-abba-{1-baseline,2-opt2,3-opt2,4-baseline}.log`. All **51**
+SQLite compile options match exactly, including API armour. Compiler metadata
+confirms the new native object retains `-g` and changes to `-O2`. This comparison
+does not substitute for real process acceptance or release performance evidence.
+
+All **53 database regressions pass in 7.41 s** with the experimental artifact
+(`/tmp/meshspan-sqlite-opt2-database-tests.log`). The temporary benchmark source
+was removed before the canonical all-target/all-feature experimental rebuild,
+which passed in **220.769 s** (`/tmp/meshspan-sqlite-opt2-canonical-build.log`).
+All **11 workflows that failed the last full gate pass together in 86.65 s**
+with four test threads and unchanged deadlines
+(`/tmp/meshspan-sqlite-opt2-headless-eleven.log`). This tests production source
+`3656a3927a8bc916374db4b276764275ad4e22a6` with the scoped CLI profile override;
+it does not replace the required final integration gate.
+
+The candidate now retains this measured override in `Cargo.toml`. Rust assertions,
+overflow checks and incremental compilation apply to Rust; they do not enable
+SQLite C assertions or incremental C compilation. SQLite's native compile options,
+including API armour, are unchanged. Native optimization changes debugger stepping
+and inlining. No migration, integrity check, dependency, lockfile, process deadline
+or acceptance assertion was weakened.
+
+A retained manual fixture creates its own real migrated database and verifies
+identity through five complete reopens. Run `cargo test -p meshspan-metadata --lib
+database::tests::measure_reopened_partition_validation_cost -- --exact --ignored
+--nocapture --test-threads=4`. It passed in **0.77 s**, reporting **5.367–8.055 ms**
+per reopen (`/tmp/meshspan-sqlite-retained-manual-fixed.log`). This fresh fixture
+is a different dataset from the private-database comparison above and has no timing
+acceptance threshold. The earlier invocation with an incomplete exact filter ran
+zero tests (`/tmp/meshspan-sqlite-retained-manual.log`) and is not passing evidence.
+Affected metadata all-target/all-feature Clippy passes with warnings denied in
+**14.049 s** (`/tmp/meshspan-sqlite-retained-clippy.log`); Rust formatting,
+document formatting and diff checks pass. Independent source review found no
+semantic defect and prompted the explicit Rust/native-check distinction above.
+The retained candidate still requires the complete local gate and a fresh separate
+real HTTPS/SMB recovery proof before integration.
+
+## Measured packet cryptography cost in local validation
+
+The maximum-transfer investigation now has a reproducible packet-cost comparison
+in `meshspan-rustls-provider::quic::tests::cached_aes_packet_cost`, explicitly
+ignored by ordinary tests because it is a manual measurement, not a transport
+acceptance proof. Run it with `cargo test -p meshspan-rustls-provider --lib
+cached_aes_packet_cost -- --ignored --nocapture --test-threads=4`. It compares
+cached direct AES-GCM with the actual packet adapter, encrypting and decrypting
+13,981 packets of 1,200 bytes per round, using unique nonces and verifying the
+final original payload. It reports aggregate times only.
+
+On parent `d707ca127a08e8c1494c20e110b8e6cb28c62fbe`, the temporary equivalent
+fixture measured direct calls at **6.172/6.022 s** and adapter calls at
+**5.949/6.225 s** (`/tmp/meshspan-packet-cost-baseline.log`). There is no measured
+adapter overhead to justify rewriting its crypto boundary. A benchmark-only
+provider `opt-level=1` override did not improve reliably: **4.827–8.029 s**
+(`/tmp/meshspan-packet-cost-opt1.log`). Cargo documents that lower optimization
+levels can share generic instantiations across crates; level 2 avoids importing
+those instances ([Cargo profiles](https://doc.rust-lang.org/cargo/reference/profiles.html#overrides-and-generics)).
+With level 2 scoped to this provider and debug assertions/overflow checks
+explicitly retained, direct calls took **0.307/0.304 s**, adapter calls
+**0.302/0.298 s** (`/tmp/meshspan-packet-cost-opt2.log`).
+
+After removing the temporary fixture, the actual maximum-size transfer passed
+with the same CLI-only override in **3.31 s**, retaining its original 15-second
+deadline, exact bytes and queued-allocation checks
+(`/tmp/meshspan-bulk-provider-opt2.log`). Four concurrent independent transfers
+then passed in **2.412–2.488 s**, consuming **2.359–2.383 s** user CPU each
+(`/tmp/meshspan-bulk-provider-opt2-load-{1,2,3,4}.log`). This is a measured
+improvement over the earlier unoptimized **12.06–12.23 s** concurrent runs and
+the retained cluster-wide failures, not a passing retry of an unchanged build.
+
+The candidate now keeps this narrow Cargo development-profile override for
+`meshspan-rustls-provider` only. Test builds inherit it. Debug symbols,
+assertions, overflow checks and incremental compilation are explicitly retained;
+all other workspace crates retain the ordinary debug profile. This is an
+evidence-backed exception for packet cryptography to the normal debug-build
+preference: debugger stepping/inlining differs inside this crate. It is not an
+unoptimized whole-workspace test claim. No dependency, algorithm, release
+profile, deadline, assertion or test target changed. Canonical concurrent
+consumer tests and the complete gate remain required before integration.
+
+The canonical all-target/all-feature rebuild completed in **4 min 06 s**
+(`/tmp/meshspan-provider-profile-canonical-build.log`). Its cluster artifact
+`meshspan_cluster-b2bad129668d4490` passes **all 138 tests with four threads in
+98.34 s**, including the previously failing maximum transfer
+(`/tmp/meshspan-provider-profile-cluster.log`). Provider checks pass: **five
+unit tests** (the manual benchmark is ignored here), **two real TLS handshakes**
+and **four external-chain cases**, including denied names, expiry, roots and
+tampering (`/tmp/meshspan-provider-profile-{unit,handshake,chains}.log`). The
+manual benchmark is then explicitly executed: **0.299/0.300 s** through the
+adapter and **0.313/0.317 s** directly, **1.233 s** overall
+(`/tmp/meshspan-provider-profile-packet-cost.log`). Affected all-target/all-feature
+Clippy passes in **4.200 s**; workspace Rust and document formatting pass.
+The complete integration gate is still required; the historical federation
+timeout is not declared explained by this packet-cost measurement.
+
+## Bounded-runner gate — maximum consensus transfer still fails
+
+The complete gate on signed, GitHub-verified commit
+`4431f935d06d06244ff75a65c6e70578166034c1` (tree
+`986200004844050c96b3afda97c06a00b63d555f`) failed with exit **1** after
+**274.51 s** under NVM, four scheduler workers, four Cargo build jobs and
+explicit four-worker Rust/JavaScript test harnesses. All static, generated,
+licence and tooling lanes passed; web tests passed in **56.08 s**. The cluster
+library had **137 passed, one failed** in **127.06 s**. Daemon and later Rust
+targets were not reached. Log: `/tmp/meshspan-check-4431f935-bounded-js.log`.
+
+The maximum generic-command transfer again exceeded its unchanged 15-second
+deadline: the receiver reported `ReceivingBody` for **14,044 ms**, with no
+message in the application queue. The current diagnostic groups descriptor,
+frame and FIN waits into that stage, so it does not yet identify the stalled
+boundary. The worker-limit fix did not resolve this failure. No further full
+gate is justified until focused evidence identifies the next change; PR #274
+remains a draft. Neither this failure nor the earlier federation timeout is
+closed by isolated passing runs.
+
+Focused investigation adds only test-build observations distinguishing descriptor,
+payload and FIN waits, with fixed-size expected/received byte counts fenced to
+the latest transfer. Rebuilding canonical test artefacts took **39.940 s**
+(`/tmp/meshspan-bulk-byte-diagnostic-build.log`). The cluster-only four-thread
+reproduction fails **137 passed, one failed in 121.89 s**, receiving
+**15,073,280 of 16,777,311 bytes** before the original deadline. It is waiting
+for remaining payload, not the descriptor or FIN
+(`/tmp/meshspan-bulk-byte-diagnostic-cluster.log`).
+
+Three GDB stack samples of the original isolated test all found packet encryption
+on the test's runtime thread: two inside `hybrid_array::Default/from_fn` invoked
+by `ctr::gen_par_ks_blocks`, and one inside `aes_gcm::init_ctr` through the QUIC
+packet adapter. That diagnostic run finishes in **11.06 s**; debugger pauses
+make it unsuitable as an uninstrumented performance baseline
+(`/tmp/meshspan-bulk-stack-sampling.log`). These observations narrow investigation
+to concurrent transfer throughput; they do not justify changing cryptography,
+deadlines or accepted safety requirements.
+
+The initial diagnostic Clippy run rejected an unnecessary post-receipt stage
+because it pushed the receive operation over its function-size ceiling. That
+redundant observation was removed without splitting runtime work or suppressing
+the lint. Final cluster all-target/all-feature Clippy passes in **6.474 s**;
+workspace Rust formatting passes. After rebuilding, the seven focused bulk tests
+pass with four threads in **12.94 s**
+(`/tmp/meshspan-bulk-byte-diagnostic-focused.log`). This confirms the diagnostic
+change preserves those vectors; it does not close the reproduced cluster-wide
+failure. No crypto, dependency, profile, timeout or assertion changes were made.
+
+## Integration diagnostics — bounded JavaScript test runners
+
+The gate on signed commit `4177ab55970132f06e102e19059a353bd9b81727`
+(tree `e44e832896d828e4a6b9a87282650a70dfc0ae54`) was deliberately stopped
+with exit **143** after discovering that the launcher passed its worker budget
+to Rust but omitted it from Vitest and Node's tooling-test harness. This attempt
+used `MESHSPAN_CHECK_WORKERS=2`; JavaScript could still start CPU-sized pools.
+All static/generated/licence/tooling lanes passed, but joined Rust/web test
+results were not reported. This is an **incomplete gate**, not a pass
+(`/tmp/meshspan-check-4177ab55-two-workers.log`).
+
+The launcher now supplies Vitest `--maxWorkers` and Node `--test-concurrency`
+from the existing 1–32 worker budget. A regression executes a copy of the actual
+launcher with only its process boundary replaced by a command recorder. The
+unchanged launcher fails on the missing Vitest argument in **0.087 s**
+(`/tmp/meshspan-check-budget-baseline.log`). The fixed scheduler suite passes
+**six tests in 0.128 s**, checking budgets 2 and 32, exact Rust/Node/Vitest test
+arguments and all 12 dispatched steps (`/tmp/meshspan-check-budget-fixed.log`).
+Affected ESLint passes. The real web suite with four workers passes **54 files,
+277 tests in 12.304 s** (`/tmp/meshspan-check-budget-web.log`); a live process
+snapshot showed four Vitest fork workers. Installed Vitest's shared pool also
+resolves this bound across the configured projects.
+
+No dependency, test target, deadline, assertion or runtime behavior changed.
+This repairs uncontrolled validation concurrency; it does not establish the
+cause of either earlier timeout. A complete four-worker gate remains required.
+Stage 10 task 16 / DATA-02 and Stage 11 acceptance remain open.
+
+## Integration diagnostics — owned federation fixture cancellation
+
+Review found a concrete test-fixture lifetime defect independent of the earlier
+unclassified federation timeout. Two owner-exchange fixtures borrowed their
+client streams inside a three-second timeout, then awaited the server worker
+while those streams remained open. If the timeout interrupted an upload, the
+server could still be waiting for client bytes or FIN.
+
+A new real-QUIC regression withholds Ready until the unchanged client deadline
+expires, then releases the server and requires upload EOF within one second.
+The borrowed-stream baseline fails with `timed-out client retained upload while
+joining owner` in **4.57 s**
+(`/tmp/meshspan-federation-owner-cancellation-baseline.log`). The conversation
+now owns its streams inside the timed future, so cancellation drops them before
+the worker join. Both fixture paths observe the worker and preserve timeout
+context if it also fails. The regression passes in **3.44 s**, additionally
+asserting that the QUIC connection remains live and no upload bytes arrive
+(`/tmp/meshspan-federation-owner-cancellation-fixed.log`). The existing real-TLS
+federation workflow passes in **13.70 s**
+(`/tmp/meshspan-federation-owned-exchange-workflow.log`), and all-target/all-feature
+daemon Clippy passes in **9.07 s**
+(`/tmp/meshspan-federation-owned-exchange-clippy.log`). This is test-fixture
+ownership correction, not a claimed explanation for the original gate timeout.
+
+Separate temporary consensus measurements were removed after investigation.
+The canonical four-thread cluster target passed **138 tests** in **112.24 s**;
+the maximum transfer took **9.774 s**, including **8.542 s** of execution on its
+single Tokio test thread and only **9.098 ms** queued for the CPU
+(`/tmp/meshspan-bulk-scheduler-cluster.log`). A bounded two-runtime-worker
+experiment improved the isolated transfer to **5.47 s** but made all four
+concurrent copies fail their unchanged 15-second deadline, consuming
+**26.74–28.35 s** user CPU each (`/tmp/meshspan-bulk-two-workers-{0,1,2,3,4}.log`).
+That experiment was rejected and removed. The original bulk fixture, cipher,
+protocol deadlines, exact-byte and allocation-lease assertions remain unchanged.
+Neither integration timeout is declared resolved, and a complete gate remains
+required. Stage 10 task 16 / DATA-02 and Stage 11 acceptance remain open.
+
+## DATA-02 final gate blocked by maximum-size consensus transfer
+
+The next full local gate on signed commit
+`bea4533f318a099a97b255d951afe17597db869b` (tree
+`4bc0d542069868254c20ec8ebd00f47e24a5659f`) **failed**, exit 1, after
+**306.50 s**, under NVM with four scheduler workers, Cargo build jobs and Rust
+test threads. All generated, embedded-web, formatting, lint, type, tooling and
+licence lanes passed. Web tests passed in **29.61 s**. The cluster library had
+**137 passed, one failed** in **110.87 s**; daemon and later Rust targets were
+not reached. Log: `/tmp/meshspan-check-bea4533f.log`.
+
+`bulk_consensus_delivers_exact_maximum_generic_command_and_keeps_queued_lease`
+exceeded its unchanged 15-second deadline. Its retained receiver observation was
+`ReceivingBody`, **13,753 ms** into that stage; the application queue was empty
+and open. Both network close requests succeeded. This reopens the previously
+observed maximum-transfer stability failure; the cipher preference evidence
+below does not explain this recurrence. The separate federation timeout in the
+following section remains unexplained. PR #274 remains a draft, and no stage
+completion is claimed.
+
+The exact canonical cluster test artifact passes the isolated maximum transfer
+in **7.64 s**, consuming **7.58 s user CPU**, **0.03 s system CPU** and zero major
+page faults (`/tmp/meshspan-bulk-bea4533f-focused.log`). Four concurrent independent
+instances, each with its original 15-second deadline, pass in **12.06–12.23 s**;
+each consumes **11.92–12.00 s user CPU**, with zero major page faults
+(`/tmp/meshspan-bulk-bea4533f-load-{1,2,3,4}.log`). This measures increased CPU cost
+under concurrent load, but does not establish why the original gate exceeded
+its deadline. No transport deadline, cipher, integrity check, test assertion or
+production implementation was changed. Focused diagnosis remains required before
+another complete gate.
+
+## DATA-02 integration gate blocked by federation backup timeout
+
+The full local gate on signed commit
+`87e595af34824949e1c47851ab5d94e834262cd0` (tree
+`3f0115fb6b7b9a73c152d0fb18588abe3729de62`) **failed**, exit 1, after
+**366.50 s** under NVM with four scheduler workers, Cargo build jobs and Rust
+test threads. Generated drift, embedded web, formatting, Rust/web lint, type
+checking, tooling and both dependency licence checks passed. Web tests passed
+in **19.02 s**. The Rust lane stopped at the daemon library: **471 passed,
+one failed, one ignored** in **140.03 s**. The failing
+`federation_connection_recovers_lost_approval_reply_over_real_tls` reported
+`federation backup capability proof: deadline has elapsed`. Later Rust targets
+were not reached. Log: `/tmp/meshspan-check-87e595af.log`.
+
+The isolated federation workflow passed in **14.75 s**
+(`/tmp/meshspan-federation-backup-timeout-focused.log`). Test-only diagnostics now
+identify the request/operation and control, execution or owner exchange when a
+deadline expires; they do not log credentials or change deadlines or assertions.
+Four concurrent independent reproductions also passed in **15.23–15.40 s**
+(`/tmp/meshspan-federation-backup-load-{1,2,3,4}.log`). The original timeout remains
+unexplained and open; these passing retries do not close it.
+
+The diagnostic daemon-library run had **471 passed, one failed, one ignored** in
+**128.12 s** (`/tmp/meshspan-federation-backup-daemon-diagnostic.log`). Federation
+passed, but `backup_provider_snapshot_is_independent_of_storage_maintenance_lock`
+failed because its five-second deadline began before daemon/database setup and
+was already expired by **1.38 s**. That fixture now starts its unchanged
+five-second deadline immediately before the wait. The real maintenance mutex
+remains held throughout the proof, and the independent expired-deadline and
+retained-completion assertions remain unchanged. Both focused startup tests pass
+in **2.18 s** (`/tmp/meshspan-backup-startup-deadline-fixed.log`); daemon Clippy
+passes across all targets/features in **12.11 s**
+(`/tmp/meshspan-federation-diagnostics-clippy.log`). Rust formatting passes.
+
+A complete gate on the updated candidate is still required. PR #274 remains a
+draft and unmerged. Stage 10 task 16 / DATA-02 remains open; Stage 11 has not
+started.
+
+## DATA-02 codec compatibility fixture follows version 21
+
+The archive-recovery follow-up was signed and pushed as
+`aaa88e8d15be1d437e7c0638760d68f4e99fd8b9` (tree
+`c303f1392697121d25040f5da2e842baedae8f0b`), with local SSH and GitHub signature
+verification. Its full gate was stopped early (exit **143**) when review found a
+remaining compatibility fixture that still classified version 21 as unsupported.
+The focused codec target reproduced that mismatch: **47 passed, one failed** in
+**0.23 s** (`/tmp/meshspan-repair-generations-codec-boundary-baseline.log`).
+The fixture now explicitly accepts versions 18–21 and rejects 22, while retaining
+the other malformed/unknown-version cases. Runtime checks were not changed.
+All **48 codec tests pass** in **0.17 s**
+(`/tmp/meshspan-repair-generations-codec-boundary-fixed.log`).
+A fresh full gate remains required; `/tmp/meshspan-check-aaa88e8d.log` is an
+incomplete run, not a passing result. PR #274 is still a draft and Stage 10 task
+16 / DATA-02 remains open.
+
+## DATA-02 preserve archived recovery across physical generations
+
+The physical-generation checkpoint was signed and pushed as
+`ec6c303dcd3a0f370398bee7bb058a8142979c2b` (tree
+`0a316bf4c76e1f741199aaf57e7bb465a92d27dd`); both local SSH verification and
+GitHub verification pass. Draft [PR #274](https://github.com/KarlLivesey/MeshSpan/pull/274)
+contains this work. It has **not** merged.
+
+Assembled review found an additional consumer boundary: an archive can name an
+older physical generation even though identical immutable bytes survive in a
+repair copy. The running `pnpm check` on `ec6c303d` was deliberately terminated
+(exit **143**) to fix this before integration. Generated drift, embedded web,
+Rust/web static checks, tooling and both dependency licence lanes had passed;
+the Rust/web test stage did not produce a completed result. This is **not a passing
+integration gate**. Log: `/tmp/meshspan-check-ec6c303d.log`.
+
+The focused archive regression returned **None** instead of the independently
+expected bytes when the surviving pack held a newer generation (**0.16 s**;
+`/tmp/meshspan-repair-generations-archive-baseline.log`). Recovery now has a distinct
+`RecoveryInventory::read_content_shard` operation. It selects only the archived
+manifest, coding position, length and digest; every candidate is read under its
+actual physical identity and its bytes are independently checked. It returns no
+placement receipt, write authority or deletion authority. Existing `read_exact`
+remains generation-exact. Both daemon recovery checking and physical restoration
+use the content operation through the existing filesystem recovery boundary.
+
+The existing inventory schema and schema digest are unchanged. An ordered cursor
+includes physical identity and pack ID, so a corrupt generation cannot hide a
+valid later generation in the same pack. Lookup first selects the next generation,
+then an exact copy, using the existing covering index and pack primary key. The
+SQLite query-plan regression passes without a table scan or temporary sort. The
+initial range query did require a temporary sort; the failed plans and diagnosis
+are retained in `/tmp/meshspan-repair-generations-recovery-tests-final.log`,
+`/tmp/meshspan-repair-generations-recovery-index-fixed.log`, and
+`/tmp/meshspan-repair-generations-index-diagnosis-2.log`.
+
+Seventeen storage recovery tests pass (**1.55 s**;
+`/tmp/meshspan-repair-generations-recovery-generation-lookup.log`), covering strict
+physical lookup, different manifest/stripe/shard/length/digest rejection, corrupt
+copies, same-pack generation fallback, and the indexed lookup. The real-folder
+round-trip proof now additionally verifies that the reclaimed original physical
+copy is absent and that offline recovery still decrypts the exact original file
+from repair copies (**1.40 s**;
+`/tmp/meshspan-repair-generations-offline-real-folders-fixed.log`). All fifteen
+protected-content tests pass (**9.76 s**;
+`/tmp/meshspan-repair-generations-offline-protected-suite.log`). Affected storage,
+filesystem and daemon Clippy passes across all targets/features (**14.73 s**;
+`/tmp/meshspan-repair-generations-recovery-clippy-final.log`). The separate real
+HTTPS/Samba recovery-and-storage-restart proof passes in **130.63 s** under NVM,
+four Cargo build jobs and four Rust test threads
+(`/tmp/meshspan-repair-generations-https-smb-recovery.log`). It used the existing
+local `meshspan-smbclient-test:bookworm` image
+`sha256:4282e160c6cc3090ee59f3b2581ee7a459fdd3f943323b7583824ea30a618eb0`;
+no image was downloaded or published. Workspace Rust formatting passes.
+A new complete integration gate is still required before merge.
+
+Stage 10 task 16 / DATA-02 remains open for automatic obsolete-placement cleanup
+admission/reference fencing, superseded/orphan handling, destination reselection
+and remaining actual process interruption/takeover cuts. No Stage 10/11 completion,
+publication, hardware, physical power-loss, soak or independent-review proof is
+claimed.
+
+## DATA-02 physical generations before obsolete-copy cleanup
+
+PR [#273](https://github.com/KarlLivesey/MeshSpan/pull/273) merged the prior
+repair-resumption candidate into `main` as
+`df6a824ac403c77924b13cc535fb481e4dd1cc39`. Its GitHub merge signature is verified,
+local/remote main agreed after fast-forward, and the merged branch was removed.
+The earlier full-gate evidence below remains evidence for that candidate only.
+
+Stage 10 task 16 / DATA-02 remains open. The next cleanup boundary exposed that
+repair reused the original physical shard generation: tombstoning an obsolete
+copy would prevent a later repair from returning to the same target. New live
+plans now select exactly the next physical generation. Recovered plans retain
+what was committed, including legacy same-generation attempts. Offline restoration
+also retains its independently selected identity. Immutable manifest bytes,
+coding geometry and expected byte digests do not change.
+
+Partition migration 122 and content-catalogue migration 14 retain the source and
+replacement generations separately, copying historical same-generation effects
+without rewriting their receipts. Metadata command version 21 gates generation
+advancement; versions 18–20 retain their prior interpretation and reject an
+advancing repair mislabeled as an older command. Projection revalidates a route's
+physical generation against its exact stored effect and survives catalogue reopen.
+No public HTTP schema, dependency or licence changes are involved.
+
+The existing real-folder repair regression failed before implementation with
+actual generation **1**, expected **2** (**1.00 s**;
+`/tmp/meshspan-repair-generation-baseline.log`). The new real-folder round-trip
+proof retires the original copy, returns a repair to that same target as generation
+3, replays its old removal permit, removes the superseded replacement, reopens the
+catalogue and reads exact bytes with other targets unavailable. Its immutable
+content layout stays identical. This test supplies explicit fixture removal
+authority: it proves physical generation isolation, **not** automatic cleanup
+admission or distributed reference attestation.
+
+Focused validation so far: ten metadata repair/migration/version/replay tests
+pass (**6.71 s**, `/tmp/meshspan-repair-generations-migration-tests.log`); eight
+catalogue repair/projection/migration tests pass (**0.59 s**,
+`/tmp/meshspan-repair-generations-projection-fixed.log`); all fifteen real-folder
+protected-content tests pass (**9.98 s**,
+`/tmp/meshspan-repair-generations-protected-fixed.log`); the affected backup-root
+upgrade fixture passes (**1.73 s**,
+`/tmp/meshspan-repair-generations-backup-fixture.log`). Final affected all-target/all-feature
+Clippy passed in **6.76 s** (`/tmp/meshspan-repair-generations-clippy-final.log`);
+workspace Rust formatting also passes.
+
+Historical schema fixtures required explicit removal of the new additive column:
+the original projection upgrade fixture failed with `QueryReturnedNoRows`, and the
+protected reuse upgrade fixture failed with `Unavailable` (fourteen other tests
+passed, **9.55 s**). Both reconstructed an invalid migration gap after the new
+migration. Correcting their historical schema reconstruction preserves the original
+assertions; production migration behavior was not weakened. Failed logs remain at
+`/tmp/meshspan-repair-generations-projection-tests.log` and
+`/tmp/meshspan-repair-generations-protected-tests.log`. An initial metadata focused
+run also exposed an erroneous SQL column-list edit; that implementation error was
+corrected before the passing metadata tests.
+
+The daemon controlled-clock maintenance/claim-takeover proof passes in **9.79 s**
+(`/tmp/meshspan-repair-generations-daemon-fixed.log`). Its old committed-effect
+fixture initially tried to reinstall a lower physical generation and was correctly
+rejected (**10.19 s**, `/tmp/meshspan-repair-generations-daemon-tests.log`). The
+fixture now writes a real replacement before committing its effect and interrupting
+completion; it does not fabricate a receipt or permit generation rollback.
+The real three-daemon stale-gateway restart/provider-loss proof passes in
+**29.21 s**, explicitly checking the next physical generation and original bytes
+(`/tmp/meshspan-repair-generations-process-proof.log`).
+
+The final integration gate is still pending for this candidate. Automatic obsolete-placement authority, reference/fence checks,
+superseded/orphan attempt cleanup, unavailable-destination reselection, and the
+remaining real process interruption/takeover cuts remain required. Stage 10 and
+Stage 11 are not complete. Publication remains prohibited; no hardware, physical
+power-loss, soak or independent-review proof is claimed here.
+
 ## DATA-02 repair-resumption candidate — complete local gate passes
 
 The complete NVM `pnpm check` passes on signed, locally/GitHub-verified

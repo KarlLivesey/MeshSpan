@@ -117,7 +117,7 @@ fn validate_repair_subject(
     };
     let source = value.source_receipt;
     let replacement = value.replacement_receipt;
-    let same_immutable_shard = source.shard == replacement.shard
+    let same_immutable_shard = valid_replacement_identity(source.shard, replacement.shard)
         && source.length == replacement.length
         && source.digest == replacement.digest;
     if value.volume_id != volume_id
@@ -272,9 +272,9 @@ fn insert_repair_effect(
             source_provider_operation_id, source_target_id, source_target_generation,
             replacement_provider_operation_id, replacement_target_id,
             replacement_target_generation, expected_length, expected_digest, committed_at,
-            revision
+            revision, replacement_shard_generation
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                   ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+                   ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
         params![
             context.operation_id.as_bytes().as_slice(),
             value.work_id.as_bytes().as_slice(),
@@ -300,6 +300,7 @@ fn insert_repair_effect(
             source.digest.as_slice(),
             context.occurred_at.get(),
             super::to_i64(revision.get())?,
+            i64::from(replacement.shard.generation),
         ],
     )?;
     Ok(())
@@ -416,4 +417,19 @@ pub(super) fn page(
     RepositoryError,
 > {
     read::page(connection, volume_id, manifest_id, after, limit)
+}
+
+// Same-generation effects remain readable/replayable for historical repair plans. A fresh
+// physical identity advances by exactly one; neither bytes nor logical shard position changes.
+pub(super) fn valid_replacement_identity(
+    source: meshspan_contracts::ShardIdentity,
+    replacement: meshspan_contracts::ShardIdentity,
+) -> bool {
+    replacement
+        == meshspan_contracts::ShardIdentity {
+            generation: replacement.generation,
+            ..source
+        }
+        && (replacement.generation == source.generation
+            || source.generation.checked_add(1) == Some(replacement.generation))
 }
