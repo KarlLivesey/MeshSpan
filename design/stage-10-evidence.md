@@ -230,11 +230,42 @@ all-target/all-feature Clippy passes **4.495 s**
 diff whitespace checks pass. Remaining validation includes a new complete gate;
 the earlier run did not reach all Rust targets.
 
-CORE-03 and Stage 10 task 17 remain incomplete; PR #275 is unmerged. The separate
-real HTTPS/Samba proof has not run on this candidate. No hardware, soak or
-lifetime-capacity proof is claimed. CORE-04
-must still introduce safe snapshot anchors, prefix reclamation and lagging-replica
-installation before lifetime log bounds can be closed.
+### Final CORE-03 candidate validation
+
+The complete local gate now **passes** on signed, pushed, locally/GitHub-verified
+commit `4088cb7c49dd0f3cee02867d525c073f06a36eae`, tree
+`c87d1f844b5d82e25fb966bc00f70d1c46401139`, with a clean working tree at start and
+completion. Command: `pnpm check`, after `nvm use`, with scheduler/Cargo/test workers
+**4** and `TMPDIR=/home/karl/.cache/meshspan-validation/tmp`. Node **26.8.2**, pnpm
+**11.19.0**, Rust **1.98.0**. Exit **0**, wall **835.909 s**;
+`/tmp/meshspan-check-4088cb7c.log`. All canonical Rust workspace targets pass
+(**790.09 s**), as do web tests (**30.90 s**), generated drift, embedded web,
+workspace Rust Clippy/formatting, both dependency-licence checks and web/tooling
+static/test checks. Rust and JavaScript advisory scans already passed on unchanged
+dependencies in the preceding candidate run. No ignored/environmental proof is
+implied by the normal gate.
+
+The separate real HTTPS/Samba recovery-and-storage-restart proof also **passes in
+101.12 s**, wall **101.138 s**, exit **0**:
+`/tmp/meshspan-537b1f4b-https-smb-recovery.log`. It ran the actual canonical executable
+`headless_process-ac32a18f1c274d87`, observed through `/proc` during the preceding
+gate, with exact test
+`offline_backup::original_file_recovers_through_https_and_real_smb_after_storage_restart`
+and `--exact --ignored --test-threads=4`. It used NVM and the same validation TMPDIR,
+plus pinned local Samba image
+`sha256:4282e160c6cc3090ee59f3b2581ee7a459fdd3f943323b7583824ea30a618eb0`, without
+download/publication. The subsequent fixture-only commit changed no production
+source, so this runtime evidence remains applicable to the final candidate.
+
+This completes CORE-03's transactional-accounting acceptance on the assembled
+candidate and validates the live admission/provider-lifetime corrections. PR #275
+is ready for integration; these final evidence additions are prose only. Earlier
+failed runs remain recorded: current passing validation does not retroactively
+establish the cause of the earlier private-activation failure. Stage 10 task 17
+remains partial. CORE-04 must still introduce safe snapshot anchors, prefix
+reclamation and lagging-replica installation before lifetime log bounds can be
+closed. No hardware, power-loss, soak or independent-review proof is claimed.
+Stage 11 has not started; publication remains on hold.
 
 ## Physical-generation candidate gate — multi-daemon setup failures
 
