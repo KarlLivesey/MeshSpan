@@ -10,6 +10,45 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 repair-resumption integration gate — historical backup fixture
+
+The first complete NVM `pnpm check` for signed/pushed/GitHub-verified
+`c8e4a52f06dd2cda3664b81d85dfaae6472f974b` (tree
+`87d73ee63fdb185d7acea4ed362529fe01f38558`) failed after **1432.31 s**.
+Generated drift, embedded web, Rust lint/format, Rust/JavaScript licences,
+workspace formatting, web lint/typecheck/tests and tooling tests passed. Rust
+workspace tests stopped in metadata: **588 passed, 1 failed**, with later Rust
+targets not reached. Log: `/tmp/meshspan-check-c8e4a52f.log`.
+
+`backup_root_migration_retains_surviving_legacy_history` constructs a historical
+version-109 database from a populated current fixture. Its explicit removal of
+post-109 objects omitted migration 121's `maintenance_repair_attempts` table,
+while deleting the corresponding migration history. Reopening correctly refused
+to create an already-existing table. The fixture now removes that post-109 table
+alongside the other newer objects. Production migrations are unchanged; the exact
+assertion that roots 200 and 201 survive remains intact. All six backup-root tests
+pass in **3.93 s** (`cargo test -p meshspan-metadata --lib
+repository::backup_catalogue_tests::roots`;
+`/tmp/meshspan-data02-backup-root-fixture-test.log`).
+
+The initial gate launcher also found `/usr/bin/time` unavailable, before any gate
+command ran. The actual gate used Bash's built-in timer under the selected NVM
+runtime. That launch diagnostic is retained separately in
+`/tmp/meshspan-check-c8e4a52f-launch.log`.
+
+The explicit real HTTPS/Samba recovery-and-cleanup check passed in **130.65 s**
+(build **29.31 s**) using the existing local pinned Samba image. Command:
+`cargo test -p meshspan-daemon --all-features --test headless_process
+offline_backup::original_file_recovers_through_https_and_real_smb_after_storage_restart
+-- --exact --ignored --test-threads=4`, under NVM with four Cargo build jobs.
+Log: `/tmp/meshspan-data02-resume-recovery-https-smb.log`. Metadata Clippy with all
+targets/features and warnings denied passed in **4.35 s**
+(`/tmp/meshspan-data02-backup-root-fixture-clippy.log`). Rust formatting and diff
+checks passed. The fixture correction changes no production implementation.
+
+A new complete gate remains required before PR #273 can merge. The earlier
+failed gate is not a pass or Stage 10 completion.
+
 ## DATA-02 daemon resumes the consensus-owned physical attempt
 
 The daemon now commits `PlanShardRepair` before provider admission, reloads the
