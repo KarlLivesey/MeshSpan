@@ -14,6 +14,7 @@ mod data_router;
 mod error;
 mod federated_backup_client;
 mod federated_backup_wire;
+mod put_resolution_client;
 mod router;
 mod server;
 mod wire;
@@ -29,8 +30,9 @@ pub use capability::{
     encode_write_permit,
 };
 pub use client::{
-    get_federated_shard, get_shard, put_federated_shard, put_shard, reclaim_federated_shard,
-    reclaim_shard, retire_federated_shard, scrub_federated_shard, tombstone_shard,
+    PreparedShardUpload, RepairShardUpload, ShardUploadClient, get_federated_shard, get_shard,
+    put_federated_shard, put_shard, reclaim_federated_shard, reclaim_shard, retire_federated_shard,
+    scrub_federated_shard, tombstone_shard,
 };
 pub use data_router::{RemoteDataRouter, RemoteDataRouterError};
 pub use error::DataPlaneError;

@@ -13,7 +13,7 @@ fn metadata_versions_preserve_18_principals_and_reject_new_opcodes()
     let (context, command) = tests::fixture()?;
     let bytes = encode_authoritative_command(context, &command)?;
     assert_eq!(bytes.get(..4), Some(b"MSC\x04".as_slice()));
-    for version in [18, 19] {
+    for version in [18, 19, 20] {
         let decoded = decode_authoritative_entry_for_version(version, &bytes)?;
         assert_eq!(
             decoded.context,
@@ -25,7 +25,7 @@ fn metadata_versions_preserve_18_principals_and_reject_new_opcodes()
             command.request_digest(context)
         );
     }
-    for version in [0, 1, 17, 20, u16::MAX] {
+    for version in [0, 1, 17, 21, u16::MAX] {
         assert!(!is_supported_metadata_command_version(version));
         assert_eq!(
             decode_authoritative_entry_for_version(version, &bytes),

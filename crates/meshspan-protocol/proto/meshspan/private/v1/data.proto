@@ -38,6 +38,52 @@ message PutShardResult {
   VersionedPayload receipt = 2;
 }
 
+// Original write identity is immutable; write_capability is independently refreshed.
+// No shard bytes are accepted and no new capacity reservation is created.
+message ResolveShardPutRequest {
+  RequestHeader header = 1;
+  bytes target_id = 2;
+  uint64 target_generation = 3;
+  VersionedPayload original = 4;
+  bytes write_capability = 5;
+}
+
+message ResolveShardPutResult {
+  bytes original_request_digest = 1;
+  oneof outcome {
+    bool unknown = 2;
+    bool prepared = 3;
+    VersionedPayload verified = 4;
+    WireError rejection = 5;
+  }
+}
+
+// Fresh native repair authority may resume this immutable original intent.
+// Ready pins the original operation before accepting DataFrame/PutShardFinish.
+message ResumeShardPutRequest {
+  RequestHeader header = 1;
+  bytes target_id = 2;
+  uint64 target_generation = 3;
+  VersionedPayload intent = 4;
+  bytes write_capability = 5;
+  // Return and close after admission so reconstruction does not hold a network worker.
+  bool admission_only = 6;
+}
+
+message ResumeShardPutReady {
+  VersionedPayload original = 1;
+  uint64 maximum_frame_bytes = 2;
+}
+
+message ResumeShardPutResult {
+  VersionedPayload intent = 1;
+  oneof outcome {
+    ResumeShardPutReady ready = 2;
+    VersionedPayload verified = 3;
+    WireError rejection = 4;
+  }
+}
+
 message GetShardRequest {
   RequestHeader header = 1;
   bytes target_id = 2;

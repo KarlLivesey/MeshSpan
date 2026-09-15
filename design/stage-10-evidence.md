@@ -10,6 +10,396 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 repair-resumption candidate — complete local gate passes
+
+The complete NVM `pnpm check` passes on signed, locally/GitHub-verified
+`eb2c6ca23e1d55fd5cb3e19f582cb400e9d8b929`, tested tree
+`51f144c9eb5526d2fc7858a16ee6b777bfbc7384`, in **1290.89 s** with four check
+workers, four Cargo build jobs and four Rust test threads. Rust workspace tests
+pass in **1250.97 s**, including the later targets not reached in the prior failed
+gates; web tests pass in **16.29 s**. Generated drift, embedded web, Rust/web
+static checks, formatting, Rust/JavaScript dependency licences and tooling tests
+all pass. Log: `/tmp/meshspan-check-eb2c6ca2.log`.
+
+The exact-byte repair/resumption paths also have the separately executed real
+HTTPS/Samba recovery-and-cleanup proof (**130.65 s**) and three-process automatic
+repair/stale-gateway restart proof (**35.85 s**), recorded below. The final metric
+contention correction additionally passed its deterministic failed-before/fixed-
+after regression and real exporter restart/peer/root-loss proof (**16.69 s**).
+No subsequent production implementation changes are included in this evidence
+update. The historical fixture and intermittent history-sampling failures remain
+recorded below; this passing gate resolves their integration block.
+
+PR #273 is ready for integration. DATA-02 still requires the remaining process
+interruption cuts, obsolete/superseded physical-attempt cleanup and whole-stripe
+generation handling. Stage 10 is incomplete; Stage 11 has not started as an
+integrated stage. Hardware, physical power-loss, soak and independent review are
+not claimed. Publication remains on hold.
+
+## DATA-02 integration gate — recover contended current-minute metric samples
+
+The full gate on signed/pushed/GitHub-verified `cafd84bb4008aa8da6a492dffc110657b824750a`
+failed after **807.42 s**. All static, licence, tooling and web lanes passed;
+headless tests finished **32 passed, 1 failed, 13 ignored**. The failure was
+`metrics::exporter_policy_survives_restart_and_reaches_another_gateway`, which
+reported an elapsed deadline during its initial root/configuration phase. Later
+Rust targets, including metadata, were not reached. Log:
+`/tmp/meshspan-check-cafd84bb.log`. The preceding gate passed this case with the same production implementation;
+the intervening commit changed only a historical fixture and documentation. A
+passing retry alone was not accepted as resolution.
+
+Retained root state showed no exporter configuration operations. Inspection of
+the initial history wait identified a matching timing defect: a failed
+non-blocking observation snapshot records a missing sample, but the prior
+once-per-minute guard then freezes that missing sample for up to 60 seconds.
+The real-process history wait is 15 seconds. A deterministic regression holds
+the observation mutex for the first sample, releases it, and requires the next
+sample to recover. It failed before the fix with the old observation timestamp
+still retained (`/tmp/meshspan-metrics-history-contention-baseline.log`).
+
+History sampling now retries a missing sample only within the current minute.
+A successful sample remains unchanged; completed buckets and historical gaps
+are not backfilled. The locks remain non-blocking, and the existing one-second
+observer tick bounds retries. No timeout, safety assertion or test parallelism
+was relaxed. The process fixture also names its history/configuration/dispatch
+phases and reports bounded missing-sample counts on a history timeout.
+
+All eight focused history tests passed in **0.08 s** (build **25.29 s**), including
+the real mutex-contention regression, gap preservation and API validation:
+`cargo test -p meshspan-daemon --lib metric_history`
+(`/tmp/meshspan-metrics-history-contention-tests.log`). The real exporter
+restart/second-gateway/root-loss proof passed in **16.69 s** (build **17.71 s**):
+`cargo test -p meshspan-daemon --all-features --test headless_process
+metrics::exporter_policy_survives_restart_and_reaches_another_gateway
+-- --exact --test-threads=4`
+(`/tmp/meshspan-metrics-history-process-proof.log`). Daemon Clippy, all targets
+and features with warnings denied, passed in **5.45 s**; formatting/diff checks
+passed. No schema, API model or dependency changed. A new complete gate remains
+required; PR #273 is still draft and Stage 10 remains incomplete.
+
+## DATA-02 repair-resumption integration gate — historical backup fixture
+
+The first complete NVM `pnpm check` for signed/pushed/GitHub-verified
+`c8e4a52f06dd2cda3664b81d85dfaae6472f974b` (tree
+`87d73ee63fdb185d7acea4ed362529fe01f38558`) failed after **1432.31 s**.
+Generated drift, embedded web, Rust lint/format, Rust/JavaScript licences,
+workspace formatting, web lint/typecheck/tests and tooling tests passed. Rust
+workspace tests stopped in metadata: **588 passed, 1 failed**, with later Rust
+targets not reached. Log: `/tmp/meshspan-check-c8e4a52f.log`.
+
+`backup_root_migration_retains_surviving_legacy_history` constructs a historical
+version-109 database from a populated current fixture. Its explicit removal of
+post-109 objects omitted migration 121's `maintenance_repair_attempts` table,
+while deleting the corresponding migration history. Reopening correctly refused
+to create an already-existing table. The fixture now removes that post-109 table
+alongside the other newer objects. Production migrations are unchanged; the exact
+assertion that roots 200 and 201 survive remains intact. All six backup-root tests
+pass in **3.93 s** (`cargo test -p meshspan-metadata --lib
+repository::backup_catalogue_tests::roots`;
+`/tmp/meshspan-data02-backup-root-fixture-test.log`).
+
+The initial gate launcher also found `/usr/bin/time` unavailable, before any gate
+command ran. The actual gate used Bash's built-in timer under the selected NVM
+runtime. That launch diagnostic is retained separately in
+`/tmp/meshspan-check-c8e4a52f-launch.log`.
+
+The explicit real HTTPS/Samba recovery-and-cleanup check passed in **130.65 s**
+(build **29.31 s**) using the existing local pinned Samba image. Command:
+`cargo test -p meshspan-daemon --all-features --test headless_process
+offline_backup::original_file_recovers_through_https_and_real_smb_after_storage_restart
+-- --exact --ignored --test-threads=4`, under NVM with four Cargo build jobs.
+Log: `/tmp/meshspan-data02-resume-recovery-https-smb.log`. Metadata Clippy with all
+targets/features and warnings denied passed in **4.35 s**
+(`/tmp/meshspan-data02-backup-root-fixture-clippy.log`). Rust formatting and diff
+checks passed. The fixture correction changes no production implementation.
+
+A new complete gate remains required before PR #273 can merge. The earlier
+failed gate is not a pass or Stage 10 completion.
+
+## DATA-02 daemon resumes the consensus-owned physical attempt
+
+The daemon now commits `PlanShardRepair` before provider admission, reloads the
+same physical intent on claim takeover, and refreshes only the claim's control
+identities and read/write authority. A verified replacement is recovered before
+reconstruction, so loss of the original inputs does not cause a second write.
+The worker validates the exact returned provider operation, destination and byte
+identity before committing its effect, and checks live time before each durable
+transition. Production uses the operating-system clock; the scheduler fixture
+supplies its controlled clock when advancing synthetic authority time.
+
+Native admission has a terminal `admission_only` exchange. The client waits for
+stream completion before reconstructing, freeing the provider's bounded worker
+for the reads needed by that reconstruction. Payload upload uses a separate
+bounded stream and the same saved intent/admission. Existing ordinary writes and
+offline reconstruction keep their original paths. This checkpoint adds no
+migration or dependency beyond the preceding signed metadata/native checkpoints.
+The new optional native protobuf flag defaults to the existing upload behavior.
+
+Focused local evidence (four Cargo build jobs and four test threads):
+
+- A substituted provider-operation regression failed before the worker binding:
+  `/tmp/meshspan-data02-worker-receipt-baseline.log`. All four worker tests then
+  passed, covering exact evidence, physical failure, substituted receipts and
+  expiry at the claim/effect/completion boundaries:
+  `/tmp/meshspan-data02-worker-resume-tests.log` (0.00 s tests; 50.10 s build).
+- Real-folder resumption recovered the identical write after its original
+  deadline with insufficient surviving reconstruction inputs: 1.05 s,
+  `/tmp/meshspan-data02-filesystem-resume-test.log`.
+- Real mTLS admission/upload/lost-result/reopen proof passed in 0.69 s, including
+  terminal admission before reconstruction and one observed physical write:
+  `/tmp/meshspan-data02-admission-terminal-test.log`.
+- The three-process automatic repair / stale-gateway restart proof passed in
+  35.85 s and now requires the earlier committed plan to match the exact effect:
+  `/tmp/meshspan-data02-daemon-plan-projection-test.log`.
+- The maintenance consumer initially remained Claimed when a synthetic future
+  tick met the real-clock guard. Explicit clock injection preserved the production
+  expiry checks and restored the fixture (10.19 s). The extended fixture then
+  passed saved-plan and already-written worker-state loss, reopened metadata and
+  next-claim completion with the original physical identity (10.02 s):
+  `/tmp/meshspan-data02-daemon-attempt-takeover-test-fixed.log`.
+- Affected data-plane/filesystem/daemon Clippy, all targets/features with warnings
+  denied, passed in 11.56 s:
+  `/tmp/meshspan-data02-daemon-resume-clippy-final.log`.
+
+The worker-state-loss fixture uses controlled time and real local persistence;
+it is not an OS process-kill or hardware proof. Full candidate integration,
+remaining real-process interruption cuts, obsolete/superseded attempt cleanup and
+whole-stripe generation changes still need acceptance. Stage 10 task 16 / DATA-02
+remain open; no Stage 11 or publication completion is claimed.
+
+## DATA-02 consensus-owned repair attempt — metadata progress
+
+Native resumption is signed/pushed as `0abea90626979c29bf520f78f707e2fd666fc119`,
+verified locally and by GitHub. The following metadata change adds transactional
+partition migration 121 and `PlanShardRepair` (wire kind 138, operation kind 167).
+Metadata command version 20 advertises this new command; compatibility decoders
+retain versions 18/19 and reject a plan falsely labelled as either older version.
+Historical node-command envelopes remain decodable as version 19.
+
+The consensus-owned job retains its exact physical operation, target, source
+receipt, deadline and byte identity before provider IO. A new claim can adopt
+that same intent with fresh effect/completion identities; it cannot silently
+reselect a destination or recycle the previous claim's control IDs/audit IDs.
+Once a plan exists, an effect must match its exact claim, context and replacement
+identity. Historical effects without a plan remain replayable. Reads bind the
+bounded stored command to the committed operation's digest, kind and revision.
+The record is a plan, not a claim that provider bytes are durable.
+
+Focused proofs cover reopen/adoption, changed physical intent and stale claim
+denial, recycled control identity denial, exact effect/completion, versioned
+codec/truncation rejection, and upgrade from schema 120 with integrity/FK checks.
+The substituted-command read test first failed (1 failed / 1 passed, 1.63s);
+after binding the record to its committed digest both passed in 1.47s. Broader
+maintenance tests passed 17/17 in 7.41s; command-codec tests passed 48/48 in 0.14s.
+Metadata/cluster/daemon all-target/all-feature warnings-denied Clippy passed in
+19.24s. Development compile/lint failures (SQL fixture integer type, visibility,
+reserved operation-kind collision, large value copies and an unnecessary test
+result wrapper) were corrected; no ceilings or expectations were weakened.
+
+Logs: `/tmp/meshspan-data02-repair-plan-tests-{baseline,fixed}.log`,
+`/tmp/meshspan-data02-repair-plan-acceptance{,-fixed}.log`,
+`/tmp/meshspan-data02-repair-plan-maintenance-tests.log`,
+`/tmp/meshspan-data02-repair-plan-codec-tests.log`,
+`/tmp/meshspan-data02-repair-plan-clippy{,-fixed}.log`, and
+`/tmp/meshspan-data02-repair-plan-consumer-clippy{,-fixed}.log`.
+
+The daemon still needs to select/adopt this record and invoke the resumable
+physical path. Real process takeover, remaining interruption cuts, superseded
+attempt cleanup and the complete gate remain open. No integration or Stage 10
+task 16 / DATA-02 completion is claimed by this metadata checkpoint.
+
+## DATA-02 exact repair resumption over native mTLS — transport progress
+
+Provider resumption is committed as `cae3e0c7a9815b4aa63b0b3c58581370b019a21e`,
+signed, pushed and verified locally and by GitHub. The next working tree adds
+native `ResumeShardPutRequest/Result` on unused private-envelope tags 16/17.
+It binds the immutable intent, returns its exact prepared admission or a freshly
+verified committed receipt, and retains the existing framed-byte/finish result
+protocol. Fresh transfer expiry is distinct from the original write context.
+Server elapsed time advances across upload and is checked again before provider
+write; an old admission-time sample cannot silently extend fresh authority.
+Federation does not accept this native-only operation.
+
+The real Quinn/mTLS test now cancels after admission, reopens the provider,
+resumes using only the original intent after its deadline, loses the durable
+write acknowledgement, reopens again, resolves the exact receipt twice without
+another upload, and reads identical bytes. Exactly one successful physical write
+is observed. Forged authority and a substituted digest are rejected. Controlled
+test times move forward; this is not hardware/power-loss evidence. The first
+run failed to compile due to a test module path; corrected before the passing
+0.68s proof and final 0.63s consumer run.
+
+Validation on the tree based on `cae3e0c7`:
+
+- Contracts, storage, data-plane and protocol all-target/all-feature tests:
+  182 passed across 13 targets, none failed/ignored; build 5.47s, storage 6.76s.
+- Foreground publisher recovery/expiry consumers: 2 passed in 1.11s.
+- All-target/all-feature warnings-denied Clippy for contracts, storage,
+  protocol, data-plane, filesystem and daemon passed in 15.55s. After the
+  monotonic-deadline unit test, affected Clippy passed in 3.36s.
+- Protocol fixtures reject missing/ambiguous outcomes, wrong intent versions
+  or sizes, missing admissions and invalid frame bounds. A pure time-boundary
+  test rejects arrival at the exact fresh deadline.
+- Development lint failures identified oversized upload enum/future storage
+  and an unnecessary owned payload; ownership was corrected without changing
+  lint thresholds or test expectations.
+- NVM-selected Node 26.8.2 / npm 11.19.1: `pnpm check:licences` passed
+  (`cargo deny` licences and 9 production / 28 tool-only JavaScript packages).
+  Log: `/tmp/meshspan-data02-repair-resume-licences.log`.
+
+Logs: `/tmp/meshspan-data02-repair-resume-wire-proof{,-fixed}.log`,
+`/tmp/meshspan-data02-repair-resume-protocol.log`,
+`/tmp/meshspan-data02-repair-resume-final-tests.log`,
+`/tmp/meshspan-data02-repair-resume-publisher-tests.log`,
+`/tmp/meshspan-data02-repair-resume-clippy{,-fixed,-final}.log`, and
+`/tmp/meshspan-data02-repair-resume-lifetime-clippy.log`.
+
+The daemon accepts the native protocol but does not yet drive it from durable
+repair-job intent. Replicated intent, worker takeover, remaining repair cuts,
+cleanup and the complete integration gate are still required. DATA-02 and
+Stage 10 task 16 remain open.
+
+## DATA-02 resume prepared repair bytes under fresh authority — provider boundary
+
+The provider can now prepare an immutable repair intent before accepting bytes,
+recover its actual reservation after a lost admission reply, and finish the same
+operation after the original deadline using fresh authenticated repair authority.
+Preparation and capacity pinning are one journal transaction. An expired released
+reservation must reacquire current capacity; an already prepared reservation is
+not charged twice. Original deadlines, reservation tokens and put digests remain
+unchanged. Ordinary expired puts and foreground use of the new path are rejected.
+Committed replay independently verifies current pack bytes through the existing
+resolver. No schema or dependency change is needed at this provider boundary.
+
+The real-folder interruption/restart regression failed with `InvalidInput` in
+0.23s before resumption and passed in 0.24s after it. Its strengthened version
+also checks forged/expired authority, substituted bytes/digests, foreground
+denial, exact committed replay and one 24-byte accounting credit. Journal tests
+prove lost-admission capacity exhaustion rolls back, replay after reopening
+retains the same token, and an intent not previously received can be prepared
+after its original deadline. These are controlled local interruption tests.
+
+Validation on the working tree based on `cbe0f4a3`:
+
+- Contracts/storage all-target/all-feature tests: 39 + 63 passed, no failed or
+  ignored tests; storage runtime 6.20s. The first run had a missing test fixture
+  argument at compile time; corrected before the passing run.
+- Strengthened focused repair regressions: 3 passed in 0.26s. Affected
+  all-target/all-feature Clippy with warnings denied passed in 0.39s.
+- Existing real native transport consumer: 1 passed in 0.52s; foreground
+  publisher recovery/expiry consumers: 2 passed in 1.13s.
+- Intent codec has independent fixed-byte, malformed-boundary and admission
+  binding tests. Its initial admission validator accepted zero length; the
+  fail-before/pass-after logs retain that development correction.
+
+Logs: `/tmp/meshspan-data02-expired-repair-resume-{baseline,fixed}.log`,
+`/tmp/meshspan-data02-repair-admission-tests{,-fixed}.log`,
+`/tmp/meshspan-data02-repair-resume-adversarial.log`,
+`/tmp/meshspan-data02-repair-admission-final-clippy.log`,
+`/tmp/meshspan-data02-repair-admission-{wire,publisher}-consumer.log`, and
+`/tmp/meshspan-data02-intent-validation-{baseline,fixed}.log`.
+
+The new resume path is not yet exposed through the private transport or used by
+durable daemon repair plans. Those integrations, worker takeover and the full
+candidate gate remain required. DATA-02 and Stage 10 task 16 remain incomplete.
+
+## DATA-02 distinct reservation and put contexts — compatibility regression
+
+The exact-outcome resolver now compares the retained reservation itself and
+checks the original put context through the provider operation digest. It no
+longer incorrectly reconstructs reservation admission from a later put's shorter
+deadline or refreshed revision. The existing lost-response/restart regression
+now exercises that valid combination. Before the fix it failed with
+`Journal(OperationConflict)` in 0.12s; after the fix it passed in 0.24s. Logs:
+`/tmp/meshspan-data02-distinct-admission-context-{baseline,fixed}.log`.
+
+On the working tree based on `fe44bb66`, the complete storage target suite
+passed: 60 tests, 0 failed/ignored, 5.96s; affected all-target/all-feature Clippy
+with warnings denied passed in 1.57s. Logs are
+`/tmp/meshspan-data02-reservation-context-{storage-tests,clippy}.log`.
+The reservation digest format and normal admission checks are unchanged.
+Durable repair intent and expired incomplete-write resumption remain open;
+this is not a full integration gate or Stage 10 task 16 completion.
+
+## DATA-02 exact provider admission and outcome resolution — signed progress
+
+PR #272 merged as `9560fd84936f90909446291463991d424bdeffd8`; its tree matches
+the checked source plus evidence and GitHub verifies the merge signature. The
+next branch, `codex/durable-repair-attempts`, has three signed, pushed commits,
+verified locally and by GitHub: storage `f39617c6`, transport `97455bf6` and daemon
+ownership `567f9989f100cebc6172688034c5d66579f70b09`. This is progress, not DATA-02
+completion or a passing integration gate. Stage 10 task 16's durable-progress
+prerequisite and the earlier repair-lifecycle acceptance remain open.
+
+The native client previously discarded the actual provider reservation and sent
+bytes after any nonempty ready payload. A real mTLS regression fails before the
+fix in **0.21 s** because bytes are transmitted after malformed admission; it
+passes afterward. It now also rejects a canonical but substituted target before
+upload. `ShardUploadClient` separates admission from upload, exposes the exact
+original context/reservation/shard identity for persistence, rejects changed
+bytes and bounds prepare/finish/resolve by the supplied clock and deadline.
+
+An independently reproduced lost-write-response/restart case could not resolve
+the exact original operation after its reservation expired: baseline **0.20 s**,
+`InvalidInput`. `FolderShardStore::resolve_put` now accepts fresh authenticated
+write authority while retaining every original request field. It returns closed
+unknown/prepared/verified evidence; it neither reserves capacity nor uploads
+bytes. Verification rereads the original pack operation and actual active bytes;
+prepared journal accounting commits once only after that proof. The regression
+passes in **0.24 s**, including exact 24-byte accounting, replay, altered original
+context, forged/expired/stale authority and later pack-byte corruption. Original
+version-one digest bytes are unchanged; no storage schema migration was added.
+
+Private data tags 14/15 add same-swarm exact outcome resolution. Existing tags
+remain unchanged. The resolver preserves fresh native authority checks; it does
+not grant federation authority or replace federation lifecycle/quota accounting.
+A hostile-outcome test found that the generic payload validator permits empty
+payloads. The new resolution messages now additionally reject empty verified
+receipts and unbound outcome digests; the generic validator was not weakened.
+Both new protocol tests pass after this correction. A test-module path error and
+a test cognitive-complexity warning were corrected before the final checks; no
+lint level or timeout was raised to obtain a pass.
+
+The combined real mTLS/folder proof cancels before bytes, retries the identical
+admission, cancels receipt observation after the provider reports durability,
+reopens the provider, advances time past the original expiry, and resolves the
+exact receipt under fresh authority. Replay does not issue another put; forged
+authority and altered original context are rejected. A separate admitted upload
+is stopped at expiry before sending bytes. Controlled time only moves forward.
+The final combined target passes in **0.52 s**. Native and existing federated
+transfer tests pass together: **172 tests across 13 targets, zero failed/ignored**
+for contracts, storage, data-plane and protocol with all targets/features and
+four test threads. Publisher interruption/restart consumers pass **2 tests in
+1.01 s**. Final affected all-target/all-feature Clippy (including filesystem and
+daemon consumers) passes in **8.41 s**; formatting/diff checks pass.
+
+Appliance provider IO now runs on owned blocking workers with the existing
+two-slot admission budget, retained until the synchronous call ends. Cancellation
+does not detach a provider write. The storage-node dispatcher accepts the new
+resolution request. The three-daemon stale-gateway/repair/provider-loss proof
+passes in **29.04 s** (build reported **1m 02s**) with exact original HTTPS bytes.
+This exercises real data traffic, not a full concurrency/performance or hardware
+acceptance claim. NVM selected Node **26.8.2**, npm **11.19.1**, pnpm **11.19.0**;
+`pnpm check:licences` passes Rust and JavaScript checks. No dependency changed.
+
+Logs: `/tmp/meshspan-data02-reservation-baseline.log`,
+`/tmp/meshspan-data02-expired-put-baseline.log`,
+`/tmp/meshspan-data02-put-resolution-adversarial.log`,
+`/tmp/meshspan-data02-resolution-protocol-tests.log`,
+`/tmp/meshspan-data02-resolution-protocol-fixed.log`,
+`/tmp/meshspan-data02-put-boundaries-final-tests.log`,
+`/tmp/meshspan-data02-publisher-consumer-tests.log`,
+`/tmp/meshspan-data02-final-consumer-clippy.log`,
+`/tmp/meshspan-data02-bounded-data-repair-proof.log` and
+`/tmp/meshspan-data02-admission-licences.log`.
+
+Remaining before DATA-02 acceptance: persist the selected physical/effect identities
+before IO; resume incomplete bytes under fresh authority without changing the
+original attempt; recover lost ready responses and worker takeover; integrate
+provider/effect/completion cuts into the real daemon; and authorise obsolete-route
+cleanup without retiring the live logical manifest. The complete NVM integration
+gate remains required before merging this branch. Publication remains on hold.
+
 ## DATA-02 repair projection — complete candidate gate
 
 The complete local NVM `pnpm check` passes on signed, locally/GitHub-verified
@@ -41,8 +431,7 @@ headless process tests and filesystem targets passed. Web tests passed in
 **16.32 s**. Metadata finished **583 passed, two failed** in **380.39 s**; later
 Rust targets were not reached. PR #272 remains unmerged.
 
-Both failures are legacy-fixture assumptions invalidated by partition migration
-120. The backup-root fixture restored schema 109 but retained migration 120's
+Both failures are legacy-fixture assumptions invalidated by partition migration 120. The backup-root fixture restored schema 109 but retained migration 120's
 `maintenance_repair_effects_scope_order` index, so replay correctly rejected an
 already-existing index. Its focused baseline fails in **1.36 s**. The fixture now
 removes that post-109 index along with the other successor schema objects; the

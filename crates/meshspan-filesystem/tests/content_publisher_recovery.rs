@@ -353,6 +353,33 @@ impl<P> InterruptSecondPut<P> {
 }
 
 impl<P: StorageProvider> StorageProvider for InterruptSecondPut<P> {
+    fn prepare_repair_put(
+        &mut self,
+        intent: meshspan_contracts::ShardPutIntent,
+        authority: meshspan_contracts::ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<meshspan_contracts::RepairPutAdmission, ContractError> {
+        StorageProvider::prepare_repair_put(&mut self.inner, intent, authority, observed_at)
+    }
+
+    fn finish_repair_put(
+        &mut self,
+        request: PutShardRequest,
+        authority: meshspan_contracts::ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<ShardReceipt, ContractError> {
+        StorageProvider::finish_repair_put(&mut self.inner, request, authority, observed_at)
+    }
+
+    fn resolve_put(
+        &mut self,
+        original: meshspan_contracts::ShardPutIdentity,
+        authority: meshspan_contracts::ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<meshspan_contracts::ShardPutResolution, ContractError> {
+        self.inner.resolve_put(original, authority, observed_at)
+    }
+
     fn describe(&self) -> ImplementationDescriptor {
         self.inner.describe()
     }

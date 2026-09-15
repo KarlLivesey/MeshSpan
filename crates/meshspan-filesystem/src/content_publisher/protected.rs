@@ -70,6 +70,26 @@ pub trait ContentShardRouter {
         observed_at: meshspan_domain::UnixMicros,
     ) -> Result<ShardReceipt, ContractError>;
 
+    /// Admits or recovers one exact repair intent under fresh authority before byte upload.
+    /// # Errors
+    /// Rejects unknown routes, changed intent, stale authority and provider failure.
+    fn prepare_repair_put(
+        &mut self,
+        intent: meshspan_contracts::ShardPutIntent,
+        authority: meshspan_contracts::ShardWritePermit,
+        observed_at: meshspan_domain::UnixMicros,
+    ) -> Result<meshspan_contracts::RepairPutAdmission, ContractError>;
+
+    /// Finishes a prepared repair while retaining its original context and actual reservation.
+    /// # Errors
+    /// Rejects changed identity/bytes, expired authority and provider failure.
+    fn finish_repair_put(
+        &mut self,
+        request: PutShardRequest,
+        authority: meshspan_contracts::ShardWritePermit,
+        observed_at: meshspan_domain::UnixMicros,
+    ) -> Result<ShardReceipt, ContractError>;
+
     /// Reads one exact verified shard from its routed target.
     ///
     /// # Errors
@@ -97,6 +117,24 @@ impl<Provider: StorageProvider> ContentShardRouter for Provider {
         observed_at: meshspan_domain::UnixMicros,
     ) -> Result<ShardReceipt, ContractError> {
         StorageProvider::put_exact(self, request, observed_at)
+    }
+
+    fn prepare_repair_put(
+        &mut self,
+        intent: meshspan_contracts::ShardPutIntent,
+        authority: meshspan_contracts::ShardWritePermit,
+        observed_at: meshspan_domain::UnixMicros,
+    ) -> Result<meshspan_contracts::RepairPutAdmission, ContractError> {
+        StorageProvider::prepare_repair_put(self, intent, authority, observed_at)
+    }
+
+    fn finish_repair_put(
+        &mut self,
+        request: PutShardRequest,
+        authority: meshspan_contracts::ShardWritePermit,
+        observed_at: meshspan_domain::UnixMicros,
+    ) -> Result<ShardReceipt, ContractError> {
+        StorageProvider::finish_repair_put(self, request, authority, observed_at)
     }
 
     fn get_exact(

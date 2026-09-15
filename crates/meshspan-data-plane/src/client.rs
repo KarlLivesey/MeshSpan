@@ -2,12 +2,15 @@
 
 //! Client side of exact remote shard lifecycle streams.
 
+mod upload;
+pub use upload::{PreparedShardUpload, RepairShardUpload, ShardUploadClient};
+
 use meshspan_contracts::{
-    BoundedBytes, FederatedShardPermit, ReclamationReceipt, RemovalPermit, ScrubObservation,
-    ShardIdentity, ShardReadPermit, ShardReceipt, ShardWritePermit, TombstoneReceipt,
-    reclamation_receipt_digest, tombstone_receipt_digest,
+    BoundedBytes, FederatedShardPermit, ReclamationReceipt, RemovalPermit, ReservationClass,
+    ScrubObservation, ShardIdentity, ShardReadPermit, ShardReceipt, ShardWritePermit,
+    TombstoneReceipt, reclamation_receipt_digest, tombstone_receipt_digest,
 };
-use meshspan_domain::{FederationStorageAction, OperationId, TargetId, UnixMicros};
+use meshspan_domain::{FederationStorageAction, OperationId, Revision, TargetId, UnixMicros};
 use meshspan_protocol::WireLimits;
 use meshspan_protocol::v1::data_control_envelope::Message;
 use meshspan_protocol::v1::{
@@ -20,7 +23,9 @@ use meshspan_transport::{
 };
 
 use crate::DataPlaneError;
-use crate::capability::{encode_federated_shard_permit, encode_read_permit, encode_write_permit};
+use crate::capability::{
+    decode_reservation, encode_federated_shard_permit, encode_read_permit, encode_write_permit,
+};
 use crate::wire::{
     federated_reclamation_evidence, receipt, reclamation_receipt, remote_rejection,
     removal_permit_payload, request_context, request_context_without_revision, require_durable,
@@ -40,6 +45,19 @@ pub async fn put_shard(
     bytes: &BoundedBytes,
     limits: WireLimits,
 ) -> Result<ShardReceipt, DataPlaneError> {
+    admit_native_upload(connection, header, permit, bytes, limits)
+        .await?
+        .finish(bytes)
+        .await
+}
+
+async fn admit_native_upload(
+    connection: &quinn::Connection,
+    header: RequestHeader,
+    permit: ShardWritePermit,
+    bytes: &BoundedBytes,
+    limits: WireLimits,
+) -> Result<ReadyShardUpload, DataPlaneError> {
     let maximum_bytes =
         usize::try_from(permit.maximum_bytes).map_err(|_| DataPlaneError::InvalidMessage)?;
     if bytes.is_empty() || bytes.len() > maximum_bytes {
@@ -48,7 +66,7 @@ pub async fn put_shard(
     if header.mesh_id.as_slice() != permit.mesh_id.as_bytes() {
         return Err(DataPlaneError::InvalidMessage);
     }
-    put_with_capability(
+    admit_upload(
         connection,
         header,
         PutInvocation {
@@ -56,6 +74,9 @@ pub async fn put_shard(
             target_id: permit.target_id,
             target_generation: permit.target_generation,
             shard: permit.shard,
+            reservation_class: permit.reservation_class,
+            authorization_revision: permit.authorization_revision,
+            provider_shard: permit.shard,
             capability: encode_write_permit(permit),
             federation_capability_digest: None,
         },
@@ -102,6 +123,17 @@ pub async fn put_federated_shard(
             target_id: permit.target_id,
             target_generation: permit.target_generation,
             shard: permit.shard,
+            authorization_revision: permit.allocation_revision,
+            provider_shard: meshspan_contracts::federated_provider_shard_identity(
+                permit.remote_mesh_id,
+                permit.scope_digest,
+                permit.shard,
+            ),
+            reservation_class: match permit.action {
+                FederationStorageAction::Put => ReservationClass::ForegroundWrite,
+                FederationStorageAction::Repair => ReservationClass::Repair,
+                _ => return Err(DataPlaneError::InvalidMessage),
+            },
             capability: encode_federated_shard_permit(permit),
             federation_capability_digest: Some(capability_digest),
         },
@@ -116,6 +148,9 @@ struct PutInvocation {
     target_id: TargetId,
     target_generation: u64,
     shard: ShardIdentity,
+    reservation_class: ReservationClass,
+    authorization_revision: Revision,
+    provider_shard: ShardIdentity,
     capability: Vec<u8>,
     federation_capability_digest: Option<[u8; 32]>,
 }
@@ -127,9 +162,24 @@ async fn put_with_capability(
     bytes: &BoundedBytes,
     limits: WireLimits,
 ) -> Result<ShardReceipt, DataPlaneError> {
+    admit_upload(connection, header, invocation, bytes, limits)
+        .await?
+        .finish(bytes)
+        .await
+}
+
+async fn admit_upload(
+    connection: &quinn::Connection,
+    header: RequestHeader,
+    invocation: PutInvocation,
+    bytes: &BoundedBytes,
+    limits: WireLimits,
+) -> Result<ReadyShardUpload, DataPlaneError> {
     if request_context_without_revision(&header)?.operation_id != invocation.operation_id {
         return Err(DataPlaneError::InvalidMessage);
     }
+    let context = request_context(&header, invocation.authorization_revision)?;
+    let deadline = context.deadline;
     let digest: [u8; 32] = blake3::hash(bytes.as_slice()).into();
     let (mut send, mut receive) = open_stream(connection, StreamKind::Data).await?;
     send_data_control(
@@ -160,51 +210,96 @@ async fn put_with_capability(
     if let Some(error) = ready.rejection.as_ref() {
         return Err(remote_rejection(error)?);
     }
-    if ready.reservation.is_empty()
+    let reservation =
+        decode_reservation(&ready.reservation).map_err(|_| DataPlaneError::InvalidMessage)?;
+    if reservation.operation_id != invocation.operation_id
+        || reservation.target_id != invocation.target_id
+        || reservation.target_generation != invocation.target_generation
+        || reservation.class != invocation.reservation_class
+        || reservation.maximum_bytes != bytes.len() as u64
+        || reservation.expires_at != deadline
         || ready.maximum_frame_bytes == 0
         || ready.maximum_frame_bytes > limits.maximum_data_frame_bytes() as u64
     {
         return Err(DataPlaneError::InvalidMessage);
     }
-    send_bytes(
-        &mut send,
-        bytes.as_slice(),
-        ready.maximum_frame_bytes,
-        limits,
-    )
-    .await?;
-    send_data_control(
-        &mut send,
-        &DataControlEnvelope {
-            message: Some(Message::PutShardFinish(PutShardFinish {
-                final_length: bytes.len() as u64,
-                final_digest: digest.to_vec(),
-            })),
+    Ok(ReadyShardUpload {
+        identity: meshspan_contracts::ShardPutIdentity {
+            context,
+            reservation,
+            shard: invocation.provider_shard,
+            expected_length: bytes.len() as u64,
+            expected_digest: digest,
         },
+        logical_shard: invocation.shard,
+        send,
+        receive,
+        maximum_frame_bytes: ready.maximum_frame_bytes,
         limits,
-    )
-    .await?;
-    send.finish()
-        .map_err(meshspan_transport::TransportError::from)?;
-    let result = receive_data_control(&mut receive, limits)
-        .await?
-        .into_inner();
-    let Message::PutShardResult(result) = result.message.ok_or(DataPlaneError::InvalidMessage)?
-    else {
-        return Err(DataPlaneError::InvalidMessage);
-    };
-    require_durable(result.result.as_ref())?;
-    let receipt = receipt(result.receipt.as_ref())?;
-    if receipt.operation_id != invocation.operation_id
-        || receipt.target_id != invocation.target_id
-        || receipt.target_generation != invocation.target_generation
-        || receipt.shard != invocation.shard
-        || receipt.length != bytes.len() as u64
-        || receipt.digest != digest
-    {
-        return Err(DataPlaneError::InvalidMessage);
+        connection_id: connection.stable_id(),
+    })
+}
+
+struct ReadyShardUpload {
+    identity: meshspan_contracts::ShardPutIdentity,
+    logical_shard: ShardIdentity,
+    send: quinn::SendStream,
+    receive: quinn::RecvStream,
+    maximum_frame_bytes: u64,
+    limits: WireLimits,
+    connection_id: usize,
+}
+
+impl ReadyShardUpload {
+    async fn finish(mut self, bytes: &BoundedBytes) -> Result<ShardReceipt, DataPlaneError> {
+        let original = self.identity;
+        if bytes.len() as u64 != original.expected_length
+            || blake3::hash(bytes.as_slice()).as_bytes() != &original.expected_digest
+        {
+            return Err(DataPlaneError::InvalidMessage);
+        }
+        send_bytes(
+            &mut self.send,
+            bytes.as_slice(),
+            self.maximum_frame_bytes,
+            self.limits,
+        )
+        .await?;
+        send_data_control(
+            &mut self.send,
+            &DataControlEnvelope {
+                message: Some(Message::PutShardFinish(PutShardFinish {
+                    final_length: original.expected_length,
+                    final_digest: original.expected_digest.to_vec(),
+                })),
+            },
+            self.limits,
+        )
+        .await?;
+        self.send
+            .finish()
+            .map_err(meshspan_transport::TransportError::from)?;
+        let result = receive_data_control(&mut self.receive, self.limits)
+            .await?
+            .into_inner();
+        let Message::PutShardResult(result) =
+            result.message.ok_or(DataPlaneError::InvalidMessage)?
+        else {
+            return Err(DataPlaneError::InvalidMessage);
+        };
+        require_durable(result.result.as_ref())?;
+        let receipt = receipt(result.receipt.as_ref())?;
+        if receipt.operation_id != original.context.operation_id
+            || receipt.target_id != original.reservation.target_id
+            || receipt.target_generation != original.reservation.target_generation
+            || receipt.shard != self.logical_shard
+            || receipt.length != original.expected_length
+            || receipt.digest != original.expected_digest
+        {
+            return Err(DataPlaneError::InvalidMessage);
+        }
+        Ok(receipt)
     }
-    Ok(receipt)
 }
 
 /// Reads and independently verifies one exact immutable shard from an authenticated peer.

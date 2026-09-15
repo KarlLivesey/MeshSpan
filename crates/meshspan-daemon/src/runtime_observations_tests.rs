@@ -411,3 +411,38 @@ fn runtime_metrics_omit_unobserved_gauges_and_include_all_recorded_families()
     );
     Ok(())
 }
+
+#[test]
+fn metric_history_recovers_within_the_same_minute_after_observation_contention()
+-> Result<(), Box<dyn std::error::Error>> {
+    let store = RuntimeObservations::default();
+    let locked = store
+        .0
+        .state
+        .lock()
+        .map_err(|_| "observation state poisoned")?;
+    store.sample_history(UnixMicros::new(1));
+    drop(locked);
+    let missing = store.history(MetricHistoryQuery::parse(None)?)?;
+    assert_eq!(missing.points.len(), 1);
+    assert!(missing.points[0].metrics.is_none());
+    store.sample_history(UnixMicros::new(2));
+    let recovered = store.history(MetricHistoryQuery::parse(None)?)?;
+    assert_eq!(recovered.points.len(), 1);
+    assert_eq!(
+        recovered.points[0].bucket_start_seconds,
+        missing.points[0].bucket_start_seconds
+    );
+    assert_eq!(recovered.points[0].observed_at_epoch_micros, Some(2));
+    assert!(recovered.points[0].metrics.as_ref().is_some_and(|metrics| {
+        metrics
+            .iter()
+            .any(|metric| metric.name == "meshspan_v1_https_dispatches")
+    }));
+    store.sample_history(UnixMicros::new(3));
+    assert_eq!(
+        store.history(MetricHistoryQuery::parse(None)?)?.points,
+        recovered.points
+    );
+    Ok(())
+}

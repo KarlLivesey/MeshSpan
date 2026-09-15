@@ -4,6 +4,8 @@
 
 mod backup_capacity;
 mod pack_routing;
+mod put_resolution;
+mod repair_put;
 
 use std::path::Path;
 
@@ -248,20 +250,28 @@ impl FolderShardStore {
         if let PreparePutResult::Committed(receipt) = self.journal.prepare_put(journal_request)? {
             return Ok(receipt);
         }
-        self.select_pack(request.shard, now)?;
+        self.persist_prepared_put(journal_request, &request.bytes)
+    }
+
+    fn persist_prepared_put(
+        &mut self,
+        request: JournalPutRequest,
+        bytes: &BoundedBytes,
+    ) -> Result<ShardReceipt, FolderShardStoreError> {
+        self.select_pack(request.shard, request.now)?;
         let evidence = self
             .pack
             .put_exact(PackPutRequest {
-                operation_id: request.context.operation_id,
-                request_digest,
+                operation_id: request.reservation.operation_id,
+                request_digest: request.request_digest,
                 shard: request.shard,
                 expected_digest: request.expected_digest,
-                bytes: &request.bytes,
-                now,
+                bytes,
+                now: request.now,
             })
             .map_err(|error| map_pack(&error))?;
         self.journal
-            .commit_put(journal_request, evidence)
+            .commit_put(request, evidence)
             .map_err(Into::into)
     }
 
@@ -628,6 +638,36 @@ impl meshspan_contracts::StorageUsageSource for FolderShardStore {
 }
 
 impl StorageProvider for FolderShardStore {
+    fn prepare_repair_put(
+        &mut self,
+        intent: meshspan_contracts::ShardPutIntent,
+        authority: meshspan_contracts::ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<meshspan_contracts::RepairPutAdmission, ContractError> {
+        FolderShardStore::prepare_repair_put(self, intent, authority, observed_at)
+            .map_err(contract_error)
+    }
+
+    fn finish_repair_put(
+        &mut self,
+        request: PutShardRequest,
+        authority: meshspan_contracts::ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<ShardReceipt, ContractError> {
+        FolderShardStore::finish_repair_put(self, &request, authority, observed_at)
+            .map_err(contract_error)
+    }
+
+    fn resolve_put(
+        &mut self,
+        original: meshspan_contracts::ShardPutIdentity,
+        authority: meshspan_contracts::ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<meshspan_contracts::ShardPutResolution, ContractError> {
+        FolderShardStore::resolve_put(self, original, authority, observed_at)
+            .map_err(contract_error)
+    }
+
     fn describe(&self) -> ImplementationDescriptor {
         ImplementationDescriptor {
             implementation_id: "folder-pack",
@@ -842,24 +882,7 @@ fn validate_put(
 }
 
 fn put_request_digest(request: &PutShardRequest) -> [u8; 32] {
-    let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.storage.put-request.v1");
-    digest.update(&request.context.operation_id.as_bytes());
-    digest.update(&request.context.deadline.get().to_be_bytes());
-    match request.context.expected_revision {
-        Some(revision) => {
-            digest.update(&[1]);
-            digest.update(&revision.get().to_be_bytes());
-        }
-        None => {
-            digest.update(&[0]);
-        }
-    }
-    digest.update(&request.reservation.reservation_digest);
-    digest.update(&crate::shard::encode_shard(request.shard));
-    digest.update(&request.expected_length.to_be_bytes());
-    digest.update(&request.expected_digest);
-    digest.finalize().into()
+    request.identity().request_digest()
 }
 
 fn map_pack(error: &PackStoreError) -> FolderShardStoreError {

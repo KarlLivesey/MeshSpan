@@ -45,6 +45,9 @@ mod deadline;
 #[path = "protected_content/reuse.rs"]
 mod reuse;
 
+#[path = "protected_content/repair_resume.rs"]
+mod repair_resume;
+
 #[path = "protected_content/recovery.rs"]
 mod recovery;
 
@@ -799,6 +802,40 @@ impl ContentShardRouter for TestRouter {
             .get_mut(&target_id)
             .ok_or(ContractError::NotFound)?;
         StorageProvider::put_exact(provider, request, observed_at)
+    }
+
+    fn prepare_repair_put(
+        &mut self,
+        intent: meshspan_contracts::ShardPutIntent,
+        authority: meshspan_contracts::ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<meshspan_contracts::RepairPutAdmission, ContractError> {
+        let mut state = self.lock()?;
+        if state.offline.contains(&intent.target_id) {
+            return Err(ContractError::Unavailable);
+        }
+        let provider = state
+            .providers
+            .get_mut(&intent.target_id)
+            .ok_or(ContractError::NotFound)?;
+        StorageProvider::prepare_repair_put(provider, intent, authority, observed_at)
+    }
+
+    fn finish_repair_put(
+        &mut self,
+        request: PutShardRequest,
+        authority: meshspan_contracts::ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<ShardReceipt, ContractError> {
+        let mut state = self.lock()?;
+        if state.offline.contains(&request.reservation.target_id) {
+            return Err(ContractError::Unavailable);
+        }
+        let provider = state
+            .providers
+            .get_mut(&request.reservation.target_id)
+            .ok_or(ContractError::NotFound)?;
+        StorageProvider::finish_repair_put(provider, request, authority, observed_at)
     }
 
     fn get_exact(

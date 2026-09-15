@@ -22,6 +22,7 @@ mod pack_routing;
 #[cfg(test)]
 mod pack_routing_tests;
 mod removal;
+mod repair_put;
 mod scrub;
 
 pub use inventory::{
@@ -308,6 +309,25 @@ struct StoredReservation {
     class: ReservationClass,
     maximum_bytes: u64,
     expires_at: UnixMicros,
+    state: i64,
+}
+
+impl StoredReservation {
+    fn into_reservation(
+        self,
+        marker: TargetMarker,
+        operation_id: OperationId,
+    ) -> StorageReservation {
+        StorageReservation {
+            operation_id,
+            target_id: marker.target_id(),
+            target_generation: marker.generation(),
+            class: self.class,
+            maximum_bytes: self.maximum_bytes,
+            expires_at: self.expires_at,
+            reservation_digest: self.reservation_digest,
+        }
+    }
 }
 
 struct StoredTargetState {
@@ -576,7 +596,7 @@ fn load_reservation(
     transaction
         .query_row(
             "SELECT request_digest, reservation_digest, reservation_class,
-                    maximum_bytes, expires_at
+                    maximum_bytes, expires_at, state
              FROM reservations WHERE operation_id = ?1",
             [operation.as_slice()],
             |row| {
@@ -586,6 +606,7 @@ fn load_reservation(
                     row.get::<_, i64>(2)?,
                     row.get::<_, i64>(3)?,
                     row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
                 ))
             },
         )
@@ -597,6 +618,7 @@ fn load_reservation(
                 class: decode_reservation_class(row.2)?,
                 maximum_bytes: to_u64(row.3)?,
                 expires_at: UnixMicros::new(row.4),
+                state: row.5,
             })
         })
         .transpose()
@@ -611,15 +633,7 @@ fn resolve_existing(
     if existing.request_digest != request_digest {
         return Err(TargetJournalError::OperationConflict);
     }
-    Ok(StorageReservation {
-        operation_id,
-        target_id: marker.target_id(),
-        target_generation: marker.generation(),
-        class: existing.class,
-        maximum_bytes: existing.maximum_bytes,
-        expires_at: existing.expires_at,
-        reservation_digest: existing.reservation_digest,
-    })
+    Ok(existing.into_reservation(marker, operation_id))
 }
 
 fn expire_active_reservations(
@@ -827,6 +841,8 @@ pub enum TargetJournalError {
 
 #[cfg(test)]
 mod tests {
+    mod repair_admission;
+
     use meshspan_contracts::{ContractVersion, RequestContext, ReservationClass};
     use meshspan_domain::{
         EntropyError, MeshId, OperationId, RandomSource, Revision, TargetId, UnixMicros,

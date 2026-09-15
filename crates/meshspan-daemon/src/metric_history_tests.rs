@@ -137,3 +137,23 @@ fn metric_history_output_rejects_overflow_misordered_buckets_and_substituted_lin
     assert!(encode_metric_history_response(&invalid).is_err());
     Ok(())
 }
+
+#[test]
+fn missing_current_bucket_retries_without_filling_historical_gaps() {
+    let mut history = MetricHistory::default();
+    assert!(history.sample_due(0));
+    history.record(point(0), 0);
+    assert!(history.sample_due(1));
+    assert!(history.sample_due(59));
+    let mut valid = point(60);
+    valid.metrics = Some(Vec::new());
+    history.record(valid, 60);
+    assert!(!history.sample_due(59));
+    assert!(!history.sample_due(60));
+    assert!(!history.sample_due(119));
+    assert!(history.sample_due(120));
+    assert!(history.minutes.points[0].metrics.is_none());
+    history.record(point(120), 120);
+    assert!(!history.sample_due(119));
+    assert!(history.sample_due(120));
+}

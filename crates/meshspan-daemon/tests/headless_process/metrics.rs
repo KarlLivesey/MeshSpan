@@ -38,8 +38,11 @@ async fn exporter_policy_survives_restart_and_reaches_another_gateway() -> Resul
         super::save_and_verify_recovery_bundle(&root, &client, api_key, &created).await?;
         super::wait_for_storage_folder_visibility(&root, &client, api_key).await?;
         // Local panel history does not require enabling an external exporter.
+        phase = "initial local metric history sample";
         let previous_history = verify_history(root.address, &client, api_key).await?;
+        phase = "exporter configuration";
         configure_and_verify(root.address, &client, api_key, &administrator).await?;
+        phase = "root gateway dispatch observations";
         verify_gateway_dispatches(&root, &client, api_key).await?;
         processes[0].kill()?;
         processes[0].wait()?;
@@ -214,6 +217,7 @@ async fn verify_history(
     key: &str,
 ) -> Result<String, Box<dyn Error>> {
     let deadline = super::Instant::now() + super::WAIT_LIMIT;
+    let mut last_sample = "no history response".to_owned();
     loop {
         let response = tokio::time::timeout_at(
             deadline.into(),
@@ -226,11 +230,20 @@ async fn verify_history(
                 &[("Authorization", &format!("Bearer {key}"))],
             ),
         )
-        .await??;
+        .await
+        .map_err(|_| format!("local metric history request exceeded 15s; {last_sample}"))??;
         require_status(&response, "200 OK", "read local metric history")?;
         let page: meshspan_api_contract::MetricHistoryResponse =
             serde_json::from_str(response_body(&response)?)?;
         meshspan_api_contract::encode_metric_history_response(&page)?;
+        last_sample = format!(
+            "points={}, missing_samples={}",
+            page.points.len(),
+            page.points
+                .iter()
+                .filter(|point| point.metrics.is_none())
+                .count()
+        );
         if page.points.iter().any(|point| {
             point.metrics.as_ref().is_some_and(|metrics| {
                 metrics
@@ -242,7 +255,9 @@ async fn verify_history(
             return Ok(page.history_id);
         }
         if super::Instant::now() >= deadline {
-            return Err("daemon did not sample local metric history".into());
+            return Err(
+                format!("daemon did not sample local metric history; {last_sample}").into(),
+            );
         }
         super::sleep(super::RETRY_INTERVAL).await;
     }

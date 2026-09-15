@@ -94,6 +94,8 @@ impl<Provider: StorageProvider> RemoteShardRouter<Provider> {
 
 fn message_route(message: &Message) -> Result<(TargetId, u64), DataPlaneError> {
     let (bytes, generation) = match message {
+        Message::ResumeShardPutRequest(value) => (&value.target_id, value.target_generation),
+        Message::ResolveShardPutRequest(value) => (&value.target_id, value.target_generation),
         Message::PutShardBegin(value) => (&value.target_id, value.target_generation),
         Message::GetShardRequest(value) => (&value.target_id, value.target_generation),
         Message::DeleteShardRequest(value) => (&value.target_id, value.target_generation),

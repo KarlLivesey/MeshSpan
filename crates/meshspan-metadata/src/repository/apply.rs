@@ -667,6 +667,7 @@ fn is_maintenance_work_command(command: &AuthoritativeCommand) -> bool {
             | AuthoritativeCommand::RenewMaintenanceWork(_)
             | AuthoritativeCommand::CompleteMaintenanceWork(_)
             | AuthoritativeCommand::CommitShardRepair(_)
+            | AuthoritativeCommand::PlanShardRepair(_)
             | AuthoritativeCommand::CommitScrubPass(_)
             | AuthoritativeCommand::CommitTargetReconciliation(_)
             | AuthoritativeCommand::CommitRebalanceScanPage(_)
@@ -706,6 +707,9 @@ fn execute_maintenance_work_command(
         }
         AuthoritativeCommand::CompleteMaintenanceWork(value) => {
             maintenance_work::complete(transaction, context, *value, revision)
+        }
+        AuthoritativeCommand::PlanShardRepair(value) => {
+            maintenance_work::plan_shard_repair(transaction, context, value, revision)
         }
         AuthoritativeCommand::CommitShardRepair(value) => {
             maintenance_work::commit_repair(transaction, context, value, revision)
@@ -1592,6 +1596,7 @@ fn command_kind(command: &AuthoritativeCommand) -> u8 {
         AuthoritativeCommand::RenewMaintenanceWork(_) => 103,
         AuthoritativeCommand::CompleteMaintenanceWork(_) => 104,
         AuthoritativeCommand::CommitShardRepair(_) => 105,
+        AuthoritativeCommand::PlanShardRepair(_) => 167,
         AuthoritativeCommand::CommitScrubPass(_) => 106,
         AuthoritativeCommand::BeginStorageTargetDrain(_) => 107,
         AuthoritativeCommand::AttestStorageTargetDrain(_) => 108,

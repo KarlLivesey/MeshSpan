@@ -3,7 +3,8 @@
 //! Composition of fenced maintenance claims, physical shard repair and authoritative completion.
 
 use meshspan_cluster::MetadataAuthorityRequestError;
-use meshspan_contracts::{CodingScheme, ContractError, ShardReceipt};
+use meshspan_contracts::{CodingScheme, ContractError, ShardPutIntent, ShardReceipt};
+use meshspan_domain::Clock;
 use meshspan_filesystem::{
     CommittedProtectedStripe, ContentShardRouter, ProtectedShardRepairer, ShardRepairRequest,
     ShardRepairTransition,
@@ -32,6 +33,8 @@ pub struct ShardRepairExecution<'a> {
     pub manifest_id: meshspan_domain::ContentManifestId,
     /// Compare-and-swap generation of the current shard-location catalogue.
     pub source_layout_generation: u64,
+    /// Immutable provider operation retained by metadata before any physical IO.
+    pub intent: ShardPutIntent,
     /// Physical reconstruction and destination authority.
     pub physical: ShardRepairRequest,
     /// Complete verified coding geometry and currently known durable receipts.
@@ -74,8 +77,10 @@ pub trait PhysicalShardRepair {
     /// Rejects invalid evidence, insufficient slices, capacity failure and provider errors.
     fn repair_exact(
         &mut self,
+        intent: ShardPutIntent,
         request: ShardRepairRequest,
         stripe: &CommittedProtectedStripe,
+        clock: &dyn Clock,
     ) -> Result<ShardReceipt, ContractError>;
 }
 
@@ -86,10 +91,12 @@ where
 {
     fn repair_exact(
         &mut self,
+        intent: ShardPutIntent,
         request: ShardRepairRequest,
         stripe: &CommittedProtectedStripe,
+        clock: &dyn Clock,
     ) -> Result<ShardReceipt, ContractError> {
-        self.repair(request, stripe)
+        self.resume_repair(intent, request, stripe, clock)
     }
 }
 
@@ -106,12 +113,14 @@ pub fn execute_shard_repair<Authority, Repairer>(
     authority: &Authority,
     repairer: &mut Repairer,
     execution: &ShardRepairExecution<'_>,
+    clock: &dyn Clock,
 ) -> Result<ShardRepairExecutionReceipt, ShardRepairExecutionError>
 where
     Authority: MaintenanceMetadataAuthority,
     Repairer: PhysicalShardRepair,
 {
     validate_execution(execution)?;
+    require_live_execution(execution, clock)?;
     let replacement_layout_generation = execution
         .source_layout_generation
         .checked_add(1)
@@ -120,7 +129,27 @@ where
         execution.claim_context,
         &AuthoritativeCommand::ClaimMaintenanceWork(execution.claim),
     )?;
-    let replacement_receipt = repairer.repair_exact(execution.physical, execution.stripe)?;
+    require_live_execution(execution, clock)?;
+    let replacement_receipt = repairer.repair_exact(
+        execution.intent,
+        execution.physical,
+        execution.stripe,
+        clock,
+    )?;
+    let intent = execution.intent;
+    if replacement_receipt
+        != (ShardReceipt {
+            operation_id: intent.context.operation_id,
+            shard: intent.shard,
+            target_id: intent.target_id,
+            target_generation: intent.target_generation,
+            length: intent.expected_length,
+            digest: intent.expected_digest,
+        })
+    {
+        return Err(ShardRepairExecutionError::InvalidInput);
+    }
+    require_live_execution(execution, clock)?;
     let effect = authority.commit(
         execution.effect_context,
         &AuthoritativeCommand::CommitShardRepair(CommitShardRepair {
@@ -136,6 +165,7 @@ where
             replacement_receipt,
         }),
     )?;
+    require_live_execution(execution, clock)?;
     let completion = authority.commit(
         execution.completion_context,
         &AuthoritativeCommand::CompleteMaintenanceWork(CompleteMaintenanceWork {
@@ -167,11 +197,35 @@ where
     })
 }
 
+fn require_live_execution(
+    execution: &ShardRepairExecution<'_>,
+    clock: &dyn Clock,
+) -> Result<(), ShardRepairExecutionError> {
+    let now = clock.now();
+    if now < execution.physical.observed_at
+        || now >= execution.physical.deadline
+        || now >= execution.claim.lease_expires_at
+    {
+        return Err(ContractError::DeadlineExceeded.into());
+    }
+    Ok(())
+}
+
 fn validate_execution(
     execution: &ShardRepairExecution<'_>,
 ) -> Result<(), ShardRepairExecutionError> {
     let claim = execution.claim;
-    if execution.source_layout_generation == 0
+    let current = execution.physical.physical_intent();
+    if (ShardPutIntent {
+        context: execution.intent.context,
+        ..current
+    }) != execution.intent
+    {
+        return Err(ShardRepairExecutionError::InvalidInput);
+    }
+    execution.intent.validate()?;
+    if current.context.operation_id != execution.intent.context.operation_id
+        || execution.source_layout_generation == 0
         || execution.physical.source_receipt.shard.stripe_index
             != execution.stripe.stripe.chunk().chunk_index
         || execution.claim_context.actor_principal_id != execution.effect_context.actor_principal_id
@@ -231,7 +285,7 @@ mod tests {
         let mut repairer = FixedRepairer {
             replacement: Ok(replacement),
         };
-        let receipt = execute_shard_repair(&authority, &mut repairer, &execution)?;
+        let receipt = execute_shard_repair(&authority, &mut repairer, &execution, &FixedClock)?;
         assert_eq!(receipt.replacement_receipt, replacement);
         assert_eq!(receipt.effect.committed_revision, Revision::new(2));
         assert_eq!(receipt.completion.committed_revision, Revision::new(3));
@@ -271,13 +325,100 @@ mod tests {
             replacement: Err(ContractError::Unavailable),
         };
         assert!(matches!(
-            execute_shard_repair(&authority, &mut repairer, &execution(&stripe, source)?),
+            execute_shard_repair(
+                &authority,
+                &mut repairer,
+                &execution(&stripe, source)?,
+                &FixedClock
+            ),
             Err(ShardRepairExecutionError::Physical(
                 ContractError::Unavailable
             ))
         ));
         assert_eq!(authority.commands.borrow().len(), 1);
         Ok(())
+    }
+
+    #[test]
+    fn substituted_provider_operation_never_commits_a_repair_effect()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = shard_receipt(20, 21, 0)?;
+        let stripe = committed_stripe(source)?;
+        let authority = RecordingAuthority::default();
+        let mut repairer = FixedRepairer {
+            replacement: Ok(ShardReceipt {
+                operation_id: operation(99)?,
+                target_id: target(23)?,
+                ..source
+            }),
+        };
+        assert!(matches!(
+            execute_shard_repair(
+                &authority,
+                &mut repairer,
+                &execution(&stripe, source)?,
+                &FixedClock
+            ),
+            Err(ShardRepairExecutionError::InvalidInput)
+        ));
+        assert_eq!(authority.commands.borrow().len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn lease_expiry_blocks_effect_and_completion_at_their_actual_boundary()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = shard_receipt(20, 21, 0)?;
+        let stripe = committed_stripe(source)?;
+        for (expires_on_read, expected_commands) in [(1, 0), (2, 1), (3, 1), (4, 2)] {
+            let authority = RecordingAuthority::default();
+            let mut repairer = FixedRepairer {
+                replacement: Ok(ShardReceipt {
+                    operation_id: operation(22)?,
+                    target_id: target(23)?,
+                    ..source
+                }),
+            };
+            let clock = ExpiringClock {
+                reads: std::sync::atomic::AtomicUsize::new(0),
+                expires_on_read,
+            };
+            assert!(matches!(
+                execute_shard_repair(
+                    &authority,
+                    &mut repairer,
+                    &execution(&stripe, source)?,
+                    &clock,
+                ),
+                Err(ShardRepairExecutionError::Physical(
+                    ContractError::DeadlineExceeded
+                ))
+            ));
+            assert_eq!(authority.commands.borrow().len(), expected_commands);
+        }
+        Ok(())
+    }
+
+    struct ExpiringClock {
+        reads: std::sync::atomic::AtomicUsize,
+        expires_on_read: usize,
+    }
+    impl Clock for ExpiringClock {
+        fn now(&self) -> UnixMicros {
+            let read = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            UnixMicros::new(if read >= self.expires_on_read {
+                100
+            } else {
+                30
+            })
+        }
+    }
+
+    struct FixedClock;
+    impl Clock for FixedClock {
+        fn now(&self) -> UnixMicros {
+            UnixMicros::new(30)
+        }
     }
 
     #[derive(Default)]
@@ -323,8 +464,10 @@ mod tests {
     impl PhysicalShardRepair for FixedRepairer {
         fn repair_exact(
             &mut self,
+            _intent: ShardPutIntent,
             _request: ShardRepairRequest,
             _stripe: &CommittedProtectedStripe,
+            _clock: &dyn Clock,
         ) -> Result<ShardReceipt, ContractError> {
             self.replacement
         }
@@ -335,6 +478,15 @@ mod tests {
         source: ShardReceipt,
     ) -> Result<ShardRepairExecution<'_>, meshspan_domain::IdentifierError> {
         let worker_node_id = NodeId::from_bytes([8; 16])?;
+        let physical = ShardRepairRequest {
+            replacement_operation_id: operation(22)?,
+            source_receipt: source,
+            replacement_target_id: target(23)?,
+            replacement_target_generation: 1,
+            authorization_revision: Revision::new(1),
+            deadline: UnixMicros::new(100),
+            observed_at: UnixMicros::new(10),
+        };
         Ok(ShardRepairExecution {
             claim_context: context(1, 10)?,
             effect_context: context(2, 20)?,
@@ -350,15 +502,8 @@ mod tests {
             volume_id: VolumeId::from_bytes([10; 16])?,
             manifest_id: ContentManifestId::from_bytes([11; 16])?,
             source_layout_generation: 1,
-            physical: ShardRepairRequest {
-                replacement_operation_id: operation(4)?,
-                source_receipt: source,
-                replacement_target_id: target(23)?,
-                replacement_target_generation: 1,
-                authorization_revision: Revision::new(1),
-                deadline: UnixMicros::new(100),
-                observed_at: UnixMicros::new(10),
-            },
+            intent: physical.physical_intent(),
+            physical,
             stripe,
         })
     }

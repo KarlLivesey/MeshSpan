@@ -504,6 +504,36 @@ pub trait StorageProvider {
         observed_at: UnixMicros,
     ) -> Result<ShardReceipt, ContractError>;
 
+    /// Resolves an original write under fresh authority without admitting another byte upload.
+    /// # Errors
+    /// Rejects altered original identities, stale authority and inconsistent or corrupt evidence.
+    fn resolve_put(
+        &mut self,
+        original: crate::ShardPutIdentity,
+        authority: ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<crate::ShardPutResolution, ContractError>;
+
+    /// Prepares or recovers the same repair intent under fresh authority, before byte upload.
+    /// # Errors
+    /// Rejects foreground use, stale authority, changed intent, exhausted capacity and corruption.
+    fn prepare_repair_put(
+        &mut self,
+        intent: crate::ShardPutIntent,
+        authority: ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<crate::RepairPutAdmission, ContractError>;
+
+    /// Finishes exact prepared repair bytes without changing original admission or operation IDs.
+    /// # Errors
+    /// Rejects missing preparation, changed bytes, stale authority, foreground use and corruption.
+    fn finish_repair_put(
+        &mut self,
+        request: PutShardRequest,
+        authority: ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<ShardReceipt, ContractError>;
+
     /// Reads and verifies one exact shard after validating the authority capability.
     ///
     /// # Errors

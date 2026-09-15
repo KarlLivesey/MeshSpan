@@ -15,6 +15,8 @@ use meshspan_filesystem::ContentShardRouter;
 use meshspan_metadata::{AuthoritativeRepository, StorageTargetProviderContext};
 use meshspan_protocol::v1::ErrorCode;
 
+mod repair;
+
 use crate::LocalFolderStorageProvider;
 use crate::native_filesystem_runtime::MAXIMUM_NATIVE_SHARD_BYTES;
 use crate::private_consensus_runtime::PrivateConsensusRuntime;
@@ -244,6 +246,37 @@ impl ContentShardRouter for ClusterShardRouter {
         ) {
             Some(provider) => StorageProvider::put_exact(provider, request, observed_at),
             None => self.remote_put(&request),
+        }
+    }
+
+    fn prepare_repair_put(
+        &mut self,
+        intent: meshspan_contracts::ShardPutIntent,
+        authority: ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<meshspan_contracts::RepairPutAdmission, ContractError> {
+        match self.writable_local_mut(intent.target_id, intent.target_generation) {
+            Some(provider) => {
+                StorageProvider::prepare_repair_put(provider, intent, authority, observed_at)
+            }
+            None => self.remote_prepare_repair(intent, authority),
+        }
+    }
+
+    fn finish_repair_put(
+        &mut self,
+        request: PutShardRequest,
+        authority: ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<ShardReceipt, ContractError> {
+        match self.writable_local_mut(
+            request.reservation.target_id,
+            request.reservation.target_generation,
+        ) {
+            Some(provider) => {
+                StorageProvider::finish_repair_put(provider, request, authority, observed_at)
+            }
+            None => self.remote_finish_repair(&request, authority),
         }
     }
 

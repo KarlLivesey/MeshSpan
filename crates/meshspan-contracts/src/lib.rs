@@ -32,7 +32,13 @@ pub use placement_assessment::{PlacementAssessment, PlacementAssessmentRequest};
 pub use protection_metrics::ProtectionMetric;
 mod observability;
 mod security;
+mod shard_put;
 mod shard_receipt;
+pub use shard_put::{RepairPutAdmission, ShardPutIdentity, ShardPutIntent, ShardPutResolution};
+mod shard_put_intent;
+pub use shard_put_intent::{
+    SHARD_PUT_INTENT_V1_BYTES, decode_shard_put_intent_v1, encode_shard_put_intent_v1,
+};
 mod storage;
 pub use shard_receipt::{SHARD_RECEIPT_V1_BYTES, decode_shard_receipt_v1, encode_shard_receipt_v1};
 mod storage_io;

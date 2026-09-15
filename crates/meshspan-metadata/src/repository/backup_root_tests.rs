@@ -20,7 +20,8 @@ fn backup_root_migration_retains_surviving_legacy_history() -> TestResult {
         fixture.repository.database.connection(),
     )?;
     fixture.repository.database.connection().execute_batch(
-        "DROP INDEX maintenance_repair_effects_scope_order;
+        "DROP TABLE maintenance_repair_attempts;
+         DROP INDEX maintenance_repair_effects_scope_order;
          DROP TABLE node_capability_presentations;
          DROP TABLE user_enrollments;
          DROP TABLE partition_recovery_consensus_activation;

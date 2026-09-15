@@ -3,7 +3,9 @@
 //! Provider-neutral server side of the authenticated shard stream state machine.
 
 mod federation;
+mod put_resolution;
 mod removal;
+mod repair_upload;
 mod scrub;
 
 pub use removal::reject_shard_maintenance;
@@ -121,6 +123,14 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
     ) -> Result<(), DataPlaneError> {
         validate_authenticated_sender(&message, peer)?;
         match message {
+            Message::ResumeShardPutRequest(request) => {
+                self.serve_repair_upload(&mut stream, limits, observed_at, request)
+                    .await
+            }
+            Message::ResolveShardPutRequest(request) => {
+                self.serve_put_resolution(&mut stream, limits, observed_at, request)
+                    .await
+            }
             Message::PutShardBegin(begin) => {
                 self.serve_put(&mut stream, limits, observed_at, begin)
                     .await
@@ -208,28 +218,18 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
         )
         .await?;
 
-        let bytes = receive_put_bytes(&mut stream.receive, begin.declared_length, limits).await?;
-        let finish = receive_data_control(&mut stream.receive, limits)
-            .await?
-            .into_inner();
-        let Message::PutShardFinish(finish) =
-            finish.message.ok_or(DataPlaneError::InvalidMessage)?
-        else {
-            return Err(DataPlaneError::InvalidMessage);
-        };
         let digest: [u8; 32] = begin
             .declared_digest
             .as_slice()
             .try_into()
             .map_err(|_| DataPlaneError::InvalidMessage)?;
-        if finish.final_length != begin.declared_length
-            || finish.final_digest.as_slice() != digest
-            || blake3::hash(&bytes).as_bytes() != &digest
-        {
-            return Err(DataPlaneError::InvalidMessage);
-        }
-        let bounded = BoundedBytes::copy_from(&bytes, self.maximum_shard_bytes)
-            .map_err(|_| DataPlaneError::InvalidMessage)?;
+        let bounded = receive_put_payload(
+            &mut stream.receive,
+            (begin.declared_length, digest),
+            limits,
+            self.maximum_shard_bytes,
+        )
+        .await?;
         let request = PutShardRequest {
             context: prepared.context,
             reservation,
@@ -417,6 +417,8 @@ fn validate_authenticated_sender(
     peer: AuthenticatedPeer,
 ) -> Result<(), DataPlaneError> {
     let header = match message {
+        Message::ResolveShardPutRequest(value) => value.header.as_ref(),
+        Message::ResumeShardPutRequest(value) => value.header.as_ref(),
         Message::PutShardBegin(value) => value.header.as_ref(),
         Message::GetShardRequest(value) => value.header.as_ref(),
         Message::DeleteShardRequest(value) => value.header.as_ref(),
@@ -431,6 +433,30 @@ fn validate_authenticated_sender(
     } else {
         Err(DataPlaneError::InvalidMessage)
     }
+}
+
+async fn receive_put_payload(
+    receive: &mut quinn::RecvStream,
+    expected: (u64, [u8; 32]),
+    limits: WireLimits,
+    maximum_shard_bytes: usize,
+) -> Result<BoundedBytes, DataPlaneError> {
+    let (length, digest) = expected;
+    if length == 0 || length > maximum_shard_bytes as u64 {
+        return Err(DataPlaneError::InvalidMessage);
+    }
+    let bytes = receive_put_bytes(receive, length, limits).await?;
+    let finish = receive_data_control(receive, limits).await?.into_inner();
+    let Some(Message::PutShardFinish(finish)) = finish.message else {
+        return Err(DataPlaneError::InvalidMessage);
+    };
+    if finish.final_length != length
+        || finish.final_digest.as_slice() != digest
+        || blake3::hash(&bytes).as_bytes() != &digest
+    {
+        return Err(DataPlaneError::InvalidMessage);
+    }
+    BoundedBytes::copy_from(&bytes, maximum_shard_bytes).map_err(|_| DataPlaneError::InvalidMessage)
 }
 
 async fn receive_put_bytes(

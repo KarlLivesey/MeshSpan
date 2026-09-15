@@ -24,6 +24,9 @@ mod consensus;
 #[path = "compatibility/updates.rs"]
 mod updates;
 
+#[path = "compatibility/put_resolution.rs"]
+mod put_resolution;
+
 #[test]
 fn update_artifact_wire_binds_platform_length_digest_and_rejects_malformed_identity()
 -> Result<(), Box<dyn std::error::Error>> {

@@ -14,6 +14,7 @@ use meshspan_domain::{MeshId, OperationId, Revision, TargetId, UnixMicros};
 use crate::{CommittedProtectedStripe, ContentShardRouter};
 
 mod recovery;
+mod resume;
 pub use recovery::restore_recovery_stripe;
 
 /// Authority and deadline for checking an encrypted stripe without modifying storage.
@@ -96,31 +97,8 @@ where
         request: ShardRepairRequest,
         stripe: &CommittedProtectedStripe,
     ) -> Result<ShardReceipt, ContractError> {
-        let source_index = validate_request(request, stripe)?;
-        let context = repair_context(request);
-        let read = StripeReadRequest {
-            operation_id: request.replacement_operation_id,
-            authorization_revision: request.authorization_revision,
-            deadline: request.deadline,
-            observed_at: request.observed_at,
-        };
-        let targets = stripe
-            .receipts
-            .as_slice()
-            .iter()
-            .map(|receipt| receipt.target_id)
-            .collect();
-        let available = self.read_verified_slices(read, stripe, &targets)?;
-        let ciphertext = reconstruct_ciphertext(&self.coding, context, stripe, available.bytes)?;
-        let encoded = self
-            .coding
-            .encode(context, stripe.stripe.coding_layout(), &ciphertext)?;
-        let replacement_bytes = encoded
-            .as_slice()
-            .get(source_index)
-            .cloned()
-            .ok_or(ContractError::InternalContract)?;
-        store_replacement(&mut self.router, request, replacement_bytes)
+        let bytes = self.reconstruct_replacement(request, stripe)?;
+        store_replacement(&mut self.router, request, bytes)
     }
 
     /// Proves current decodability using only the explicitly permitted targets.
@@ -177,6 +155,38 @@ where
     #[must_use]
     pub fn into_router(self) -> Router {
         self.router
+    }
+
+    fn reconstruct_replacement(
+        &self,
+        request: ShardRepairRequest,
+        stripe: &CommittedProtectedStripe,
+    ) -> Result<BoundedBytes, ContractError> {
+        let source_index = validate_request(request, stripe)?;
+        let context = repair_context(request);
+        let read = StripeReadRequest {
+            operation_id: request.replacement_operation_id,
+            authorization_revision: request.authorization_revision,
+            deadline: request.deadline,
+            observed_at: request.observed_at,
+        };
+        let targets = stripe
+            .receipts
+            .as_slice()
+            .iter()
+            .map(|receipt| receipt.target_id)
+            .collect();
+        let available = self.read_verified_slices(read, stripe, &targets)?;
+        let ciphertext = reconstruct_ciphertext(&self.coding, context, stripe, available.bytes)?;
+        let encoded = self
+            .coding
+            .encode(context, stripe.stripe.coding_layout(), &ciphertext)?;
+        let replacement_bytes = encoded
+            .as_slice()
+            .get(source_index)
+            .cloned()
+            .ok_or(ContractError::InternalContract)?;
+        Ok(replacement_bytes)
     }
 
     fn read_verified_slices(
