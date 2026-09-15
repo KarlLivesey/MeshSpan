@@ -422,8 +422,8 @@ fn migration122_preserves_legacy_repair_plan_and_both_original_receipts()
         plan.effect_context,
         &AuthoritativeCommand::CommitShardRepair(effect),
     )?;
-    // Reconstruct the exact preceding schema: the command and receipts use the legacy
-    // same-generation representation, so removing only migration122 loses no information.
+    // Reconstruct schema 121, including removal of later log-accounting metadata.
+    // The command and receipts retain their legacy same-generation representation.
     let database = &mut fixture.repository.database;
     let transaction = database.connection_mut().transaction()?;
     transaction.execute_batch(
@@ -438,7 +438,8 @@ fn migration122_preserves_legacy_repair_plan_and_both_original_receipts()
         SELECT work_id, provider_operation_id, effect_operation_id, completion_operation_id,
             plan_operation_id, 20, command_bytes, revision FROM legacy_repair_attempts;
         DROP TABLE legacy_repair_attempts;
-        DELETE FROM schema_migrations WHERE version = 122;",
+        DROP TABLE consensus_log_accounting;
+        DELETE FROM schema_migrations WHERE version IN (122, 123);",
     )?;
     transaction.commit()?;
     fixture = reopen(fixture, &path)?;

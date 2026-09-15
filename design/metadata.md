@@ -92,6 +92,24 @@ does not instantiate file gateways, grant gateway keys or advertise cached progr
 as full service readiness. Certificate maintenance, remaining role transitions and
 complete recovered-file service acceptance still require integrated evidence.
 
+## Private request admission
+
+Forwarded commands and read-fence requests obtain fresh typed admission facts
+through the existing metadata authority owner's bounded queue and retained
+repository. They do not reopen the partition for each request. Store opening and
+explicit integrity verification still independently check retained-log accounting;
+only per-mutation accounting uses the transactional counters.
+
+Admission reads do not append, establish a quorum fence or cache authorization.
+They return only the mesh/partition identity, current node certificate and the
+operation-specific voting, registration or certificate-installation facts needed
+by the caller. Full ingress, stopped owners and the one-second response deadline
+fail closed; cancelled queued reads are skipped. The daemon keeps canonical
+decoding and installation-signature verification on owned blocking workers and
+rechecks deadlines and authenticated bindings after waits. Read-fence responses
+require fresh admission both before and after quorum confirmation, so a returned
+fence cannot bypass a newly applied retirement or certificate replacement.
+
 ## SQL rules
 
 - Use `STRICT` tables, foreign keys, unique constraints and explicit checks.

@@ -97,6 +97,15 @@ fn recovery_consensus_activation_rolls_back_membership_vote_and_revision_togethe
     let (delivery, permission) = permission(&fixture)?;
     let root = fixture.candidate.fixture.authority.root_certificate_der();
     let mut repository = fixture.candidate.reopen()?;
+    let original_accounting = retained_accounting(&repository)?;
+    inject_unapplied_tail(&repository)?;
+    let expected_accounting = (2, original_accounting.1 + 19, original_accounting.2 + 1);
+    assert_eq!(retained_accounting(&repository)?, expected_accounting);
+    let expected_state = super::super::super::consensus::load_state_from_connection(
+        repository.database.connection(),
+        &fixture.candidate.plan.partition_id.as_bytes(),
+        1,
+    )?;
     assert!(
         repository
             .activate_recovery_consensus(root, &permission, &delivery, recovery_time(70))
@@ -104,6 +113,7 @@ fn recovery_consensus_activation_rolls_back_membership_vote_and_revision_togethe
     );
     repository.materialise_recovery_node_keys(&fixture.candidate.fixture.authority)?;
     for (operation, table) in [
+        ("UPDATE", "consensus_log_accounting"),
         ("UPDATE", "consensus_vote"),
         ("UPDATE", "applied_state"),
         ("INSERT", "partition_recovery_consensus_activation"),
@@ -120,6 +130,15 @@ fn recovery_consensus_activation_rolls_back_membership_vote_and_revision_togethe
             .execute_batch("DROP TRIGGER fail_activation")?;
         drop(repository);
         repository = fixture.candidate.reopen()?;
+        assert_eq!(retained_accounting(&repository)?, expected_accounting);
+        assert_eq!(
+            super::super::super::consensus::load_state_from_connection(
+                repository.database.connection(),
+                &fixture.candidate.plan.partition_id.as_bytes(),
+                1,
+            )?,
+            expected_state
+        );
         assert_eq!(repository.current_revision()?, Revision::new(1));
         assert_eq!(repository.recovery_consensus_admission(root)?, None);
         assert_eq!(
@@ -135,8 +154,25 @@ fn recovery_consensus_activation_rolls_back_membership_vote_and_revision_togethe
         ));
     }
     repository.activate_recovery_consensus(root, &permission, &delivery, recovery_time(80))?;
+    drop(repository);
+    let repository = fixture.candidate.reopen()?;
+    assert_eq!(
+        repository.load_consensus_state(2)?.log,
+        expected_state.log[..1]
+    );
+    let expected_finished = (1, original_accounting.1, original_accounting.2 + 2);
+    assert_eq!(retained_accounting(&repository)?, expected_finished);
     repository.into_database().check_integrity()?;
     Ok(())
+}
+
+fn retained_accounting(
+    repository: &AuthoritativeRepository,
+) -> Result<(i64, i64, i64), rusqlite::Error> {
+    repository.database.connection().query_row(
+        "SELECT entry_count, payload_bytes, revision FROM consensus_log_accounting WHERE singleton = 1",
+        [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )
 }
 
 #[test]
@@ -195,8 +231,15 @@ fn inject_unapplied_tail(repository: &AuthoritativeRepository) -> TestResult {
     )?;
     let mut payload = operation.as_bytes().to_vec();
     payload.extend_from_slice(&[7, 8, 9]);
-    repository.database.connection().execute("INSERT INTO consensus_log (log_index, term, entry_kind, entry_version, payload, payload_digest)
+    let transaction = repository.database.connection().unchecked_transaction()?;
+    transaction.execute("INSERT INTO consensus_log (log_index, term, entry_kind, entry_version, payload, payload_digest)
         VALUES (2, 1, 1, 1, ?1, ?2)", rusqlite::params![payload, entry.entry_digest().as_slice()])?;
+    transaction.execute(
+        "UPDATE consensus_log_accounting SET entry_count = entry_count + 1,
+        payload_bytes = payload_bytes + 19, revision = revision + 1 WHERE singleton = 1",
+        [],
+    )?;
+    transaction.commit()?;
     Ok(())
 }
 

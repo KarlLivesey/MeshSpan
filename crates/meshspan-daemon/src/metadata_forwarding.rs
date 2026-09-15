@@ -30,7 +30,7 @@ const LOCAL_APPLY_ATTEMPTS: usize = 200;
 pub(crate) mod discovery;
 
 #[path = "metadata_command_admission.rs"]
-mod admission;
+pub(crate) mod admission;
 
 pub(crate) async fn forward_to_authority(
     runtime: &Arc<PrivateConsensusRuntime>,
@@ -220,13 +220,11 @@ async fn request_durable_result(
 pub(crate) async fn handle(
     network: &ConsensusNetwork,
     authority: &MetadataAuthorityHandle,
-    directory: &std::path::Path,
     request: &PeerControlRequest,
 ) -> Result<ControlEnvelope, MetadataAuthorityRequestError> {
     handle_owned(
         network,
         authority,
-        directory,
         request,
         #[cfg(test)]
         None,
@@ -262,17 +260,15 @@ impl AdmissionGate {
 pub(crate) async fn handle_with_admission_gate(
     network: &ConsensusNetwork,
     authority: &MetadataAuthorityHandle,
-    directory: &std::path::Path,
     request: &PeerControlRequest,
     gate: AdmissionGate,
 ) -> Result<ControlEnvelope, MetadataAuthorityRequestError> {
-    handle_owned(network, authority, directory, request, Some(gate)).await
+    handle_owned(network, authority, request, Some(gate)).await
 }
 
 async fn handle_owned(
     network: &ConsensusNetwork,
     authority: &MetadataAuthorityHandle,
-    directory: &std::path::Path,
     request: &PeerControlRequest,
     #[cfg(test)] gate: Option<AdmissionGate>,
 ) -> Result<ControlEnvelope, MetadataAuthorityRequestError> {
@@ -295,17 +291,20 @@ async fn handle_owned(
         incarnation: request.sender_incarnation,
         certificate_fingerprint: request.certificate_fingerprint,
     };
-    let directory = directory.to_path_buf();
-    // Certificate lookup and canonical decoding are bounded blocking work owned by this request.
-    let admitted = tokio::task::spawn_blocking(move || {
-        #[cfg(test)]
-        if let Some(gate) = gate {
-            gate.wait(operation_id)?;
+    #[cfg(test)]
+    if let Some(gate) = gate {
+        tokio::task::spawn_blocking(move || gate.wait(operation_id))
+            .await
+            .map_err(|_| MetadataAuthorityRequestError::Failed)?
+            .map_err(|_| MetadataAuthorityRequestError::Rejected)?;
+    }
+    let admitted = match admission::prepare(authority, peer, envelope).await {
+        Ok(decoded) => Ok(decoded),
+        Err(admission::AdmissionError::Protocol(code)) => Err(code),
+        Err(admission::AdmissionError::WorkerStopped) => {
+            return Err(MetadataAuthorityRequestError::Failed);
         }
-        admission::prepare(&directory, peer, &envelope)
-    })
-    .await
-    .map_err(|_| MetadataAuthorityRequestError::Failed)?;
+    };
     let result = match admitted {
         Ok(decoded) => match authority
             .commit_or_resolve(decoded.context, decoded.command)

@@ -32,6 +32,11 @@ const DEFAULT_ELECTION_TIMEOUT: Duration = Duration::from_millis(1_200);
 const DEFAULT_ELECTION_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
 mod capability_admission;
+mod peer_admission;
+use peer_admission::PeerAdmissionRequest;
+pub use peer_admission::{
+    MetadataPeerAdmissionDetails, MetadataPeerAdmissionPurpose, MetadataPeerAdmissionState,
+};
 #[path = "metadata_observation.rs"]
 mod observation;
 pub use observation::{MetadataAuthorityObservation, MetadataReplicationObservation};
@@ -325,6 +330,7 @@ fn spawn_metadata_authority_runtime(
 }
 
 enum AuthorityEvent {
+    PeerAdmission(PeerAdmissionRequest),
     Read(ReadRequest),
     ReplicaPage(
         MetadataReplicaCursor,
@@ -431,6 +437,12 @@ impl MetadataAuthorityRuntime {
         event: AuthorityEvent,
     ) -> Result<bool, MetadataAuthorityRuntimeError> {
         match event {
+            AuthorityEvent::PeerAdmission(request) => {
+                if !request.respond.is_closed() {
+                    let result = self.peer_admission(request.node_id, request.purpose);
+                    let _cancelled = request.respond.send(result);
+                }
+            }
             AuthorityEvent::Read(request) => self.begin_read(request)?,
             AuthorityEvent::ReplicaPage(after, respond) => {
                 let _cancelled = respond.send(self.driver.metadata_replica_page(after));

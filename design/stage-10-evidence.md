@@ -10,6 +10,263 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## CORE-03 — transactional log accounting and request admission
+
+PR #274 merged as GitHub-verified `e00300954f60b7941de0dcde11236d53e7219d0c`
+after the full gate and real HTTPS/Samba proof below. Local main fast-forwarded
+to that exact remote merge, whose tree matches the checked branch plus its
+evidence-only commit. The merged feature branch was removed. New work starts
+from that main revision on `codex/consensus-accounting-admission`.
+
+The persistence slice adds partition migration **123**, preserving migration 122
+verbatim and the immutable expected-migration-digest cache. Exact entry/payload
+counters are updated in the same transaction as append, suffix replacement and
+recovery activation. Vote-only writes do not change counters. An independent
+aggregate at migration, opening, load and explicit integrity boundaries rejects
+missing or corrupt accounting without silently resetting it. Existing retained
+entry/byte limits are unchanged; this is not CORE-04 snapshot compaction.
+
+A controlled whole-log aggregate in the actual persistence accounting read
+caused the new fixed-append regression to fail at 1,000 entries: **999 full-scan
+steps and 5,029 SQLite VM steps**, against a zero-scan requirement. This is an
+explicit cost control, not a claim of executing the unchanged old source.
+Log `/tmp/meshspan-core03-scan-control-compiled.log`, test **0.78 s**. An initial
+fixture compilation error using unsigned SQL row decoding is retained separately
+in `/tmp/meshspan-core03-scan-control.log`; it is not defect evidence. The oracle
+now reads SQLite integers and independently checks their unsigned conversion.
+
+After removing the control, all **five accounting regressions pass in 6.17 s**
+(`/tmp/meshspan-core03-accounting-fixed.log`): fixed append/vote accounting does
+constant bounded work at 1k/10k/100k entries, suffix access is indexed, migration
+backfills an existing schema-122 database, exact counters survive rollback/retry/
+restart, and corruption fails load/integrity/reopen. Existing database, consensus
+and recovery-activation tests pass **64 tests, one manual test ignored, 14.31 s**
+(`/tmp/meshspan-core03-accounting-consumers.log`). Backup/snapshot checks first
+passed eight and failed one in **4.42 s** because the legacy-schema fixture left
+the new table behind while removing migration history
+(`/tmp/meshspan-core03-accounting-backup-snapshot.log`). Removing that post-109
+table as part of constructing the real old schema fixes the exact regression:
+**1.14 s**, `/tmp/meshspan-core03-legacy-backup-fixed.log`. Migration rejection
+and the independent history/byte assertions remain unchanged.
+Metadata all-target/all-feature Clippy passes with warnings denied in **4.157 s**
+(`/tmp/meshspan-core03-accounting-final-clippy.log`); metadata Rust formatting,
+document formatting and diff checks pass.
+
+Review also identified the important integration gap: forwarded mutation
+admission and pre/post read-fence admission reopen authority databases. Merely
+moving the aggregate out of persistence would still scan history on each such
+open. The existing metadata owner must supply fresh typed admission reads through
+its bounded queue, retaining certificate/incarnation/role/deadline checks and
+post-fence revalidation. Signed, GitHub-verified progress commit
+`22e09dcb6a2fb07674355fcfd6fcbaa61862b4cc` records the persistence slice. Review
+found no production accounting defect but identified an unexercised rollback:
+recovery activation must roll back a changed counter as well as a deleted tail.
+The existing test now injects an exact unapplied entry, fails the accounting,
+vote, applied-state and activation-record writes independently, and checks the
+same tail/counters after every reopen. Successful recovery then removes only the
+tail. It passes in **2.95 s** (`/tmp/meshspan-core03-recovery-accounting-final.log`).
+
+The admission consumer now uses fresh operation-specific reads through that
+existing owner. Typed purpose/detail mismatches fail closed. Codec/digest and
+installation-signature work remain on observed blocking workers; cancellation
+does not undo effects or leave queued read waiters alive. The former `prepare`
+function, retained temporarily as a control with only import/fixture-path
+adaptation, fails the actual repeated-admission test with **Unavailable** when
+the database path is moved (**1.05 s**,
+`/tmp/meshspan-core03-admission-reopen-control.log`). The fixed path passes
+eight such reads, then rejects the old certificate binding, accepts its new
+projection and rejects retirement (**0.98 s**,
+`/tmp/meshspan-core03-admission-restored.log`). Path restoration precedes result
+propagation. These are real owner/SQL projection tests, not certificate-issuance
+or hardware-fault acceptance. An initial fixture borrow error is retained in
+`/tmp/meshspan-core03-admission-first.log`, not counted as executed tests.
+
+Review additionally required a controlled response-boundary interleaving after
+real quorum confirmation. Skipping only final admission makes the new test fail
+with **Ok(fence)** instead of **Unauthorised** (**0.93 s**,
+`/tmp/meshspan-core03-post-fence-control.log`). Restoring that check makes both
+real-owner admission tests pass in **1.50 s**
+(`/tmp/meshspan-core03-admission-final.log`). Three bounded-queue/current-read/
+cancellation tests pass in **1.00 s**
+(`/tmp/meshspan-core03-admission-owner-tests.log`). Five existing purpose,
+binding/deadline, exact installation-acknowledgement and shutdown/drain regressions
+pass in **3.08 s** (`/tmp/meshspan-core03-admission-negative-drain.log`). All
+temporary controls are removed. Metadata/cluster all-target/all-feature Clippy
+passes with warnings denied in **20.477 s**
+(`/tmp/meshspan-core03-owner-accounting-clippy.log`).
+
+Final daemon Clippy initially rejected an unnecessarily owned request header
+(`/tmp/meshspan-core03-admission-clippy.log`). Borrowing it inside the already
+owned blocking closure preserves that worker's lifetime and passes all-target/
+all-feature Clippy with warnings denied in **19.891 s**
+(`/tmp/meshspan-core03-admission-final-clippy.log`). After that correction, both
+real-owner admission regressions pass in **1.49 s**
+(`/tmp/meshspan-core03-admission-checked.log`), and the five negative/drain
+regressions pass in **3.08 s**
+(`/tmp/meshspan-core03-admission-negative-final.log`). No test control remains.
+
+The assembled candidate is signed and GitHub-verified at
+`fe411cc66eefe0958955cd0d4f5a91cbd161c8cf`, tree
+`044fb6e33a6c87c366d2c1ba4b9691b811579783`, in draft PR #275. Its full
+`pnpm check:dependency-update` gate **failed**, exit **1**, wall **719.625 s**
+(`/tmp/meshspan-check-fe411cc6.log`), with a clean checkout at start and end.
+NVM selected Node 26.8.2/pnpm 11.19.0; scheduler, Cargo and Rust test workers
+were bounded at four, with the existing validation TMPDIR. Both advisory scans,
+generated drift, embedded web, all Rust/web static checks, dependency licences
+and tooling tests passed; web tests passed in **39.17 s**. Cluster library tests
+passed **141 in 53.94 s**, daemon library **476 passed, one ignored, 66.20 s**.
+Headless tests passed **32, failed one, ignored 13, 259.51 s**; later Rust
+targets were not reached. The exact failure was
+`federated_backup::remote_backup_forwards_through_gateway_to_distinct_storage_process`:
+the export TLS stream closed after response headers, with a declared 4,191,038-byte
+body and zero body bytes received, during permission-succession verification.
+Private fixture state remains at `.tmpZK6bbi`, `.tmpUsSdn8` and `.tmpk5Du1J`
+under `/home/karl/.cache/meshspan-validation/tmp`. This failure is not cleared
+by the earlier focused admission passes. Investigation now uses the exact
+canonical headless executable observed in that gate,
+`target/debug/deps/headless_process-ac32a18f1c274d87`.
+
+The unchanged-candidate exact focused reproduction did **not** reach export:
+it failed private node activation/catch-up, then timed out waiting for configured
+status (**19.73 s**, `/tmp/meshspan-fe411cc6-federated-backup-focused.log`). Its
+fixtures remain at `.tmpdr1wng`, `.tmpxdtrfZ` and `.tmpE5SBNz` in the same
+validation TMPDIR. This is separate evidence, not a reproduced export failure
+or a passing retry. No implementation fix or full-gate retry has been attempted.
+
+Temporary closed-error/phase probes in export-provider reads, federation scope
+refresh/execution and private join distinguished failures without logging keys,
+headers or content. The instrumented exact test passed **24.08 s** after a
+**62 s** build (`/tmp/meshspan-fe411cc6-federated-backup-probe.log`); its only
+reported denial was the expected read after revocation. Four isolated concurrent
+instances all passed in **27.799–30.919 s**
+(`/tmp/meshspan-federated-probe-bounded-{1,2,3,4}.log`). A matching group of
+federated backup, external certificates, incarnation restart and local trust
+passed **4 tests in 22.73 s**
+(`/tmp/meshspan-fe411cc6-federated-neighbours-probe.log`). The preceding
+headless ACME/backup cohort, retaining the gate's four-worker environment,
+passed **9 tests, seven opt-in tests ignored, 53.33 s**
+(`/tmp/meshspan-fe411cc6-early-headless-probe.log`). These runs used instrumented
+executable `target/debug/deps/headless_process-64660018bd3ffeed`; they are not a
+new canonical gate or evidence of a fix. All probes were removed by comparison
+with the exact committed source. No deadlines, assertions or safety checks were
+changed. Both original failures remain unresolved; unchanged test repetitions
+are paused pending a discriminating boundary reproduction.
+
+A controlled provider-lifetime regression now demonstrates a separate concrete
+failure: after a real forwarded read returns exact bytes, receipt and terminal
+FIN, its worker can still retain the physical catalogue slot. Pausing that
+completed worker makes the next sequential read fail `Unavailable`, with no
+result received. The added regression failed against the previous implementation
+in **4.52 s**, wall **60.899 s** including compilation
+(`/tmp/meshspan-provider-completion-baseline.log`). This proves the lifetime
+boundary defect; it does not establish the cause of either earlier process-test
+failure.
+
+The candidate binds the admitted object through the existing provider registry
+and holds its exclusive slot for each physical provider call, including all
+source/sink IO. Final authority validation, result and FIN follow slot release.
+Exact-object binding is checked before access; genuine physical overlap still
+fails closed. Direct and forwarded execution use this same facade. No wire,
+schema, dependency, deadline or authority requirement changes.
+
+The first corrected focused run failed later in **8.06 s**
+(`/tmp/meshspan-provider-completion-fixed.log`). Phase context then located the
+failure after the new lifetime assertions, at deletion replay, operation 173,
+nonce marker 184 (**8.46 s**, `/tmp/meshspan-provider-completion-context.log`).
+A temporary server probe identified `Transport(ReplayedFederationMessage)`
+(**7.28 s**, `/tmp/meshspan-provider-capability-probe.log`): the existing authority
+fetch fixture already used `[184; 32]`, and the expanded backup client counter
+reached that same nonce. The fixture now reserves a distinct backup-client nonce
+domain while preserving all replay-denial checks. The diagnostic probes were
+removed. This is a test-fixture correction, not a relaxation of replay protection.
+
+With the fixture correction, the real-TLS proof passes **13.19 s**, wall
+**50.250 s** including compilation
+(`/tmp/meshspan-provider-lifetime-final-focused.log`). It covers sequential
+completion, exact receipts/bytes, physical overlap rejection without emitted bytes,
+wrong-object rejection before provider access, and the existing interruption,
+quota, renewal, deletion and replay checks. Review added bounded gate waits under
+the existing proof/request deadline and observation of both owner workers before
+propagating either join error. Initial Clippy rejected the enlarged test exchange
+at 107/100 lines (`/tmp/meshspan-provider-lifetime-clippy.log`); separating owned
+wire-response verification from worker setup preserves the complete oracle.
+All-target/all-feature daemon Clippy then passes **9.551 s**
+(`/tmp/meshspan-provider-lifetime-clippy-final.log`).
+
+After that test-only ownership refactor, the focused real-TLS proof passes again
+in **13.29 s**, wall **58.964 s** including compilation
+(`/tmp/meshspan-provider-lifetime-reviewed-focused.log`). The uninstrumented real
+three-process federated-backup proof passes **23.29 s**, wall **82.706 s** including
+compilation (`/tmp/meshspan-provider-lifetime-headless.log`), using headless binary
+`headless_process-64660018bd3ffeed`. These checks used NVM-selected Node 26.8.2,
+Cargo/test workers **4**, and the validation TMPDIR. The completed source awaits a
+new canonical gate; neither focused pass retroactively clears the earlier failures.
+
+The lifetime correction was signed, pushed and locally/GitHub verified as
+`537b1f4b82c405e02e60fb37daabf5c67beb3c07`, tree
+`96401fcbc6991fb860f9774805260e17cd4aab5f`. The advisory-plus-full gate on that
+clean tree **failed**, exit **1**, wall **1160.552 s**
+(`/tmp/meshspan-check-537b1f4b.log`). Both advisories, static/licence checks and web
+tests passed. Cluster: **141 passed, 53.85 s**; daemon: **476 passed, one ignored,
+68.92 s**; headless: **33 passed, 13 ignored, 275.76 s**; filesystem: **237 passed,
+45.22 s**. This reaches and passes the previously failing headless target without
+claiming the historical private-activation failure's cause was established.
+
+The later metadata target passed **596**, failed **one**, ignored **one**, in
+**447.34 s**; subsequent Rust targets were not reached. The failure was
+`migration122_preserves_legacy_repair_plan_and_both_original_receipts`,
+`InvalidMigrationHistory`. Its reconstruction of schema 121 removed migration
+122 but retained migration 123 and its accounting table. A focused unchanged
+reproduction fails identically in **1.06 s**, wall **1.385 s**
+(`/tmp/meshspan-migration122-accounting-baseline.log`). The fixture now also removes
+the later accounting table and migration record before reopening; exact legacy
+repair-plan and both original-receipt assertions remain unchanged. This changes
+only the historical fixture, not production migration validation.
+
+The corrected schema-121 fixture passes **0.95 s**, wall **5.144 s** including
+compilation (`/tmp/meshspan-migration122-accounting-fixed.log`). Metadata
+all-target/all-feature Clippy passes **4.495 s**
+(`/tmp/meshspan-migration122-accounting-clippy.log`); workspace Rust formatting and
+diff whitespace checks pass. Remaining validation includes a new complete gate;
+the earlier run did not reach all Rust targets.
+
+### Final CORE-03 candidate validation
+
+The complete local gate now **passes** on signed, pushed, locally/GitHub-verified
+commit `4088cb7c49dd0f3cee02867d525c073f06a36eae`, tree
+`c87d1f844b5d82e25fb966bc00f70d1c46401139`, with a clean working tree at start and
+completion. Command: `pnpm check`, after `nvm use`, with scheduler/Cargo/test workers
+**4** and `TMPDIR=/home/karl/.cache/meshspan-validation/tmp`. Node **26.8.2**, pnpm
+**11.19.0**, Rust **1.98.0**. Exit **0**, wall **835.909 s**;
+`/tmp/meshspan-check-4088cb7c.log`. All canonical Rust workspace targets pass
+(**790.09 s**), as do web tests (**30.90 s**), generated drift, embedded web,
+workspace Rust Clippy/formatting, both dependency-licence checks and web/tooling
+static/test checks. Rust and JavaScript advisory scans already passed on unchanged
+dependencies in the preceding candidate run. No ignored/environmental proof is
+implied by the normal gate.
+
+The separate real HTTPS/Samba recovery-and-storage-restart proof also **passes in
+101.12 s**, wall **101.138 s**, exit **0**:
+`/tmp/meshspan-537b1f4b-https-smb-recovery.log`. It ran the actual canonical executable
+`headless_process-ac32a18f1c274d87`, observed through `/proc` during the preceding
+gate, with exact test
+`offline_backup::original_file_recovers_through_https_and_real_smb_after_storage_restart`
+and `--exact --ignored --test-threads=4`. It used NVM and the same validation TMPDIR,
+plus pinned local Samba image
+`sha256:4282e160c6cc3090ee59f3b2581ee7a459fdd3f943323b7583824ea30a618eb0`, without
+download/publication. The subsequent fixture-only commit changed no production
+source, so this runtime evidence remains applicable to the final candidate.
+
+This completes CORE-03's transactional-accounting acceptance on the assembled
+candidate and validates the live admission/provider-lifetime corrections. PR #275
+is ready for integration; these final evidence additions are prose only. Earlier
+failed runs remain recorded: current passing validation does not retroactively
+establish the cause of the earlier private-activation failure. Stage 10 task 17
+remains partial. CORE-04 must still introduce safe snapshot anchors, prefix
+reclamation and lagging-replica installation before lifetime log bounds can be
+closed. No hardware, power-loss, soak or independent-review proof is claimed.
+Stage 11 has not started; publication remains on hold.
+
 ## Physical-generation candidate gate — multi-daemon setup failures
 
 ### Final retained candidate gate

@@ -2,13 +2,14 @@
 
 //! Bind typed metadata forwarding to the authenticated node, not its claimed audit actor.
 
-use std::path::Path;
-
+use meshspan_cluster::{
+    MetadataAuthorityHandle, MetadataPeerAdmissionDetails, MetadataPeerAdmissionPurpose,
+    MetadataPeerAdmissionState,
+};
 use meshspan_domain::{Clock as _, UnixMicros};
 use meshspan_metadata::{
-    ActiveNodeCertificate, AuthoritativeCommand, AuthoritativeRepository,
-    DecodedAuthoritativeCommand, JoinRoles, METADATA_COMMAND_VERSION, PartitionDatabase,
-    StorageTargetRegistrationContext, decode_authoritative_command,
+    ActiveNodeCertificate, AuthoritativeCommand, DecodedAuthoritativeCommand, JoinRoles,
+    METADATA_COMMAND_VERSION, StorageTargetRegistrationContext, decode_authoritative_command,
 };
 use meshspan_protocol::v1::{
     ControlEnvelope, ErrorCode, MetadataCommand, RequestHeader, control_envelope::Message,
@@ -17,86 +18,129 @@ use meshspan_protocol::v1::{
 use meshspan_transport::PeerBinding;
 use sha2::{Digest as _, Sha256};
 
-pub(super) fn prepare(
-    directory: &Path,
+#[derive(Debug)]
+pub(crate) enum AdmissionError {
+    Protocol(ErrorCode),
+    WorkerStopped,
+}
+
+impl From<ErrorCode> for AdmissionError {
+    fn from(code: ErrorCode) -> Self {
+        Self::Protocol(code)
+    }
+}
+
+pub(crate) async fn prepare(
+    authority: &MetadataAuthorityHandle,
     peer: PeerBinding,
-    envelope: &ControlEnvelope,
-) -> Result<DecodedAuthoritativeCommand, ErrorCode> {
-    let now = crate::OperatingSystemClock.now();
-    let header = envelope.header.as_ref().ok_or(ErrorCode::Invalid)?;
-    let Some(Message::MetadataCommand(command)) = envelope.message.as_ref() else {
+    envelope: ControlEnvelope,
+) -> Result<DecodedAuthoritativeCommand, AdmissionError> {
+    // The existing private request owner bounds and joins both CPU jobs. Codec/digest and
+    // installation-signature work must not execute on an asynchronous executor thread.
+    let (header, decoded) = tokio::task::spawn_blocking(move || decode_request(peer, envelope))
+        .await
+        .map_err(|_| AdmissionError::WorkerStopped)??;
+    let purpose = if matches!(
+        decoded.command,
+        AuthoritativeCommand::AcknowledgeNodeCertificateInstallation(_)
+    ) {
+        MetadataPeerAdmissionPurpose::CertificateInstallation
+    } else {
+        MetadataPeerAdmissionPurpose::Command
+    };
+    let state = authority
+        .peer_admission(peer.node_id, purpose)
+        .await
+        .map_err(|_| ErrorCode::Unavailable)?;
+    tokio::task::spawn_blocking(move || authorize(peer, &header, decoded, state))
+        .await
+        .map_err(|_| AdmissionError::WorkerStopped)?
+        .map_err(Into::into)
+}
+
+fn decode_request(
+    peer: PeerBinding,
+    envelope: ControlEnvelope,
+) -> Result<(RequestHeader, DecodedAuthoritativeCommand), ErrorCode> {
+    let header = envelope.header.ok_or(ErrorCode::Invalid)?;
+    validate_sender(peer, &header, crate::OperatingSystemClock.now())?;
+    let Some(Message::MetadataCommand(command)) = envelope.message else {
         return Err(ErrorCode::Invalid);
     };
-    let repository = AuthoritativeRepository::new(
-        PartitionDatabase::open_existing(&directory.join("root-authority.sqlite3"), now)
-            .map_err(|_| ErrorCode::Unavailable)?,
-    );
-    let certificate = repository
-        .active_node_certificate(peer.node_id)
-        .map_err(|_| ErrorCode::Unavailable)?
-        .ok_or(ErrorCode::Unauthorised)?;
+    let decoded = decode(&header, &command)?;
+    Ok((header, decoded))
+}
+
+fn authorize(
+    peer: PeerBinding,
+    header: &RequestHeader,
+    decoded: DecodedAuthoritativeCommand,
+    state: MetadataPeerAdmissionState,
+) -> Result<DecodedAuthoritativeCommand, ErrorCode> {
+    let now = crate::OperatingSystemClock.now();
+    let certificate = state.certificate.ok_or(ErrorCode::Unauthorised)?;
     validate_sender(peer, header, now)?;
     if certificate.node_id != peer.node_id || certificate.incarnation != peer.incarnation {
         return Err(ErrorCode::Unauthorised);
     }
-    let mesh = repository
-        .local_mesh_id()
-        .map_err(|_| ErrorCode::Unavailable)?
-        .ok_or(ErrorCode::Unauthorised)?;
+    let mesh = state.mesh_id.ok_or(ErrorCode::Unauthorised)?;
     if header.mesh_id.as_slice() != mesh.as_bytes()
-        || header.partition_id.as_slice() != repository.partition_id().as_bytes()
+        || header.partition_id.as_slice() != state.partition_id.as_bytes()
     {
         return Err(ErrorCode::Unauthorised);
     }
-    let decoded = decode(header, command)?;
-    if matches!(
-        decoded.command,
-        AuthoritativeCommand::AcknowledgeNodeCertificateInstallation(_)
+    match (
+        matches!(
+            decoded.command,
+            AuthoritativeCommand::AcknowledgeNodeCertificateInstallation(_)
+        ),
+        state.details,
     ) {
-        let registration = repository
-            .storage_target_registration_context(peer.node_id, now)
-            .map_err(|_| ErrorCode::Unavailable)?
-            .ok_or(ErrorCode::Unauthorised)?;
-        let rotation = repository
-            .node_certificate_rotation(peer.node_id)
-            .map_err(|_| ErrorCode::Unavailable)?
-            .ok_or(ErrorCode::Unauthorised)?;
-        // An already-open control stream may still use the active leaf. Both leaves bind
-        // the same node key; the acknowledgement separately attests the exact installed one.
-        if validate_binding(peer, header, &certificate, now).is_err()
-            && Sha256::digest(&rotation.certificate_der).as_slice() != peer.certificate_fingerprint
-        {
-            return Err(ErrorCode::Unauthorised);
+        (
+            true,
+            MetadataPeerAdmissionDetails::CertificateInstallation {
+                registration,
+                rotation,
+            },
+        ) => {
+            let registration = registration.ok_or(ErrorCode::Unauthorised)?;
+            let rotation = rotation.ok_or(ErrorCode::Unauthorised)?;
+            // An already-open control stream may use the active leaf. The staged leaf is
+            // accepted only for this exact same-key signed installation acknowledgement.
+            if validate_binding(peer, header, &certificate, now).is_err()
+                && Sha256::digest(&rotation.certificate_der).as_slice()
+                    != peer.certificate_fingerprint
+            {
+                return Err(ErrorCode::Unauthorised);
+            }
+            if !acknowledgement_matches(&decoded, peer, registration, &rotation, now) {
+                return Err(ErrorCode::Unauthorised);
+            }
         }
-        return if acknowledgement_matches(&decoded, peer, registration, &rotation, now) {
-            Ok(decoded)
-        } else {
-            Err(ErrorCode::Unauthorised)
-        };
+        (
+            false,
+            MetadataPeerAdmissionDetails::Command {
+                is_voter,
+                registration,
+            },
+        ) => {
+            validate_binding(peer, header, &certificate, now)?;
+            if certificate.roles.bits() & JoinRoles::GATEWAY == 0
+                && !is_voter
+                && (certificate.roles.bits() & JoinRoles::STORAGE == 0
+                    || !registration
+                        .is_some_and(|registration| registration_matches(&decoded, registration)))
+            {
+                return Err(ErrorCode::Unauthorised);
+            }
+        }
+        (_, MetadataPeerAdmissionDetails::ReadFence)
+        | (true, MetadataPeerAdmissionDetails::Command { .. })
+        | (false, MetadataPeerAdmissionDetails::CertificateInstallation { .. }) => {
+            return Err(ErrorCode::InternalContract);
+        }
     }
-    // A staged leaf is admitted only for its own attested installation above.
-    validate_binding(peer, header, &certificate, now)?;
-    let plan = repository
-        .load_active_consensus_quorum_plan()
-        .map_err(|_| ErrorCode::Unavailable)?
-        .ok_or(ErrorCode::Unavailable)?;
-    if certificate.roles.bits() & JoinRoles::GATEWAY != 0 || plan.voters().contains(&peer.node_id) {
-        // These services perform the existing domain/user checks before forwarding. Metadata
-        // still validates their typed command; membership eligibility alone is not this role.
-        return Ok(decoded);
-    }
-    if certificate.roles.bits() & JoinRoles::STORAGE == 0 {
-        return Err(ErrorCode::Unauthorised);
-    }
-    let registration = repository
-        .storage_target_registration_context(peer.node_id, now)
-        .map_err(|_| ErrorCode::Unavailable)?
-        .ok_or(ErrorCode::Unauthorised)?;
-    if registration_matches(&decoded, registration) {
-        Ok(decoded)
-    } else {
-        Err(ErrorCode::Unauthorised)
-    }
+    Ok(decoded)
 }
 
 fn validate_binding(
@@ -307,6 +351,57 @@ mod tests {
             registration,
             &rotation,
             rotation.valid_until
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn admission_purpose_mismatch_never_grants_forwarding() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let (mut decoded, peer, registration, rotation) = acknowledgement_fixture()?;
+        let now = crate::OperatingSystemClock.now();
+        let partition = meshspan_domain::PartitionId::from_bytes([8; 16])?;
+        let header = RequestHeader {
+            mesh_id: registration.mesh_id.as_bytes().to_vec(),
+            partition_id: partition.as_bytes().to_vec(),
+            sender_node_id: peer.node_id.as_bytes().to_vec(),
+            sender_incarnation: peer.incarnation,
+            deadline_unix_micros: now.get() + 9_000_000,
+            ..RequestHeader::default()
+        };
+        let mut state = MetadataPeerAdmissionState {
+            mesh_id: Some(registration.mesh_id),
+            partition_id: partition,
+            certificate: Some(ActiveNodeCertificate {
+                node_id: peer.node_id,
+                incarnation: peer.incarnation,
+                roles: JoinRoles::new(JoinRoles::GATEWAY)?,
+                generation: 1,
+                certificate_der: rotation.certificate_der,
+                certificate_fingerprint: peer.certificate_fingerprint,
+                valid_until: UnixMicros::new(now.get() + 20_000_000),
+                revision: Revision::new(1),
+            }),
+            details: MetadataPeerAdmissionDetails::Command {
+                is_voter: true,
+                registration: None,
+            },
+        };
+        assert!(matches!(
+            authorize(peer, &header, decoded.clone(), state.clone()),
+            Err(ErrorCode::InternalContract)
+        ));
+        decoded.command = AuthoritativeCommand::CreateUser(meshspan_metadata::CreateUser {
+            principal_id: registration.actor_principal_id,
+            name: meshspan_metadata::RecordName::new("Not an installation")?,
+        });
+        state.details = MetadataPeerAdmissionDetails::CertificateInstallation {
+            registration: None,
+            rotation: None,
+        };
+        assert!(matches!(
+            authorize(peer, &header, decoded, state),
+            Err(ErrorCode::InternalContract)
         ));
         Ok(())
     }

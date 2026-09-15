@@ -2,84 +2,113 @@
 
 //! Read-fence admission before quorum work and after the confirmed frontier is applied.
 
-use std::path::Path;
-
 use meshspan_cluster::{
-    ConsensusNetwork, MetadataAuthorityHandle, MetadataAuthorityRequestError, PeerControlRequest,
+    ConsensusNetwork, MetadataAuthorityHandle, MetadataAuthorityRequestError,
+    MetadataPeerAdmissionPurpose, MetadataReadFence, PeerControlRequest,
     metadata_read_fence_response,
 };
 use meshspan_domain::{Clock as _, UnixMicros};
-use meshspan_metadata::{ActiveNodeCertificate, AuthoritativeRepository};
+use meshspan_metadata::ActiveNodeCertificate;
 use meshspan_protocol::v1::{ControlEnvelope, ErrorCode, RequestHeader};
 use meshspan_transport::PeerBinding;
 
 pub(crate) async fn handle(
     network: &ConsensusNetwork,
     authority: &MetadataAuthorityHandle,
-    directory: &Path,
     request: &PeerControlRequest,
 ) -> Result<ControlEnvelope, MetadataAuthorityRequestError> {
-    let result = async {
-        admit(directory, request).await?;
-        let fence = authority.read_fence().await.map_err(|error| match error {
-            MetadataAuthorityRequestError::NotLeader { .. }
-            | MetadataAuthorityRequestError::Unavailable => ErrorCode::Unavailable,
-            MetadataAuthorityRequestError::Conflict
-            | MetadataAuthorityRequestError::Rejected
-            | MetadataAuthorityRequestError::Failed
-            | MetadataAuthorityRequestError::Unsupported => ErrorCode::InternalContract,
-        })?;
-        // Catch-up may have applied this caller's retirement, replacement or certificate rotation.
-        admit(directory, request).await?;
-        Ok(fence)
-    }
-    .await;
-    metadata_read_fence_response(network, request.envelope.as_inner(), result)
-}
-
-async fn admit(directory: &Path, request: &PeerControlRequest) -> Result<(), ErrorCode> {
-    let directory = directory.to_path_buf();
     let header = request
         .envelope
         .as_inner()
         .header
-        .clone()
-        .ok_or(ErrorCode::Invalid)?;
+        .as_ref()
+        .ok_or(MetadataAuthorityRequestError::Rejected)?;
     let peer = PeerBinding {
         node_id: request.from,
         incarnation: request.sender_incarnation,
         certificate_fingerprint: request.certificate_fingerprint,
     };
-    // The control dispatcher bounds owned requests; SQLite never runs on the async executor.
-    tokio::task::spawn_blocking(move || {
-        let now = crate::OperatingSystemClock.now();
-        let repository =
-            super::open_root_repository_at(&directory, now).map_err(|_| ErrorCode::Unavailable)?;
-        admit_repository(&repository, peer, &header, now)
-    })
-    .await
-    .map_err(|_| ErrorCode::Unavailable)?
+    let result = read_fence(authority, peer, header).await;
+    metadata_read_fence_response(network, request.envelope.as_inner(), result)
 }
 
-fn admit_repository(
-    repository: &AuthoritativeRepository,
+pub(crate) async fn read_fence(
+    authority: &MetadataAuthorityHandle,
     peer: PeerBinding,
     header: &RequestHeader,
-    now: UnixMicros,
+) -> Result<MetadataReadFence, ErrorCode> {
+    read_fence_owned(
+        authority,
+        peer,
+        header,
+        #[cfg(test)]
+        None,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) struct ReadFenceAdmissionGate {
+    pub(crate) confirmed: tokio::sync::oneshot::Sender<MetadataReadFence>,
+    pub(crate) released: tokio::sync::oneshot::Receiver<()>,
+}
+
+#[cfg(test)]
+pub(crate) async fn read_fence_with_admission_gate(
+    authority: &MetadataAuthorityHandle,
+    peer: PeerBinding,
+    header: &RequestHeader,
+    gate: ReadFenceAdmissionGate,
+) -> Result<MetadataReadFence, ErrorCode> {
+    read_fence_owned(authority, peer, header, Some(gate)).await
+}
+
+async fn read_fence_owned(
+    authority: &MetadataAuthorityHandle,
+    peer: PeerBinding,
+    header: &RequestHeader,
+    #[cfg(test)] gate: Option<ReadFenceAdmissionGate>,
+) -> Result<MetadataReadFence, ErrorCode> {
+    admit(authority, peer, header).await?;
+    let fence = authority.read_fence().await.map_err(|error| match error {
+        MetadataAuthorityRequestError::NotLeader { .. }
+        | MetadataAuthorityRequestError::Unavailable => ErrorCode::Unavailable,
+        MetadataAuthorityRequestError::Conflict
+        | MetadataAuthorityRequestError::Rejected
+        | MetadataAuthorityRequestError::Failed
+        | MetadataAuthorityRequestError::Unsupported => ErrorCode::InternalContract,
+    })?;
+    #[cfg(test)]
+    if let Some(gate) = gate {
+        // Precise response-boundary interleaving after a real fence, not simulated catch-up.
+        gate.confirmed
+            .send(fence)
+            .map_err(|_| ErrorCode::Unavailable)?;
+        gate.released.await.map_err(|_| ErrorCode::Unavailable)?;
+    }
+    // Catch-up may have applied this caller's retirement, replacement or certificate rotation.
+    admit(authority, peer, header).await?;
+    Ok(fence)
+}
+
+async fn admit(
+    authority: &MetadataAuthorityHandle,
+    peer: PeerBinding,
+    header: &RequestHeader,
 ) -> Result<(), ErrorCode> {
-    let mesh = repository
-        .local_mesh_id()
-        .map_err(|_| ErrorCode::Unavailable)?
-        .ok_or(ErrorCode::Unauthorised)?;
+    validate_sender(peer, header, crate::OperatingSystemClock.now())?;
+    let state = authority
+        .peer_admission(peer.node_id, MetadataPeerAdmissionPurpose::ReadFence)
+        .await
+        .map_err(|_| ErrorCode::Unavailable)?;
+    let now = crate::OperatingSystemClock.now();
+    let mesh = state.mesh_id.ok_or(ErrorCode::Unauthorised)?;
     if header.mesh_id.as_slice() != mesh.as_bytes()
-        || header.partition_id.as_slice() != repository.partition_id().as_bytes()
+        || header.partition_id.as_slice() != state.partition_id.as_bytes()
     {
         return Err(ErrorCode::Unauthorised);
     }
-    let certificate = repository
-        .active_node_certificate(peer.node_id)
-        .map_err(|_| ErrorCode::Unavailable)?
-        .ok_or(ErrorCode::Unauthorised)?;
+    let certificate = state.certificate.ok_or(ErrorCode::Unauthorised)?;
     admit_certificate(peer, header, &certificate, now)
 }
 
@@ -87,6 +116,22 @@ fn admit_certificate(
     peer: PeerBinding,
     header: &RequestHeader,
     certificate: &ActiveNodeCertificate,
+    now: UnixMicros,
+) -> Result<(), ErrorCode> {
+    validate_sender(peer, header, now)?;
+    if certificate.node_id != peer.node_id
+        || certificate.incarnation != peer.incarnation
+        || certificate.certificate_fingerprint != peer.certificate_fingerprint
+        || certificate.valid_until <= now
+    {
+        return Err(ErrorCode::Unauthorised);
+    }
+    Ok(())
+}
+
+fn validate_sender(
+    peer: PeerBinding,
+    header: &RequestHeader,
     now: UnixMicros,
 ) -> Result<(), ErrorCode> {
     let remaining = header
@@ -98,10 +143,6 @@ fn admit_certificate(
     }
     if header.sender_node_id.as_slice() != peer.node_id.as_bytes()
         || header.sender_incarnation != peer.incarnation
-        || certificate.node_id != peer.node_id
-        || certificate.incarnation != peer.incarnation
-        || certificate.certificate_fingerprint != peer.certificate_fingerprint
-        || certificate.valid_until <= now
     {
         return Err(ErrorCode::Unauthorised);
     }

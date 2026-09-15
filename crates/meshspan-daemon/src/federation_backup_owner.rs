@@ -82,18 +82,14 @@ impl FederationBackupOwner {
                     &relay,
                     now,
                 )?;
-                sessions.backup_providers.with_provider(
-                    admitted.scope(),
-                    admitted.request().object(),
-                    |provider| {
-                        FederationBackupOwnerService::new(
-                            reader,
-                            sessions.node,
-                            stream.routing_epoch,
-                        )
+                let mut provider = sessions
+                    .backup_providers
+                    .bind(admitted.scope(), admitted.request().object())?;
+                let outcome =
+                    FederationBackupOwnerService::new(reader, sessions.node, stream.routing_epoch)
                         .execute_stream(
                             &relay,
-                            provider,
+                            &mut provider,
                             stream.stream,
                             FederationBackupOwnerStreamContext {
                                 runtime: &runtime,
@@ -101,9 +97,16 @@ impl FederationBackupOwner {
                                 limits: stream.limits,
                             },
                         )
-                        .map_err(Into::into)
-                    },
-                )
+                        .map_err(Into::into);
+                #[cfg(test)]
+                if outcome.is_ok() {
+                    // The real terminal result and FIN precede this pause; physical
+                    // provider ownership has already ended before the client sees them.
+                    sessions
+                        .backup_providers
+                        .pause_completed_transfer(admitted.scope(), admitted.request().object())?;
+                }
+                outcome
             })
         })
         .await

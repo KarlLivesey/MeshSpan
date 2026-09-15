@@ -2,6 +2,12 @@
 
 //! Atomic SQLite persistence adapter for the deterministic consensus core.
 
+pub(super) mod accounting;
+
+#[cfg(test)]
+#[path = "consensus/accounting_tests.rs"]
+mod accounting_tests;
+
 use meshspan_consensus::{
     CoreError, DurableCoreState, DurableMutation, LogEntry, LogPosition, QuorumPlanRecordError,
 };
@@ -299,6 +305,7 @@ pub(super) fn load_state_from_connection(
     partition_id: &[u8; 16],
     membership_epoch: u64,
 ) -> Result<DurableCoreState, ConsensusStoreError> {
+    accounting::verify(connection)?;
     let vote = connection
         .query_row(
             "SELECT partition_id, current_term, voted_for_node_id, membership_epoch
@@ -498,6 +505,8 @@ fn persist_log(
     transaction: &Transaction<'_>,
     mutation: &DurableMutation,
 ) -> Result<(), ConsensusStoreError> {
+    let prior = accounting::read(transaction)?;
+    let mut next = prior;
     let applied_index: i64 = transaction.query_row(
         "SELECT last_log_index FROM applied_state WHERE singleton = 1",
         [],
@@ -512,10 +521,7 @@ fn persist_log(
         if truncate_from > last_index.saturating_add(1) {
             return Err(ConsensusStoreError::InvalidMutation);
         }
-        transaction.execute(
-            "DELETE FROM consensus_log WHERE log_index >= ?1",
-            [to_i64(truncate_from)?],
-        )?;
+        next = accounting::delete_suffix(transaction, next, truncate_from)?;
     }
     let mut expected_index = read_last_log_index(transaction)?
         .checked_add(1)
@@ -528,6 +534,7 @@ fn persist_log(
         let mut payload = Vec::with_capacity(16 + entry.command.len());
         payload.extend_from_slice(&entry.operation_id.as_bytes());
         payload.extend_from_slice(&entry.command);
+        next = next.with_payload(payload.len())?;
         transaction.execute(
             "INSERT INTO consensus_log(
                 log_index, term, entry_kind, entry_version, payload, payload_digest
@@ -546,19 +553,20 @@ fn persist_log(
             .ok_or(ConsensusStoreError::InvalidMutation)?;
         previous_term = entry.position.term;
     }
-    let (entry_count, byte_count): (i64, i64) = transaction.query_row(
-        "SELECT count(*), coalesce(sum(length(payload)), 0) FROM consensus_log",
-        [],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
-    if nonnegative_u64(entry_count)?
-        > u64::try_from(MAXIMUM_RECOVERED_LOG_ENTRIES)
-            .map_err(|_| ConsensusStoreError::RecoveryBoundExceeded)?
-        || nonnegative_u64(byte_count)? > MAXIMUM_RECOVERED_LOG_BYTES
-    {
-        return Err(ConsensusStoreError::RecoveryBoundExceeded);
-    }
+    accounting::store(transaction, prior, next)?;
     Ok(())
+}
+
+pub(super) fn truncate_recovery_suffix(
+    transaction: &Transaction<'_>,
+    retained_index: u64,
+) -> Result<(), ConsensusStoreError> {
+    let prior = accounting::read(transaction)?;
+    let from = retained_index
+        .checked_add(1)
+        .ok_or(ConsensusStoreError::InvalidMutation)?;
+    let next = accounting::delete_suffix(transaction, prior, from)?;
+    accounting::store(transaction, prior, next)
 }
 
 fn validate_mutation_entries(mutation: &DurableMutation) -> Result<(), ConsensusStoreError> {
@@ -1132,7 +1140,7 @@ mod tests {
         })
     }
 
-    fn initialise_plan(
+    pub(super) fn initialise_plan(
         database: &mut PartitionDatabase,
         voter: NodeId,
         epoch: u64,
@@ -1147,7 +1155,7 @@ mod tests {
         Ok(())
     }
 
-    fn entry(
+    pub(super) fn entry(
         term: u64,
         index: u64,
         operation_byte: u8,

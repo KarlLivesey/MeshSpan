@@ -66,7 +66,9 @@ impl<'a, 'identity> Client<'a, 'identity> {
         let targets = &hosts.backup_targets;
         let host = &hosts.inviter;
         let (folder_path, target) = prepare_target(fixture, targets, self.scope)?;
-        Box::pin(native_owner::verify(&mut self, fixture, host, internal)).await?;
+        Box::pin(native_owner::verify(&mut self, fixture, host, internal))
+            .await
+            .map_err(|error| format!("native owner proof: {error}"))?;
         let object = BackupObjectIdentity {
             destination_id: meshspan_domain::BackupDestinationId::from_bytes([212; 16])?,
             backup_id: meshspan_domain::BackupId::from_bytes([215; 16])?,
@@ -464,7 +466,15 @@ impl<'a, 'identity> Client<'a, 'identity> {
             meshspan_data_plane::encode_federated_backup_request(self.scope, request, now)?,
         );
         let outbound = self.sign(message, request)?;
-        let response = super::exchange(self.session, outbound.envelope()).await??;
+        let response = super::exchange(self.session, outbound.envelope())
+            .await?
+            .map_err(|error| {
+                format!(
+                    "backup capability operation {:?}, nonce marker {}: {error}",
+                    request.context().operation_id,
+                    self.nonce - 1
+                )
+            })?;
         let authenticated = self.peers.authenticate_backup_response(
             &self.session.connection,
             &response,
@@ -490,8 +500,13 @@ impl<'a, 'identity> Client<'a, 'identity> {
         message: Message,
         request: &FederatedBackupRequest,
     ) -> TestResult<OutboundFederationBackupMessage> {
-        let nonce = self.nonce;
+        let marker = self.nonce;
         self.nonce = self.nonce.checked_add(1).ok_or("nonce exhausted")?;
+        // This client shares the server replay window with authority/discovery fixtures.
+        // Reserve a distinct nonce domain so added exchanges cannot reuse their markers.
+        let mut nonce = [0; 32];
+        nonce[..23].copy_from_slice(b"backup-execution-client");
+        nonce[31] = marker;
         Ok(signed_federation_backup_message(
             self.identity,
             FederationExchangeContext::new(
@@ -500,7 +515,7 @@ impl<'a, 'identity> Client<'a, 'identity> {
                 request.context().operation_id.as_bytes(),
                 [190; 16],
                 request.context().deadline,
-                [nonce; 32],
+                nonce,
             )?,
             message,
             self.session.limits.wire,

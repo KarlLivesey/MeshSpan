@@ -270,7 +270,8 @@ pub use meshspan_metadata::FederationRemoteAuthoritySnapshot;
 pub use metadata_authority::{
     ConsensusMessageTransport, MetadataAuthorityConfig, MetadataAuthorityHandle,
     MetadataAuthorityObservation, MetadataAuthorityRequestError, MetadataAuthorityRuntimeError,
-    MetadataAuthorityStartError, MetadataReadFence, MetadataReplicationObservation,
+    MetadataAuthorityStartError, MetadataPeerAdmissionDetails, MetadataPeerAdmissionPurpose,
+    MetadataPeerAdmissionState, MetadataReadFence, MetadataReplicationObservation,
     PeerConsensusMessage, spawn_metadata_authority,
 };
 pub use native_gateway_wire::{

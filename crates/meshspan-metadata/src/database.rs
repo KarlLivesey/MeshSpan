@@ -110,6 +110,8 @@ impl PartitionDatabase {
     pub fn check_integrity(&self) -> Result<IntegrityReport, MetadataStoreError> {
         let report = check_integrity(&self.connection, PARTITION_SCHEMA_VERSION)?;
         crate::authentication_integrity::check_method_shapes(&self.connection)?;
+        crate::repository::verify_consensus_log_accounting(&self.connection)
+            .map_err(|_| MetadataStoreError::IntegrityFailed)?;
         Ok(report)
     }
 

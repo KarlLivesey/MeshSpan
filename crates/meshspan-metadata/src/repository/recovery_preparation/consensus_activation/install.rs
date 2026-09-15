@@ -12,10 +12,8 @@ pub(super) fn apply(transaction: &Transaction<'_>, activation: &Activation) -> R
     let revision = to_i64(activation.revision.get())?;
     let epoch = to_i64(activation.plan.quorum.membership_epoch())?;
     let partition = activation.plan.partition_id.as_bytes();
-    transaction.execute(
-        "DELETE FROM consensus_log WHERE log_index > ?1",
-        [to_i64(source.source_log_index)?],
-    )?;
+    crate::repository::consensus::truncate_recovery_suffix(transaction, source.source_log_index)
+        .map_err(|_| Error::CorruptState)?;
     let changed = transaction.execute(
         "UPDATE consensus_vote SET current_term = ?1, voted_for_node_id = NULL,
         membership_epoch = ?2, persisted_at = ?3 WHERE singleton = 1 AND partition_id = ?4",

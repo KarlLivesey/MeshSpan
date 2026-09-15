@@ -7,7 +7,10 @@ use meshspan_backup::{
     DirectoryBackupProvider, IntersectedBackupCapacity, NamespacedBackupProvider,
 };
 use meshspan_contracts::{
-    BackupObjectIdentity, BackupProvider, FederatedBackupScope, federated_provider_backup_identity,
+    BackupDeleteReceipt, BackupDeleteRequest, BackupLookupRequest, BackupObjectIdentity,
+    BackupObjectReceipt, BackupProvider, BackupReadReceipt, BackupReadRequest, BackupStoreRequest,
+    BackupVerifyRequest, ContractError, FederatedBackupScope, ImplementationDescriptor,
+    federated_provider_backup_identity,
 };
 use meshspan_domain::{BackupDestinationId, NodeId, TargetId, UnixMicros};
 use meshspan_metadata::{
@@ -22,6 +25,7 @@ use std::{
 use super::FederationSessionRuntimeError;
 type Result<T> = std::result::Result<T, FederationSessionRuntimeError>;
 type Slots = BTreeMap<BackupDestinationId, Arc<Mutex<Option<OpenedProvider>>>>;
+type ProviderResult<T> = std::result::Result<T, ContractError>;
 
 /// The maintenance owner publishes handles only; request workers never lock maintenance IO.
 #[derive(Clone, Default)]
@@ -94,6 +98,57 @@ pub(super) struct FederationBackupProviders {
     configuration: FederationBackupProviderConfiguration,
     slots: Mutex<Slots>,
     maximum_resident: usize,
+    #[cfg(test)]
+    completion_gate: Mutex<Option<CompletionGate>>,
+}
+
+#[cfg(test)]
+struct CompletionGate {
+    destination: BackupDestinationId,
+    entered: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+
+#[cfg(test)]
+impl super::FederationSessions {
+    /// Bind through the native registry for focused physical IO lifetime assertions.
+    pub(crate) fn bind_backup_provider_for_test(
+        &self,
+        scope: FederatedBackupScope,
+        object: BackupObjectIdentity,
+    ) -> Result<impl BackupProvider + '_> {
+        self.backup_providers.bind(scope, object)
+    }
+
+    /// Pauses one native worker after its terminal result and FIN have completed.
+    pub(crate) fn pause_backup_provider_completion(
+        &self,
+        scope: FederatedBackupScope,
+        object: BackupObjectIdentity,
+    ) -> Result<(
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    )> {
+        let destination = federated_provider_backup_identity(scope, object)
+            .map_err(|_| FederationSessionRuntimeError::Unavailable)?
+            .destination_id;
+        let (entered, observed) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let mut gate = self
+            .backup_providers
+            .completion_gate
+            .lock()
+            .map_err(|_| FederationSessionRuntimeError::Unavailable)?;
+        if gate.is_some() {
+            return Err(FederationSessionRuntimeError::Unavailable);
+        }
+        *gate = Some(CompletionGate {
+            destination,
+            entered,
+            release: released,
+        });
+        Ok((observed, release))
+    }
 }
 
 struct OpenedProvider {
@@ -109,7 +164,24 @@ impl FederationBackupProviders {
             configuration,
             slots: Mutex::new(BTreeMap::new()),
             maximum_resident: workers.saturating_mul(8),
+            #[cfg(test)]
+            completion_gate: Mutex::new(None),
         }
+    }
+
+    /// Bind one admitted object without retaining its catalogue slot during the final reply.
+    pub(super) fn bind(
+        &self,
+        scope: FederatedBackupScope,
+        object: BackupObjectIdentity,
+    ) -> Result<BoundBackupProvider<'_>> {
+        let descriptor = self.with_provider(scope, object, |provider| Ok(provider.describe()))?;
+        Ok(BoundBackupProvider {
+            owner: self,
+            scope,
+            object,
+            descriptor,
+        })
     }
 
     /// Release idle catalogues for withdrawn targets so returning folders can regain ownership.
@@ -178,6 +250,40 @@ impl FederationBackupProviders {
             .as_mut()
             .ok_or(FederationSessionRuntimeError::Unavailable)?;
         work(&mut entry.provider)
+    }
+
+    #[cfg(test)]
+    pub(super) fn pause_completed_transfer(
+        &self,
+        scope: FederatedBackupScope,
+        object: BackupObjectIdentity,
+    ) -> Result<()> {
+        let destination = federated_provider_backup_identity(scope, object)
+            .map_err(|_| FederationSessionRuntimeError::Unavailable)?
+            .destination_id;
+        let gate = {
+            let mut pending = self
+                .completion_gate
+                .lock()
+                .map_err(|_| FederationSessionRuntimeError::Unavailable)?;
+            if pending
+                .as_ref()
+                .is_some_and(|gate| gate.destination == destination)
+            {
+                pending.take()
+            } else {
+                None
+            }
+        };
+        if let Some(gate) = gate {
+            gate.entered
+                .send(())
+                .map_err(|()| FederationSessionRuntimeError::Unavailable)?;
+            gate.release
+                .blocking_recv()
+                .map_err(|_| FederationSessionRuntimeError::Unavailable)?;
+        }
+        Ok(())
     }
 
     fn slot(&self, destination: BackupDestinationId) -> Result<Arc<Mutex<Option<OpenedProvider>>>> {
@@ -261,5 +367,88 @@ impl FederationBackupProviders {
             Box::new(OperatingSystemClock),
         )
         .map_err(|_| FederationSessionRuntimeError::Unavailable)
+    }
+}
+
+/// Each physical call retains the existing exclusive catalogue owner. The conversation's
+/// final authority check, result and FIN happen after that call releases its slot, so an
+/// observed completion cannot leave the next sequential request behind an obsolete guard.
+pub(super) struct BoundBackupProvider<'a> {
+    owner: &'a FederationBackupProviders,
+    scope: FederatedBackupScope,
+    object: BackupObjectIdentity,
+    descriptor: ImplementationDescriptor,
+}
+
+impl BackupProvider for BoundBackupProvider<'_> {
+    fn describe(&self) -> ImplementationDescriptor {
+        self.descriptor
+    }
+
+    fn lookup_exact(
+        &self,
+        request: &BackupLookupRequest,
+        observed_at: UnixMicros,
+    ) -> ProviderResult<BackupObjectReceipt> {
+        self.access(request.object, |provider| {
+            provider.lookup_exact(request, observed_at)
+        })
+    }
+
+    fn store_exact(
+        &mut self,
+        request: BackupStoreRequest,
+        source: &mut dyn std::io::Read,
+        observed_at: UnixMicros,
+    ) -> ProviderResult<BackupObjectReceipt> {
+        self.access(request.object, |provider| {
+            provider.store_exact(request, source, observed_at)
+        })
+    }
+
+    fn read_exact(
+        &self,
+        request: &BackupReadRequest,
+        destination: &mut dyn std::io::Write,
+        observed_at: UnixMicros,
+    ) -> ProviderResult<BackupReadReceipt> {
+        self.access(request.object, |provider| {
+            provider.read_exact(request, destination, observed_at)
+        })
+    }
+
+    fn verify_exact(
+        &self,
+        request: &BackupVerifyRequest,
+        observed_at: UnixMicros,
+    ) -> ProviderResult<BackupObjectReceipt> {
+        self.access(request.object, |provider| {
+            provider.verify_exact(request, observed_at)
+        })
+    }
+
+    fn delete_exact(
+        &mut self,
+        request: &BackupDeleteRequest,
+        observed_at: UnixMicros,
+    ) -> ProviderResult<BackupDeleteReceipt> {
+        self.access(request.object, |provider| {
+            provider.delete_exact(request, observed_at)
+        })
+    }
+}
+
+impl BoundBackupProvider<'_> {
+    fn access<T>(
+        &self,
+        object: BackupObjectIdentity,
+        operation: impl FnOnce(&mut dyn BackupProvider) -> ProviderResult<T>,
+    ) -> ProviderResult<T> {
+        if object != self.object {
+            return Err(ContractError::InvalidInput);
+        }
+        self.owner
+            .with_provider(self.scope, self.object, |provider| Ok(operation(provider)))
+            .map_err(|_| ContractError::Unavailable)?
     }
 }

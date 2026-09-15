@@ -891,6 +891,14 @@ the stage; publication-dependent acceptance remains held separately and visible.
     Exact upload/read/missing-file counters and restart reset pass in the real
     daemon flow (**20.41 s**). Pack database extent/reusable-page evidence now
     passes real guarded cleanup and the daemon lifecycle (**20.94 s**).
+    CORE-03 now provides transactional retained-log accounting and bounded live
+    consensus-owner request admission, with the assembled full local gate and
+    real HTTPS/Samba recovery proof passing. The final review also corrected
+    completed backup transfers retaining their physical provider slot.
+    [Candidate evidence](stage-10-evidence.md#final-core-03-candidate-validation).
+    Consensus snapshot anchors and prefix reclamation remain CORE-04 work; these
+    checks do not close task 17's remaining lifecycle/reuse acceptance or its
+    existing point estimate.
     The reopened prerequisites now stand as follows:
 
     - **8 points:** finish Stage 4 DAT-021 lifecycle acceptance and actual

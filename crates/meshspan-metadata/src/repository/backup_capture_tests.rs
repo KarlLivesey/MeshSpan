@@ -12,7 +12,18 @@ fn captured_backup_survives_later_commits_without_rewriting_its_capture_time()
     let claim = queue_and_claim(&mut fixture, backup)?;
     // Direct repository fixtures bypass Raft append. Retain the source log position
     // explicitly here; the real-process test exercises the actual committed log.
-    fixture.repository.database.connection().execute("INSERT INTO consensus_log(log_index, term, entry_kind, entry_version, payload, payload_digest) VALUES (6, 1, 1, 1, x'01', zeroblob(32))", [])?;
+    let transaction = fixture
+        .repository
+        .database
+        .connection()
+        .unchecked_transaction()?;
+    transaction.execute("INSERT INTO consensus_log(log_index, term, entry_kind, entry_version, payload, payload_digest) VALUES (6, 1, 1, 1, x'01', zeroblob(32))", [])?;
+    transaction.execute(
+        "UPDATE consensus_log_accounting SET entry_count = entry_count + 1,
+        payload_bytes = payload_bytes + 1, revision = revision + 1 WHERE singleton = 1",
+        [],
+    )?;
+    transaction.commit()?;
     let source = captured(&fixture, backup, destination, claim);
     fixture.repository.apply_committed(
         LogPosition { index: 7, term: 1 },

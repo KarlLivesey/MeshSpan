@@ -15,10 +15,10 @@ mod http01;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 122;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 123;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 17;
 
-const PARTITION_MIGRATIONS: [Migration; 122] = [
+const PARTITION_MIGRATIONS: [Migration; 123] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -504,8 +504,12 @@ const PARTITION_MIGRATIONS: [Migration; 122] = [
         sql: include_str!("../schema/partition/121_repair_attempts.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 122,
         sql: include_str!("../schema/partition/122_repair_shard_generations.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/123_consensus_log_accounting.sql"),
     },
 ];
 
@@ -770,6 +774,10 @@ fn partition_data_migration(
     transaction: &rusqlite::Transaction<'_>,
     version: u32,
 ) -> Result<(), MetadataStoreError> {
+    if version == 123 {
+        crate::repository::verify_consensus_log_accounting(transaction)
+            .map_err(|_| MetadataStoreError::IntegrityFailed)?;
+    }
     if version == 86 {
         http01::backfill(transaction)?;
     }

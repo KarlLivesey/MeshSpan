@@ -70,6 +70,11 @@ fn snapshot_capture_keeps_one_read_view_while_another_connection_commits()
                  VALUES(2,1,1,1,?1,?2)", params![payload, appended.entry_digest().as_slice()],
             )?;
             transaction.execute(
+                "UPDATE consensus_log_accounting SET entry_count = entry_count + 1,
+                 payload_bytes = payload_bytes + ?1, revision = revision + 1 WHERE singleton = 1",
+                [i64::try_from(payload.len()).map_err(|_| rusqlite::Error::InvalidQuery)?],
+            )?;
+            transaction.execute(
                 "UPDATE applied_state SET last_log_index=2 WHERE singleton=1",
                 [],
             )?;
