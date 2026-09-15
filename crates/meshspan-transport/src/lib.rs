@@ -26,7 +26,9 @@ mod tls;
 pub use identity::{
     AuthenticatedPeer, NegotiationConfig, PeerBinding, PeerRegistry, certificate_fingerprint,
 };
-pub use rotating_tls::{InstalledNodeCertificate, NodeTransportConfig, RotatingNodeTransport};
+pub use rotating_tls::{
+    InstalledNodeCertificate, NodeTransportConfig, PreparedNodeTransport, RotatingNodeTransport,
+};
 pub use snapshot::{SnapshotStager, VerifiedSnapshot};
 pub use stream::{
     AcceptedStream, StreamKind, accept_stream, classify_stream, open_stream, receive_control,

@@ -229,19 +229,24 @@ pub(crate) fn endpoint(
     bind_address: SocketAddr,
     server: Option<ServerConfig>,
 ) -> Result<Endpoint, TransportError> {
+    endpoint_with_runtime(bind_address, server, Arc::new(quinn::TokioRuntime))
+}
+
+pub(crate) fn endpoint_with_runtime(
+    bind_address: SocketAddr,
+    server: Option<ServerConfig>,
+    runtime: Arc<dyn quinn::Runtime>,
+) -> Result<Endpoint, TransportError> {
     let socket = std::net::UdpSocket::bind(bind_address).map_err(TransportError::Io)?;
-    Endpoint::new(
-        endpoint_config()?,
-        server,
-        socket,
-        Arc::new(quinn::TokioRuntime),
-    )
-    .map_err(TransportError::Io)
+    Endpoint::new(endpoint_config()?, server, socket, runtime).map_err(TransportError::Io)
 }
 
 /// Stable transport boundary failures without certificate or message contents.
 #[derive(Debug, Error)]
 pub enum TransportError {
+    /// An owned private transport driver failed during shared shutdown.
+    #[error("private transport driver shutdown failed")]
+    Shutdown,
     /// Configuration, key material, trust roots or resource limits are invalid.
     #[error("private transport configuration is invalid")]
     InvalidConfiguration,

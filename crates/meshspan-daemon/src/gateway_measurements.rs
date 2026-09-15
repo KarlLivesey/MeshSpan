@@ -62,6 +62,21 @@ impl<Handler: SmbConnectionHandler> SmbConnectionHandler for ObservedSmbHandler<
             result
         })
     }
+
+    fn maintain(
+        &mut self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<std::time::Duration, Self::Error>> + Send + '_>,
+    > {
+        self.handler.maintain()
+    }
+
+    fn shutdown(
+        &mut self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Self::Error>> + Send + '_>>
+    {
+        self.handler.shutdown()
+    }
 }
 
 struct DispatchLifetime {

@@ -23,6 +23,14 @@ message ComponentSupport {
   uint32 maximum_concurrency = 6;
 }
 
+// Exact implementation bounds; absence means bulk consensus is unsupported.
+message ConsensusTransferSupport {
+  uint32 format_version = 1;
+  uint64 maximum_command_bytes = 2;
+  uint64 maximum_body_bytes = 3;
+  uint32 maximum_entries = 4;
+}
+
 message NodeHello {
   repeated ProtocolVersion versions = 1;
   bytes mesh_id = 2;
@@ -34,6 +42,7 @@ message NodeHello {
   uint64 maximum_control_bytes = 8;
   uint64 maximum_data_frame_bytes = 9;
   uint32 maximum_streams = 10;
+  optional ConsensusTransferSupport consensus_transfer = 11;
 }
 
 message NodeWelcome {
@@ -46,6 +55,7 @@ message NodeWelcome {
   uint64 maximum_control_bytes = 7;
   uint64 maximum_data_frame_bytes = 8;
   uint32 maximum_streams = 9;
+  optional ConsensusTransferSupport consensus_transfer = 10;
 }
 
 message Ping {

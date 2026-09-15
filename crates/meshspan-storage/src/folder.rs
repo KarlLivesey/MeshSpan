@@ -405,11 +405,9 @@ fn create_pack_directory(directory: &Dir) -> Result<(), StorageFolderError> {
 }
 
 fn sync_directory(directory: &Dir) -> Result<(), StorageFolderError> {
-    directory
-        .try_clone()?
-        .into_std_file()
-        .sync_all()
-        .map_err(Into::into)
+    // Directory capabilities may use O_PATH on Linux, which cannot be fsynced.
+    // Reopen this same directory readably without resolving its ambient pathname.
+    directory.open(".")?.sync_all().map_err(Into::into)
 }
 
 /// Closed folder-registration failures that never echo attacker-controlled paths.

@@ -321,6 +321,7 @@ fn foreign_range_lock_rejects_write_before_stage_mutation() -> Result<(), Box<dy
         gateway_node_id: owner.gateway_node_id,
         range,
         kind: RangeLockKind::Shared,
+        lifetime: crate::RangeLockLifetime::Independent,
         lease_expires_at: UnixMicros::new(150),
         observed_at: UnixMicros::new(20),
     };

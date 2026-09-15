@@ -20,6 +20,9 @@ use crate::{
     RenewMaintenanceWork, StorageUsageLimit,
 };
 
+#[path = "maintenance_retry_tests.rs"]
+mod retry;
+
 #[test]
 fn work_is_deduplicated_leased_retried_and_fenced() -> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = Fixture::new()?;
@@ -756,15 +759,16 @@ struct RebalancePageSpec {
 
 impl Fixture {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::at(std::path::Path::new(":memory:"))
+    }
+
+    fn at(path: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
         let administrator = PrincipalId::from_bytes([2; 16])?;
         let node = NodeId::from_bytes([6; 16])?;
         let host = HostId::from_bytes([5; 16])?;
         let volume = VolumeId::from_bytes([7; 16])?;
-        let database = PartitionDatabase::open(
-            std::path::Path::new(":memory:"),
-            PartitionId::from_bytes([1; 16])?,
-            UnixMicros::new(1),
-        )?;
+        let database =
+            PartitionDatabase::open(path, PartitionId::from_bytes([1; 16])?, UnixMicros::new(1))?;
         let mut fixture = Self {
             repository: AuthoritativeRepository::new(database),
             administrator,

@@ -635,6 +635,32 @@ impl DurableContentCatalog {
         self.protected_acknowledgement_evidence(committed.request)
     }
 
+    /// Returns the recorded strong-wait cutoff for a verified committed content reference.
+    ///
+    /// The daemon uses this fixed cutoff while confirming namespace publication. A missing
+    /// cutoff supplies no additional wait allowance; callers must not renew it on retry.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unknown, conflicting or corrupt content and a cutoff beyond the original request.
+    pub fn committed_strong_wait_deadline(
+        &self,
+        content: PublishedContentReference,
+    ) -> Result<Option<UnixMicros>, ContentCatalogError> {
+        self.committed_acknowledgement_evidence(content)?;
+        let request = load_request(&self.connection, content.publication_operation_id)?
+            .ok_or(ContentCatalogError::Incomplete)?;
+        let stored: Option<i64> = self.connection.query_row(
+            "SELECT strong_deadline_at FROM content_publications WHERE operation_id = ?1",
+            [request.operation_id.as_bytes().as_slice()],
+            |row| row.get(0),
+        )?;
+        if stored.is_some_and(|deadline| deadline > request.deadline.get()) {
+            return Err(ContentCatalogError::Corrupt);
+        }
+        Ok(stored.map(UnixMicros::new))
+    }
+
     /// Resolves and independently verifies one committed manifest without source-local operation
     /// knowledge.
     ///

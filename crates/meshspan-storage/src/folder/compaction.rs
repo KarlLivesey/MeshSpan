@@ -7,6 +7,37 @@ use std::path::PathBuf;
 use super::{PACK_DIRECTORY, RegisteredFolder, StorageFolderError, sync_directory};
 
 impl RegisteredFolder {
+    pub(crate) fn pack_file_exists(&self, sequence: u64) -> Result<bool, StorageFolderError> {
+        let directory = self.private_directory.open_dir(PACK_DIRECTORY)?;
+        match directory.symlink_metadata(format!("{sequence:016x}.sqlite3")) {
+            Ok(metadata) if metadata.is_file() => Ok(true),
+            Ok(_) => Err(StorageFolderError::CapabilityProbeFailed),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Requires durable journal retirement authority and no open source readers/writers.
+    pub(crate) fn retire_pack_files(&self, sequence: u64) -> Result<(), StorageFolderError> {
+        let directory = self.private_directory.open_dir(PACK_DIRECTORY)?;
+        for stem in [
+            format!("{sequence:016x}.sqlite3"),
+            format!("{sequence:016x}.compact.sqlite3"),
+        ] {
+            for suffix in ["", "-wal", "-shm", "-journal"] {
+                let name = format!("{stem}{suffix}");
+                match directory.symlink_metadata(&name) {
+                    Ok(metadata) if metadata.is_file() => directory.remove_file(&name)?,
+                    Ok(_) => return Err(StorageFolderError::CapabilityProbeFailed),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+        // A lost result is retried from the persistent retirement row, including missing files.
+        sync_directory(&directory)
+    }
+
     pub(crate) fn prepare_compaction(&self, sequence: u64) -> Result<PathBuf, StorageFolderError> {
         let original = self.pack_database_path(sequence)?;
         let directory = self.private_directory.open_dir(PACK_DIRECTORY)?;

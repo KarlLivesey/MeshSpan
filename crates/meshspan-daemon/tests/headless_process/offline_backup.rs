@@ -31,10 +31,22 @@ async fn recover_backup(clients: super::recovery_live_file::Clients) -> Result<(
         let key = created["api_key"].as_str().ok_or("bootstrap key missing")?;
         super::save_and_verify_recovery_bundle(&root, &client, key, &created).await?;
         super::wait_for_storage_folder_visibility(&root, &client, key).await?;
+        let authorization = format!("Bearer {key}");
+        // Make the startup archive finish before writing: recovery must select a later
+        // capture explicitly, rather than depend on a race with automatic backup work.
+        let startup_backup = protected_backup(&root, &client, &authorization).await?;
         let administrator = super::bootstrap_administrator_id(&claim, &root.identity_path)?;
         super::recovery_history::populate(&root, &client, key, &administrator, clients).await?;
-        let authorization = format!("Bearer {key}");
-        let id = protected_backup(&root, &client, &authorization).await?;
+        let sequence =
+            super::stage10::request_fresh_backup(root.address, &client, &authorization).await?;
+        let id = super::backup_history::automatic_backup_history_for_schedule(
+            root.address,
+            &client,
+            &authorization,
+            sequence,
+        )
+        .await?;
+        assert_ne!(id, startup_backup);
         let (bytes, digest) =
             super::backup_history::encrypted_export(root.address, &client, &authorization, &id)
                 .await?;

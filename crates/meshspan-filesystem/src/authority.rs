@@ -983,6 +983,7 @@ where
                 gateway_node_id: context.gateway_node_id,
                 range: request.range,
                 kind: request.kind,
+                lifetime: request.lifetime,
                 lease_expires_at: request.lease_expires_at,
                 observed_at: request.observed_at,
             },
@@ -1227,24 +1228,40 @@ where
     ) -> Result<UploadCommitReceipt, AuthorisedFilesystemError<A::Error>> {
         require_adapter_context(context, request.observed_at)?;
         let (session, grant) = self.authorise_upload(context, request.upload_id)?;
+        let committed = self
+            .filesystem
+            .resolve(request.operation_id)
+            .map_err(AuthorisedFilesystemError::Commit)?;
+        if session.expires_at <= context.now && committed.is_none() {
+            return Err(AuthorisedFilesystemError::Upload(
+                crate::UploadServiceError::StaleAuthority,
+            ));
+        }
         let publication = self
             .filesystem
             .prepare_upload_publication(branch_id, &session, request, policy, grant)
             .map_err(AuthorisedFilesystemError::Handle)?;
+        // Admission uses the fresh authority/clock above. A retry executes the original
+        // durable plan; regenerated server timestamps are not new client intent.
+        let original_observed_at = publication.completion.observed_at;
+        let original_authorization_revision = publication.content_authorization_revision;
         self.filesystem
-            .commit_upload(&UploadCommitRequest {
-                operation_id: request.operation_id,
-                upload_id: request.upload_id,
-                principal_id: session.principal_id,
-                authorization_revision: grant.identity_revision,
-                stage_fence: request.stage_fence,
-                expected_sequence: request.expected_sequence,
-                final_length: request.final_length,
-                sparse: request.sparse,
-                expected_content_digest: request.expected_content_digest,
-                publication,
-                observed_at: request.observed_at,
-            })
+            .commit_upload_at(
+                &UploadCommitRequest {
+                    operation_id: request.operation_id,
+                    upload_id: request.upload_id,
+                    principal_id: session.principal_id,
+                    authorization_revision: original_authorization_revision,
+                    stage_fence: request.stage_fence,
+                    expected_sequence: request.expected_sequence,
+                    final_length: request.final_length,
+                    sparse: request.sparse,
+                    expected_content_digest: request.expected_content_digest,
+                    publication,
+                    observed_at: original_observed_at,
+                },
+                context.now,
+            )
             .map_err(AuthorisedFilesystemError::Commit)
     }
 

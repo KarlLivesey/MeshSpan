@@ -68,7 +68,7 @@ impl ProofMetadata {
     }
 
     pub fn decode(&self, entry: &LogEntry) -> Result<DecodedCommand, NodeRuntimeError> {
-        let [kind] = entry.command.as_slice() else {
+        let [kind] = entry.command.as_ref() else {
             return Err(NodeRuntimeError::InvalidConfiguration);
         };
         let command = match *kind {

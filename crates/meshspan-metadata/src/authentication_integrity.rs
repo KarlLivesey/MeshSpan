@@ -212,7 +212,10 @@ fn invalid_session_factor(connection: &Connection) -> Result<i64, rusqlite::Erro
             JOIN authentication_sessions AS session USING(session_id)
             JOIN authentication_methods AS method USING(method_id)
             WHERE factor.method_kind <> method.method_kind
-               OR factor.authenticated_at <> session.issued_at
+               OR (session.source_session_id IS NULL
+                   AND factor.authenticated_at <> session.issued_at)
+               OR (session.source_session_id IS NOT NULL
+                   AND factor.authenticated_at > session.issued_at)
                OR method.user_principal_id <> session.user_principal_id
                OR (method.service_scope & session.service) <> session.service
                OR factor.credential_generation > method.credential_generation

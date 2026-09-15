@@ -2,7 +2,7 @@
 
 //! Authenticated SMB command routing over the common logical filesystem.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use meshspan_domain::{UnixMicros, VolumeId};
 use meshspan_filesystem::{FilesystemAccessContext, FilesystemFileAdapter, NamespaceLimits};
@@ -89,6 +89,7 @@ pub struct SmbCommandDispatcher<I, F, C, M> {
     shares: Vec<SmbPublishedShare>,
     trees: BTreeMap<u32, ConnectedTree<F>>,
     next_tree_id: u32,
+    renewals: BTreeSet<(UnixMicros, u32)>,
     make_context: C,
     classify_filesystem_error: M,
     active: bool,
@@ -136,6 +137,7 @@ where
             shares,
             trees: BTreeMap::new(),
             next_tree_id: 1,
+            renewals: BTreeSet::new(),
             make_context,
             classify_filesystem_error,
             active: true,
@@ -187,6 +189,61 @@ where
         match response {
             Ok(response) => self.protect(response, encrypted),
             Err(failure) => self.error(header, failure, encrypted),
+        }
+    }
+
+    /// Renews one due open across all trees, ordered by deadline rather than tree identity.
+    pub(crate) fn maintain(&mut self, now: UnixMicros) -> Result<bool, ConnectorFailure> {
+        let Some((due, tree_id)) = self.renewals.first().copied() else {
+            return Ok(false);
+        };
+        if due > now || !self.active {
+            return Ok(false);
+        }
+        self.renewals.pop_first();
+        let tree = self
+            .trees
+            .get_mut(&tree_id)
+            .ok_or(ConnectorFailure::ShareDeleted)?;
+        let result = match (self.make_context)(self.channel.identity(), now) {
+            Ok(context) => tree
+                .adapter
+                .maintain_lease(context)
+                .map_err(|error| classify_adapter_error(&self.classify_filesystem_error, &error)),
+            Err(error) => {
+                tree.adapter.fence_next_lease();
+                Err(error)
+            }
+        };
+        if let Some(next) = tree.adapter.next_renewal_at() {
+            self.renewals.insert((next, tree_id));
+        }
+        result
+    }
+
+    pub(crate) fn detach_one(&mut self, now: UnixMicros) -> Result<bool, ConnectorFailure> {
+        self.active = false;
+        self.renewals.clear();
+        let Some((&tree_id, tree)) = self.trees.first_key_value() else {
+            return Ok(false);
+        };
+        if !tree.adapter.has_open_files() {
+            self.trees.remove(&tree_id);
+            return Ok(true);
+        }
+        let tree = self
+            .trees
+            .get_mut(&tree_id)
+            .ok_or(ConnectorFailure::ShareDeleted)?;
+        match (self.make_context)(self.channel.identity(), now) {
+            Ok(context) => tree
+                .adapter
+                .detach_one(context)
+                .map_err(|error| classify_adapter_error(&self.classify_filesystem_error, &error)),
+            Err(error) => {
+                tree.adapter.forget_next_open();
+                Err(error)
+            }
         }
     }
 
@@ -245,6 +302,9 @@ where
         if tree.encryption_required && !encrypted {
             return Err(ConnectorFailure::AccessDenied);
         }
+        if let Some(due) = tree.adapter.next_renewal_at() {
+            self.renewals.remove(&(due, request.header.tree_id));
+        }
         self.trees
             .remove(&request.header.tree_id)
             .ok_or(ConnectorFailure::InternalFailure)?;
@@ -262,6 +322,7 @@ where
         let request = LogoffRequest::parse(packet).map_err(|_| ConnectorFailure::InvalidInput)?;
         let response = request.success_response().to_vec();
         self.trees.clear();
+        self.renewals.clear();
         self.active = false;
         Ok(response)
     }
@@ -281,14 +342,20 @@ where
         if tree.encryption_required && !encrypted {
             return Err(ConnectorFailure::AccessDenied);
         }
-        dispatch_filesystem(&mut tree.adapter, context, header.command, packet).map_err(|error| {
-            match error {
+        if let Some(due) = tree.adapter.next_renewal_at() {
+            self.renewals.remove(&(due, header.tree_id));
+        }
+        let result = dispatch_filesystem(&mut tree.adapter, context, header.command, packet)
+            .map_err(|error| match error {
                 FilesystemCommandError::InvalidRequest => ConnectorFailure::InvalidInput,
                 FilesystemCommandError::Adapter(error) => {
                     classify_adapter_error(&self.classify_filesystem_error, &error)
                 }
-            }
-        })
+            });
+        if let Some(due) = tree.adapter.next_renewal_at() {
+            self.renewals.insert((due, header.tree_id));
+        }
+        result
     }
 
     fn allocate_tree_id(&mut self) -> Result<u32, ConnectorFailure> {

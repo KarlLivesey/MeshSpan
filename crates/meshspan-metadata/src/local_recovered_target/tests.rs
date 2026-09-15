@@ -104,12 +104,16 @@ fn local_schema_fifteen_upgrade_preserves_existing_registration() -> TestResult 
     database.connection().execute_batch(
         "DROP TRIGGER local_targets_recovery_conflict;
         DROP TABLE local_recovered_targets;
-        DELETE FROM schema_migrations WHERE version = 16;
+        DROP TABLE local_node_capability_presentations;
+        DELETE FROM schema_migrations WHERE version >= 16;
         PRAGMA user_version = 15; UPDATE local_identity SET schema_version = 15;",
     )?;
     drop(database);
     let database = LocalDatabase::open_existing(&file, UnixMicros::new(2))?;
-    assert_eq!(database.schema_version(), 16);
+    assert_eq!(
+        database.schema_version(),
+        crate::migration::LOCAL_SCHEMA_VERSION
+    );
     assert_eq!(
         database
             .local_target(ordinary.target_id)?

@@ -28,12 +28,8 @@ async fn surviving_daemon_retires_unadmitted_upload_after_worker_sigkill() -> Te
     let proof = async {
         let (clients, authorization) = bootstrap(&fixtures, &mut cleanup.0).await?;
         let gates = provider_gate::lock_catalogues(&fixtures).await?;
-        let sequence = stage10::request_post_enrolment_backup(
-            fixtures[0].address,
-            &clients[0],
-            &authorization,
-        )
-        .await?;
+        let sequence =
+            stage10::request_fresh_backup(fixtures[0].address, &clients[0], &authorization).await?;
         let interrupted =
             provider_gate::wait_for_published_intent(&fixtures[0], &gates, sequence).await?;
         let worker = fixtures

@@ -191,14 +191,14 @@ pub(crate) async fn admit_node(
 ///
 /// The public setup UI and headless startup both enter through this exact implementation.
 pub(crate) async fn activate_and_install_node(
-    local_state: &mut DaemonLocalState,
+    local_state: DaemonLocalState,
     private_listen: SocketAddr,
     admission: &EnrolNodeResponse,
     data_streams: tokio::sync::mpsc::Sender<PeerDataStream>,
     now: UnixMicros,
-) -> Result<HeadlessJoinNetwork, HeadlessNodeJoinError> {
+) -> Result<(DaemonLocalState, HeadlessJoinNetwork), HeadlessNodeJoinError> {
     let local_node_id = local_state.node_id();
-    let prepared = prepare_join_network(local_state, private_listen, admission).await?;
+    let prepared = prepare_join_network(&local_state, private_listen, admission).await?;
     let partition_id = prepared.partition_id;
     let mesh_id = prepared.config.mesh_id;
     let (peer_messages, received_peer_messages) = tokio::sync::mpsc::channel(256);
@@ -211,24 +211,47 @@ pub(crate) async fn activate_and_install_node(
         snapshots,
         data_streams,
     )?;
-    activate_joined_node(&network, admission, local_node_id, now).await?;
-    let received = tokio::time::timeout(
-        std::time::Duration::from_micros(
-            u64::try_from(PRIVATE_OPERATION_TIMEOUT_MICROS)
-                .map_err(|_| HeadlessNodeJoinError::PrivateNetwork)?,
-        ),
-        received_snapshots.recv(),
-    )
-    .await
-    .map_err(|_| HeadlessNodeJoinError::PrivateNetwork)?
-    .ok_or(HeadlessNodeJoinError::PrivateNetwork)?;
-    install_join_snapshot(local_state, mesh_id, partition_id, received, now)?;
-    complete_join_setup(local_state, now)?;
-    Ok(HeadlessJoinNetwork {
-        network,
-        peer_messages: received_peer_messages,
-        control_requests: received_control_requests,
-    })
+    let installed = async {
+        activate_joined_node(&network, admission, local_node_id, now).await?;
+        let received = tokio::time::timeout(
+            std::time::Duration::from_micros(
+                u64::try_from(PRIVATE_OPERATION_TIMEOUT_MICROS)
+                    .map_err(|_| HeadlessNodeJoinError::PrivateNetwork)?,
+            ),
+            received_snapshots.recv(),
+        )
+        .await
+        .map_err(|_| HeadlessNodeJoinError::PrivateNetwork)?
+        .ok_or(HeadlessNodeJoinError::PrivateNetwork)?;
+        // One owned blocking job covers restore and claim completion. Network cleanup cannot
+        // return while the durable install/receipt owner is still running.
+        tokio::task::spawn_blocking(move || {
+            let mut local_state = local_state;
+            install_join_snapshot(&local_state, mesh_id, partition_id, received, now)?;
+            complete_join_setup(&mut local_state, now)?;
+            Ok::<_, HeadlessNodeJoinError>(local_state)
+        })
+        .await
+        .map_err(|_| HeadlessNodeJoinError::InstallWorker)?
+    }
+    .await;
+    match installed {
+        Ok(local_state) => Ok((
+            local_state,
+            HeadlessJoinNetwork {
+                network,
+                peer_messages: received_peer_messages,
+                control_requests: received_control_requests,
+            },
+        )),
+        Err(primary) => match network.shutdown().await {
+            Ok(()) => Err(primary),
+            Err(_error) => Err(HeadlessNodeJoinError::Shutdown {
+                primary: Box::new(primary),
+                additional_failures: 1,
+            }),
+        },
+    }
 }
 
 struct PreparedJoinNetwork {
@@ -272,6 +295,18 @@ async fn prepare_join_network(
     } else {
         std::net::SocketAddr::from(([0_u16; 8], 0))
     };
+    let cache_path = local_state.state_directory().join("local.sqlite3");
+    let cache_node = local_state.node_id();
+    let capability_cache = tokio::task::spawn_blocking(move || {
+        meshspan_cluster::ConsensusCapabilityCacheConfig::open(
+            cache_path,
+            cache_node,
+            meshspan_domain::Clock::now(&crate::OperatingSystemClock),
+        )
+    })
+    .await
+    .map_err(|_| HeadlessNodeJoinError::PrivateNetwork)?
+    .map_err(|_| HeadlessNodeJoinError::PrivateNetwork)?;
     Ok(PreparedJoinNetwork {
         config: ConsensusNetworkConfig {
             local_node_id: local_state.node_id(),
@@ -297,6 +332,7 @@ async fn prepare_join_network(
             ),
             trust_anchors: vec![decode_hex_vec(&admission.root_certificate_der_hex)?],
             peers,
+            capability_cache: Some(capability_cache),
             snapshot_staging_path: Some(
                 local_state.state_directory().join(ROOT_AUTHORITY_DATABASE),
             ),
@@ -324,7 +360,7 @@ async fn activate_joined_node(
                 NodeRole::Gateway.into(),
                 NodeRole::MetadataLearner.into(),
             ],
-            capability_digest: network.local_capability_digest().to_vec(),
+            capability_digest: network.local_capability_digest()?.to_vec(),
         })),
     };
     let target = admission
@@ -589,6 +625,13 @@ const fn decode_nibble(value: u8) -> Option<u8> {
 
 #[derive(Debug, Error)]
 pub(crate) enum HeadlessNodeJoinError {
+    #[error("{primary}; join cleanup reported {additional_failures} additional failures")]
+    Shutdown {
+        primary: Box<HeadlessNodeJoinError>,
+        additional_failures: u32,
+    },
+    #[error("headless node snapshot installation worker failed")]
+    InstallWorker,
     #[error("headless node join local state is invalid")]
     InvalidLocalState,
     #[error("headless node admission response is invalid")]

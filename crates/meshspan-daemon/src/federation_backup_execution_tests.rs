@@ -74,10 +74,6 @@ impl<'a, 'identity> Client<'a, 'identity> {
             byte_length: PAYLOAD.len() as u64,
             digest: Sha256::digest(PAYLOAD).into(),
         };
-        let store = FederatedBackupRequest::Store(meshspan_contracts::BackupStoreRequest {
-            context: context(170)?,
-            object,
-        });
         let full = Box::pin(self.fill_first_allocation(object)).await?;
         let first_scope = self.scope;
         let second = super::super::authority(fixture)?
@@ -92,6 +88,10 @@ impl<'a, 'identity> Client<'a, 'identity> {
         self.scope = route.binding.scope;
         Box::pin(self.remove_filler(first_scope, full)).await?;
         interruption::assert_usage(fixture, self.scope, 0, object.byte_length)?;
+        let store = FederatedBackupRequest::Store(meshspan_contracts::BackupStoreRequest {
+            context: context(170)?,
+            object,
+        });
         let failed = tokio::time::timeout(
             std::time::Duration::from_secs(3),
             self.control_during_stalled_upload(&store),
@@ -101,7 +101,16 @@ impl<'a, 'identity> Client<'a, 'identity> {
             if error.code == i32::from(meshspan_protocol::v1::ErrorCode::Unavailable)));
         interruption::assert_usage(fixture, self.scope, 0, object.byte_length)?;
         Box::pin(self.recover_lost_store_result(fixture, consumer, object)).await?;
-        let stored = self.cycle(&store, PAYLOAD).await?;
+        // A new attempt gets its own deadline after the independent lost-result proof;
+        // the operation/object stay fixed, and the successful receipt is replayed exactly.
+        let store = FederatedBackupRequest::Store(meshspan_contracts::BackupStoreRequest {
+            context: context(170)?,
+            object,
+        });
+        let stored = self
+            .cycle(&store, PAYLOAD)
+            .await
+            .map_err(|error| format!("store backup after interruption proofs: {error}"))?;
         let Outcome::Stored(receipt) = &stored else {
             return Err("missing native stored receipt".into());
         };

@@ -18,6 +18,9 @@ use serde::Deserialize;
 
 const FIXTURE: &str = include_str!("../../../contracts/protobuf/v1/node-hello.json");
 
+#[path = "compatibility/consensus.rs"]
+mod consensus;
+
 #[path = "compatibility/updates.rs"]
 mod updates;
 
@@ -402,6 +405,7 @@ fn hello_envelope(fixture: &HelloFixture) -> Result<ControlEnvelope, Box<dyn std
     Ok(ControlEnvelope {
         header: None,
         message: Some(Message::NodeHello(NodeHello {
+            consensus_transfer: None,
             versions: vec![version],
             mesh_id: hex_to_bytes(&fixture.mesh_id_hex)?,
             node_id: hex_to_bytes(&fixture.node_id_hex)?,

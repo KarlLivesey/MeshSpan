@@ -3,6 +3,100 @@
 use super::*;
 
 #[tokio::test]
+async fn missing_kind_prefix_does_not_block_or_cancel_other_control_streams()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (first, second, mut received) = control_pair()?;
+    let peer = second.local_node_id();
+    let connection = first.control_connection(peer).await?;
+    let (mut delayed_send, mut delayed_receive) = connection.open_bi().await?;
+    let delayed_operation = OperationId::from_bytes([48; 16])?;
+    let immediate_operation = OperationId::from_bytes([49; 16])?;
+    let request = control_request(&first, immediate_operation, 2)?;
+    let client = first.clone();
+    let immediate = tokio::spawn(async move { client.request_control(peer, &request).await });
+    // Opening the later stream makes the preceding empty stream visible to the peer.
+    // Its absent kind byte must not block this complete request or lose the earlier stream
+    // when the complete request's worker is reaped.
+    let held = tokio::time::timeout(Duration::from_secs(2), received.recv())
+        .await?
+        .ok_or("complete request was blocked behind an absent stream kind")?;
+    let expected = control_response(&second, immediate_operation, 2)?;
+    held.respond
+        .send(expected.clone())
+        .map_err(|_| "response cancelled")?;
+    assert_eq!(immediate.await??.as_inner(), &expected);
+
+    delayed_send
+        .write_all(&[StreamKind::Metadata as u8])
+        .await?;
+    send_control(
+        &mut delayed_send,
+        &control_request(&first, delayed_operation, 1)?,
+        first.wire_limits,
+    )
+    .await?;
+    delayed_send.finish()?;
+    let held = tokio::time::timeout(Duration::from_secs(2), received.recv())
+        .await?
+        .ok_or("delayed request was cancelled by another stream completing")?;
+    let expected = control_response(&second, delayed_operation, 1)?;
+    held.respond
+        .send(expected.clone())
+        .map_err(|_| "delayed response cancelled")?;
+    let response = tokio::time::timeout(
+        Duration::from_secs(2),
+        receive_control(&mut delayed_receive, first.wire_limits),
+    )
+    .await??;
+    assert_eq!(response.as_inner(), &expected);
+    assert!(connection.close_reason().is_none());
+    first.shutdown().await?;
+    second.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_kind_prefix_expires_without_closing_shared_transport()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (first, second, mut received) = control_pair()?;
+    let peer = second.local_node_id();
+    let connection = first.control_connection(peer).await?;
+    let (_delayed_send, mut delayed_receive) = connection.open_bi().await?;
+    let operation = OperationId::from_bytes([50; 16])?;
+    let request = control_request(&first, operation, 3)?;
+    let client = first.clone();
+    let immediate = tokio::spawn(async move { client.request_control(peer, &request).await });
+    let held = tokio::time::timeout(Duration::from_secs(2), received.recv())
+        .await?
+        .ok_or("complete request was blocked")?;
+    let expected = control_response(&second, operation, 3)?;
+    held.respond
+        .send(expected.clone())
+        .map_err(|_| "response cancelled")?;
+    assert_eq!(immediate.await??.as_inner(), &expected);
+    let mut byte = [0_u8; 1];
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), delayed_receive.read(&mut byte)).await??,
+        None,
+        "expired stream unexpectedly returned a success response",
+    );
+    assert!(connection.close_reason().is_none());
+    let request = control_request(&first, operation, 3)?;
+    let client = first.clone();
+    let later = tokio::spawn(async move { client.request_control(peer, &request).await });
+    let held = tokio::time::timeout(Duration::from_secs(2), received.recv())
+        .await?
+        .ok_or("expired prefix stopped later requests")?;
+    held.respond
+        .send(expected.clone())
+        .map_err(|_| "later response cancelled")?;
+    assert_eq!(later.await??.as_inner(), &expected);
+    first.shutdown().await?;
+    second.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn failed_control_handler_does_not_cancel_another_request_on_the_connection()
 -> Result<(), Box<dyn std::error::Error>> {
     let (first, second, mut received) = control_pair()?;
@@ -230,7 +324,7 @@ pub(super) fn control_pair() -> Result<
     // Discover addresses from live sockets rather than releasing an ephemeral
     // reservation before binding, which races concurrent network/process tests.
     let first = ConsensusNetwork::start(first_config, first_messages)?;
-    let first_address = first.transport.server_endpoint().local_addr()?;
+    let first_address = first.transport.server_endpoint()?.local_addr()?;
     let second = ConsensusNetwork::start_with_control(
         config(
             second_node,
@@ -246,7 +340,7 @@ pub(super) fn control_pair() -> Result<
     )?;
     first.upsert_peer(&peer(
         second_node,
-        second.transport.server_endpoint().local_addr()?,
+        second.transport.server_endpoint()?.local_addr()?,
         second_identity.certificate_der(),
     ))?;
     Ok((first, second, received_controls))

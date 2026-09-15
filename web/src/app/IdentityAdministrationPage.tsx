@@ -52,6 +52,7 @@ export function IdentityAdministrationPage(): JSX.Element {
       >
         <IdentityAdministrationPanel
           client={session.client}
+          stepUp={session.stepUp}
           csrfToken={session.csrfToken() ?? ""}
         />
       </Match>

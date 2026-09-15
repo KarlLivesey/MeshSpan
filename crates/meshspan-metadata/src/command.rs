@@ -55,6 +55,7 @@ use crate::{
     RevokeFederationGrantAssignmentActivation,
 };
 use crate::{IssueFederationStorageAllocation, RevokeFederationStorageAllocation};
+use crate::{IssueUserEnrollment, RedeemUserEnrollment, RevokeUserEnrollment};
 use crate::{
     ResolveFederatedMutationQuarantine, RetainFederatedMutationQuarantine,
     SurfaceFederatedMutationQuarantine,
@@ -78,6 +79,8 @@ pub struct CommandContext {
 /// Closed authoritative command families implemented by the Stage 2 kernel.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AuthoritativeCommand {
+    /// Refreshes the exact current capability presentation of an authenticated active node.
+    RefreshNodeCapabilities(crate::RefreshNodeCapabilities),
     /// Explicitly configures one immutable update verification key.
     ConfigureUpdateSigner(crate::ConfigureUpdateSigner),
     /// Selects one authenticated candidate and snapshots active members.
@@ -184,6 +187,12 @@ pub enum AuthoritativeCommand {
     RevokeAccessActivation(RevokeAccessActivation),
     /// Creates one typed authentication method without persisting plaintext credentials.
     CreateAuthenticationMethod(CreateAuthenticationMethod),
+    /// Manager-issued capability for the first primary user credential.
+    IssueUserEnrollment(IssueUserEnrollment),
+    /// Revocation of invitation use, including secret-bearing exact replay.
+    RevokeUserEnrollment(RevokeUserEnrollment),
+    /// Atomic invitation consumption and ordinary primary credential creation.
+    RedeemUserEnrollment(RedeemUserEnrollment),
     /// Appends and selects one immutable service/operation authentication policy.
     ConfigureAuthenticationPolicy(ConfigureAuthenticationPolicy),
     /// Revokes one exact authentication method immediately.
@@ -420,11 +429,23 @@ impl AuthoritativeCommand {
         digest.finish()
     }
 
+    pub(crate) fn node_request_digest(&self, context: crate::NodeCommandContext) -> [u8; 32] {
+        let mut digest = CanonicalDigest::new(b"meshspan.metadata.node-command.v1");
+        digest.identifier(context.operation_id.as_bytes());
+        digest.identifier(context.actor_node_id.as_bytes());
+        digest.identifier(context.audit_event_id.as_bytes());
+        digest.signed(context.occurred_at.get());
+        digest.optional_revision(context.expected_revision);
+        self.update_digest(&mut digest);
+        digest.finish()
+    }
+
     // This is deliberately one exhaustive, side-effect-free dispatch table: splitting command
     // families across fallible routing layers would weaken the closed-command invariant.
     #[allow(clippy::too_many_lines)]
     fn update_digest(&self, digest: &mut CanonicalDigest) {
         match self {
+            Self::RefreshNodeCapabilities(value) => value.update_digest(digest),
             Self::BootstrapMesh(value) => value.update_digest(digest),
             Self::BootstrapAppliance(value) => value.update_digest(digest),
             Self::ConfirmRecoveryBundleSaved(value) => value.update_digest(digest),
@@ -466,6 +487,9 @@ impl AuthoritativeCommand {
             Self::ActivateGroup(value) => value.update_digest(digest),
             Self::RevokeAccessActivation(value) => value.update_digest(digest),
             Self::CreateAuthenticationMethod(value) => value.update_digest(digest),
+            Self::IssueUserEnrollment(value) => value.update_digest(digest),
+            Self::RevokeUserEnrollment(value) => value.update_digest(digest),
+            Self::RedeemUserEnrollment(value) => value.update_digest(digest),
             Self::ConfigureAuthenticationPolicy(value) => value.update_digest(digest),
             Self::RevokeAuthenticationMethod(value) => value.update_digest(digest),
             Self::IssueAuthenticationSession(value) => value.update_digest(digest),
@@ -2736,6 +2760,16 @@ macro_rules! digest_simple_record {
         }
     };
 }
+
+digest_simple_record!(
+    RedeemUserEnrollment,
+    b"redeem-user-enrollment-v1",
+    |value, digest| {
+        digest.identifier(value.enrollment_operation_id.as_bytes());
+        digest.bytes(&value.token_digest);
+        value.method.update_digest(digest);
+    }
+);
 
 digest_simple_record!(
     crate::StageNodeCertificate,

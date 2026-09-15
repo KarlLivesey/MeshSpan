@@ -184,7 +184,7 @@ impl ApiKeyIssuanceKey {
         Self::from_bytes(*bytes)
     }
 
-    fn derive(
+    pub(crate) fn derive(
         &self,
         domain: &[u8],
         principal_id: PrincipalId,

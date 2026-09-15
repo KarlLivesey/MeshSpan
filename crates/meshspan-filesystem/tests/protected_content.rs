@@ -39,6 +39,9 @@ const PERMIT_KEY: [u8; 32] = [42; 32];
 #[path = "protected_content/availability.rs"]
 mod availability;
 
+#[path = "protected_content/deadline.rs"]
+mod deadline;
+
 #[path = "protected_content/reuse.rs"]
 mod reuse;
 
@@ -725,6 +728,7 @@ struct TestRouter {
 struct RouterState {
     providers: BTreeMap<TargetId, FolderShardStore>,
     offline: BTreeSet<TargetId>,
+    reserve_calls: usize,
 }
 
 impl TestRouter {
@@ -733,6 +737,7 @@ impl TestRouter {
             state: Arc::new(Mutex::new(RouterState {
                 providers,
                 offline: BTreeSet::new(),
+                reserve_calls: 0,
             })),
         }
     }
@@ -768,6 +773,7 @@ impl ContentShardRouter for TestRouter {
         request: ReserveStorageRequest,
     ) -> Result<StorageReservation, ContractError> {
         let mut state = self.lock()?;
+        state.reserve_calls += 1;
         if state.offline.contains(&request.target_id) {
             return Err(ContractError::Unavailable);
         }

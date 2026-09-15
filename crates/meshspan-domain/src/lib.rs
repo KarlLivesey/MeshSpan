@@ -25,6 +25,7 @@ mod seams;
 mod secret_text;
 mod session_token;
 mod topology;
+mod user_enrollment;
 mod uuid;
 
 pub use access::{
@@ -107,5 +108,8 @@ pub use session_token::{
 pub use topology::{
     FailureScenario, FailureTerm, FaultGroupMember, ProtectionError, ProtectionLayout,
     ProtectionProof, Topology, prove_protection,
+};
+pub use user_enrollment::{
+    ENCODED_USER_ENROLLMENT_LENGTH, UserEnrollmentBundle, UserEnrollmentError,
 };
 pub use uuid::uuid_v8;

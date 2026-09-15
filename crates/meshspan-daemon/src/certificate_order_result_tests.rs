@@ -83,8 +83,66 @@ fn trusted_terminal_result_commits_once_and_untrusted_chain_commits_nothing()
     Ok(())
 }
 
+#[test]
+fn p384_issued_terminal_result_commits_and_rejects_untrusted_chain()
+-> Result<(), Box<dyn std::error::Error>> {
+    let now = UnixMicros::new(1_789_420_000_000_000);
+    let key = ExternalCertificateRequestKey::from_pkcs8(include_bytes!(
+        "../../meshspan-rustls-provider/tests/fixtures/external/local-p384-leaf-key.der"
+    ))?;
+    let execution = execution_with_key(now, key)?;
+    let response = include_bytes!(
+        "../../meshspan-rustls-provider/tests/fixtures/external/local-p384-chain.pem"
+    );
+    let mut trust_roots = RootCertStore::empty();
+    trust_roots.add(CertificateDer::from(
+        include_bytes!(
+            "../../meshspan-rustls-provider/tests/fixtures/external/local-p384-root.der"
+        )
+        .to_vec(),
+    ))?;
+    let trusted = CertificateOrderResultService::new(trust_roots)?;
+    let authority = RecordingCompletionAuthority::new(vec![
+        WrappingPrivateKey::from_bytes([8; 32])?.public_key(),
+    ]);
+    let mut completion = CertificateOrderCompletionService::new(&authority, FixedRandom(30));
+    let committed = trusted.complete(
+        &mut completion,
+        PrincipalId::from_bytes([7; 16])?,
+        now,
+        &execution,
+        response,
+    )?;
+    assert_eq!(committed.revision, Revision::new(20));
+    assert_eq!(authority.commit_count(), 1);
+
+    let untrusted = CertificateOrderResultService::new(roots(&CertificateAuthority::new()?)?)?;
+    assert!(matches!(
+        untrusted.complete(
+            &mut completion,
+            PrincipalId::from_bytes([7; 16])?,
+            now,
+            &execution,
+            response
+        ),
+        Err(CertificateOrderResultError::UntrustedCertificate)
+    ));
+    assert_eq!(authority.commit_count(), 1);
+    Ok(())
+}
+
 fn execution(
     now: UnixMicros,
+) -> Result<
+    CertificateOrderExecution<UnavailableTransport, Http01Challenge>,
+    Box<dyn std::error::Error>,
+> {
+    execution_with_key(now, ExternalCertificateRequestKey::generate()?)
+}
+
+fn execution_with_key(
+    now: UnixMicros,
+    certificate_key: ExternalCertificateRequestKey,
 ) -> Result<
     CertificateOrderExecution<UnavailableTransport, Http01Challenge>,
     Box<dyn std::error::Error>,
@@ -113,7 +171,6 @@ fn execution(
         AcmeChallengePreference::Http01,
         claim.fence,
     )?;
-    let certificate_key = ExternalCertificateRequestKey::generate()?;
     let csr_der = certificate_key.certificate_signing_request(&names)?;
     let prepared = PreparedCertificateOrder {
         assignment: CertificateOrderAssignment {

@@ -70,6 +70,18 @@ impl PrivateConsensusRuntime {
         self.network.read().map_err(|_| ())?.clone().ok_or(())
     }
 
+    /// Drains the installed network while preserving the shared barrier for concurrent callers.
+    pub(crate) async fn shutdown(&self) -> Result<(), ()> {
+        let (network, poisoned) = match self.network.read() {
+            Ok(network) => (network.clone(), false),
+            Err(error) => (error.into_inner().clone(), true),
+        };
+        if let Some(network) = network {
+            network.shutdown().await.map_err(|_| ())?;
+        }
+        if poisoned { Err(()) } else { Ok(()) }
+    }
+
     /// Adds or replaces one newly admitted certificate-bound peer route.
     pub(crate) fn upsert_peer(&self, peer: &ConsensusPeerConfig) -> Result<(), ()> {
         self.network()
@@ -78,6 +90,19 @@ impl PrivateConsensusRuntime {
 }
 
 impl ConsensusMessageTransport for PrivateConsensusRuntime {
+    fn consensus_transfer_support_for(
+        &self,
+        expected: meshspan_transport::PeerBinding,
+        capability_digest: [u8; 32],
+    ) -> Result<
+        Option<meshspan_cluster::ObservedConsensusTransferSupport>,
+        meshspan_cluster::ConsensusNetworkError,
+    > {
+        self.network()
+            .map_err(|()| meshspan_cluster::ConsensusNetworkError::InvalidConfiguration)?
+            .consensus_transfer_support_for(expected, capability_digest)
+    }
+
     fn send(&self, to: NodeId, message: CoreMessage) {
         if let Ok(network) = self.network() {
             network.send(to, message);

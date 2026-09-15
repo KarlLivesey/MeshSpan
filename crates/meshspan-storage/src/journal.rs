@@ -35,10 +35,11 @@ pub use scrub::ScrubCheckpoint;
 
 pub(crate) use pack_routing::PackLimits;
 
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
 const SCHEMA: &str = include_str!("../schema/001_initial.sql");
 const BACKUP_CAPACITY_SCHEMA: &str = include_str!("../schema/002_backup_capacity.sql");
 const PACK_ROUTING_SCHEMA: &str = include_str!("../schema/003_pack_routing.sql");
+const PACK_RETIREMENT_SCHEMA: &str = include_str!("../schema/004_pack_retirement.sql");
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const STATE_SUBDIRECTORY: &str = "storage-targets";
 
@@ -357,6 +358,7 @@ fn migrate(connection: &mut Connection, applied_at: UnixMicros) -> Result<(), Ta
         (1_u32, SCHEMA),
         (2, BACKUP_CAPACITY_SCHEMA),
         (3, PACK_ROUTING_SCHEMA),
+        (4, PACK_RETIREMENT_SCHEMA),
     ] {
         let expected = blake3::hash(schema.as_bytes());
         if migration > version {

@@ -264,7 +264,7 @@ pub(crate) fn native_trust_roots() -> Result<RootCertStore, CertificateRuntimeEr
 pub(crate) fn acme_client_config(
     roots: RootCertStore,
 ) -> Result<Arc<ClientConfig>, CertificateRuntimeError> {
-    let provider = Arc::new(meshspan_rustls_provider::provider());
+    let provider = Arc::new(meshspan_rustls_provider::external_webpki_provider());
     let config = ClientConfig::builder_with_provider(provider)
         .with_protocol_versions(&[&rustls::version::TLS13])
         .map_err(|_| CertificateRuntimeError::NativeTrust)?
@@ -304,3 +304,7 @@ pub(crate) enum CertificateRuntimeError {
     #[error("certificate worker stopped unexpectedly")]
     WorkerStopped,
 }
+
+#[cfg(test)]
+#[path = "certificate_runtime_tls_tests.rs"]
+mod tls_tests;

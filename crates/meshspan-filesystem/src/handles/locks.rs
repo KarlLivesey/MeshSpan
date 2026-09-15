@@ -78,6 +78,32 @@ impl RangeLockKind {
     }
 }
 
+/// Whether a lock has its own deadline or explicitly follows its owning handle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RangeLockLifetime {
+    /// Preserve the acquired deadline independently of subsequent handle renewal.
+    Independent,
+    /// Retain the lock while this handle's live lease is renewed.
+    Handle,
+}
+
+impl RangeLockLifetime {
+    const fn code(self) -> u8 {
+        match self {
+            Self::Independent => 1,
+            Self::Handle => 2,
+        }
+    }
+
+    fn from_code(code: i64) -> Result<Self, HandleError> {
+        match code {
+            1 => Ok(Self::Independent),
+            2 => Ok(Self::Handle),
+            _ => Err(HandleError::Corrupt),
+        }
+    }
+}
+
 /// Exact request to acquire one leased byte-range lock.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LockRangeRequest {
@@ -97,6 +123,8 @@ pub struct LockRangeRequest {
     pub range: ByteRange,
     /// Shared or exclusive compatibility.
     pub kind: RangeLockKind,
+    /// Explicit ownership of the lock deadline.
+    pub lifetime: RangeLockLifetime,
     /// Exclusive lock lease deadline, no later than the handle lease.
     pub lease_expires_at: UnixMicros,
     /// Authoritative acquisition instant.
@@ -122,6 +150,8 @@ pub struct LockRangeReceipt {
     pub range: ByteRange,
     /// Lock compatibility class.
     pub kind: RangeLockKind,
+    /// Explicit ownership of the lock deadline.
+    pub lifetime: RangeLockLifetime,
     /// Exclusive lock deadline.
     pub lease_expires_at: UnixMicros,
     /// Digest binding the complete durable result.
@@ -176,6 +206,7 @@ struct StoredLockReceipt {
     start: i64,
     length: i64,
     kind: i64,
+    lifetime: i64,
     expires_at: i64,
     result_digest: Vec<u8>,
 }
@@ -256,6 +287,8 @@ fn validate_lock_owner(
         || handle.principal != request.principal_id
         || handle.gateway != request.gateway_node_id
         || request.lease_expires_at > handle.lease_expires_at
+        || (request.lifetime == RangeLockLifetime::Handle
+            && request.lease_expires_at != handle.lease_expires_at)
     {
         return Err(HandleError::StaleHandle);
     }
@@ -324,8 +357,8 @@ fn persist_lock(
             lock_id, operation_id, request_digest, handle_id, handle_fence,
             acquired_handle_fence,
             byte_start, byte_length, lock_kind, lease_expires_at, state,
-            created_at, released_at, receipt_digest
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, ?8, ?9, 1, ?10, NULL, ?11)",
+            created_at, released_at, receipt_digest, acquired_lease_expires_at, lock_lifetime
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, ?8, ?9, 1, ?10, NULL, ?11, ?9, ?12)",
         params![
             request.lock_id.as_bytes().as_slice(),
             request.operation_id.as_bytes().as_slice(),
@@ -338,6 +371,7 @@ fn persist_lock(
             request.lease_expires_at.get(),
             request.observed_at.get(),
             result_digest.as_slice(),
+            request.lifetime.code(),
         ],
     )?;
     Ok(LockRangeReceipt {
@@ -349,12 +383,13 @@ fn persist_lock(
         handle_fence: request.handle_fence,
         range: request.range,
         kind: request.kind,
+        lifetime: request.lifetime,
         lease_expires_at: request.lease_expires_at,
         result_digest,
     })
 }
 
-fn load_lock_receipt(
+pub(super) fn load_lock_receipt(
     connection: &Connection,
     operation_id: OperationId,
     disposition: PublicationDisposition,
@@ -362,7 +397,7 @@ fn load_lock_receipt(
     let stored: Option<StoredLockReceipt> = connection
         .query_row(
             "SELECT lock_id, request_digest, handle_id, acquired_handle_fence, byte_start,
-                    byte_length, lock_kind, lease_expires_at, receipt_digest
+                    byte_length, lock_kind, acquired_lease_expires_at, receipt_digest, lock_lifetime
              FROM range_locks WHERE operation_id = ?1",
             [operation_id.as_bytes().as_slice()],
             |row| {
@@ -376,6 +411,7 @@ fn load_lock_receipt(
                     kind: row.get(6)?,
                     expires_at: row.get(7)?,
                     result_digest: row.get(8)?,
+                    lifetime: row.get(9)?,
                 })
             },
         )
@@ -412,6 +448,7 @@ fn decode_lock_receipt(
         handle_fence,
         range,
         kind,
+        lifetime: RangeLockLifetime::from_code(stored.lifetime)?,
         lease_expires_at,
         result_digest,
     };
@@ -598,7 +635,14 @@ fn matching_unlock_replay(
 
 fn lock_request_digest(request: LockRangeRequest) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.lock-range-request.v1\0");
+    match request.lifetime {
+        RangeLockLifetime::Independent => {
+            digest.update(b"meshspan.filesystem.lock-range-request.v1\0")
+        }
+        RangeLockLifetime::Handle => {
+            digest.update(b"meshspan.filesystem.lock-range-request.v2\0\x02")
+        }
+    };
     digest.update(&request.operation_id.as_bytes());
     digest.update(&request.lock_id.as_bytes());
     digest.update(&request.handle_id.as_bytes());
@@ -622,6 +666,7 @@ fn lock_result_digest(request: LockRangeRequest, request_digest: [u8; 32]) -> [u
         request.handle_fence,
         request.range,
         request.kind,
+        request.lifetime,
         request.lease_expires_at,
     )
 }
@@ -635,10 +680,18 @@ fn lock_result_digest_fields(
     handle_fence: u64,
     range: ByteRange,
     kind: RangeLockKind,
+    lifetime: RangeLockLifetime,
     lease_expires_at: UnixMicros,
 ) -> [u8; 32] {
     let mut digest = blake3::Hasher::new();
-    digest.update(b"meshspan.filesystem.lock-range-result.v1\0");
+    match lifetime {
+        RangeLockLifetime::Independent => {
+            digest.update(b"meshspan.filesystem.lock-range-result.v1\0")
+        }
+        RangeLockLifetime::Handle => {
+            digest.update(b"meshspan.filesystem.lock-range-result.v2\0\x02")
+        }
+    };
     digest.update(&operation_id.as_bytes());
     digest.update(&lock_id.as_bytes());
     digest.update(&handle_id.as_bytes());
@@ -660,6 +713,7 @@ fn lock_receipt_digest(receipt: LockRangeReceipt) -> [u8; 32] {
         receipt.handle_fence,
         receipt.range,
         receipt.kind,
+        receipt.lifetime,
         receipt.lease_expires_at,
     )
 }

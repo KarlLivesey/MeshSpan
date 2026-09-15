@@ -3,6 +3,12 @@
 import { createSignal, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 
+import { zCreatePasskeyRegistrationRequestWritable } from "../../generated/zod.gen";
+import type { CreatePasskeyRegistrationRequestWritable } from "../../generated/types.gen";
+import {
+  createExactMutation,
+  mutationMessage,
+} from "../../native-api/mutation-outcome";
 import { browserCredentials, requestPasskeyRegistration } from "./webauthn";
 import type { AuthenticationSecurityClient } from "./model";
 
@@ -15,19 +21,77 @@ type PasskeyRegistrationProps = Readonly<{
 export function PasskeyRegistration(
   props: PasskeyRegistrationProps,
 ): JSX.Element {
+  const model = createPasskeyRegistration(props);
+
+  return (
+    <form
+      class="security-action-card"
+      onSubmit={(event) => void model.register(event)}
+    >
+      <div>
+        <p class="eyebrow">Recommended</p>
+        <h3>Add a passkey</h3>
+        <p>Use this device, a security key or another nearby authenticator.</p>
+      </div>
+      <label>
+        <span>Name</span>
+        <input
+          disabled={model.locked()}
+          maxlength={80}
+          onInput={(event) => model.setLabel(event.currentTarget.value)}
+          required
+          value={model.label()}
+        />
+      </label>
+      <button class="primary-action" disabled={model.pending()} type="submit">
+        {model.buttonLabel()}
+      </button>
+      <div class="form-message" aria-live="polite">
+        <Show when={model.message()}>
+          {(value) => <p class="success">{value()}</p>}
+        </Show>
+        <Show when={model.error()}>
+          {(value) => <p class="error">{value()}</p>}
+        </Show>
+      </div>
+    </form>
+  );
+}
+
+function createPasskeyRegistration(props: PasskeyRegistrationProps) {
   const [label, setLabel] = createSignal("This device");
-  const [pending, setPending] = createSignal(false);
-  const [message, setMessage] = createSignal<string>();
-  const [error, setError] = createSignal<string>();
+  const [preparing, setPreparing] = createSignal(false);
+  const [localError, setLocalError] = createSignal<string>();
+  const mutation = createExactMutation(
+    async (request: CreatePasskeyRegistrationRequestWritable) =>
+      props.client.createCurrentUserPasskey(request, props.csrfToken),
+    (receipt, request) => {
+      if (receipt.operation_id !== request.operation_id)
+        throw new TypeError("Passkey receipt does not match the request.");
+    },
+    async () => props.onChanged(),
+  );
+  const pending = () => preparing() || mutation.busy();
+  const locked = () => pending() || mutation.locked();
+  const message = () =>
+    mutation.state().phase === "committed"
+      ? "The passkey is now available for sign-in."
+      : undefined;
+  const error = () => localError() ?? mutationMessage(mutation.state());
+  let preparingRequest = false;
 
   const register = async (event: SubmitEvent): Promise<void> => {
     event.preventDefault();
-    if (pending()) {
+    if (preparingRequest || pending()) {
       return;
     }
-    setPending(true);
-    setMessage(undefined);
-    setError(undefined);
+    setLocalError(undefined);
+    if (mutation.locked()) {
+      await mutation.retry();
+      return;
+    }
+    preparingRequest = true;
+    setPreparing(true);
     try {
       const challenge =
         await props.client.createCurrentUserPasskeyRegistrationChallenge(
@@ -40,45 +104,31 @@ export function PasskeyRegistration(
         crypto.randomUUID(),
         browserCredentials(),
       );
-      await props.client.createCurrentUserPasskey(request, props.csrfToken);
-      await props.onChanged();
-      setMessage(`${label().trim()} is now available for sign-in.`);
+      await mutation.submit(
+        zCreatePasskeyRegistrationRequestWritable.parse(request),
+      );
     } catch {
-      setError("MeshSpan could not add that passkey. Nothing was changed.");
+      setLocalError(
+        "Passkey preparation did not finish. Registration was not submitted.",
+      );
     } finally {
-      setPending(false);
+      preparingRequest = false;
+      setPreparing(false);
     }
   };
 
-  return (
-    <form
-      class="security-action-card"
-      onSubmit={(event) => void register(event)}
-    >
-      <div>
-        <p class="eyebrow">Recommended</p>
-        <h3>Add a passkey</h3>
-        <p>Use this device, a security key or another nearby authenticator.</p>
-      </div>
-      <label>
-        <span>Name</span>
-        <input
-          disabled={pending()}
-          maxlength={80}
-          onInput={(event) => setLabel(event.currentTarget.value)}
-          required
-          value={label()}
-        />
-      </label>
-      <button class="primary-action" disabled={pending()} type="submit">
-        {pending() ? "Waiting for passkey…" : "Add passkey"}
-      </button>
-      <div class="form-message" aria-live="polite">
-        <Show when={message()}>
-          {(value) => <p class="success">{value()}</p>}
-        </Show>
-        <Show when={error()}>{(value) => <p class="error">{value()}</p>}</Show>
-      </div>
-    </form>
-  );
+  const buttonLabel = (): string => {
+    if (pending()) return "Waiting for passkey…";
+    return mutation.locked() ? "Retry passkey registration" : "Add passkey";
+  };
+  return {
+    label,
+    setLabel,
+    locked,
+    pending,
+    register,
+    message,
+    error,
+    buttonLabel,
+  };
 }

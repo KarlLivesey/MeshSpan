@@ -223,6 +223,59 @@ pub(crate) async fn handle(
     directory: &std::path::Path,
     request: &PeerControlRequest,
 ) -> Result<ControlEnvelope, MetadataAuthorityRequestError> {
+    handle_owned(
+        network,
+        authority,
+        directory,
+        request,
+        #[cfg(test)]
+        None,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(crate) struct AdmissionGate {
+    pub(crate) operation_id: OperationId,
+    pub(crate) started: tokio::sync::oneshot::Sender<()>,
+    pub(crate) released: std::sync::mpsc::Receiver<()>,
+}
+
+#[cfg(test)]
+impl AdmissionGate {
+    fn wait(self, operation: OperationId) -> Result<(), ErrorCode> {
+        if self.operation_id != operation {
+            return Err(ErrorCode::Invalid);
+        }
+        match self.started.send(()) {
+            Ok(()) | Err(()) => {}
+        }
+        // Dropping the fixture's release sender also releases the worker after a failed assertion.
+        match self.released.recv() {
+            Ok(()) | Err(_) => {}
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(crate) async fn handle_with_admission_gate(
+    network: &ConsensusNetwork,
+    authority: &MetadataAuthorityHandle,
+    directory: &std::path::Path,
+    request: &PeerControlRequest,
+    gate: AdmissionGate,
+) -> Result<ControlEnvelope, MetadataAuthorityRequestError> {
+    handle_owned(network, authority, directory, request, Some(gate)).await
+}
+
+async fn handle_owned(
+    network: &ConsensusNetwork,
+    authority: &MetadataAuthorityHandle,
+    directory: &std::path::Path,
+    request: &PeerControlRequest,
+    #[cfg(test)] gate: Option<AdmissionGate>,
+) -> Result<ControlEnvelope, MetadataAuthorityRequestError> {
     let envelope = request.envelope.as_inner().clone();
     let header = envelope
         .header
@@ -244,10 +297,15 @@ pub(crate) async fn handle(
     };
     let directory = directory.to_path_buf();
     // Certificate lookup and canonical decoding are bounded blocking work owned by this request.
-    let admitted =
-        tokio::task::spawn_blocking(move || admission::prepare(&directory, peer, &envelope))
-            .await
-            .map_err(|_| MetadataAuthorityRequestError::Failed)?;
+    let admitted = tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        if let Some(gate) = gate {
+            gate.wait(operation_id)?;
+        }
+        admission::prepare(&directory, peer, &envelope)
+    })
+    .await
+    .map_err(|_| MetadataAuthorityRequestError::Failed)?;
     let result = match admitted {
         Ok(decoded) => match authority
             .commit_or_resolve(decoded.context, decoded.command)
@@ -291,7 +349,7 @@ pub(crate) async fn handle(
     })
 }
 
-fn authority_error_result(error: MetadataAuthorityRequestError) -> OperationResult {
+pub(crate) fn authority_error_result(error: MetadataAuthorityRequestError) -> OperationResult {
     let (outcome, code, diagnostic_code) = match error {
         MetadataAuthorityRequestError::NotLeader { .. } => {
             (OperationOutcome::Redirect, ErrorCode::Unavailable, 1)
@@ -325,7 +383,7 @@ fn authority_error_result(error: MetadataAuthorityRequestError) -> OperationResu
     }
 }
 
-fn authority_response_error(result: &OperationResult) -> MetadataAuthorityRequestError {
+pub(crate) fn authority_response_error(result: &OperationResult) -> MetadataAuthorityRequestError {
     match result
         .error
         .as_ref()

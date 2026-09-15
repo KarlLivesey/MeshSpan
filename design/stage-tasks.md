@@ -6,6 +6,17 @@ append new tasks rather than renumbering existing ones, and explain scope change
 The [roadmap](roadmap.md) defines stage order; [requirements](requirements.md) and
 [accepted decisions](stage-6-11-decisions.md) define acceptance, not this inventory.
 
+The owner adopted the MeshSpan Viability Pack on 2026-09-14 as the implementation
+breakdown. Its ticket IDs cross-reference these stable stage tasks; they do not
+replace accepted requirements or count as completed acceptance. The first active
+slice is CORE-01 (Stage 3 / Stage 11 task 4), ACC-02 (truthful browser outcomes),
+DATA-05 (Stage 10 task 17, pack lifecycle) and NET-01 (external TLS). Daemon
+lifecycle, first-credential onboarding and SMB lease renewal follow their
+dependency-ready boundaries. The first integrated checkpoint requires two users
+to sign in independently, share exact bytes over HTTPS and SMB, retain an open
+beyond 60 seconds, restart and recover exact outcomes. Snapshot provenance and
+focused results are recorded in [the existing evidence log](stage-10-evidence.md#viability-pack-adoption-and-core-01-prefix-proof).
+
 Status baseline: 2026-09-06, after merge `f27acad`. This is a reconciliation of
 recorded evidence and implementation entry points, not a new test run or a full
 code audit. **Recorded complete** means the stated task has linked implementation
@@ -72,6 +83,10 @@ the stage; publication-dependent acceptance remains held separately and visible.
    leaf changes. The estimate fell 5 → 3 → 1 → 0 as this scope was verified.
 
 2. **Automatic ACME and DNS challenge handling — Implemented; assembled renewal verification remains.** **1 point remaining.**
+   [Current candidate verification](stage-10-evidence.md#current-candidate-verification--full-gate-and-real-process-proofs-on-2adaba80)
+   passes both real-time HTTP-01 interruption/retry cases and all three isolated
+   DNS-provider workflows. Assembled renewal and task 5's public staging-CA
+   acceptance remain separate requirements.
    PKI-003/004/006/010; accepted decisions §7.
    [ACME components](../crates/meshspan-acme/src/lib.rs) and
    [renewal scheduling](../crates/meshspan-daemon/src/certificate_renewal_scheduler.rs)
@@ -479,11 +494,36 @@ the stage; publication-dependent acceptance remains held separately and visible.
    remain separate Stage 11 obligations, not claims made by this process proof.
 
 10. **Offline verification and disaster recovery — Recovered HTTPS/SMB file access verified; operational closure remains.** **3 points remaining.**
+    [Current candidate verification](stage-10-evidence.md#current-candidate-verification--full-gate-and-real-process-proofs-on-2adaba80)
+    passes the full workspace gate and the exact musl HTTPS/SMB recovery workflow.
+    Earlier classified lifecycle/history failures have focused corrections; the
+    unclassified historical storage-snapshot failure below remains retained.
+    These passes do not close the three operational acceptance points.
     PER-004/005/007, TST-007. Recovery-bundle foundations and task 8 exist;
     [product-facing recovery remains outstanding](stage-10-evidence.md#remaining-backup-integration).
     Complete the documented offline verification and recovery-authority workflow,
     exact-position restoration, membership/secret checks and safe service
     admission. Restore-readiness must not masquerade as a completed restore.
+    The [2026-09-14 Linux continuation](stage-10-evidence.md#tasks-1027--linux-directory-durability-prerequisite)
+    reproduced PR #269's zero-root failure with deterministic startup-backup
+    ordering. Requiring a fresh post-upload capture passes the original history
+    assertions. Retained histories and live diagnostics explain the later
+    unknown-peer failure: a fetch interrupted by gateway death legitimately uses
+    its 30-second deadline before automatic catch-up, exceeding the fixture's
+    15-second routing allowance. The post-restart readiness budget now includes
+    that protocol deadline. The corrected full workflow passed in **139.28 s**,
+    including committed cleanup/replay and file preservation. A preceding earlier,
+    unlabelled post-restart timeout remains unexplained and retained; a passing
+    retry does not close it. The full local gate then failed in **510.74 s**
+    at a federation-pairing/backup session library test (`DeadlineExceeded`);
+    headless and later Rust targets were not reached. Task 10 and integration
+    remain open. Subsequent contextual reproduction identified an expired store
+    request created before unrelated federation proofs; moving each attempt's
+    deadline to its start passed all 440 daemon library tests. The new full gate
+    passed the library and offline recovery, then failed three other headless
+    cases (federated protection, successor peer startup and executable upload).
+    Later Rust targets were not reached; the separate storage-snapshot
+    `Unavailable` also remains unexplained.
     [Headless offline verification](stage-10-evidence.md#task-10--headless-offline-backup-verification)
     now consumes the actual encrypted export, independently saved digest and
     setup recovery bundle/code, checks exact SQLite state and stored recovery
@@ -960,6 +1000,18 @@ the stage; publication-dependent acceptance remains held separately and visible.
     **108 → 106**; only the assembled-stage pass remains for this task.
 
 22. **Mesh-wide rolling updates — Partial; automatic interruption-allowed installation implemented; availability-preserving coordination remains.** **7 points remaining.**
+    [Current candidate verification](stage-10-evidence.md#current-candidate-verification--full-gate-and-real-process-proofs-on-2adaba80)
+    passes exact preparation reporting, three-daemon signed-candidate propagation,
+    and actual two-process replacement with verified installations and cold-launch
+    retention. Replacement uses the interruption-allowed policy; the remaining
+    availability-preserving admission requirements are not waived.
+    The Linux continuation now executes a verified static-PIE musl binary.
+    Both PR #269 handoff regressions and the single-copy restart-refusal scenario
+    passed together after measured artifact verification exposed an invalid
+    generic control-wait budget. The final bounded-HTTP-poll review passes all
+    three scenarios and musl Clippy; earlier peer-startup failures remain open
+    reliability observations.
+    Full supported-platform update and assembled-stage acceptance remain open.
     Accepted decisions §7, PER-003/006, TST-007. Provide one administrator-selected
     signed candidate, compatibility checks, availability-aware node ordering,
     durable progress and stop-on-failed-probe behaviour. Prove interrupted update
@@ -1083,6 +1135,9 @@ the stage; publication-dependent acceptance remains held separately and visible.
     Verify entry points, state/storage paths and dependency/licence inventory.
     The development daemon build and an SMB test-client image do not close this
     product packaging task. Local preparation only while publication is held.
+    The Linux continuation prepared verified local musl compiler tooling. Actual
+    linked standard-library/compiler-runtime notices must be included alongside
+    Cargo/npm notices in the final dependency inventory; build/acceptance remains.
     [Local package assembly](stage-10-evidence.md#tasks-2427--local-native-package-and-packaged-process-execution)
     now builds an inspected macOS ARM64 dev archive with embedded panels,
     licence/inventory/provenance/checksums and passes a packaged setup/join/renewal/
@@ -1115,6 +1170,15 @@ the stage; publication-dependent acceptance remains held separately and visible.
     or the independent security review required by Stage 11.
 
 27. **Packaged-platform HTTPS/SMB acceptance — Partial; current-tree workflow corrections verified.** **6 points remaining.**
+    The [Linux continuation](stage-10-evidence.md#tasks-1027--linux-directory-durability-prerequisite)
+    fixed independently reproduced directory-fsync failures in folder and backup
+    providers. [Current candidate verification](stage-10-evidence.md#current-candidate-verification--full-gate-and-real-process-proofs-on-2adaba80)
+    now passes the complete local gate and nine musl process proofs, including
+    offline HTTPS/SMB recovery, three-gateway SMB, six-process protection, backup
+    takeover and actual executable replacement. The readiness, receipt and
+    immutable-history corrections have focused evidence in the linked log.
+    Task 10 retains the separate unclassified storage-snapshot failure. These
+    development-binary results do not close the six packaged-platform points.
     Stage 10 exit gate, TST-004/007/009, REL-003. Run complete real-client file
     cycles, backup/recovery and upgrade paths using the accepted native/container
     artefacts, including Linux-only, macOS-only and mixed-host meshes. Keep local

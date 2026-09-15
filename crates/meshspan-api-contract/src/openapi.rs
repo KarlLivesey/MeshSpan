@@ -12,6 +12,8 @@ mod metrics;
 mod notifications;
 #[path = "openapi_updates.rs"]
 mod updates;
+#[path = "openapi_user_enrollment.rs"]
+mod user_enrollment;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -212,6 +214,13 @@ fn components() -> Value {
             schema_response::<CreateAcknowledgementPolicyResponse>(
                 "CreateAcknowledgementPolicyResponse",
             ),
+            schema_request::<crate::IssueUserEnrollmentRequest>("IssueUserEnrollmentRequest"),
+            schema_response::<crate::IssueUserEnrollmentResponse>("IssueUserEnrollmentResponse"),
+            schema_request::<crate::RevokeUserEnrollmentRequest>("RevokeUserEnrollmentRequest"),
+            schema_response::<crate::RevokeUserEnrollmentResponse>("RevokeUserEnrollmentResponse"),
+            schema_request::<crate::RedeemUserEnrollmentApiKeyRequest>(
+                "RedeemUserEnrollmentApiKeyRequest",
+            ),
             schema_request::<CreateApiKeyRequest>("CreateApiKeyRequest"),
             schema_response::<CreateApiKeyResponse>("CreateApiKeyResponse"),
             schema_request::<CreateDirectoryRequest>("CreateDirectoryRequest"),
@@ -401,6 +410,7 @@ fn paths() -> Value {
         administration_paths()
             .into_iter()
             .chain(file_api_paths())
+            .chain(user_enrollment::paths())
             .chain([
                 ("/health".to_owned(), health_path()),
                 ("/openapi.json".to_owned(), openapi_path()),

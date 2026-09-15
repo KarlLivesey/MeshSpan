@@ -355,6 +355,8 @@ pub struct UploadCommitReceipt {
     pub session: UploadSession,
     /// Exact namespace publication receipt, applied or replayed.
     pub publication: NamespacePublicationReceipt,
+    /// Immutable object metadata bound to this exact committed publication, independent of later paths.
+    pub object: crate::NamespaceObjectStat,
     /// Immutable receipt evidence and honest durability scope for this successful publication.
     pub acknowledgement: crate::PublicationAcknowledgement,
 }

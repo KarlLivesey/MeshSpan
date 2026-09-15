@@ -4,29 +4,25 @@
 
 mod adapter;
 mod classification;
+mod lease;
 pub(crate) mod publication;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use meshspan_cluster::{MetadataAuthorityHandle, MetadataFilesystemAuthorityError};
-use meshspan_domain::{
-    AuditEventId, BranchId, InitialBootstrapMaterial, OperationId, PartitionId, TargetId,
-    UnixMicros,
-};
+use meshspan_domain::{BranchId, InitialBootstrapMaterial, PartitionId, TargetId, UnixMicros};
 use meshspan_filesystem::{
     AuthorisedFilesystemError, AuthorisedFilesystemService, BoundFilesystemAdapter,
     ContentAcknowledgementClass, ContentChunkLimits, ContentPublicationError,
     FilesystemAdapterConfigurationError, FilesystemAdapterPolicy, FilesystemCommitError,
     FilesystemCommitService, NamespacePublicationReceipt, ProtectedContentAccess,
     ProtectedContentPublisher, ProtectedShardRepairer, PublicationAcknowledgement,
-    VerifiedPublicationHead, VersionPublicationStore,
+    VersionPublicationStore,
 };
 use meshspan_metadata::{
-    AuthoritativeRepository, CommandContext, CommitConvergedVolumeHead, ConvergedHeadEvidence,
-    MetadataStoreError, PartitionDatabase, StorageTargetProviderContext,
+    AuthoritativeRepository, MetadataStoreError, PartitionDatabase, StorageTargetProviderContext,
 };
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::cluster_storage_provider::ClusterShardRouter;
@@ -41,7 +37,6 @@ use crate::{
 pub(crate) use classification::classify_native_filesystem_error;
 
 const CONTENT_CHUNK_BYTES: usize = 4 * 1024 * 1024;
-const HEAD_AUDIT_ID_DOMAIN: &[u8] = b"meshspan.native.converged-head-audit.v1\0";
 pub(crate) const MAXIMUM_NATIVE_SHARD_BYTES: usize = CONTENT_CHUNK_BYTES + 16;
 
 type ProductionPublisher = ProtectedContentPublisher<
@@ -520,21 +515,28 @@ impl NativeFilesystemRuntime {
             .clone();
         let store = VersionPublicationStore::open(&state_directory, observed_at)
             .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?;
-        let verified = store
-            .verify_publication_head(receipt)
-            .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?;
+        publication::verify_committed_receipt(&store, receipt)?;
         let content = store
             .published_content_for_version(receipt.file_version_id)
             .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?
             .ok_or(NativeFilesystemRuntimeError::StrongBarrierFailed)?;
-        let acknowledgement =
+        let catalogue =
             meshspan_filesystem::DurableContentCatalog::open(&state_directory, observed_at)
-                .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?
-                .committed_acknowledgement_evidence(content)
-                .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?
-                .branch_committed();
+                .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?;
+        let acknowledgement = catalogue
+            .committed_acknowledgement_evidence(content)
+            .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?
+            .branch_committed();
         let result = if acknowledgement.acknowledged_class == ContentAcknowledgementClass::Strong {
-            self.commit_converged_head(verified, observed_at)?;
+            let deadline = catalogue
+                .committed_strong_wait_deadline(content)
+                .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?;
+            let authority = self
+                .lock()?
+                .configuration
+                .authority(observed_at)
+                .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?;
+            publication::confirm_or_commit_publication(&authority, &store, receipt, deadline)?;
             acknowledgement
                 .globally_converged()
                 .ok_or(NativeFilesystemRuntimeError::StrongBarrierFailed)
@@ -546,51 +548,6 @@ impl NativeFilesystemRuntime {
                 .observe_file_publication(receipt.durability_scope);
         })
     }
-
-    fn commit_converged_head(
-        &self,
-        verified: VerifiedPublicationHead,
-        observed_at: UnixMicros,
-    ) -> Result<(), NativeFilesystemRuntimeError> {
-        let authority = self
-            .lock()?
-            .configuration
-            .authority(observed_at)
-            .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?;
-        let receipt = verified.receipt();
-        let command = CommitConvergedVolumeHead {
-            volume_id: verified.volume_id(),
-            expected_namespace_commit_id: verified.expected_namespace_commit_id(),
-            namespace_commit_id: receipt.namespace_commit_id,
-            root_object_revision_id: verified.root_object_revision_id(),
-            evidence: ConvergedHeadEvidence::Publication {
-                operation_id: receipt.operation_id,
-                request_digest: receipt.request_digest,
-                result_digest: verified.convergence_digest(),
-            },
-        };
-        let context = CommandContext {
-            operation_id: receipt.operation_id,
-            actor_principal_id: verified.created_by(),
-            audit_event_id: head_audit_event_id(receipt.operation_id)?,
-            occurred_at: verified.created_at(),
-            expected_revision: None,
-        };
-        publication::commit_publication_head(&authority, context, command)
-    }
-}
-
-fn head_audit_event_id(
-    operation_id: OperationId,
-) -> Result<AuditEventId, NativeFilesystemRuntimeError> {
-    let mut digest = Sha256::new();
-    digest.update(HEAD_AUDIT_ID_DOMAIN);
-    digest.update(operation_id.as_bytes());
-    let bytes: [u8; 16] = digest.finalize()[..16]
-        .try_into()
-        .map(meshspan_domain::uuid_v8)
-        .map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)?;
-    AuditEventId::from_bytes(bytes).map_err(|_| NativeFilesystemRuntimeError::StrongBarrierFailed)
 }
 
 /// Closed runtime operation failures exposed only to native service classifiers.

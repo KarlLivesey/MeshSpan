@@ -416,7 +416,9 @@ impl FolderShardStore {
         {
             return Err(FolderShardStoreError::InvalidInput);
         }
-        self.journal.verify_committed_tombstone(receipt)?;
+        if let Some(reclaimed) = self.journal.committed_reclamation(receipt)? {
+            return Ok(reclaimed);
+        }
         self.select_pack(receipt.shard, now)?;
         self.pack
             .unlink_tombstoned(receipt, now)
@@ -1178,3 +1180,6 @@ mod conformance_tests;
 
 #[cfg(test)]
 mod fault_tests;
+
+#[cfg(test)]
+mod pack_retirement_tests;

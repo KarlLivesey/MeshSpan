@@ -45,6 +45,15 @@ pub fn node_capability_digest(value: &NodeHello) -> [u8; 32] {
     digest.update(value.maximum_control_bytes.to_be_bytes());
     digest.update(value.maximum_data_frame_bytes.to_be_bytes());
     digest.update(value.maximum_streams.to_be_bytes());
+    // Preserve legacy digests for absent support; the domain separator makes the additive
+    // capability binding unambiguous without changing existing enrolment presentations.
+    if let Some(support) = &value.consensus_transfer {
+        digest.update(b"consensus-transfer\0");
+        digest.update(support.format_version.to_be_bytes());
+        digest.update(support.maximum_command_bytes.to_be_bytes());
+        digest.update(support.maximum_body_bytes.to_be_bytes());
+        digest.update(support.maximum_entries.to_be_bytes());
+    }
     digest.finalize().into()
 }
 

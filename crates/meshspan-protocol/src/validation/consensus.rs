@@ -51,6 +51,7 @@ pub(super) fn append_request(
         || value.leader_incarnation == 0
         || value.membership_epoch == 0
         || value.read_barrier_id == Some(0)
+        || value.probe_id == 0
     {
         return Err(WireContractError::InvalidMessage);
     }
@@ -59,14 +60,32 @@ pub(super) fn append_request(
 
 pub(super) fn append_response(value: &AppendResponse) -> Result<(), WireContractError> {
     valid_digest(&value.quorum_plan_digest)?;
+    valid_digest(&value.matched_digest)?;
     if value.term == 0
         || value.next_index_hint == 0
         || value.membership_epoch == 0
         || value.read_barrier_id == Some(0)
+        || value.probe_id == Some(0)
     {
         return Err(WireContractError::InvalidMessage);
     }
+    validate_append_match(value)?;
     validate_conditional_error(value.accepted, value.rejection.as_ref())
+}
+
+fn validate_append_match(value: &AppendResponse) -> Result<(), WireContractError> {
+    let empty_digest = value.matched_digest == [0; 32];
+    if value.accepted {
+        if value.probe_id.is_none() || (value.matched_index == 0) != empty_digest {
+            return Err(WireContractError::InvalidMessage);
+        }
+    } else if value.matched_index != 0
+        || !empty_digest
+        || (value.probe_id.is_none() && value.read_barrier_id.is_some())
+    {
+        return Err(WireContractError::InvalidMessage);
+    }
+    Ok(())
 }
 
 pub(super) fn committed_prefix(

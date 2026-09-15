@@ -3,8 +3,8 @@
 //! Exact conversion between validated Protobuf and consensus-owned values.
 
 use meshspan_consensus::{
-    AppendRequest, AppendResponse, CommittedPrefix, CoreMessage, LogEntry, LogPosition,
-    ReadBarrierId, VoteRequest, VoteResponse,
+    AppendProbeId, AppendRequest, AppendResponse, CommittedPrefix, CoreMessage, LogEntry,
+    LogPosition, ReadBarrierId, VoteRequest, VoteResponse,
 };
 use meshspan_domain::{NodeId, OperationId};
 use meshspan_protocol::ValidatedControlEnvelope;
@@ -36,6 +36,7 @@ pub fn encode_consensus_message(message: &CoreMessage) -> Message {
             quorum_plan_digest: value.plan_digest.to_vec(),
         }),
         CoreMessage::AppendRequest(value) => Message::AppendRequest(WireAppendRequest {
+            probe_id: value.probe_id.0,
             term: value.term,
             leader_node_id: value.leader.as_bytes().to_vec(),
             leader_incarnation: value.leader_incarnation,
@@ -48,6 +49,8 @@ pub fn encode_consensus_message(message: &CoreMessage) -> Message {
             read_barrier_id: value.read_barrier_id.map(|value| value.0),
         }),
         CoreMessage::AppendResponse(value) => Message::AppendResponse(WireAppendResponse {
+            probe_id: value.probe_id.map(|id| id.0),
+            matched_digest: value.matched_digest.to_vec(),
             term: value.term,
             accepted: value.accepted,
             matched_index: value.matched_index,
@@ -78,8 +81,19 @@ pub fn encode_consensus_message(message: &CoreMessage) -> Message {
 pub fn decode_consensus_message(
     envelope: &ValidatedControlEnvelope,
 ) -> Result<CoreMessage, ConsensusWireError> {
+    decode_payload(envelope.as_inner())
+}
+
+pub(crate) fn decode_bulk_message(
+    envelope: &meshspan_protocol::ValidatedConsensusBulk,
+) -> Result<CoreMessage, ConsensusWireError> {
+    decode_payload(envelope.as_inner())
+}
+
+fn decode_payload(
+    envelope: &meshspan_protocol::v1::ControlEnvelope,
+) -> Result<CoreMessage, ConsensusWireError> {
     match envelope
-        .as_inner()
         .message
         .as_ref()
         .ok_or(ConsensusWireError::InvalidMessage)?
@@ -99,6 +113,7 @@ pub fn decode_consensus_message(
             plan_digest: digest(&value.quorum_plan_digest)?,
         })),
         Message::AppendRequest(value) => Ok(CoreMessage::AppendRequest(AppendRequest {
+            probe_id: AppendProbeId(value.probe_id),
             term: value.term,
             leader: node_id(&value.leader_node_id)?,
             leader_incarnation: value.leader_incarnation,
@@ -115,6 +130,8 @@ pub fn decode_consensus_message(
             plan_digest: digest(&value.quorum_plan_digest)?,
         })),
         Message::AppendResponse(value) => Ok(CoreMessage::AppendResponse(AppendResponse {
+            probe_id: value.probe_id.map(AppendProbeId),
+            matched_digest: digest(&value.matched_digest)?,
             term: value.term,
             accepted: value.accepted,
             matched_index: value.matched_index,
@@ -146,7 +163,7 @@ pub(crate) fn wire_entry(entry: &LogEntry) -> WireLogEntry {
         command_digest: entry.entry_digest().to_vec(),
         command: Some(VersionedPayload {
             format_version: u32::from(entry.command_version),
-            canonical_bytes: entry.command.clone(),
+            canonical_bytes: entry.command.to_vec(),
         }),
     }
 }
@@ -158,11 +175,11 @@ pub(crate) fn core_entry(entry: &WireLogEntry) -> Result<LogEntry, ConsensusWire
         .ok_or(ConsensusWireError::InvalidMessage)?;
     let command_version =
         u16::try_from(command.format_version).map_err(|_| ConsensusWireError::InvalidMessage)?;
-    let rebuilt = LogEntry::new(
+    let rebuilt = LogEntry::from_shared_command(
         core_position(entry.position.as_ref())?,
         operation_id(&entry.operation_id)?,
         command_version,
-        command.canonical_bytes.clone(),
+        std::sync::Arc::from(command.canonical_bytes.as_slice()),
     )
     .map_err(|_| ConsensusWireError::InvalidMessage)?;
     if rebuilt.entry_digest().as_slice() != entry.command_digest {
@@ -255,6 +272,7 @@ mod tests {
                 plan_digest: [6; 32],
             }),
             CoreMessage::AppendRequest(AppendRequest {
+                probe_id: AppendProbeId(13),
                 term: 4,
                 leader: NodeId::from_bytes([1; 16])?,
                 leader_incarnation: 2,
@@ -267,6 +285,8 @@ mod tests {
                 plan_digest: [6; 32],
             }),
             CoreMessage::AppendResponse(AppendResponse {
+                probe_id: Some(AppendProbeId(13)),
+                matched_digest: [0; 32],
                 term: 4,
                 accepted: false,
                 matched_index: 0,
@@ -292,6 +312,41 @@ mod tests {
             let limits = limits()?;
             let frame = encode_control_frame(&envelope, limits)?;
             let validated = decode_control_frame(&frame, limits)?;
+            assert_eq!(decode_consensus_message(&validated)?, message);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn append_reply_preserves_exact_match_and_uncorrelated_phase_notice()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let accepted = AppendResponse {
+            probe_id: Some(AppendProbeId(13)),
+            matched_digest: [17; 32],
+            term: 4,
+            accepted: true,
+            matched_index: 8,
+            next_index_hint: 9,
+            read_barrier_id: Some(ReadBarrierId(11)),
+            membership_epoch: 9,
+            plan_digest: [6; 32],
+        };
+        let notice = AppendResponse {
+            probe_id: None,
+            matched_digest: [0; 32],
+            accepted: false,
+            matched_index: 0,
+            read_barrier_id: None,
+            ..accepted
+        };
+        for response in [accepted, notice] {
+            let message = CoreMessage::AppendResponse(response);
+            let envelope = ControlEnvelope {
+                header: Some(header()),
+                message: Some(encode_consensus_message(&message)),
+            };
+            let frame = encode_control_frame(&envelope, limits()?)?;
+            let validated = decode_control_frame(&frame, limits()?)?;
             assert_eq!(decode_consensus_message(&validated)?, message);
         }
         Ok(())

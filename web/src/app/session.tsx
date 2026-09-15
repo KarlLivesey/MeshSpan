@@ -19,7 +19,9 @@ import {
 import type {
   CreateSessionRequestWritable,
   CurrentSessionResponse,
+  StepUpCurrentSessionRequestWritable,
 } from "../generated/types.gen";
+import { createExactMutation } from "../native-api/mutation-outcome";
 import {
   browserCredentials,
   requestPasskeyAssertion,
@@ -33,7 +35,7 @@ export type SessionState =
   | Readonly<{ phase: "checking" }>
   | Readonly<{ phase: "anonymous" }>
   | Readonly<{ phase: "authenticated"; session: CurrentSessionResponse }>
-  | Readonly<{ message: string; phase: "unavailable" }>;
+  | Readonly<{ message: string; phase: "unavailable" | "revocation_unknown" }>;
 
 type SessionContextValue = Readonly<{
   client: MeshSpanFetchClient;
@@ -48,6 +50,7 @@ type SessionContextValue = Readonly<{
     remember: boolean,
     additionalFactor?: SessionAdditionalFactor,
   ) => Promise<void>;
+  stepUp: (factor: SessionAdditionalFactor) => Promise<void>;
   signOut: () => Promise<void>;
   state: Accessor<SessionState>;
 }>;
@@ -55,6 +58,7 @@ type SessionContextValue = Readonly<{
 type SessionStore = Readonly<{
   accept: (result: CreateSessionResult, persistent: boolean) => void;
   clear: () => void;
+  rotate: (result: CreateSessionResult) => void;
   csrfToken: Accessor<string | undefined>;
   refresh: () => Promise<void>;
   setState: Setter<SessionState>;
@@ -81,6 +85,7 @@ export function SessionProvider(
     signInWithApiKey: actions.signInWithApiKey,
     signInWithPasskey: actions.signInWithPasskey,
     signOut: actions.signOut,
+    stepUp: actions.stepUp,
     state: store.state,
   };
   return <SessionContext value={context}>{props.children}</SessionContext>;
@@ -88,21 +93,28 @@ export function SessionProvider(
 
 function createSessionStore(client: MeshSpanFetchClient): SessionStore {
   const [state, setState] = createSignal<SessionState>({ phase: "checking" });
+  const initialToken = readStoredCsrfToken();
   const [csrfToken, setCsrfToken] = createSignal<string | undefined>(
-    readStoredCsrfToken(),
+    initialToken,
   );
+  let persistent =
+    initialToken !== undefined && readStorage("localStorage") === initialToken;
+  let generation = Symbol();
   const clear = (): void => {
+    generation = Symbol();
     clearStoredCsrfToken();
     setCsrfToken(undefined);
     setState({ phase: "anonymous" });
   };
   const refresh = async (): Promise<void> => {
+    const owner = generation;
     try {
-      setState({
-        phase: "authenticated",
-        session: await client.getCurrentSession(),
-      });
+      const session = await client.getCurrentSession();
+      // A late read cannot restore a principal or clear credentials after session replacement.
+      if (owner !== generation) return;
+      setState({ phase: "authenticated", session });
     } catch (error) {
+      if (owner !== generation) return;
       if (error instanceof MeshSpanApiError && error.statusCode === 401) {
         clear();
         return;
@@ -113,11 +125,16 @@ function createSessionStore(client: MeshSpanFetchClient): SessionStore {
       });
     }
   };
-  const accept = (result: CreateSessionResult, persistent: boolean): void => {
+  const accept = (result: CreateSessionResult, remember: boolean): void => {
+    generation = Symbol();
+    persistent = remember;
     setCsrfToken(result.csrfToken);
     storeCsrfToken(result.csrfToken, persistent);
   };
-  return { accept, clear, csrfToken, refresh, setState, state };
+  const rotate = (result: CreateSessionResult): void => {
+    accept(result, persistent);
+  };
+  return { accept, clear, csrfToken, refresh, rotate, setState, state };
 }
 
 function createSessionActions(
@@ -167,19 +184,195 @@ function createSessionActions(
       remember,
     );
   };
-  const signOut = async (): Promise<void> => {
-    const token = store.csrfToken();
-    if (token === undefined) {
-      store.setState({ phase: "anonymous" });
-      return;
-    }
-    await client.revokeCurrentSession(
-      { operation_id: crypto.randomUUID() },
-      token,
-    );
-    store.clear();
+  const signOut = createSignOut(client, store);
+  const stepUp = createStepUp(client, store);
+  const run = createSessionActionGuard();
+  return {
+    signInWithApiKey: async (...args: Parameters<typeof signInWithApiKey>) =>
+      run(async () => signInWithApiKey(...args)),
+    signInWithPasskey: async (...args: Parameters<typeof signInWithPasskey>) =>
+      run(async () => signInWithPasskey(...args)),
+    signOut: async () => run(signOut),
+    stepUp: async (factor: SessionAdditionalFactor) =>
+      run(async () => stepUp(factor)),
   };
-  return { signInWithApiKey, signInWithPasskey, signOut };
+}
+
+function createSessionActionGuard(): (
+  action: () => Promise<void>,
+) => Promise<void> {
+  let pending = false;
+  return async (action) => {
+    // Cookie replacement happens in HTTP before JavaScript can reject a stale receipt.
+    if (pending)
+      throw new Error(
+        "Another session change is pending. Wait for it before continuing.",
+      );
+    pending = true;
+    try {
+      await action();
+    } finally {
+      pending = false;
+    }
+  };
+}
+
+function createStepUp(
+  client: MeshSpanFetchClient,
+  store: SessionStore,
+): (factor: SessionAdditionalFactor) => Promise<void> {
+  let sessionId: string | undefined;
+  let token: string | undefined;
+  let submit: ((factor: SessionAdditionalFactor) => Promise<void>) | undefined;
+  return async (factor) => {
+    const current = store.state();
+    const currentToken = store.csrfToken();
+    if (current.phase !== "authenticated" || currentToken === undefined)
+      throw new Error("Sign in again before confirming this session.");
+    if (
+      submit === undefined ||
+      current.session.session_id !== sessionId ||
+      currentToken !== token
+    ) {
+      sessionId = current.session.session_id;
+      token = currentToken;
+      submit = createSessionStepUp(client, store, { sessionId, token });
+    }
+    await submit(factor);
+  };
+}
+
+function createSessionStepUp(
+  client: MeshSpanFetchClient,
+  store: SessionStore,
+  owner: Readonly<{ sessionId: string; token: string }>,
+): (factor: SessionAdditionalFactor) => Promise<void> {
+  const mutation = createExactMutation(
+    async (request: StepUpCurrentSessionRequestWritable) =>
+      client.stepUpCurrentSession(request, owner.token),
+    (receipt, request) => {
+      if (
+        receipt.session.operation_id !== request.operation_id ||
+        receipt.session.assurance !== "recent_step_up"
+      )
+        throw new Error(
+          "Session confirmation receipt does not match the request.",
+        );
+    },
+    async () => Promise.resolve(),
+  );
+  return async (factor) => {
+    if (mutation.state().phase === "unknown") await mutation.retry();
+    else
+      await mutation.submit({
+        operation_id: crypto.randomUUID(),
+        additional_factor: factor,
+      });
+    const outcome = mutation.state();
+    if (outcome.phase !== "committed")
+      throw new Error(
+        "Session confirmation is unknown. Retry the same confirmation.",
+      );
+    const current = store.state();
+    if (
+      current.phase !== "authenticated" ||
+      current.session.session_id !== owner.sessionId ||
+      store.csrfToken() !== owner.token
+    )
+      throw new Error(
+        "The confirmed session has been replaced. Check the current sign-in.",
+      );
+    store.rotate(outcome.receipt);
+    await store.refresh();
+  };
+}
+
+function createSignOut(
+  client: MeshSpanFetchClient,
+  store: SessionStore,
+): () => Promise<void> {
+  let sessionId: string | undefined;
+  let signOut = createSessionSignOut(client, store, sessionId);
+  return async () => {
+    const current = store.state();
+    if (
+      current.phase === "authenticated" &&
+      current.session.session_id !== sessionId
+    ) {
+      sessionId = current.session.session_id;
+      signOut = createSessionSignOut(client, store, sessionId);
+    }
+    await signOut();
+  };
+}
+
+function createSessionSignOut(
+  client: MeshSpanFetchClient,
+  store: SessionStore,
+  sessionId: string | undefined,
+): () => Promise<void> {
+  const ownerToken = untrack(store.csrfToken);
+  const mutation = createExactMutation(
+    async (request: {
+      operation_id: string;
+      session_id: string;
+      token: string;
+    }) =>
+      client.revokeCurrentSession(
+        { operation_id: request.operation_id },
+        request.token,
+      ),
+    (receipt, request) => {
+      if (
+        receipt.operation_id !== request.operation_id ||
+        receipt.session_id !== request.session_id
+      ) {
+        throw new TypeError(
+          "Session revocation receipt does not match the request.",
+        );
+      }
+    },
+    async () => {
+      const current = store.state();
+      // A late receipt only revokes its own session, never a replacement login.
+      if (
+        store.csrfToken() === ownerToken &&
+        (current.phase !== "authenticated" ||
+          current.session.session_id === sessionId)
+      ) {
+        store.clear();
+      }
+      return Promise.resolve();
+    },
+  );
+  return async () => {
+    const token = store.csrfToken();
+    const current = store.state();
+    if (mutation.locked()) await mutation.retry();
+    else if (token !== undefined && current.phase === "authenticated") {
+      await mutation.submit({
+        operation_id: crypto.randomUUID(),
+        session_id: current.session.session_id,
+        token,
+      });
+    }
+    const latest = store.state();
+    if (
+      store.csrfToken() !== ownerToken ||
+      (latest.phase === "authenticated" &&
+        latest.session.session_id !== sessionId)
+    )
+      return;
+    if (mutation.state().phase !== "committed") {
+      store.setState({
+        phase: "revocation_unknown",
+        message:
+          token === undefined
+            ? "Sign-out is not confirmed: this browser is missing its session security token. Check the session again; the server cookie may still be valid."
+            : "Sign-out is not confirmed. Retry the same revocation or check whether the session is still active.",
+      });
+    }
+  };
 }
 
 function factorField(additionalFactor?: SessionAdditionalFactor): Readonly<{

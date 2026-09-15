@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 import { createSignal, type Accessor } from "solid-js";
-import { MeshSpanApiError } from "../../generated/fetch.gen";
+import {
+  createExactMutation,
+  mutationMessage,
+} from "../../native-api/mutation-outcome";
+import type {
+  ConfigureBackupDestinationResponse,
+  ConfigureBackupScheduleResponse,
+} from "../../generated/types.gen";
 import type { BackupAdministrationClient, BackupChange } from "./types";
 
 type Changes = Readonly<{
@@ -25,65 +32,47 @@ export function createBackupChanges(
     undefined,
     { ownedWrite: true },
   );
-  const [saving, setSaving] = createSignal(false, { ownedWrite: true });
-  const [error, setError] = createSignal<string | undefined>(undefined, {
-    ownedWrite: true,
-  });
-  const [notice, setNotice] = createSignal<string | undefined>(undefined, {
-    ownedWrite: true,
-  });
-  const locked = (): boolean => saving() || pending() !== undefined;
-  // Executor admission is synchronous; UI signals publish on Solid's flush.
-  let inFlight = false;
-  const execute = async (change: BackupChange): Promise<boolean> => {
-    if (inFlight) return false;
-    inFlight = true;
-    setSaving(true);
-    setError();
-    setNotice();
-    try {
-      await sendChange(client(), change, csrfToken());
-      setPending();
-      setNotice(
-        "Backup settings saved. This does not confirm a completed backup.",
-      );
-      await refresh();
-      return true;
-    } catch (failure: unknown) {
-      if (isDefiniteRejection(failure)) {
-        setPending();
-        setError(
-          "The change was rejected. Refresh the current settings and check your access before editing again.",
-        );
-      } else {
-        setError(
-          "The result is unknown. Retry the pending change to confirm its outcome; do not submit a different change.",
-        );
-      }
-      return false;
-    } finally {
-      inFlight = false;
-      setSaving(false);
-    }
-  };
-  const save = async (change: BackupChange): Promise<boolean> => {
-    if (locked() || inFlight) return false;
-    setPending(change);
-    return execute(change);
+  const [hideError, setHideError] = createSignal(false, { ownedWrite: true });
+  const mutation = createExactMutation(
+    async (attempt: { operation_id: string; change: BackupChange }) =>
+      sendChange(client(), attempt.change, csrfToken()),
+    () => {
+      /* sendChange checks each concrete receipt before returning. */
+    },
+    refresh,
+  );
+  const notice = (): string | undefined =>
+    mutation.state().phase === "committed"
+      ? "Backup settings saved. This does not confirm a completed backup."
+      : undefined;
+  const complete = (): boolean => {
+    const committed = mutation.state().phase === "committed";
+    if (committed) setPending(undefined);
+    return committed;
   };
   return {
-    error,
+    error: () => (hideError() ? undefined : mutationMessage(mutation.state())),
     notice,
     pending,
-    saving,
-    locked,
+    saving: () => mutation.state().phase === "submitting",
+    locked: mutation.locked,
     clearError: () => {
-      setError();
+      setHideError(true);
     },
-    save,
+    save: async (change) => {
+      if (mutation.locked()) return false;
+      setHideError(false);
+      setPending(structuredClone(change));
+      await mutation.submit({
+        operation_id: change.request.operation_id,
+        change,
+      });
+      return complete();
+    },
     retry: async () => {
-      const change = pending();
-      if (change !== undefined) await execute(change);
+      setHideError(false);
+      await mutation.retry();
+      complete();
     },
   };
 }
@@ -92,7 +81,9 @@ async function sendChange(
   client: BackupAdministrationClient,
   change: BackupChange,
   csrfToken: string,
-): Promise<void> {
+): Promise<
+  ConfigureBackupScheduleResponse | ConfigureBackupDestinationResponse
+> {
   if (change.kind === "schedule") {
     const receipt = await client.configureBackupSchedule(
       change.request,
@@ -107,6 +98,7 @@ async function sendChange(
         "Backup schedule receipt does not match the request.",
       );
     }
+    return receipt;
   } else {
     const receipt = await client.configureBackupDestination(
       change.request,
@@ -121,20 +113,6 @@ async function sendChange(
         "Backup destination receipt does not match the request.",
       );
     }
+    return receipt;
   }
-}
-
-function isDefiniteRejection(error: unknown): boolean {
-  return (
-    error instanceof MeshSpanApiError &&
-    error.apiError !== undefined &&
-    [
-      "unauthenticated",
-      "forbidden",
-      "invalid_request",
-      "operation_conflict",
-      "not_found",
-      "state_conflict",
-    ].includes(error.apiError.code)
-  );
 }

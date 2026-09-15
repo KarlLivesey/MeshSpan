@@ -88,6 +88,7 @@ impl TransferFixture {
                     certificate_der: remote_identity.certificate_der().to_vec(),
                     certificate_name: "meshspan.internal".to_owned(),
                 }],
+                capability_cache: None,
                 snapshot_staging_path: None,
             };
             let (messages, _received) = mpsc::channel(2);

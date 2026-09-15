@@ -52,6 +52,53 @@ fn external_publication_validates_encrypts_commits_and_replays_without_entropy()
     Ok(())
 }
 
+#[test]
+fn p384_issued_publication_validates_and_commits_matching_p256_key()
+-> Result<(), Box<dyn std::error::Error>> {
+    let now = UnixMicros::new(1_789_420_000_000_000);
+    let material = RequestMaterial {
+        certificate_chain_pem: include_str!(
+            "../../meshspan-rustls-provider/tests/fixtures/external/local-p384-chain.pem"
+        )
+        .to_owned(),
+        private_key_pem: pem(
+            "PRIVATE KEY",
+            include_bytes!(
+                "../../meshspan-rustls-provider/tests/fixtures/external/local-p384-leaf-key.der"
+            ),
+        ),
+    };
+    let mut request = material.request()?;
+    request
+        .certificate_names
+        .insert(0, "*.files.example.test".to_owned());
+    let state = Arc::new(Mutex::new(None));
+    let authority = MockAuthority {
+        state: Arc::clone(&state),
+        recipient: WrappingPrivateKey::from_bytes([42; 32])?.public_key(),
+    };
+    let administrator = IdentityAdministrator {
+        principal_id: PrincipalId::from_bytes([43; 16])?,
+        now,
+    };
+    let mut service =
+        ExternalCertificatePublisherService::new(authority, gateway()?, FixedRandom(44));
+    let response = service.publish(administrator, request)?;
+    assert_eq!(response.generation.value(), Some(7));
+    assert_eq!(
+        response.certificate_names,
+        ["*.files.example.test", "files.example.test"]
+    );
+    assert_eq!(response.revision, 5);
+    assert!(
+        state
+            .lock()
+            .map_err(|_| "publication state poisoned")?
+            .is_some()
+    );
+    Ok(())
+}
+
 #[derive(Clone)]
 struct MockAuthority {
     state: Arc<Mutex<Option<ExternalCertificatePublisherCommit>>>,

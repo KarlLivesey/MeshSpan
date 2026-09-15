@@ -2,6 +2,7 @@
 
 //! Generated private wire messages plus strict bounded framing and validation.
 
+mod consensus_bulk;
 mod federation_backup_discovery;
 mod federation_backup_signing;
 mod federation_signing;
@@ -9,6 +10,12 @@ mod framing;
 mod metadata_replica;
 mod node_capability;
 mod validation;
+
+pub use consensus_bulk::{
+    MAXIMUM_CONSENSUS_BULK_BODY_BYTES, MAXIMUM_CONSENSUS_BULK_ENTRIES,
+    MAXIMUM_CONSENSUS_COMMAND_BYTES, ValidatedConsensusBulk, consensus_transfer_support,
+    decode_consensus_bulk, encode_consensus_bulk_entries,
+};
 
 pub use federation_backup_discovery::{
     decode_backup_allocation_cursor, encode_backup_allocation_cursor,

@@ -20,7 +20,13 @@ mod external_certificate;
 mod fault_group;
 mod federation;
 mod federation_peer;
+mod node;
+mod user_enrollment;
 pub use federation_peer::{decode_federation_pairing_peer, encode_federation_pairing_peer};
+pub use node::{
+    DecodedAuthoritativeEntry, decode_authoritative_entry_for_version,
+    encode_authoritative_node_command, is_supported_metadata_command_version,
+};
 mod identity;
 mod locality_policy;
 mod maintenance_work;
@@ -50,7 +56,7 @@ use self::encoder::Encoder;
 use crate::{AuthoritativeCommand, CommandContext};
 
 /// Current closed metadata-command wire format.
-pub const METADATA_COMMAND_VERSION: u16 = 18;
+pub const METADATA_COMMAND_VERSION: u16 = 19;
 
 const MAGIC: [u8; 4] = *b"MSC\x04";
 const MAXIMUM_COMMAND_BYTES: usize = 1024 * 1024;
@@ -73,6 +79,9 @@ pub fn encode_authoritative_command(
     context: CommandContext,
     command: &AuthoritativeCommand,
 ) -> Result<Vec<u8>, MetadataCommandCodecError> {
+    if matches!(command, AuthoritativeCommand::RefreshNodeCapabilities(_)) {
+        return Err(MetadataCommandCodecError::Unsupported);
+    }
     let mut encoder = Encoder::new(MAXIMUM_COMMAND_BYTES);
     encoder.fixed(&MAGIC)?;
     encoder.identifier(context.operation_id.as_bytes())?;
@@ -105,6 +114,9 @@ pub fn decode_authoritative_command(
     let occurred_at = UnixMicros::new(decoder.i64()?);
     let expected_revision = decoder.optional_u64()?.map(Revision::new);
     let command = decode_command(&mut decoder)?;
+    if matches!(command, AuthoritativeCommand::RefreshNodeCapabilities(_)) {
+        return Err(MetadataCommandCodecError::Unsupported);
+    }
     decoder.finish()?;
     Ok(DecodedAuthoritativeCommand {
         context: CommandContext {
@@ -228,7 +240,9 @@ fn encode_extension_command(
     encoder: &mut Encoder,
     command: &AuthoritativeCommand,
 ) -> Result<bool, MetadataCommandCodecError> {
-    if cleanup::encode_command(encoder, command)? {
+    if cleanup::encode_command(encoder, command)?
+        || user_enrollment::encode_command(encoder, command)?
+    {
         return Ok(true);
     }
     if let AuthoritativeCommand::RegisterCleanupAttestationKey(value) = command {
@@ -294,6 +308,7 @@ fn decode_command(
         return Ok(command);
     }
     match kind {
+        user_enrollment::ISSUE..=user_enrollment::REDEEM => user_enrollment::decode(kind, decoder),
         update::CONFIGURE..=update::PUBLISH_ARTIFACT => update::decode(kind, decoder),
         notification::CONFIGURE..=notification::COMPLETE => notification::decode(kind, decoder),
         metrics_exporter::CONFIGURE_METRICS_EXPORTER => {
@@ -465,5 +480,7 @@ impl From<meshspan_contracts::BoundedItemsError> for MetadataCommandCodecError {
     }
 }
 
+#[cfg(test)]
+mod node_tests;
 #[cfg(test)]
 mod tests;

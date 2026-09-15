@@ -24,6 +24,8 @@ mod local_certificates;
 mod metrics;
 #[path = "headless_process/namespace_delivery.rs"]
 mod namespace_delivery;
+#[path = "headless_process/node_capabilities.rs"]
+mod node_capabilities;
 #[path = "headless_process/notifications.rs"]
 mod notifications;
 #[path = "headless_process/offline_backup.rs"]
@@ -72,12 +74,16 @@ mod recovery_storage_control;
 mod recovery_storage_io;
 #[path = "headless_process/recovery_targets.rs"]
 mod recovery_targets;
+#[path = "headless_process/smb_lease.rs"]
+mod smb_lease;
 #[path = "headless_process/stage10.rs"]
 mod stage10;
 #[path = "headless_process/stage8.rs"]
 mod stage8;
 #[path = "headless_process/updates.rs"]
 mod updates;
+#[path = "headless_process/user_enrollment.rs"]
+mod user_enrollment;
 #[path = "headless_process/web_panel.rs"]
 mod web_panel;
 
@@ -717,8 +723,7 @@ async fn clean_machine_operator_flow_uses_only_cli_and_public_https() -> Result<
         )
         .await?;
         let sequence =
-            stage10::request_post_enrolment_backup(root.address, &root_client, &authorization)
-                .await?;
+            stage10::request_fresh_backup(root.address, &root_client, &authorization).await?;
         let root_backup = backup_history::automatic_backup_history_for_schedule(
             root.address,
             &root_client,
@@ -1177,7 +1182,8 @@ fn stop_processes(processes: &mut [Child]) {
 #[tokio::test]
 async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<(), Box<dyn Error>>
 {
-    let fixture = ProcessFixture::new()?;
+    let mut fixture = ProcessFixture::new()?;
+    fixture.temporary.disable_cleanup(true);
     let mut processes = ProcessCleanup(vec![fixture.start()?]);
     let proof = async {
         let claim = wait_for_claim(&fixture.claim_path).await?;
@@ -1237,14 +1243,10 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
             .await?;
         assert_volume_visible(fixture.address, &client, api_key).await?;
         let content = b"headless native file bytes";
-        let committed = upload_file(fixture.address, &client, api_key, &volume_id, content).await?;
-        if committed["acknowledgement"]["configured_consistency"] != "strong"
-            || committed["acknowledgement"]["acknowledged_consistency"] != "strong"
-            || committed["acknowledgement"]["durability_scope"] != "globally_converged"
-            || committed["acknowledgement"]["policy_committed"] != true
-        {
-            return Err("strong upload returned no globally converged acknowledgement".into());
-        }
+        let committed =
+            prepare_strong_upload_replay(fixture.address, &client, api_key, &volume_id, content)
+                .await?;
+        assert_exact_upload_replay(fixture.address, &client, api_key, &committed).await?;
         assert_file_surfaces(fixture.address, &client, api_key, &volume_id, content).await?;
 
         stop_processes(&mut processes.0);
@@ -1265,10 +1267,12 @@ async fn real_headless_process_creates_mesh_over_https_and_restarts() -> Result<
         assert_volume_visible(fixture.address, &client, api_key).await?;
         assert_user_visible(fixture.address, &client, api_key).await?;
         assert_file_surfaces(fixture.address, &client, api_key, &volume_id, content).await?;
+        assert_exact_upload_replay(fixture.address, &client, api_key, &committed).await?;
         Ok(())
     }
     .await;
     drop(processes);
+    fixture.temporary.disable_cleanup(false);
     retain_failure_state(proof, [fixture.temporary])
 }
 
@@ -2021,7 +2025,17 @@ fn smb_client_process(
         "--env",
         "MESHSPAN_SMB_PASSWORD",
         "--env",
+        "MESHSPAN_SMB_USERNAME",
+        "--env",
         "MESHSPAN_SMB_COMMAND",
+    ]);
+    // Native Linux Docker needs the host network to reach these loopback-only listeners.
+    #[cfg(target_os = "linux")]
+    process.args([
+        "--network",
+        "host",
+        "--add-host",
+        "host.docker.internal:127.0.0.1",
     ]);
     if let Some(exchange) = exchange {
         process
@@ -2032,6 +2046,7 @@ fn smb_client_process(
         .arg(image)
         .args(["-ec", script, "smb-proof", &port.to_string()])
         .env("MESHSPAN_SMB_PASSWORD", api_key)
+        .env("MESHSPAN_SMB_USERNAME", "Administrator")
         .env("MESHSPAN_SMB_COMMAND", "");
     Ok(process)
 }
@@ -2049,7 +2064,7 @@ const fn real_smb_command_script() -> &'static str {
     r#"
 set -eu
 port="$1"
-printf 'username = Administrator\npassword = %s\n' "$MESHSPAN_SMB_PASSWORD" > /tmp/credentials
+printf 'username = %s\npassword = %s\n' "$MESHSPAN_SMB_USERNAME" "$MESHSPAN_SMB_PASSWORD" > /tmp/credentials
 chmod 600 /tmp/credentials
 smbclient '//host.docker.internal/process-files' \
   --port "$port" \
@@ -2189,6 +2204,26 @@ async fn upload_named_file(
     volume_id: &str,
     proof: FileUploadProof<'_>,
 ) -> Result<serde_json::Value, Box<dyn Error>> {
+    Ok(
+        upload_named_file_with_receipt(address, client, api_key, volume_id, proof)
+            .await?
+            .response,
+    )
+}
+
+struct CommittedUploadProof {
+    path: String,
+    request: Vec<u8>,
+    response: serde_json::Value,
+}
+
+async fn upload_named_file_with_receipt(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    volume_id: &str,
+    proof: FileUploadProof<'_>,
+) -> Result<CommittedUploadProof, Box<dyn Error>> {
     let content = proof.content;
     let write_operation = format!(
         "00000000-0000-4000-8000-{:012x}",
@@ -2265,7 +2300,117 @@ async fn upload_named_file(
     if committed["upload"]["state"] != "committed" {
         return Err("native upload did not return a committed file".into());
     }
-    Ok(committed)
+    Ok(CommittedUploadProof {
+        path: format!("/api/latest/uploads/{upload_id}/commits"),
+        request: commit_body,
+        response: committed,
+    })
+}
+
+async fn prepare_strong_upload_replay(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    volume_id: &str,
+    content: &[u8],
+) -> Result<CommittedUploadProof, Box<dyn Error>> {
+    let first = upload_named_file_with_receipt(
+        address,
+        client,
+        api_key,
+        volume_id,
+        FileUploadProof {
+            path: "process-proof.bin",
+            content,
+            operation_base: 6,
+        },
+    )
+    .await?;
+    let first_response = require_strong_upload_receipt(&first.response)?;
+    let later = upload_named_file(
+        address,
+        client,
+        api_key,
+        volume_id,
+        FileUploadProof {
+            path: "later-publication.bin",
+            content: b"A later strong publication advances the namespace",
+            operation_base: 0x70,
+        },
+    )
+    .await?;
+    let later_response = require_strong_upload_receipt(&later)?;
+    assert_ne!(
+        first_response.object.namespace_commit_id,
+        later_response.object.namespace_commit_id
+    );
+    Ok(first)
+}
+
+fn require_strong_upload_receipt(
+    response: &serde_json::Value,
+) -> Result<meshspan_api_contract::CommitUploadResponse, Box<dyn Error>> {
+    use meshspan_api_contract::{AcknowledgementConsistency, WriteDurabilityScope};
+    let response: meshspan_api_contract::CommitUploadResponse =
+        serde_json::from_value(response.clone())?;
+    let acknowledgement = &response.acknowledgement;
+    assert_eq!(
+        acknowledgement.configured_consistency,
+        AcknowledgementConsistency::Strong
+    );
+    assert_eq!(
+        acknowledgement.acknowledged_consistency,
+        AcknowledgementConsistency::Strong
+    );
+    assert_eq!(
+        acknowledgement.durability_scope,
+        WriteDurabilityScope::GloballyConverged
+    );
+    assert!(acknowledgement.policy_committed);
+    assert!(!acknowledgement.fallback_applied);
+    Ok(response)
+}
+
+async fn assert_exact_upload_replay(
+    address: SocketAddr,
+    client: &ClientConfig,
+    api_key: &str,
+    committed: &CommittedUploadProof,
+) -> Result<(), Box<dyn Error>> {
+    let authorization = format!("Bearer {api_key}");
+    let headers = [("Authorization", authorization.as_str())];
+    let replay = request_with_headers(
+        address,
+        client,
+        "POST",
+        &committed.path,
+        Some(&committed.request),
+        &headers,
+    )
+    .await?;
+    require_status(&replay, "200 OK", "recover earlier strong upload receipt")?;
+    let replay: serde_json::Value = serde_json::from_str(response_body(&replay)?)?;
+    assert_eq!(
+        replay, committed.response,
+        "exact strong upload outcome changed"
+    );
+    let mut changed: meshspan_api_contract::CommitUploadRequest =
+        serde_json::from_slice(&committed.request)?;
+    changed.final_length += 1;
+    let rejected = request_with_headers(
+        address,
+        client,
+        "POST",
+        &committed.path,
+        Some(&serde_json::to_vec(&changed)?),
+        &headers,
+    )
+    .await?;
+    require_status(
+        &rejected,
+        "409 Conflict",
+        "reject substituted strong upload request",
+    )
 }
 
 async fn assign_single_node_strong_acknowledgement(
@@ -2847,9 +2992,25 @@ async fn wait_for_status(
     client: &ClientConfig,
     expected: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let deadline = Instant::now() + WAIT_LIMIT;
+    wait_for_status_with_limit(address, client, expected, WAIT_LIMIT).await
+}
+
+async fn wait_for_status_with_limit(
+    address: SocketAddr,
+    client: &ClientConfig,
+    expected: &str,
+    limit: Duration,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + limit;
     loop {
-        let response = request(address, client, "GET", "/api/latest/setup/status", None).await;
+        let response = tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline),
+            request(address, client, "GET", "/api/latest/setup/status", None),
+        )
+        .await
+        .map_err(|_| {
+            format!("headless process at {address} exceeded setup state {expected:?} deadline during HTTP request")
+        })?;
         let last_observation = match response {
             Ok(response) => {
                 if response.contains(&format!("\"state\":\"{expected}\"")) {
@@ -2914,7 +3075,15 @@ async fn request_with_content_type(
     content_type: &str,
     additional_headers: &[(&str, &str)],
 ) -> Result<String, Box<dyn Error>> {
+    let mut timing = StatusRequestTiming {
+        address,
+        enabled: target == "/api/latest/setup/status",
+        started: Instant::now(),
+        phase: "TCP connect",
+        response: Vec::new(),
+    };
     let stream = TcpStream::connect(address).await?;
+    timing.phase = "TLS handshake";
     let connector = TlsConnector::from(Arc::new(client.clone()));
     let name = ServerName::try_from(CERTIFICATE_NAME)?.to_owned();
     let mut stream = connector.connect(name, stream).await?;
@@ -2930,14 +3099,16 @@ async fn request_with_content_type(
     for (name, value) in additional_headers.iter().rev() {
         headers.insert_str(insertion, &format!("{name}: {value}\r\n"));
     }
+    timing.phase = "request write";
     stream.write_all(headers.as_bytes()).await?;
     stream.write_all(body).await?;
     // TLS write completion can leave the final record buffered. Flush before
     // waiting for the server, which needs the complete Content-Length to reply.
     stream.flush().await?;
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).await?;
-    Ok(String::from_utf8(response)?)
+    timing.phase = "response / TLS EOF";
+    stream.read_to_end(&mut timing.response).await?;
+    timing.phase = "complete";
+    Ok(String::from_utf8(std::mem::take(&mut timing.response))?)
 }
 
 fn unused_address() -> Result<SocketAddr, std::io::Error> {
@@ -2946,4 +3117,46 @@ fn unused_address() -> Result<SocketAddr, std::io::Error> {
 
 fn unused_udp_address() -> Result<SocketAddr, std::io::Error> {
     ports::udp()
+}
+
+// Temporary cancellation-safe, secret-free readiness transport diagnostic.
+struct StatusRequestTiming {
+    address: SocketAddr,
+    enabled: bool,
+    started: Instant,
+    phase: &'static str,
+    response: Vec<u8>,
+}
+
+impl Drop for StatusRequestTiming {
+    #[expect(
+        clippy::print_stderr,
+        reason = "Temporary bounded readiness transport diagnosis"
+    )]
+    fn drop(&mut self) {
+        if !self.enabled || self.started.elapsed() < Duration::from_secs(5) {
+            return;
+        }
+        let text = String::from_utf8_lossy(&self.response);
+        let framing = text.split_once("\r\n\r\n").map(|(headers, body)| {
+            let declared = headers.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            });
+            (
+                declared,
+                body.len(),
+                body.contains("\"state\":\"configured\""),
+            )
+        });
+        eprintln!(
+            "status transport {} {:?}: phase={}, bytes={}, framing={framing:?}",
+            self.address,
+            self.started.elapsed(),
+            self.phase,
+            self.response.len()
+        );
+    }
 }

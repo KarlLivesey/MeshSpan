@@ -11,9 +11,19 @@ pub use backup_publication_intent::{
 };
 mod federated_backup_route;
 pub use federated_backup_route::{BindFederatedBackupRoute, FederatedBackupRouteRecord};
+mod node_command;
+pub use node_command::{
+    AuthoritativeCommandContext, NodeCapabilityPrior, NodeCommandContext, RefreshNodeCapabilities,
+};
+mod user_enrollment_command;
+pub use user_enrollment_command::{
+    IssueUserEnrollment, RedeemUserEnrollment, RevokeUserEnrollment,
+};
 mod command;
 mod command_codec;
 mod database;
+mod node_capability_cache;
+pub use node_capability_cache::CachedNodeCapabilityPresentation;
 mod recovery_key_bundle;
 mod recovery_node_certificate;
 mod recovery_restoration;
@@ -177,8 +187,10 @@ pub use command::{
     WithdrawSmbExport,
 };
 pub use command_codec::{
-    DecodedAuthoritativeCommand, METADATA_COMMAND_VERSION, MetadataCommandCodecError,
-    decode_authoritative_command, encode_authoritative_command,
+    DecodedAuthoritativeCommand, DecodedAuthoritativeEntry, METADATA_COMMAND_VERSION,
+    MetadataCommandCodecError, decode_authoritative_command,
+    decode_authoritative_entry_for_version, encode_authoritative_command,
+    encode_authoritative_node_command, is_supported_metadata_command_version,
 };
 pub use command_codec::{decode_federation_pairing_peer, encode_federation_pairing_peer};
 pub use database::{IntegrityReport, LocalDatabase, PartitionDatabase};
@@ -324,14 +336,14 @@ pub use repository::{
     MetadataBackupProtectionEvidence, MetadataBackupRecord, MetadataBackupRun,
     MetadataBackupRunClaimRecord, MetadataBackupRunState, MetadataBackupSchedule,
     MetadataBackupState, NamespaceCursor, NamespaceRecord, NodeActivationCandidate,
-    NodeActivationRecord, NodeAttestationContext, NodeEnrolmentRecord, NodeWrappingKeyRecord,
-    ObjectOwnerCursor, ObjectOwnerRecord, OnlineCertificateAuthorityRecord, Page, PageLimit,
-    PartitionBackupManifest, PartitionConsensusPersistence, PartitionSnapshotManifest,
-    PasskeyRegistrationProfile, PasskeyRegistrationReplay, PasskeySessionReplay,
-    PasskeyVerificationMaterial, PermissionGrantRecord, PermissionGrantRevocationRecord,
-    PreservedVote, PrincipalCursor, PrincipalKind, PrincipalRecord, ProtectionPolicyCursor,
-    ProtectionPolicyRecord, ProtectionScenarioRecord, ProtectionTermRecord,
-    PublicCertificateInstallationRecord, PublicCertificateRolloutSummary,
+    NodeActivationRecord, NodeAttestationContext, NodeCapabilityPresentation, NodeEnrolmentRecord,
+    NodeWrappingKeyRecord, ObjectOwnerCursor, ObjectOwnerRecord, OnlineCertificateAuthorityRecord,
+    Page, PageLimit, PartitionBackupManifest, PartitionConsensusPersistence,
+    PartitionSnapshotManifest, PasskeyRegistrationProfile, PasskeyRegistrationReplay,
+    PasskeySessionReplay, PasskeyVerificationMaterial, PermissionGrantRecord,
+    PermissionGrantRevocationRecord, PreservedVote, PrincipalCursor, PrincipalKind,
+    PrincipalRecord, ProtectionPolicyCursor, ProtectionPolicyRecord, ProtectionScenarioRecord,
+    ProtectionTermRecord, PublicCertificateInstallationRecord, PublicCertificateRolloutSummary,
     PublicCertificateSelection, PublicCertificateSource, PublicCertificateStatusRecord,
     ReadyMaintenanceWork, ReadyMaintenanceWorkPage, RebalanceScanProgress, RecoveryBundleState,
     RecoveryCodeVerificationMaterial, RepositoryConformanceCheck, RepositoryConformanceReport,
@@ -358,3 +370,5 @@ pub use repository::{
     run_repository_conformance,
 };
 pub use repository::{FederationPairingInvitationRecord, FederationPairingInvitationState};
+
+pub use repository::{UserEnrollmentRecord, UserEnrollmentRedemption, UserEnrollmentState};

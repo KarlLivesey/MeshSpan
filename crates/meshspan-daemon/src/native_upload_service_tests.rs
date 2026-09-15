@@ -70,18 +70,16 @@ fn first_upload_materialises_a_new_volume_root_and_publishes_exact_bytes()
             bytes,
         },
     )?;
-    let committed = service.commit_upload(
-        context,
-        begin.upload_id.as_str(),
-        CommitUploadRequest {
-            operation_id: api_operation(versioned(112))?,
-            stage_fence: written.stage_fence,
-            expected_sequence: written.checkpoint_sequence,
-            final_length: 19,
-            sparse: false,
-            expected_blake3: Some(blake3::hash(b"first durable bytes").to_hex().to_string()),
-        },
-    )?;
+    let commit_request = CommitUploadRequest {
+        operation_id: api_operation(versioned(112))?,
+        stage_fence: written.stage_fence,
+        expected_sequence: written.checkpoint_sequence,
+        final_length: 19,
+        sparse: false,
+        expected_blake3: Some(blake3::hash(b"first durable bytes").to_hex().to_string()),
+    };
+    let committed =
+        service.commit_upload(context, begin.upload_id.as_str(), commit_request.clone())?;
     assert_eq!(committed.upload.state, ApiUploadState::Committed);
     assert_eq!(committed.object.path.as_str(), "first.bin");
     assert_eq!(committed.object.object.logical_length, Some(19));
@@ -90,6 +88,45 @@ fn first_upload_materialises_a_new_volume_root_and_publishes_exact_bytes()
         WriteDurabilityScope::NodeLocal
     );
     assert!(committed.acknowledgement.policy_committed);
+    drop(service);
+    let mut namespace = native_namespace_service(directory.path())?;
+    let later = meshspan_filesystem::FilesystemAccessContext {
+        now: UnixMicros::new(11),
+        ..context
+    };
+    namespace.rename_object(
+        later,
+        &uuid_text(versioned(12)),
+        RenameObjectRequest {
+            operation_id: api_operation(versioned(113))?,
+            source_path: api_path("first.bin")?,
+            target_path: api_path("renamed.bin")?,
+        },
+    )?;
+    drop(namespace);
+    let store = VersionPublicationStore::open(directory.path(), later.now)?;
+    let receipt = store
+        .resolve_namespace_publication(OperationId::from_bytes(versioned(112))?)?
+        .ok_or("committed upload receipt")?;
+    crate::native_filesystem_runtime::publication::verify_committed_receipt(&store, receipt)?;
+    let substituted = meshspan_filesystem::NamespacePublicationReceipt {
+        result_digest: [99; 32],
+        ..receipt
+    };
+    assert!(
+        crate::native_filesystem_runtime::publication::verify_committed_receipt(
+            &store,
+            substituted
+        )
+        .is_err()
+    );
+    assert!(store.verify_publication_head(receipt).is_err());
+    let mut reopened = native_upload_service(directory.path())?;
+    let recovered = reopened.commit_upload(later, begin.upload_id.as_str(), commit_request)?;
+    assert_eq!(
+        recovered, committed,
+        "later namespace changes must not replace the committed outcome"
+    );
     Ok(())
 }
 
@@ -628,7 +665,7 @@ impl DurableContentReader for TestPublisher {
     }
 }
 
-fn seed_namespace(state: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn seed_namespace(state: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = VersionPublicationStore::open(state, UnixMicros::new(1))?;
     store.publish_root_file(&RootFilePublication {
         file: FilePublication {
@@ -696,7 +733,7 @@ fn uuid_text(bytes: [u8; 16]) -> String {
     )
 }
 
-const fn versioned(seed: u8) -> [u8; 16] {
+pub(crate) const fn versioned(seed: u8) -> [u8; 16] {
     let mut bytes = [seed; 16];
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;

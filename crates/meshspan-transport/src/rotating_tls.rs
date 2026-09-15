@@ -3,7 +3,9 @@
 //! Generation-fenced replacement of internal TLS configurations without rebinding sockets.
 
 use std::net::SocketAddr;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+
+mod drivers;
 
 use rustls::RootCertStore;
 use rustls::client::WebPkiServerVerifier;
@@ -13,7 +15,7 @@ use rustls::server::WebPkiClientVerifier;
 use rustls::sign::CertifiedKey;
 use sha2::{Digest as _, Sha256};
 
-use crate::tls::{endpoint, prepare_client_config, prepare_server_config};
+use crate::tls::{endpoint_with_runtime, prepare_client_config, prepare_server_config};
 use crate::{NodeCredentials, TransportError, TransportLimits, certificate_fingerprint};
 
 /// Immutable sockets, trust and node name for one rotatable private transport.
@@ -50,10 +52,56 @@ pub struct InstalledNodeCertificate {
 /// staged authority transitions and must publish trust before selecting a new certificate.
 #[derive(Clone)]
 pub struct RotatingNodeTransport {
-    server: quinn::Endpoint,
-    client: quinn::Endpoint,
+    endpoints: Arc<Mutex<Option<Endpoints>>>,
+    drivers: Arc<drivers::Drivers>,
     config: Arc<NodeTransportConfig>,
     state: Arc<RwLock<SelectedIdentity>>,
+}
+
+/// Owns bound sockets and queued Quinn drivers until the containing network is fully prepared.
+///
+/// Dropping this preparation before activation releases all queued work and sockets synchronously.
+#[must_use]
+pub struct PreparedNodeTransport {
+    transport: RotatingNodeTransport,
+}
+
+impl PreparedNodeTransport {
+    /// Borrows the transport only for pre-start endpoint/worker assembly.
+    /// Do not start connection or accept work until this preparation is activated.
+    #[must_use]
+    pub const fn transport(&self) -> &RotatingNodeTransport {
+        &self.transport
+    }
+
+    /// Starts the prepared endpoint drivers after the containing owner's fallible setup succeeds.
+    #[must_use]
+    pub fn start(self) -> RotatingNodeTransport {
+        self.transport.drivers.start();
+        self.transport.clone()
+    }
+}
+
+impl Drop for PreparedNodeTransport {
+    fn drop(&mut self) {
+        if self.transport.drivers.abort_preparation() {
+            let endpoints = self
+                .transport
+                .endpoints
+                .lock()
+                .unwrap_or_else(|poisoned| {
+                    self.transport.drivers.failed();
+                    poisoned.into_inner()
+                })
+                .take();
+            drop(endpoints);
+        }
+    }
+}
+
+struct Endpoints {
+    server: quinn::Endpoint,
+    client: quinn::Endpoint,
 }
 
 struct SelectedIdentity {
@@ -79,27 +127,98 @@ impl RotatingNodeTransport {
         config: NodeTransportConfig,
         credentials: NodeCredentials,
     ) -> Result<Self, TransportError> {
+        Ok(Self::prepare(config, credentials)?.start())
+    }
+
+    /// Binds both sockets but queues their drivers until the enclosing owner activates them.
+    ///
+    /// # Errors
+    /// Applies the same identity, configuration and socket validation as [`Self::new`].
+    pub fn prepare(
+        config: NodeTransportConfig,
+        credentials: NodeCredentials,
+    ) -> Result<PreparedNodeTransport, TransportError> {
         let prepared = prepare_identity(&config, config.certificate_generation, credentials)?;
-        let server = endpoint(config.server_address, Some(prepared.server))?;
-        let client = endpoint(config.client_address, None)?;
-        Ok(Self {
-            server,
-            client,
-            config: Arc::new(config),
-            state: Arc::new(RwLock::new(prepared.selected)),
+        let drivers = drivers::Drivers::prepare();
+        let endpoints = (|| {
+            let server = endpoint_with_runtime(
+                config.server_address,
+                Some(prepared.server),
+                drivers.clone(),
+            )?;
+            let client = endpoint_with_runtime(config.client_address, None, drivers.clone())?;
+            Ok::<_, TransportError>(Endpoints { server, client })
+        })();
+        let endpoints = match endpoints {
+            Ok(endpoints) => endpoints,
+            Err(error) => {
+                drivers.abort_preparation();
+                return Err(error);
+            }
+        };
+        Ok(PreparedNodeTransport {
+            transport: Self {
+                endpoints: Arc::new(Mutex::new(Some(endpoints))),
+                drivers,
+                config: Arc::new(config),
+                state: Arc::new(RwLock::new(prepared.selected)),
+            },
         })
     }
 
     /// Returns the stable listening endpoint for the owning network's accept loop.
-    #[must_use]
-    pub fn server_endpoint(&self) -> quinn::Endpoint {
-        self.server.clone()
+    ///
+    /// # Errors
+    /// Rejects access after shutdown or endpoint-state poisoning. The caller must release the
+    /// returned handle before awaiting transport shutdown.
+    pub fn server_endpoint(&self) -> Result<quinn::Endpoint, TransportError> {
+        let endpoints = self
+            .endpoints
+            .lock()
+            .map_err(|_| TransportError::InvalidConfiguration)?;
+        Ok(endpoints
+            .as_ref()
+            .ok_or(TransportError::InvalidConfiguration)?
+            .server
+            .clone())
     }
 
     /// Closes both directions for every clone during owner shutdown; the transport cannot restart.
     pub fn close(&self) {
-        self.server.close(0_u32.into(), b"node stopped");
-        self.client.close(0_u32.into(), b"node stopped");
+        let endpoints = self.endpoints.lock().unwrap_or_else(|poisoned| {
+            self.drivers.failed();
+            poisoned.into_inner()
+        });
+        if let Some(endpoints) = endpoints.as_ref() {
+            endpoints.server.close(0_u32.into(), b"node stopped");
+            endpoints.client.close(0_u32.into(), b"node stopped");
+        }
+    }
+
+    /// Releases the endpoints, cancels residual QUIC IO and joins every driver for all clones.
+    ///
+    /// Call after externally owned accept/connection/stream workers have finished and released
+    /// their handles. Canceling one waiter preserves the shared drain for another waiter.
+    ///
+    /// # Errors
+    /// Reports any driver failure after observing all remaining driver results.
+    pub async fn shutdown(&self) -> Result<(), TransportError> {
+        self.close();
+        let endpoints = self
+            .endpoints
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                self.drivers.failed();
+                poisoned.into_inner()
+            })
+            .take();
+        // Quinn's driver cannot finish while an Endpoint reference remains. Release our shared
+        // references before waiting; callers must already have released their borrowed handles.
+        drop(endpoints);
+        self.drivers
+            .shutdown()
+            .await
+            .map_err(|()| TransportError::Shutdown)
     }
 
     /// Reports the exact selection for new handshakes without exposing private key material.
@@ -146,7 +265,15 @@ impl RotatingNodeTransport {
         }
         // Lock order is selection, then endpoint. No lock is held across async IO. New outbound
         // setup cannot select the old configuration after the server selection has changed.
-        self.server.set_server_config(Some(prepared.server));
+        let endpoints = self
+            .endpoints
+            .lock()
+            .map_err(|_| TransportError::InvalidConfiguration)?;
+        endpoints
+            .as_ref()
+            .ok_or(TransportError::InvalidConfiguration)?
+            .server
+            .set_server_config(Some(prepared.server));
         *selected = prepared.selected;
         Ok(selected.public)
     }
@@ -169,7 +296,14 @@ impl RotatingNodeTransport {
                 .state
                 .read()
                 .map_err(|_| TransportError::InvalidConfiguration)?;
-            self.client
+            let endpoints = self
+                .endpoints
+                .lock()
+                .map_err(|_| TransportError::InvalidConfiguration)?;
+            endpoints
+                .as_ref()
+                .ok_or(TransportError::InvalidConfiguration)?
+                .client
                 .connect_with(selected.client.clone(), address, name)?
         };
         Ok(connecting.await?)

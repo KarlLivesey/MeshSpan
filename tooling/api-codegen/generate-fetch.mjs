@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 import { readFile } from "node:fs/promises";
+import { renderUserEnrollmentClientMethods } from "./render-user-enrollment-client.mjs";
 import { CLIENT_IMPORTS } from "./render-client-imports.mjs";
 
 import {
@@ -152,6 +153,7 @@ export function createMeshSpanFetchClient(
 
   return {
     ${renderAuthenticationClientMethods(routes)}
+    ${renderUserEnrollmentClientMethods(routes)}
     ${renderCertificateClientMethods(routes)}
     ${renderBackupScheduleClientMethods(routes)}
     ${renderFederationClientMethods(routes)}

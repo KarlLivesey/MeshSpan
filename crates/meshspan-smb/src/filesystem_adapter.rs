@@ -2,7 +2,11 @@
 
 //! Mapping from authenticated SMB file commands to the common logical filesystem boundary.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+#[path = "filesystem_adapter_lease.rs"]
+mod lease;
+use lease::OpenLeaseState;
 
 use meshspan_contracts::BoundedBytes;
 use meshspan_domain::{
@@ -120,6 +124,7 @@ pub struct SmbFilesystemAdapter<F> {
     tree: SmbTreeBinding,
     limits: SmbFilesystemLimits,
     handles: BTreeMap<SmbFileId, OpenFile>,
+    renewals: BTreeSet<(UnixMicros, SmbFileId)>,
     directories: BTreeMap<SmbFileId, OpenDirectory>,
     locks: BTreeMap<(SmbFileId, u64, u64), LockId>,
 }
@@ -133,6 +138,7 @@ struct OpenFile {
     checkpoint_sequence: u64,
     logical_length: u64,
     lease_expires_at: UnixMicros,
+    lease_state: OpenLeaseState,
     granted_access: u32,
     delete_pending: bool,
     dirty: bool,
@@ -173,6 +179,7 @@ where
             tree,
             limits,
             handles: BTreeMap::new(),
+            renewals: BTreeSet::new(),
             directories: BTreeMap::new(),
             locks: BTreeMap::new(),
         }
@@ -248,11 +255,13 @@ where
                 checkpoint_sequence: 0,
                 logical_length: opened.logical_length,
                 lease_expires_at: opened.lease_expires_at,
+                lease_state: OpenLeaseState::Active,
                 granted_access: request.desired_access.wire_mask,
                 delete_pending: request.options.delete_on_close,
                 dirty: opened.dirty,
             },
         );
+        self.renewals.insert((opened.lease_expires_at, file_id));
         Ok(SmbCreateOutcome { response, file_id })
     }
 
@@ -483,7 +492,11 @@ where
         request: QueryInfoRequest,
     ) -> Result<QueryInfoResponse, SmbFilesystemAdapterError<F::Error>> {
         self.validate_header(request.header.session_id, request.header.tree_id)?;
-        let values = if let Some(open) = self.handles.get(&request.file_id) {
+        let values = if let Some(open) = self
+            .handles
+            .get(&request.file_id)
+            .filter(|open| open.lease_state == OpenLeaseState::Active)
+        {
             self.file_information(context.now, open)?
         } else if let Some(open) = self.directories.get(&request.file_id) {
             self.directory_information(context.now, open)?
@@ -757,6 +770,7 @@ where
                                         return Err(SmbFilesystemAdapterError::InvalidRange);
                                     }
                                 },
+                                lifetime: meshspan_filesystem::RangeLockLifetime::Handle,
                                 lease_expires_at: open.lease_expires_at,
                                 observed_at: context.now,
                             },
@@ -818,6 +832,9 @@ where
                 }),
             ));
         }
+        if self.forget_fenced_open(request.file_id) {
+            return Err(SmbFilesystemAdapterError::UnknownFile);
+        }
         let open = self.open(request.file_id)?.clone();
         let flush = if open.dirty {
             Some(AdapterFlushFileRequest {
@@ -851,6 +868,8 @@ where
             )
             .map_err(SmbFilesystemAdapterError::Filesystem)?;
         self.handles.remove(&request.file_id);
+        self.renewals
+            .remove(&(open.lease_expires_at, request.file_id));
         self.locks
             .retain(|(file_id, _, _), _| *file_id != request.file_id);
         Ok(CloseResponse::encode(
@@ -1044,7 +1063,11 @@ where
         &self,
         file_id: SmbFileId,
     ) -> Result<(NamespacePath, Option<HandleId>), SmbFilesystemAdapterError<F::Error>> {
-        if let Some(open) = self.handles.get(&file_id) {
+        if let Some(open) = self
+            .handles
+            .get(&file_id)
+            .filter(|open| open.lease_state == OpenLeaseState::Active)
+        {
             return Ok((open.path.clone(), Some(open.handle_id)));
         }
         let directory = self
@@ -1173,6 +1196,7 @@ where
     fn open(&self, file_id: SmbFileId) -> Result<&OpenFile, SmbFilesystemAdapterError<F::Error>> {
         self.handles
             .get(&file_id)
+            .filter(|open| open.lease_state == OpenLeaseState::Active)
             .ok_or(SmbFilesystemAdapterError::UnknownFile)
     }
 
@@ -1182,6 +1206,7 @@ where
     ) -> Result<&mut OpenFile, SmbFilesystemAdapterError<F::Error>> {
         self.handles
             .get_mut(&file_id)
+            .filter(|open| open.lease_state == OpenLeaseState::Active)
             .ok_or(SmbFilesystemAdapterError::UnknownFile)
     }
 }

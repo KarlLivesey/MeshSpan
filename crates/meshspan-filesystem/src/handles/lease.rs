@@ -5,6 +5,7 @@
 use meshspan_domain::{HandleId, NodeId, OperationId, PrincipalId, Revision, UnixMicros};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
+use super::locks::{RangeLockLifetime, load_lock_receipt};
 use super::state::{ActiveHandle, load_active};
 use super::{
     HandleError, PublicationDisposition, array, expire_stale_handles, identifier,
@@ -165,6 +166,7 @@ pub(crate) fn renew(
     expire_stale_handles(&transaction, request.observed_at)?;
     let handle = load_active(&transaction, request.handle_id, request.observed_at)?;
     validate_lease_owner(request, &handle)?;
+    validate_handle_bound_locks(&transaction, request, &handle)?;
     let resulting_fence = if request.takeover {
         request
             .expected_fence
@@ -271,6 +273,16 @@ fn update_lease(
     if changed != 1 {
         return Err(HandleError::StaleHandle);
     }
+    // Acquisition receipts keep their original deadlines. Only an explicit, validated
+    // handle-lifetime grant advances the mutable deadline in this same transaction.
+    transaction.execute(
+        "UPDATE range_locks SET lease_expires_at = ?1
+         WHERE handle_id = ?2 AND state = 1 AND lock_lifetime = 2",
+        params![
+            request.lease_expires_at.get(),
+            request.handle_id.as_bytes().as_slice()
+        ],
+    )?;
     if request.takeover {
         transaction.execute(
             "UPDATE range_locks SET handle_fence = ?1
@@ -280,6 +292,39 @@ fn update_lease(
                 request.handle_id.as_bytes().as_slice()
             ],
         )?;
+    }
+    Ok(())
+}
+
+fn validate_handle_bound_locks(
+    transaction: &Transaction<'_>,
+    request: HandleLeaseRequest,
+    handle: &ActiveHandle,
+) -> Result<(), HandleError> {
+    let mut statement = transaction.prepare(
+        "SELECT operation_id, handle_fence, lease_expires_at FROM range_locks
+         WHERE handle_id = ?1 AND state = 1 AND lock_lifetime = 2",
+    )?;
+    let mut rows = statement.query([request.handle_id.as_bytes().as_slice()])?;
+    // Stream validation without accumulating a second collection of every open lock.
+    // Updates begin only after the cursor is dropped, keeping its membership stable.
+    while let Some(row) = rows.next()? {
+        let operation: Vec<u8> = row.get(0)?;
+        let fence: i64 = row.get(1)?;
+        let deadline: i64 = row.get(2)?;
+        let receipt = load_lock_receipt(
+            transaction,
+            identifier(&operation, OperationId::from_bytes)?,
+            PublicationDisposition::Replayed,
+        )?
+        .ok_or(HandleError::Corrupt)?;
+        if receipt.lifetime != RangeLockLifetime::Handle
+            || receipt.handle_id != request.handle_id
+            || fence != to_i64(request.expected_fence)?
+            || deadline != handle.lease_expires_at.get()
+        {
+            return Err(HandleError::Corrupt);
+        }
     }
     Ok(())
 }

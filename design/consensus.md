@@ -163,6 +163,61 @@ This follows the two distinct read safeguards described in the
 and fresh leader confirmation. MeshSpan uses its independently proved `W` and `R`
 predicates rather than replacing either with an assumed majority.
 
+Append replies carry a nonzero request correlation and the exact matched entry
+digest, binding its index, term and bytes. A follower acknowledges only the
+request's verified prefix; an empty append proves only its previous position.
+The persistence continuation retains that proof before emitting the reply or
+advancing commit. Delayed commit notices never retreat an established commit.
+
+Each leader keeps at most 64 outstanding probes per peer and clears their
+correlation on membership-phase changes or leadership loss. Accepted proof must
+match the exact sent prefix and cannot reduce a newer match. Only the latest
+conflicting probe can backtrack, never below an established match. Evicted,
+duplicate or unknown probes supply no replication or read evidence. A correlated
+current-term negative reply can confirm read contact independently of log match;
+the current-term commit and local application predicates still apply. Historical
+membership notices have no probe or read identity and only solicit fresh probes
+or bounded committed history. Missing successful correlation fails closed on the
+wire; legacy replies cannot become current match proof.
+
+Replication batches contain at most 64 entries and 16 MiB of aggregate command
+bytes. The same limit applies to current append and historical membership-prefix
+replay; receivers reject an oversized aggregate before requesting persistence.
+A larger log suffix advances in consecutive batches after exact acknowledgement.
+Core entries share immutable command bytes across log, persistence and outbound
+effects, so constructing one effect per peer does not copy every payload before
+transport admission. Independent wire copies remain a transport responsibility.
+This does not remove the separate retained-log snapshot and lifetime-growth limit.
+
+The outer runtime also supplies a conservative frame budget for each peer.
+Unknown peers retain the 64 KiB control limit, including envelope and entry
+framing. Larger append bodies use the independent consensus bulk stream, with
+bounded frames, exact request/probe metadata, body digest, entry count and EOF.
+A bulk transfer receipt only confirms receipt of bytes; the ordinary correlated
+append response remains the durable replication proof. Byte reservations cover
+queued and in-flight copies separately from the core's durable log.
+
+Admission of commands that require bulk transfer checks every active plan member
+against the exact committed capability digest and a validated local Hello
+preimage bound to its current incarnation and certificate. Missing or unsupported
+evidence rejects the proposal before log append. The local preimage cache is
+bounded and restored with strict decoding and digest checks; it never grants
+membership or replaces authoritative metadata. Replication overrides are revoked
+before applying authoritative metadata and on membership activation, then rebuilt
+from current evidence.
+
+Each daemon automatically refreshes its configured presentation through a narrow
+node-authenticated root command. The current presentation is distinct from its
+immutable activation record. Compare-and-swap binds the prior presentation,
+initial activation, or verified initial admission certificate. Node actors are
+recorded as nodes, never synthetic user principals. Private control messages 120
+and 121 bind this command and its response to the authenticated connection,
+canonical request and deadline. Current roles follow the applied quorum plan;
+changing an advertised role invalidates cached handshakes before the new report.
+Only replicated presentation state completes the reporting workflow. Unknown
+outcomes retain the same command context for retry; an older peer's unsupported
+reporting endpoint cannot terminate ordinary control service.
+
 The core assumes crash, omission, corruption-detection and partition faults, not
 Byzantine voters. Mutual authentication prevents an unauthorised node from being
 counted, but a correctly enrolled malicious voter is outside this consensus

@@ -3,6 +3,7 @@
 //! Validated consensus inputs, messages, persistence mutations and effects.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use meshspan_domain::{NodeId, OperationId, PartitionId};
 use sha2::{Digest, Sha256};
@@ -11,7 +12,8 @@ use thiserror::Error;
 use crate::{ActiveQuorumPlan, CompiledQuorumPlan, JointQuorumPlan};
 
 const MAXIMUM_LOG_ENTRY_BYTES: usize = 16 * 1_024 * 1_024;
-const MAXIMUM_APPEND_ENTRIES: usize = 64;
+pub(super) const MAXIMUM_APPEND_ENTRIES: usize = 64;
+pub(super) const MAXIMUM_APPEND_COMMAND_BYTES: usize = 16 * 1_024 * 1_024;
 pub(super) const TERM_CONFIRMATION_VERSION: u16 = u16::MAX;
 pub(super) const TERM_CONFIRMATION_BYTES: &[u8] = b"MSCT\x01";
 
@@ -42,8 +44,8 @@ pub struct LogEntry {
     pub operation_id: OperationId,
     /// Independently versioned command format.
     pub command_version: u16,
-    /// Bounded canonical semantic command bytes.
-    pub command: Vec<u8>,
+    /// Bounded immutable command bytes shared by the log, persistence and outbound effects.
+    pub command: Arc<[u8]>,
     /// SHA-256 of version and command bytes.
     pub command_digest: [u8; 32],
 }
@@ -64,10 +66,28 @@ impl LogEntry {
         command_version: u16,
         command: Vec<u8>,
     ) -> Result<Self, CoreError> {
+        if command.len() > MAXIMUM_LOG_ENTRY_BYTES {
+            return Err(CoreError::InvalidInput);
+        }
+        Self::from_shared_command(position, operation_id, command_version, Arc::from(command))
+    }
+
+    /// Constructs an entry from already owned immutable bytes without another payload copy.
+    /// Transport adapters use this after reserving and copying validated wire bytes.
+    ///
+    /// # Errors
+    /// Rejects the same invalid position, version and command bounds as [`Self::new`].
+    pub fn from_shared_command(
+        position: LogPosition,
+        operation_id: OperationId,
+        command_version: u16,
+        command: Arc<[u8]>,
+    ) -> Result<Self, CoreError> {
         if !position.is_valid()
             || position == LogPosition::GENESIS
             || command_version == 0
-            || (command_version == TERM_CONFIRMATION_VERSION && command != TERM_CONFIRMATION_BYTES)
+            || (command_version == TERM_CONFIRMATION_VERSION
+                && command.as_ref() != TERM_CONFIRMATION_BYTES)
             || command.len() > MAXIMUM_LOG_ENTRY_BYTES
         {
             return Err(CoreError::InvalidInput);
@@ -91,7 +111,7 @@ impl LogEntry {
             || self.position == LogPosition::GENESIS
             || self.command_version == 0
             || (self.command_version == TERM_CONFIRMATION_VERSION
-                && self.command != TERM_CONFIRMATION_BYTES)
+                && self.command.as_ref() != TERM_CONFIRMATION_BYTES)
             || self.command.len() > MAXIMUM_LOG_ENTRY_BYTES
             || self.command_digest != command_digest(self.command_version, &self.command)
         {
@@ -117,7 +137,8 @@ impl LogEntry {
     /// Whether this validated entry confirms leadership without an application mutation.
     #[must_use]
     pub fn is_term_confirmation(&self) -> bool {
-        self.command_version == TERM_CONFIRMATION_VERSION && self.command == TERM_CONFIRMATION_BYTES
+        self.command_version == TERM_CONFIRMATION_VERSION
+            && self.command.as_ref() == TERM_CONFIRMATION_BYTES
     }
 }
 
@@ -265,9 +286,15 @@ pub struct VoteResponse {
     pub plan_digest: [u8; 32],
 }
 
+/// Nonzero append correlation unique within a leader incarnation, term and membership phase.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct AppendProbeId(pub u64);
+
 /// Leader log replication or heartbeat request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppendRequest {
+    /// Exact outstanding replication probe.
+    pub probe_id: AppendProbeId,
     /// Leader term.
     pub term: u64,
     /// Leader identity.
@@ -293,6 +320,10 @@ pub struct AppendRequest {
 /// Follower replication response.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AppendResponse {
+    /// Exact append probe, absent only for a membership-phase notice.
+    pub probe_id: Option<AppendProbeId>,
+    /// Digest binding the matched index to its exact term and bytes; zero for rejection/genesis.
+    pub matched_digest: [u8; 32],
     /// Responder's durable current term.
     pub term: u64,
     /// Whether previous position/digest and all entries were accepted.
@@ -505,6 +536,7 @@ pub enum CoreError {
 
 pub(super) fn validate_append_entries(request: &AppendRequest) -> Result<(), CoreError> {
     if request.term == 0
+        || request.probe_id.0 == 0
         || !request.previous.is_valid()
         || request.entries.len() > MAXIMUM_APPEND_ENTRIES
         || request
@@ -514,6 +546,7 @@ pub(super) fn validate_append_entries(request: &AppendRequest) -> Result<(), Cor
     {
         return Err(CoreError::InvalidInput);
     }
+    validate_replication_bytes(&request.entries)?;
     let mut expected = request
         .previous
         .index
@@ -538,6 +571,7 @@ pub(super) fn validate_committed_prefix(prefix: &CommittedPrefix) -> Result<(), 
     {
         return Err(CoreError::InvalidInput);
     }
+    validate_replication_bytes(&prefix.entries)?;
     let mut index = prefix.previous.index;
     let mut term = prefix.previous.term;
     for entry in &prefix.entries {
@@ -551,6 +585,17 @@ pub(super) fn validate_committed_prefix(prefix: &CommittedPrefix) -> Result<(), 
     if index != prefix.committed_index {
         return Err(CoreError::InvalidInput);
     }
+    Ok(())
+}
+
+fn validate_replication_bytes(entries: &[LogEntry]) -> Result<(), CoreError> {
+    entries
+        .iter()
+        .try_fold(MAXIMUM_APPEND_COMMAND_BYTES, |remaining, entry| {
+            remaining
+                .checked_sub(entry.command.len())
+                .ok_or(CoreError::InvalidInput)
+        })?;
     Ok(())
 }
 

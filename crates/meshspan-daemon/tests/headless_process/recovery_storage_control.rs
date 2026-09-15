@@ -105,7 +105,9 @@ pub(super) async fn reject_returning_identity(
         }
         Ok::<_, Box<dyn Error>>(())
     };
-    let outcome = tokio::time::timeout(super::WAIT_LIMIT, exercise).await;
+    let outcome = tokio::time::timeout(super::WAIT_LIMIT, exercise)
+        .await
+        .map_err(|error| format!("returning-node rejection proof: {error}"));
     client.close(0_u32.into(), b"proof complete");
     outcome??;
     Ok(())

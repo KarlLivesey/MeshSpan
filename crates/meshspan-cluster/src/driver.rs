@@ -2,19 +2,21 @@
 
 //! Persistence-first runtime loop around the deterministic consensus core.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 use meshspan_consensus::{
     ActiveQuorumPlan, ConsensusCore, CoreEffect, CoreError, CoreInput, CoreMessage,
     DurableMutation, LogEntry, LogPosition, MemberIncarnations, PersistenceId, ProposalId,
-    ReadBarrierId, Role,
+    ReadBarrierId, ReplicationBatchBudget, Role,
 };
 use meshspan_domain::{NodeId, OperationId, ScopeId, UnixMicros};
+#[cfg(test)]
+use meshspan_metadata::METADATA_COMMAND_VERSION;
 use meshspan_metadata::{
-    AuthoritativeCommand, AuthoritativeRepository, CommandContext, CommandReceipt,
-    ConsensusStoreError, LogPosition as MetadataLogPosition, METADATA_COMMAND_VERSION,
+    AuthoritativeCommand, AuthoritativeCommandContext, AuthoritativeRepository, CommandContext,
+    CommandReceipt, ConsensusStoreError, LogPosition as MetadataLogPosition,
     MetadataCommandCodecError, PartitionConsensusPersistence, RepositoryError, ScopeWriteAuthority,
-    decode_authoritative_command,
+    decode_authoritative_entry_for_version, is_supported_metadata_command_version,
 };
 use thiserror::Error;
 
@@ -242,6 +244,20 @@ impl<P: PartitionConsensusPersistence> PartitionConsensusDriver<P> {
         self.core.peer_matched_index(node_id)
     }
 
+    /// Supplies the active members' authenticated transport limits to deterministic replication.
+    ///
+    /// # Errors
+    ///
+    /// Rejects overrides for nodes outside the core's current membership.
+    pub fn set_replication_budgets(
+        &mut self,
+        default: ReplicationBatchBudget,
+        peers: BTreeMap<NodeId, ReplicationBatchBudget>,
+    ) -> Result<(), ClusterDriverError> {
+        self.core.set_replication_budgets(default, peers)?;
+        Ok(())
+    }
+
     /// Borrows the durable repository for read-only state-machine queries.
     ///
     /// The single-owner runtime uses this only after processing emitted effects; consensus
@@ -379,17 +395,30 @@ impl PartitionConsensusDriver<AuthoritativeRepository> {
         context: CommandContext,
         command: &AuthoritativeCommand,
     ) -> Result<(), ClusterDriverError> {
+        self.preflight_authoritative_entry(AuthoritativeCommandContext::Principal(context), command)
+    }
+
+    /// Preflights a principal or authenticated-node command against the same ordered state.
+    ///
+    /// # Errors
+    /// Rejects unknown history, mismatched operations or an invalid transactional command.
+    pub fn preflight_authoritative_entry(
+        &mut self,
+        context: AuthoritativeCommandContext,
+        command: &AuthoritativeCommand,
+    ) -> Result<(), ClusterDriverError> {
         let mut preceding = Vec::new();
         let mut index = self
             .applied_index()
             .checked_add(1)
             .ok_or(ClusterDriverError::InvalidCommittedCommand)?;
         while let Some(entry) = self.log_entry(index) {
-            if entry.command_version != METADATA_COMMAND_VERSION {
+            if !is_supported_metadata_command_version(entry.command_version) {
                 return Err(ClusterDriverError::InvalidCommittedCommand);
             }
-            let decoded = decode_authoritative_command(&entry.command)?;
-            if decoded.context.operation_id != entry.operation_id {
+            let decoded =
+                decode_authoritative_entry_for_version(entry.command_version, &entry.command)?;
+            if decoded.context.operation_id() != entry.operation_id {
                 return Err(ClusterDriverError::InvalidCommittedCommand);
             }
             preceding.push((
@@ -405,7 +434,7 @@ impl PartitionConsensusDriver<AuthoritativeRepository> {
                 .ok_or(ClusterDriverError::InvalidCommittedCommand)?;
         }
         self.persistence
-            .preflight_command(&preceding, context, command)?;
+            .preflight_entry(&preceding, context, command)?;
         Ok(())
     }
 
@@ -420,17 +449,22 @@ impl PartitionConsensusDriver<AuthoritativeRepository> {
         entry: &LogEntry,
         applied_at: UnixMicros,
     ) -> Result<AppliedAuthoritativeCommand, ClusterDriverError> {
-        if entry.command_version != METADATA_COMMAND_VERSION
+        if !is_supported_metadata_command_version(entry.command_version)
             || entry.position.index > self.commit_index()
             || self.log_entry(entry.position.index) != Some(entry)
         {
             return Err(ClusterDriverError::InvalidCommittedCommand);
         }
-        let decoded = decode_authoritative_command(&entry.command)?;
-        if decoded.context.operation_id != entry.operation_id {
+        let decoded =
+            decode_authoritative_entry_for_version(entry.command_version, &entry.command)?;
+        if decoded.context.operation_id() != entry.operation_id {
             return Err(ClusterDriverError::InvalidCommittedCommand);
         }
-        let receipt = self.persistence.apply_committed(
+        // Metadata application can replace certificate, incarnation or capability authority.
+        // Revoke old grants before AppliedThrough can emit another replication batch; the
+        // runtime re-grants them from the resulting current metadata on its next decision.
+        self.core.clear_replication_budget_overrides();
+        let receipt = self.persistence.apply_committed_entry(
             MetadataLogPosition {
                 term: entry.position.term,
                 index: entry.position.index,
@@ -482,7 +516,9 @@ pub enum ClusterDriverError {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use meshspan_consensus::{CoreConfig, MemberIncarnations, compile_plan, flat_plan};
+    use meshspan_consensus::{
+        CoreConfig, MemberIncarnations, VoteRequest, VoteResponse, compile_plan, flat_plan,
+    };
     use meshspan_domain::{
         AuditEventId, HostId, MeshId, OperationId, PartitionId, PrincipalId, QuorumPlanId,
         Revision, RoleId,
@@ -578,76 +614,186 @@ mod tests {
     }
 
     #[test]
-    fn committed_command_is_verified_applied_and_acknowledged_in_order()
+    fn higher_term_without_vote_allows_one_durable_candidate_across_restart()
     -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let local = NodeId::from_bytes([21; 16])?;
-        let partition = PartitionId::from_bytes([22; 16])?;
+        let database_path = directory.path().join("authority.sqlite3");
+        let local = NodeId::from_bytes([41; 16])?;
+        let candidate = NodeId::from_bytes([42; 16])?;
+        let competing = NodeId::from_bytes([43; 16])?;
+        let partition = PartitionId::from_bytes([44; 16])?;
         let plan = compile_plan(flat_plan(
-            QuorumPlanId::from_bytes([23; 16])?,
+            QuorumPlanId::from_bytes([45; 16])?,
             1,
-            BTreeSet::from([local]),
+            BTreeSet::from([local, candidate, competing]),
             BTreeSet::new(),
         )?)?;
-        let database = PartitionDatabase::open(
-            &directory.path().join("authority.sqlite3"),
-            partition,
-            UnixMicros::new(1),
+        let digest = plan.proof_digest();
+        let member_incarnations = MemberIncarnations::new(
+            BTreeMap::from([(local, 1), (candidate, 1), (competing, 1)]),
+            &plan,
         )?;
-        let mut repository = AuthoritativeRepository::new(database);
-        repository.initialise_consensus_quorum_plan(&plan, UnixMicros::new(2))?;
-        let incarnations = MemberIncarnations::new(BTreeMap::from([(local, 1)]), &plan)?;
-        let core = ConsensusCore::new(CoreConfig {
+        let config = CoreConfig {
             partition_id: partition,
             local_node_id: local,
             local_incarnation: 1,
             plan,
-            member_incarnations: incarnations,
-        })?;
-        let mut driver = PartitionConsensusDriver::new(core, repository);
-        driver.step(CoreInput::ElectionTimeout, UnixMicros::new(3))?;
-        assert_eq!(driver.role(), Role::Leader);
-
-        let (context, command) = bootstrap_command(local)?;
-        let command = encode_authoritative_command(context, &command)?;
-        let effects = driver.step(
-            CoreInput::Propose {
-                proposal_id: ProposalId(1),
-                operation_id: context.operation_id,
-                command_version: METADATA_COMMAND_VERSION,
-                command,
+            member_incarnations,
+        };
+        let mut repository = AuthoritativeRepository::new(PartitionDatabase::open(
+            &database_path,
+            partition,
+            UnixMicros::new(1),
+        )?);
+        repository.initialise_consensus_quorum_plan(&config.plan, UnixMicros::new(2))?;
+        let mut driver =
+            PartitionConsensusDriver::new(ConsensusCore::new(config.clone())?, repository);
+        let higher_term = VoteResponse {
+            term: 7,
+            granted: false,
+            membership_epoch: 1,
+            plan_digest: digest,
+        };
+        driver.step(
+            CoreInput::Message {
+                from: candidate,
+                sender_incarnation: 1,
+                message: CoreMessage::VoteResponse(higher_term),
             },
-            UnixMicros::new(4),
+            UnixMicros::new(3),
         )?;
-        let entry = effects
-            .into_iter()
-            .find_map(|effect| match effect {
-                DriverEffect::ApplyCommitted { mut entries } if entries.len() == 1 => entries.pop(),
-                _ => None,
-            })
-            .ok_or("single-voter proposal did not commit")?;
-
-        let mut substituted = entry.clone();
-        substituted.operation_id = OperationId::from_bytes([99; 16])?;
-        assert!(matches!(
-            driver.apply_authoritative_committed(&substituted, UnixMicros::new(5)),
-            Err(ClusterDriverError::InvalidCommittedCommand)
-        ));
-        assert_eq!(driver.persistence().current_revision()?, Revision::ZERO);
-
-        let applied = driver.apply_authoritative_committed(&entry, UnixMicros::new(6))?;
-        assert_eq!(applied.receipt.operation_id, context.operation_id);
-        assert_eq!(applied.receipt.committed_revision, Revision::new(1));
-        assert_eq!(driver.applied_index(), entry.position.index);
-        let resolved = driver
-            .persistence()
-            .resolve_operation(context.operation_id)?
-            .ok_or("committed operation did not resolve")?;
-        assert_eq!(resolved.result_digest, applied.receipt.result_digest);
+        let observed = driver.persistence().load_consensus_state(1)?;
+        assert_eq!(observed.current_term, 7);
+        assert_eq!(observed.voted_for, None);
+        let request = |candidate| CoreInput::Message {
+            from: candidate,
+            sender_incarnation: 1,
+            message: CoreMessage::VoteRequest(VoteRequest {
+                term: 7,
+                candidate,
+                candidate_incarnation: 1,
+                last_log: LogPosition::GENESIS,
+                membership_epoch: 1,
+                plan_digest: digest,
+            }),
+        };
+        let granted = driver.step(request(candidate), UnixMicros::new(4))?;
+        // The SQL vote must already be durable when the driver exposes its network reply.
+        let persisted = driver.persistence().load_consensus_state(1)?;
+        assert_eq!(persisted.current_term, 7);
+        assert_eq!(persisted.voted_for, Some(candidate));
         assert_eq!(
-            resolved.committed_position,
-            applied.receipt.committed_position
+            granted,
+            vec![DriverEffect::Send {
+                to: candidate,
+                message: CoreMessage::VoteResponse(VoteResponse {
+                    granted: true,
+                    ..higher_term
+                }),
+            }]
         );
+        drop(driver);
+        let repository = AuthoritativeRepository::new(PartitionDatabase::open(
+            &database_path,
+            partition,
+            UnixMicros::new(5),
+        )?);
+        let recovered = repository.load_consensus_state(1)?;
+        assert_eq!(recovered, persisted);
+        let mut restored =
+            PartitionConsensusDriver::new(ConsensusCore::restore(config, recovered)?, repository);
+        let denied = restored.step(request(competing), UnixMicros::new(6))?;
+        assert_eq!(
+            denied,
+            vec![DriverEffect::Send {
+                to: competing,
+                message: CoreMessage::VoteResponse(higher_term),
+            }]
+        );
+        assert_eq!(restored.persistence().load_consensus_state(1)?, persisted);
+        assert_eq!(
+            restored.step(request(candidate), UnixMicros::new(7))?,
+            granted
+        );
+        assert_eq!(restored.persistence().load_consensus_state(1)?, persisted);
+        Ok(())
+    }
+
+    #[test]
+    fn committed_command_is_verified_applied_and_acknowledged_in_order()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for version in [18, METADATA_COMMAND_VERSION] {
+            let directory = tempfile::tempdir()?;
+            let local = NodeId::from_bytes([21; 16])?;
+            let partition = PartitionId::from_bytes([22; 16])?;
+            let plan = compile_plan(flat_plan(
+                QuorumPlanId::from_bytes([23; 16])?,
+                1,
+                BTreeSet::from([local]),
+                BTreeSet::new(),
+            )?)?;
+            let database = PartitionDatabase::open(
+                &directory.path().join("authority.sqlite3"),
+                partition,
+                UnixMicros::new(1),
+            )?;
+            let mut repository = AuthoritativeRepository::new(database);
+            repository.initialise_consensus_quorum_plan(&plan, UnixMicros::new(2))?;
+            let incarnations = MemberIncarnations::new(BTreeMap::from([(local, 1)]), &plan)?;
+            let core = ConsensusCore::new(CoreConfig {
+                partition_id: partition,
+                local_node_id: local,
+                local_incarnation: 1,
+                plan,
+                member_incarnations: incarnations,
+            })?;
+            let mut driver = PartitionConsensusDriver::new(core, repository);
+            driver.step(CoreInput::ElectionTimeout, UnixMicros::new(3))?;
+            assert_eq!(driver.role(), Role::Leader);
+
+            let (context, command) = bootstrap_command(local)?;
+            let command = encode_authoritative_command(context, &command)?;
+            let effects = driver.step(
+                CoreInput::Propose {
+                    proposal_id: ProposalId(1),
+                    operation_id: context.operation_id,
+                    command_version: version,
+                    command,
+                },
+                UnixMicros::new(4),
+            )?;
+            let entry = effects
+                .into_iter()
+                .find_map(|effect| match effect {
+                    DriverEffect::ApplyCommitted { mut entries } if entries.len() == 1 => {
+                        entries.pop()
+                    }
+                    _ => None,
+                })
+                .ok_or("single-voter proposal did not commit")?;
+
+            let mut substituted = entry.clone();
+            substituted.operation_id = OperationId::from_bytes([99; 16])?;
+            assert!(matches!(
+                driver.apply_authoritative_committed(&substituted, UnixMicros::new(5)),
+                Err(ClusterDriverError::InvalidCommittedCommand)
+            ));
+            assert_eq!(driver.persistence().current_revision()?, Revision::ZERO);
+
+            let applied = driver.apply_authoritative_committed(&entry, UnixMicros::new(6))?;
+            assert_eq!(applied.receipt.operation_id, context.operation_id);
+            assert_eq!(applied.receipt.committed_revision, Revision::new(1));
+            assert_eq!(driver.applied_index(), entry.position.index);
+            let resolved = driver
+                .persistence()
+                .resolve_operation(context.operation_id)?
+                .ok_or("committed operation did not resolve")?;
+            assert_eq!(resolved.result_digest, applied.receipt.result_digest);
+            assert_eq!(
+                resolved.committed_position,
+                applied.receipt.committed_position
+            );
+        }
         Ok(())
     }
 

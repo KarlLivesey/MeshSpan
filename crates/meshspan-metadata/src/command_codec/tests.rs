@@ -1633,7 +1633,8 @@ fn storage_provider(marker: u8) -> Result<CreateComponent, Box<dyn std::error::E
     })
 }
 
-fn fixture() -> Result<(CommandContext, AuthoritativeCommand), Box<dyn std::error::Error>> {
+pub(super) fn fixture() -> Result<(CommandContext, AuthoritativeCommand), Box<dyn std::error::Error>>
+{
     let context = CommandContext {
         operation_id: OperationId::from_bytes([1; 16])?,
         actor_principal_id: PrincipalId::from_bytes([2; 16])?,

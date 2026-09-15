@@ -974,6 +974,7 @@ pub(super) fn limits() -> Result<TransportLimits, Box<dyn Error>> {
 
 fn hello(mesh_id: MeshId, node_id: NodeId, incarnation: u64) -> NodeHello {
     NodeHello {
+        consensus_transfer: None,
         versions: Vec::new(),
         mesh_id: mesh_id.as_bytes().to_vec(),
         node_id: node_id.as_bytes().to_vec(),

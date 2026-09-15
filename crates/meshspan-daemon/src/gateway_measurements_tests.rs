@@ -129,7 +129,7 @@ async fn smb_metrics_preserve_payload_errors_and_no_response_and_observe_cancell
     // An unpolled future never entered dispatch and must not count as a cancellation.
     drop(handler.handle(vec![4]));
     assert_eq!(handler.handle(vec![1, 7, 8]).await, Ok(Some(vec![1, 7, 8])));
-    assert_eq!(handler.handle(vec![2]).await, Err(()));
+    assert_eq!(handler.handle(vec![2]).await, Err("test dispatch failure"));
     assert_eq!(handler.handle(vec![3]).await, Ok(None));
     {
         let future = handler.handle(vec![4]);
@@ -156,11 +156,11 @@ async fn smb_metrics_preserve_payload_errors_and_no_response_and_observe_cancell
 struct TestSmbHandler;
 
 impl SmbConnectionHandler for TestSmbHandler {
-    type Error = ();
-    fn handle(&mut self, request: Vec<u8>) -> SmbHandlerFuture<'_, ()> {
+    type Error = &'static str;
+    fn handle(&mut self, request: Vec<u8>) -> SmbHandlerFuture<'_, Self::Error> {
         Box::pin(async move {
             match request.first() {
-                Some(2) => Err(()),
+                Some(2) => Err("test dispatch failure"),
                 Some(3) => Ok(None),
                 Some(4) => pending().await,
                 _ => Ok(Some(request)),

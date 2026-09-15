@@ -21,6 +21,19 @@ the entire canonical local gate, including generated-contract drift, both licenc
 policies, lint, formatting and all configured Rust/web tests. An unavailable audit
 service is a failed check, not a clean result. This command never publishes anything.
 
+Rustls is admitted at **0.23.45** or later on the maintained 0.23 line, including
+both MeshSpan TLS adapters. This fixes the handshake encryption-level validation
+issue in [GHSA-2mjx-qc3c-rqvc](https://github.com/rustls/rustls/security/advisories/GHSA-2mjx-qc3c-rqvc).
+The lockfile also selects **wnaf 0.14.1** instead of the yanked 0.14.0. Its
+[upstream change](https://github.com/RustCrypto/elliptic-curves/blob/master/wnaf/CHANGELOG.md)
+uses `primefield` bounds for scalar endianness. `primefield` was already locked;
+this adds a dependency edge, not a package or application capability. Its default
+features remain disabled at that edge. Rustls retains `Apache-2.0 OR ISC OR MIT`;
+wnaf retains `Apache-2.0 OR MIT`; their MIT options are permitted by
+MeshSpan's allow-only licence policy. The Rust 1.98 toolchain exceeds wnaf's
+1.85 minimum. These targeted patch changes still require the complete local
+dependency-update gate; focused TLS/QUIC tests alone do not admit integration.
+
 The code generator's exact `js-yaml@5.2.0` transitive pin is overridden to the
 maintained MIT-licensed `5.2.2` patch at that one dependency edge. It addresses
 [GHSA-pm4m-ph32-ghv5](https://github.com/nodeca/js-yaml/security/advisories/GHSA-pm4m-ph32-ghv5)
@@ -88,6 +101,7 @@ source/advisory policy automation arrive before a release artefact is built.
 | `meshspan-test-certificates` (workspace) |            0.1.0 | `GPL-2.0-only`             |
 | `sync_wrapper` (workspace)               |            1.0.2 | `GPL-2.0-only`             |
 | `p256`                                   |           0.14.0 | `Apache-2.0 OR MIT`        |
+| `p384`                                   |           0.14.0 | `Apache-2.0 OR MIT`        |
 | `rusqlite`                               |           0.40.2 | `MIT`                      |
 | `schemars`                               |            1.2.2 | `MIT`                      |
 | `serde`                                  |          1.0.229 | `MIT OR Apache-2.0`        |
@@ -105,7 +119,7 @@ source/advisory policy automation arrive before a release artefact is built.
 | `form_urlencoded`                        |            1.2.2 | `MIT OR Apache-2.0`        |
 | `quinn`                                  |          0.11.11 | `MIT OR Apache-2.0`        |
 | `rcgen`                                  |           0.14.9 | `MIT OR Apache-2.0`        |
-| `rustls`                                 |          0.23.43 | `Apache-2.0 OR ISC OR MIT` |
+| `rustls`                                 |          0.23.45 | `Apache-2.0 OR ISC OR MIT` |
 | `tokio`                                  |           1.53.1 | `MIT`                      |
 | `tower`                                  |            0.5.3 | `MIT`                      |
 | `x25519-dalek`                           |            3.0.0 | `BSD-3-Clause`             |
@@ -129,6 +143,18 @@ profile is TLS 1.3 only, with P-256 ECDHE and ECDSA identities plus AES-128-GCM 
 ChaCha20-Poly1305 traffic protection. RFC 9001 AES and ChaCha packet/header vectors, tamper
 rejection and a real mutually authenticated Rustls handshake are executable tests. Broader
 algorithm support is not implied and requires equivalent standards and interoperability proof.
+Traffic preference uses AES-128-GCM on x86/x86_64 with AES, AVX and PCLMULQDQ
+support, matching the installed AES/POLYVAL acceleration requirements; other
+architectures retain ChaCha20-Poly1305 preference. Both suites remain enabled,
+and mutual-authentication tests force each algorithm on either peer side.
+
+The explicit external HTTPS/certificate profile additionally admits `p384` 0.14.0
+under its MIT option for ECDSA P-384/SHA-384 verification. It reuses already resolved
+RustCrypto dependencies; no existing version changed. Internal node/federation
+identity verification and local signing retain the P-256 profile. Captured
+Let's Encrypt/Cloudflare chains and an independent P-384 issuer fixture cover
+external verification and its daemon call sites. RSA remains unsupported and
+NET-01 interoperability acceptance remains open; no advisory exclusion was added.
 
 The workspace `meshspan-quinn-rustls` package binds caller-supplied Rustls configurations to the
 public cryptography traits in current stable Quinn. It also supplies stateless-reset, retry and
@@ -170,16 +196,16 @@ lockfile.
 
 ### Runtime and transport
 
-| Direct dependency | Need                                                                             |
-| ----------------- | -------------------------------------------------------------------------------- |
-| `tokio`           | One async runtime, sockets, tasks, timers, channels and bounded blocking workers |
-| `tokio-util`      | Cancellation tokens and framed/stream utilities not present in the core runtime  |
-| `quinn`           | Private QUIC streams and datagrams between mutually authenticated nodes          |
-| `rustls`          | Shared in-process TLS implementation for QUIC, HTTPS and certificate handling    |
-| `bytes`           | Bounded zero-copy-oriented network buffers                                       |
-| `hyper`           | In-process HTTP/1.1 server and ACME client protocol engine                       |
-| `hyper-util`      | Tokio IO adaptation for Hyper connections                                        |
-| `http-body-util`  | Bounded request bodies and streamed response-frame access                        |
+| Direct dependency | Need                                                                                                                                                   |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tokio`           | One async runtime, sockets, tasks, timers, channels and bounded blocking workers                                                                       |
+| `tokio-util`      | Cancellation tokens and framed/stream utilities not present in the core runtime                                                                        |
+| `quinn`           | Private QUIC streams and datagrams between mutually authenticated nodes                                                                                |
+| `rustls`          | Shared in-process TLS implementation for QUIC, HTTPS and certificate handling                                                                          |
+| `bytes`           | Bounded zero-copy-oriented network buffers                                                                                                             |
+| `hyper`           | In-process HTTP/1.1 server and ACME client protocol engine                                                                                             |
+| `hyper-util`      | Tokio IO adaptation for Hyper connections                                                                                                              |
+| `http-body-util`  | Bounded request bodies and streamed response-frame access                                                                                              |
 | `httpdate`        | HTTP-date parsing for ACME retry deadlines; reuses the already locked transitive package under its MIT option, with no additional runtime dependencies |
 
 There is no OpenRaft or `raft-rs` runtime dependency. Their behaviour remains a
@@ -241,7 +267,7 @@ the first implementation.
 | `blake3`           | Content, manifest, proof and operation digests where the design selects BLAKE3 |
 | `ed25519-dalek`    | Signed routing, grants, receipts and offline-authority projections             |
 | `chacha20poly1305` | Authenticated envelope encryption for protected application material           |
-| `cmac`             | SMB 3.1.1 AES-CMAC packet signing for compatible standard clients               |
+| `cmac`             | SMB 3.1.1 AES-CMAC packet signing for compatible standard clients              |
 | `hkdf`             | Domain-separated key derivation                                                |
 | `sha2`             | Standards that mandate SHA-2, including certificate and SMB constructions      |
 | `getrandom`        | Operating-system cryptographic randomness                                      |

@@ -64,12 +64,19 @@ fn read_waits_for_both_quorums_and_preserves_a_queued_application_write()
     let directory = tempfile::tempdir()?;
     let (mut runtime, peer) =
         leadership_waiters::elected_runtime(&directory.path().join("quorums.sqlite3"))?;
+    let (requests, mut sent) = mpsc::channel(32);
+    runtime.transport = Arc::new(move |to, message| {
+        assert!(requests.try_send((to, message)).is_ok());
+    });
     let mut read = begin(&mut runtime)?;
     assert!(matches!(
         read.try_recv(),
         Err(oneshot::error::TryRecvError::Empty)
     ));
-    acknowledge(&mut runtime, peer, false, 0, Some(ReadBarrierId(1)))?;
+    // Read contact and term-confirmation replication are independent proof lanes.
+    // Keep both original requests: a negative contact does not retry or consume data.
+    let initial: Vec<_> = std::iter::from_fn(|| sent.try_recv().ok()).collect();
+    acknowledge(&mut runtime, peer, false, Some(ReadBarrierId(1)), &initial)?;
     assert!(matches!(
         read.try_recv(),
         Err(oneshot::error::TryRecvError::Empty)
@@ -77,7 +84,7 @@ fn read_waits_for_both_quorums_and_preserves_a_queued_application_write()
     let (context, command) = command(runtime.driver.local_node_id(), [89; 16])?;
     let (respond, mut response) = oneshot::channel();
     runtime.submit(AuthoritySubmission {
-        context,
+        context: AuthoritativeCommandContext::Principal(context),
         command,
         respond,
     })?;
@@ -86,12 +93,13 @@ fn read_waits_for_both_quorums_and_preserves_a_queued_application_write()
         response.try_recv(),
         Err(oneshot::error::TryRecvError::Empty)
     ));
-    acknowledge(&mut runtime, peer, true, 1, None)?;
+    acknowledge(&mut runtime, peer, true, None, &initial)?;
     let fence = read.try_recv()??;
     assert_eq!(fence.applied.index, 1);
     assert_eq!(fence.revision, Revision::new(0));
     assert!(runtime.queued.is_empty());
-    acknowledge(&mut runtime, peer, true, 2, None)?;
+    let application: Vec<_> = std::iter::from_fn(|| sent.try_recv().ok()).collect();
+    acknowledge(&mut runtime, peer, true, None, &application)?;
     let receipt = response.try_recv()??;
     assert_eq!(receipt.operation_id, context.operation_id);
     assert_eq!(receipt.committed_position.index, 2);
@@ -121,10 +129,10 @@ fn cancelled_expired_and_deposed_reads_never_become_successful()
         .last_log_entry()
         .ok_or("term confirmation missing")?
         .position;
-    runtime.receive_peer(PeerConsensusMessage {
-        from: peer,
-        sender_incarnation: 1,
-        message: CoreMessage::VoteRequest(VoteRequest {
+    runtime.receive_peer(PeerConsensusMessage::new(
+        peer,
+        1,
+        CoreMessage::VoteRequest(VoteRequest {
             term: 2,
             candidate: peer,
             candidate_incarnation: 1,
@@ -132,7 +140,7 @@ fn cancelled_expired_and_deposed_reads_never_become_successful()
             membership_epoch: 1,
             plan_digest: runtime.driver.active_plan().proof_digest(),
         }),
-    })?;
+    ))?;
     assert!(matches!(
         deposed.try_recv()?,
         Err(MetadataAuthorityRequestError::NotLeader { .. })
@@ -215,20 +223,39 @@ fn acknowledge(
     runtime: &mut MetadataAuthorityRuntime,
     peer: NodeId,
     accepted: bool,
-    index: u64,
     barrier: Option<ReadBarrierId>,
-) -> Result<(), MetadataAuthorityRuntimeError> {
-    runtime.receive_peer(PeerConsensusMessage {
-        from: peer,
-        sender_incarnation: 1,
-        message: CoreMessage::AppendResponse(AppendResponse {
-            term: 1,
+    sent: &[(NodeId, CoreMessage)],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut probe = None;
+    for (to, message) in sent {
+        if let CoreMessage::AppendRequest(request) = message
+            && *to == peer
+            && request.read_barrier_id == barrier
+        {
+            probe = Some(request);
+        }
+    }
+    let probe = probe.ok_or("missing emitted append probe for acknowledgement")?;
+    let (position, digest) = probe
+        .entries
+        .last()
+        .map_or((probe.previous, probe.previous_digest), |entry| {
+            (entry.position, entry.entry_digest())
+        });
+    runtime.receive_peer(PeerConsensusMessage::new(
+        peer,
+        1,
+        CoreMessage::AppendResponse(AppendResponse {
+            probe_id: Some(probe.probe_id),
+            matched_digest: if accepted { digest } else { [0; 32] },
+            term: probe.term,
             accepted,
-            matched_index: index,
-            next_index_hint: index + 1,
-            read_barrier_id: barrier,
-            membership_epoch: 1,
-            plan_digest: runtime.driver.active_plan().proof_digest(),
+            matched_index: if accepted { position.index } else { 0 },
+            next_index_hint: position.index + 1,
+            read_barrier_id: probe.read_barrier_id,
+            membership_epoch: probe.membership_epoch,
+            plan_digest: probe.plan_digest,
         }),
-    })
+    ))?;
+    Ok(())
 }

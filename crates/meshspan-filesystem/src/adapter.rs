@@ -13,9 +13,9 @@ use crate::{
     FilesystemAccessContext, FilesystemHandleCloseReceipt, FilesystemHandleFlushRequest,
     FilesystemHandleReadReceipt, FilesystemHandleWriteReceipt, HandleAccess, HandleLeaseReceipt,
     HandleShare, LockRangeReceipt, NamespaceListPage, NamespaceObjectStat, NamespacePath,
-    NamespacePublicationReceipt, OpenHandleReceipt, RangeLockKind, UnlockRangeReceipt,
-    UploadCommitReceipt, UploadRangePageReceipt, UploadSession, UploadStatusReceipt,
-    UploadWriteReceipt,
+    NamespacePublicationReceipt, OpenHandleReceipt, RangeLockKind, RangeLockLifetime,
+    UnlockRangeReceipt, UploadCommitReceipt, UploadRangePageReceipt, UploadSession,
+    UploadStatusReceipt, UploadWriteReceipt,
 };
 
 /// Daemon-owned publication policy that access connectors cannot override.
@@ -288,6 +288,8 @@ pub struct AdapterLockRequest {
     pub range: crate::ByteRange,
     /// Shared or exclusive compatibility class.
     pub kind: RangeLockKind,
+    /// Whether this lock explicitly follows its handle lease.
+    pub lifetime: RangeLockLifetime,
     /// Exclusive lock deadline no later than the handle lease.
     pub lease_expires_at: UnixMicros,
     /// Authoritative operation instant.

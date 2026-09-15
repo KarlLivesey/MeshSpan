@@ -38,6 +38,7 @@ struct TestError;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Call {
+    Renew(AdapterLeaseRequest),
     Create {
         components: Vec<String>,
         maximum_stage_bytes: Option<u64>,
@@ -84,6 +85,8 @@ enum Call {
 #[derive(Default)]
 struct TestFilesystem {
     calls: Vec<Call>,
+    renewal_failure: bool,
+    invalid_renewal_receipt: bool,
 }
 
 impl FilesystemFileAdapter for TestFilesystem {
@@ -335,10 +338,23 @@ impl FilesystemFileAdapter for TestFilesystem {
 
     fn renew_lease(
         &mut self,
-        _context: FilesystemAccessContext,
-        _request: AdapterLeaseRequest,
+        context: FilesystemAccessContext,
+        request: AdapterLeaseRequest,
     ) -> Result<HandleLeaseReceipt, Self::Error> {
-        Err(TestError)
+        self.calls.push(Call::Renew(request));
+        if self.renewal_failure {
+            return Err(TestError);
+        }
+        Ok(HandleLeaseReceipt {
+            disposition: PublicationDisposition::Applied,
+            operation_id: request.operation_id,
+            handle_id: request.handle_id,
+            request_digest: [25; 32],
+            handle_fence: request.expected_fence + u64::from(self.invalid_renewal_receipt),
+            gateway_node_id: context.gateway_node_id,
+            lease_expires_at: request.lease_expires_at,
+            result_digest: [26; 32],
+        })
     }
 
     fn lock_range(
@@ -360,6 +376,7 @@ impl FilesystemFileAdapter for TestFilesystem {
             handle_fence: request.handle_fence,
             range: request.range,
             kind: request.kind,
+            lifetime: request.lifetime,
             lease_expires_at: request.lease_expires_at,
             result_digest: [13; 32],
         })
@@ -899,3 +916,6 @@ fn file_version() -> Result<FileVersionId, TestError> {
 fn namespace_commit() -> Result<NamespaceCommitId, TestError> {
     NamespaceCommitId::from_bytes([5; 16]).map_err(|_| TestError)
 }
+
+#[path = "filesystem_adapter_lease_tests.rs"]
+mod lease;

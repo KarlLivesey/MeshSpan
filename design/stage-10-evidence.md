@@ -10,6 +10,1890 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Current candidate verification — full gate and real process proofs on `2adaba80`
+
+The signed, locally and GitHub-verified source revision
+`2adaba80f619eb80a903a931fb3130b0c7a4c75c` passes the required NVM
+`MESHSPAN_CHECK_WORKERS=4 CARGO_BUILD_JOBS=4 RUST_TEST_THREADS=4 pnpm check:dependency-update`
+in **1315.48 s**: Rust workspace tests **1260.61 s**, web tests **16.54 s**.
+Advisory scans, generated-contract drift, embedded web, formatting,
+all-target/all-feature Clippy, both licence checks, TypeScript/ESLint and tooling
+also pass. Unlike the preceding failed run, this reaches and passes the complete
+Rust workspace, including headless, filesystem and metadata targets. Log:
+`/tmp/meshspan-dependency-update-2adaba80.log`. The default gate still excludes
+ignored/environment-dependent acceptance; those results are recorded separately.
+
+Using `/home/karl/.cache/meshspan-validation/musl/env.sh` and Rust 1.98.0,
+`CARGO_BUILD_JOBS=4 cargo test -p meshspan-daemon --test headless_process --all-features --target x86_64-unknown-linux-musl --no-run --message-format=json`
+builds in **1 min 39 s**. The inspected build output selects the test executable;
+`python3 /tmp/meshspan-musl-2adaba80-acceptance.py` invokes its exact named cases
+with `--exact --include-ignored --test-threads=2`. Both commands use
+`TMPDIR=/home/karl/.cache/meshspan-validation/tmp`.
+Nine exact tests then pass with **two workers**, **zero failures or ignored
+cases**, in **930.78 s** (39 other tests filtered):
+
+- HTTP-01 worker loss followed by actual five-minute lease expiry;
+- rejected HTTP-01 order cleanup and reissue after the real retry backoff;
+- surviving-daemon retirement of an unadmitted upload after worker SIGKILL;
+- exact original-file recovery through HTTPS and real SMB after storage restart;
+- real SMB 3.1.1 round trips through three gateways;
+- six local processes applying one protection contract through HTTPS/SMB;
+- authenticated reporting of the exact uninterrupted preparation;
+- automatic replacement of two real executables, verified installations and
+  retained installation after cold launch;
+- signed-candidate delivery to three daemons and survival of peer restart.
+
+The first six cases plus three-daemon candidate propagation resolve the seven
+previously failing musl cases at current-candidate acceptance scope. The two
+handoff cases also revalidate the original PR #269 regressions with the current
+executable. Logs: `/tmp/meshspan-musl-2adaba80-build.log` and
+`/tmp/meshspan-musl-2adaba80-acceptance.log`; exact selection is retained in
+`/tmp/meshspan-musl-2adaba80-acceptance.py`. The SMB proof uses inspected image
+`sha256:4282e160c6cc3090ee59f3b2581ee7a459fdd3f943323b7583824ea30a618eb0`.
+These assembled passes accompany the focused lifecycle, receipt, consensus and
+partial-stream regressions below; they are not attributed solely to the latest
+transport fix or used to erase unclassified historical failures.
+
+The NVM `MESHSPAN_CHECK_WORKERS=2 pnpm check:dns-providers` proof also passes.
+Its separate offline container build takes **194.71 s**, then Cloudflare and
+webhook each pass in **28.74 s**, and manual DNS in **21.30 s**. The exact image is
+`sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922`.
+Each case uses its own network-isolated local DNS/HTTPS fixture, checks exact
+owned-record cleanup and certificate reuse, and removes its successful fixture.
+Log: `/tmp/meshspan-dns-providers-2adaba80.log`. These are not live provider-account
+or public staging-CA proofs. DNS compilation used its separate target volume
+with two workers after the musl build finished, while two musl test workers were
+waiting for their real lease/backoff boundaries; no Cargo build lock was shared.
+
+All **40 source-branch commits** verify locally. Remote `main` is still the
+PR #269 merge `fcd65853fc9fbd54112859a7188231b4b1abf4d2`. This candidate is ready
+for integration after this prose evidence is signed and pushed. Stage 10 remains
+in progress, and Stage 11 has not started as an integrated stage. First-passkey
+onboarding, full maintenance/healing projection, consensus-log compaction,
+availability-preserving update admission and the remaining numbered criteria
+are still open. Task 10's unclassified historical storage-snapshot failure is
+retained for investigation, not closed by a passing retry. No physical hardware,
+power-loss, mixed-platform, soak or independent-security-review result is claimed.
+No releases, tags, package/image publication or GitHub Actions were performed.
+
+## Assembled gate on `50469e80` — reconnect history remains incomplete
+
+The required NVM `pnpm check:dependency-update`, with four bounded workers,
+**failed in 885.91 s** (Rust lane **824.66 s**). Advisory scans, generated drift,
+embedded web, formatting, all-target/all-feature Clippy, both licence lanes,
+TypeScript/ESLint, tooling and web tests passed. Cluster **136/136** passed in
+**64.32 s**, including the unchanged maximum-transfer deadline; consensus
+**45/45** passed, and daemon unit tests passed **464 with one ignored**.
+
+Headless processes passed **31**, failed **one**, and ignored **13**, in
+**495.35 s**. The disconnected-gateway reconnect test returned `404` for
+`home.txt` at the peer instead of the exact bytes. Later Rust targets were not
+reached. Log: `/tmp/meshspan-dependency-update-50469e80.log`.
+Read-only inspection of retained fixtures shows matching committed metadata
+heads, but incomplete immutable-object receive sessions for the final merge;
+terminal history pages alone do not prove complete import. Source delivery was
+correctly left unacknowledged. No full-gate pass or integration is claimed.
+
+The focused unchanged reconnect regression also fails in **37.76 s** (build
+**56.15 s**), this time with `office.txt` missing at the root. Its retained
+sessions likewise lack immutable objects. Log:
+`/tmp/meshspan-namespace-reconnect-focused.log`. Investigation is now at object
+fetch/receive failure and retry, not metadata commit or final merge validation.
+This remains Stage 10 task 22 acceptance work; Stage 11 and publication remain
+open/held respectively.
+
+The transport diagnostic run logged empty responses during immutable-object
+fetches (`Transport(Read(FinishedEarly(0)))`), despite eventually passing in
+**38.23 s**. That passing retry does not erase the two failures. Source inspection
+identified `accept_stream` inside a `select!` with completed request workers:
+accepting a stream and then waiting for its kind byte is not cancellation-safe.
+Reaping another worker could drop the newly accepted stream before reading its
+prefix; an absent prefix also blocked independent streams.
+
+A real-Quinn regression opens an empty stream, sends a later complete request,
+then completes the earlier request after the later response. It **fails before**
+the fix in **2.09 s** (build **16.81 s**), and the five cancellation tests **pass
+after** in **0.31 s** (build **9.50 s**). The dispatcher now selects only on
+cancellation-safe `accept_bi`; its bounded worker owns classification with the
+existing two-second peer deadline. Prefix expiry releases only that stream;
+invalid traffic retains existing rejection rules. No transport/API/schema,
+dependency, concurrency limit or acceptance deadline changed. Temporary diagnostic
+printing is removed. Logs: `/tmp/meshspan-namespace-object-diagnostic.log`,
+`/tmp/meshspan-kind-prefix-baseline.log`, `/tmp/meshspan-kind-prefix-fixed.log`.
+Real-daemon reconnect validation and affected lint remain in progress.
+
+Both real-daemon namespace-delivery tests now **pass in 40.57 s** (build
+**42.31 s**), preserving the unchanged exact-byte assertions, offline independent
+writes, reconnect and second restart, plus pre-enrolment history delivery.
+Log: `/tmp/meshspan-namespace-prefix-fixed.log`. This closes the reproduced
+partial-stream cancellation defect at focused acceptance scope; broader network
+checks and the new assembled gate remain required before integration.
+
+Broader network validation passes **31 tests in 8.77 s** (build **6.15 s**),
+including independent prefix expiry, continued exact requests on the same
+connection, malformed/bulk traffic and lifecycle coverage. Affected cluster and
+daemon all-target/all-feature Clippy passes with warnings denied in **9.98 s**.
+Logs: `/tmp/meshspan-prefix-network-tests.log`, `/tmp/meshspan-prefix-clippy.log`.
+Formatting and diff checks pass; no full-gate pass is implied by these results.
+
+## DATA-01 — independent maintenance progression and durable retry
+
+The assembled implementation evaluates all nine bounded maintenance families
+sequentially and aggregates their failures. Repair claims precede destination
+planning; a placement-only `ResourceExhausted` persists an urgency-bounded retry
+with a versioned reason digest. Successful planning reuses the exact claim for
+provider execution. Uncertain provider effects are not automatically requeued.
+This implements part of Stage 9 autonomous healing and Stage 10 tasks 16/17;
+DATA-01 and the stage remain open pending the remaining accepted workflow proofs.
+
+Metadata coalescing now preserves an attempted job's retry delay unless urgency
+increases or a newly earlier deadline requires another attempt. The file-backed
+regression first failed with eligibility **10** instead of **200**; after the fix,
+all **11** maintenance-work tests pass (**4.76 s**, build **5.76 s**). They verify
+reopened eligibility at 200 but not 199, stable deduplicated identity, merged
+signals, and continued urgent/unattempted admission. Logs:
+`/tmp/meshspan-data01-coalescing-baseline.log` and
+`/tmp/meshspan-data01-coalescing-fixed.log`. No schema or dependency changed.
+Metadata all-target/all-feature Clippy also passes with warnings denied
+(**12.81 s**; `/tmp/meshspan-data01-metadata-clippy.log`). This metadata change is
+ready for a signed progress commit; the assembled daemon validation below remains
+open and no full-gate or stage completion is claimed.
+
+The expanded daemon fixture is undergoing focused validation. Its first compile
+reported test-only SQL `u64` conversions and imports left behind when repair
+ownership moved; checked SQLite integer conversions and removal of the unused
+imports fix these findings. The first assembled run still fails (**5.94 s**, build
+**54.69 s**): the scrub remains Queued and the tick reports three failed families.
+Log: `/tmp/meshspan-data01-integrated-repair-fixed-fixture.log`. Source tracing
+finds that repair, scrub/reconciliation, drain and rebalance builders generate
+full-width random `u64` fences, while claim persistence requires positive SQLite
+integers. A deterministic high-bit regression is being checked before changing
+this shared generator. The deterministic high-bit test then fails at the required
+SQLite representation assertion (**0.00 s**, build **34.09 s**), preserving the
+defect in `/tmp/meshspan-data01-fence-baseline.log`. All four maintenance builders
+now use one private generator retaining 63 random bits, matching the existing
+backup-claim convention; zero or failed entropy remains an error. The composed
+workflow is being rerun with this fix. No runtime pass is claimed yet.
+
+The range-fixed run passes the deterministic fence test and the original exact
+scrub-effect/first-retry assertions, then fails at the next tick (**6.25 s**,
+build **24.00 s**; `/tmp/meshspan-data01-integrated-fence-fixed.log`). Narrow
+temporary diagnostics identify metadata-backup preparation as the sole remaining
+failed family during that tick: snapshot and restore succeed, but retained
+history verification reports `Metadata(CorruptState)`. The fixture composes
+services without starting the normal namespace-delivery/convergence owner; its
+eventual upload therefore lacks the converged head required by archive closure.
+The fixture is being completed with that real owned worker and exact convergence
+readiness. This explanation remains to be verified by the next focused run.
+Diagnostic logs end in `family-diagnostic`, `backup-phase-diagnostic`,
+`backup-error-diagnostic`, `capture-diagnostic`, and `history-error-diagnostic`
+under `/tmp/meshspan-data01-`. Temporary diagnostic printing has been removed.
+
+The completed convergence fixture now reaches and passes the exact scrub,
+persisted retry, early-tick exclusion and second-provider repair assertions. It
+then reproduces the old deferral-time defect deterministically: a simulated
+ten-second planning interval is omitted from the persisted completion timestamp
+(**9.39 s**, build **56.41 s**;
+`/tmp/meshspan-data01-deferral-race-baseline.log`). This confirms the earlier
+backup failure was caused by missing fixture convergence, while the timing
+regression remains to be validated against the restored final implementation.
+The separate urgency-race baseline also fails (**8.31 s**, build **13.19 s**):
+without the revision precondition, a completion prepared before an intervening
+urgency update is accepted instead of rejected. Log:
+`/tmp/meshspan-data01-stale-deferral-baseline.log`. Both old-behavior diagnostic
+variants are removed; final deferral uses post-planning time and the revision
+captured before its fresh work read, with one immutable completion identity.
+
+With final behavior restored, **19 affected daemon tests pass** (**26.72 s**,
+build **10.51 s**; `/tmp/meshspan-data01-daemon-affected.log`). The real composed
+fixture verifies exact persisted scrub bytes/effect, two durable placement retries,
+no early admission despite duplicate discovery, and completion of the same repair
+job on a newly available real provider after exactly three claims. Replacement
+length/digest and layout generation are checked against the source. The ten-second
+planning and intervening-urgency regressions pass, alongside existing failed-provider,
+dispatcher and lifecycle/drain tests. Workspace formatting and diff checks pass.
+This is a local composed-runtime proof, not hardware, power-loss or a full-gate
+claim. Explicit backup/drain progression, global queue pagination, broader expected
+deferrals and shared resource attribution remain DATA-01 acceptance work.
+
+The expanded final fixture also proves the **same bootstrap backup** advances
+from a live Claimed run to Protected during the blocked-repair tick. Reopened
+run occurrence/partition/schedule identity, closed claim, Verified catalogue,
+captured protection thresholds and terminal evidence digest all agree. Both
+maintenance tests pass (**7.74 s**, build **36.67 s**;
+`/tmp/meshspan-data01-backup-acceptance.log`). Public API setup helpers now have
+their own fixture owner; both new test modules remain below the source-size
+ceiling. The earlier backup-proof gap is closed for this local fixture; completed
+drain progression, queue pagination, other deferrals and stage-wide acceptance
+remain open. The first affected Clippy run found a needless placement value
+parameter, test `expect` and test-module ordering; all were corrected without
+lint suppressions, and final Clippy is being run.
+Final affected all-target/all-feature Clippy passes with warnings denied
+(**12.91 s**; `/tmp/meshspan-data01-clippy-clean.log`). Before that pass, a function-size
+finding was resolved by placing committed-source selection and job admission
+with the fixture setup owner; one missing import from that move was corrected.
+The final exact workflow and fence tests pass after this test-only ownership
+adjustment (**2/2**, **9.04 s**, build **28.71 s**;
+`/tmp/meshspan-data01-final-workflow.log`). Formatting and diff checks pass after
+normalizing the moved import. This slice is ready for a signed checkpoint and
+the required dependency-update/full integration gate; it does not close DATA-01.
+
+Broader metadata validation on `0fa00c16` completes with **581 passing tests and
+one failure**, **376.29 s** (`/tmp/meshspan-data01-metadata-all.log`). The failure is
+`local_schema_fifteen_upgrade_preserves_existing_registration`: its hand-built
+version-15 fixture retains migration 17's table/history and fails
+`InvalidMigrationHistory`. The fixture now removes both later migrations and
+expects the current schema while retaining exact registration and integrity
+assertions; focused validation is pending. This target was not reached by the
+earlier failed full gates. No workspace gate pass is claimed.
+The corrected local recovered-target group passes **3/3 tests** (**0.29 s**,
+build **4.66 s**; `/tmp/meshspan-data01-migration-fixture-fixed.log`), including
+the version-15 upgrade, exact ordinary/recovered registration preservation,
+folder collision rejection and integrity checks. Production migration behavior
+is unchanged. The broader failed run remains recorded above.
+
+### Fail-before preparation
+
+The new real composed-runtime fixture creates a mesh, a volume and uploaded
+provider-backed content, then intends to queue an unrepairable stripe alongside
+an independently executable scrub. It checks exact persisted scrub work, effect,
+target generation and verified byte count after the actual maintenance tick.
+Production maintenance code was unchanged for this baseline.
+
+Initial fixture compilation exposed an extra dereference of a by-value ID byte
+array; correcting that test-only error allows compilation. The first runtime
+attempt fails **before maintenance**: volume creation returns HTTP **500** instead
+of **201** (**4.64 s**, build **65 s**). This is not yet a behavioral fail-before
+proof of starvation. Source tracing identifies the missing real prerequisite:
+volume-key recipient selection requires a saved/verified recovery bundle. The
+fixture omitted that existing public save/verify workflow; there is no evidence
+for the initially considered stale-generation explanation. The recovery
+prerequisite is being added without changing production safeguards.
+Logs: `/tmp/meshspan-data01-starvation-fixture-build.log` and
+`/tmp/meshspan-data01-starvation-baseline.log`.
+
+After adding that prerequisite, the regression reaches the intended failure:
+repair placement is explicitly `ResourceExhausted`; the actual tick returns an
+error and independently reopened scrub work remains **Queued**, where **Complete**
+with an exact verified effect is required. This is the behavioral fail-before
+proof (**5.30 s**, build **33.68 s**), recorded in
+`/tmp/meshspan-data01-starvation-recovery-baseline.log`. The implementation slice
+now covers independent family progression and durable pre-provider planning
+deferral; restart must retain the exact retry and prevent premature re-admission.
+
+## CORE-02 — measured packet cost and compatible cipher preference
+
+The provider now prefers its existing AES-128-GCM suite on x86/x86_64 only when
+runtime AES, AVX and PCLMULQDQ support is present, matching the installed AES and
+POLYVAL backend requirements. Other architectures retain ChaCha preference. Both
+suites, TLS 1.3, P-256 identity/key-exchange restrictions, packet limits and every
+integrity check remain intact. There is no dependency, wire-format or persistence change.
+This follows the measured **8.42 → 6.48 s** isolated maximum-transfer result below;
+it is not a claim about other hardware or a full-gate pass.
+
+Validation on `17e2e344` plus the uninstrumented preference change:
+
+- Provider tests: **11 pass**, including RFC packet/header vectors and tamper
+  rejection, external-chain validation/rejection and **four** mutually
+  authenticated handshakes. Each algorithm is forced on each peer side in turn;
+  both endpoints confirm the exact suite/TLS version and exact bidirectional
+  bytes. Selection tests independently cover both acceleration choices. Build
+  **3.77 s**, test groups **0.00/0.14/0.11 s**;
+  `/tmp/meshspan-core02-cipher-provider-tests.log`.
+- Network and three-voter bulk tests: **41 pass**, **13.81 s**, build **7.74 s**,
+  including the unchanged maximum-transfer deadline and delayed original-probe
+  receipt/reopen proof; `/tmp/meshspan-core02-cipher-network-tests.log`.
+- Provider/transport/cluster all-target/all-feature Clippy: **passes**, **2.70 s**;
+  `/tmp/meshspan-core02-cipher-clippy.log`. Formatting and diff checks pass.
+
+The subsequent full affected cluster target passes **136/136 tests** in
+**55.81 s**, including the unchanged maximum generic transfer, with four workers:
+`/tmp/meshspan-core02-cipher-cluster-tests.log`. This validates the assembled
+cluster behavior; the required workspace integration gate and additional opt-in
+acceptance remain open. Temporary AEAD timing code and unconditional AES-first
+experiments are removed.
+
+## CORE-02 — large append contact and correlation investigation
+
+The required dependency-update/full gate on signed/pushed `17e2e344` **fails**
+(**297.92 s**, Rust lane **226.63 s**). All advisory, generated, static, licensing,
+tooling and web checks pass; cluster tests pass **135/136** (**65.67 s**), including
+all real three-voter replication and read-barrier proofs. The sole failure is
+maximum generic 16 MiB delivery at its unchanged 15-second deadline. Its receive
+stage is `DecodingProtocol`: the receive owner has existed for **14,466 ms**, and
+protocol decoding began only **347 ms** before the timeout. Thus body receipt and
+codec admission used approximately **14.1 s**; this is not a stuck dispatch queue
+or an unobserved codec worker. Later Rust targets were not reached. The full log
+is `/tmp/meshspan-dependency-update-17e2e344.log`. No merge or integration pass is
+claimed; the contact/correlation fix is signed and remotely verified.
+
+A reduced canonical network run passes **29 tests** (**8.88 s**, **11.96 s user /
+0.11 s system CPU**), retaining four harness workers and the same temporary
+storage root. Temporary per-key aggregate AEAD timing then measures the isolated
+maximum transfer at **8.42 s**, of which ChaCha packet encryption/decryption
+accounts for **6.83 s**. A temporary reorder retaining both supported suites
+measures AES-first at **6.48 s**, with **5.27 s** packet AEAD. This is a measured
+CPU-cost difference, not yet proof that cipher preference fixes the full-gate
+failure; no deadline change or permanent preference change is claimed. Logs:
+`/tmp/meshspan-core02-canonical-network-resource.log`,
+`/tmp/meshspan-core02-aead-timing.log` and
+`/tmp/meshspan-core02-aes-preference-timing.log`. Both temporary changes were
+removed before implementation resumed. A reduced maximum-transfer plus federation
+run passes **30 tests** (**10.11 s**, **16.80 s user / 1.51 s system CPU**), so it
+does not reproduce or erase the full-gate timeout. Its log is
+`/tmp/meshspan-core02-bulk-federation-resource.log`.
+
+Temporary local timing instrumentation used the exact canonical workspace test
+artifact. The two failing tests pass together (**9.05 s**); all **135** cluster
+tests pass with live output (**54.03 s**) and through the existing captured-output
+runner (**55.53 s**). These runs do not close the full-gate failures. The maximum
+16 MiB body takes **7.5–9.2 s** to arrive; protocol/core decoding takes
+**0.44–0.60 s**, with negligible blocking-worker queue delay. Thus a held codec
+permit at the original failure can reflect late body arrival rather than a
+stalled codec. Logs: `/tmp/meshspan-bulk-canonical-timing.log`,
+`/tmp/meshspan-bulk-canonical-cluster-timing.log`,
+`/tmp/meshspan-bulk-canonical-captured-timing.log` and
+`/tmp/meshspan-bulk-flow-timing.log`.
+
+The measured 16 MiB stream has no packet loss/congestion and receives one stream
+credit update per frame. A bounded two-frame-window experiment leaves transfer
+time essentially unchanged (**7.535 s → 7.400 s**); it was reverted rather than
+retained as an unsupported fix. The original connection/bulk budgets and every
+test deadline are unchanged. Log: `/tmp/meshspan-bulk-two-frame-timing.log`.
+Temporary timing changes are removed; the local patch is retained outside the
+repository at `/tmp/meshspan-bulk-timing-instrumentation.patch`.
+
+Source tracing identifies a concrete, separate large-append liveness defect:
+heartbeat generation repeats pending entries, while the network drops another
+oversized append whenever its bulk worker is occupied. A slow transfer therefore
+withholds leader contact. Each regenerated request also consumes one of **64**
+probe records, potentially evicting the genuinely transmitted request before
+its acknowledgement. The normal three-voter fixture uses **40 ms** heartbeats
+and **600/850 ms** follower election timeouts; its measured 512 KiB body transfer
+can already overlap that first timeout. Two deterministic core regressions now **fail** (**0.00 s**, build **1.05 s**):
+there is no independent empty contact, and the original valid data reply leaves
+commit/matched at **0** after **70** heartbeats instead of advancing to **1**.
+Log: `/tmp/meshspan-core02-leader-contact-baseline.log`.
+
+The real three-voter delayed-body regression also **fails** (**5.75 s**, build
+**7.08 s**): the held original **70 KiB** operation returns `NotLeader` while
+the control path remains available. Normal fixture election deadlines are used
+(**900/1487.5 ms** after existing rank jitter); the older reconnect proof retains
+its explicit **5 s** override. The new proof requires 70 independent empty
+contacts to both followers, no premature commit/receipt, delivery of the original
+probe and exact reopened bytes/receipt. Failure fixture:
+`/home/karl/.cache/meshspan-validation/tmp/.tmpamzCz6`; log:
+`/tmp/meshspan-core02-delayed-body-baseline.log`.
+
+On `82749f83` plus this repair, replication and empty leader-contact probes have
+separate **64-record** bounds. Identical replication retries retain their exact
+previous/through position and digest binding and probe ID. Heartbeats send an
+independent empty contact at the follower's already-proven prefix; a contact can
+confirm current read authority but cannot advance replication or cause conflict
+backtracking. No wire, persistence, dependency or deadline contract changes.
+
+Pass-after validation: all **45 consensus tests pass** (**4.20 s**, build
+**1.50 s**), including both new regressions and existing expired read-proof,
+higher-term, divergent-log, partition and election simulations. All **five real
+three-voter bulk tests pass** (**10.44 s**, build **20.81 s**), including the new
+70-heartbeat hold followed by original-request delivery and exact reopened
+receipts. These close the reproduced contact/correlation defects, not the
+separate maximum generic transfer failure or the complete integration gate.
+
+The wider cluster run passes **135** tests and fails **one** read-barrier fixture
+(**60.85 s**; `/tmp/meshspan-core02-contact-cluster-fixed.log`). Its helper drains
+and discards the actual data request while selecting a read contact, then relies
+on the old negative-contact side effect to send data again. The fixture now
+retains both original requests and acknowledges each separately; its two-quorum,
+queued-write and exact revision assertions are unchanged. Final focused read and
+bulk validation passes **nine tests** (**12.18 s**, build **5.32 s**):
+`/tmp/meshspan-core02-contact-final-focused.log`. The new delayed-body assertion
+phase was clarified after Clippy reported test complexity **27/25**; no lint
+suppression or acceptance assertion was removed.
+
+Affected consensus/cluster all-target/all-feature Clippy passes with warnings
+denied (**4.11 s**; `/tmp/meshspan-core02-contact-clippy-final.log`). Rust formatting
+and diff checks pass. No required full-gate pass is claimed for this checkpoint.
+
+The maximum-transfer timeout now records its latest receive stage and elapsed
+time in test builds only. This is one fixed-size record per network with no
+payloads, credential data, per-transfer logging or changed deadlines; a later
+failure can distinguish body receipt, codec waiting/decoding and dispatch.
+
+## INT-01 — daemon drain reaches the underlying transport lifetime
+
+The first assembled daemon lifecycle run passes **7 tests** and fails **2**
+(**15.24 s**, build **66 s**). The new real private-handler proof blocks the
+existing owned admission worker for one exact metadata `CreateUser` operation,
+drops its response receiver, starts shutdown, then releases the worker. Shutdown
+waits and the original committed receipt survives reopening and exact retry.
+The two remaining failures are configured-generation UDP reuse and an invalid
+passkey origin in the new repeated-cycle fixture. Log:
+`/tmp/meshspan-int01-daemon-lifecycle.log`.
+
+After correcting that fixture and placing the runtime-ownership assertion before
+socket reuse, both configured-generation cases still fail `AddrInUse`
+(**6.82 s**). The bind-failure case explicitly reports **zero retained
+PrivateConsensusRuntime owners**. Log:
+`/tmp/meshspan-int01-private-generation-diagnostic.log`.
+
+Local Quinn source inspection identifies a separate lower-level lifetime:
+`EndpointRef::drop` wakes its internally spawned endpoint driver, which releases
+the socket on a later poll. Closing connections or waiting for idle connections
+does not join that driver. Two independent current-thread transport regressions
+reproduce `AddrInUse` (**0.05 s**): immediate socket reuse after close/drop, and
+reuse of the prepared server socket after the second socket bind fails. Neither
+test yields, sleeps or retries the required bind. Log:
+`/tmp/meshspan-int01-quinn-driver-baseline.log`.
+
+The transport owner now retains bounded Quinn driver handles. Shutdown first
+drains admitted MeshSpan workers, then closes driver admission, releases endpoint
+handles and cancels/joins residual protocol drivers. A canceled waiter preserves
+the shared join state. Driver panics and capacity rejection remain terminal
+failures; owner-requested cancellation is expected cleanup. A prepared-transport
+guard postpones driver startup through all fallible network preparation and
+synchronously releases sockets when abandoned. There are no dependency, wire or
+persistence changes.
+
+All **9** focused transport rotation/lifecycle tests pass (**0.39 s**, build
+**2.35 s**), including both previously failing immediate-rebind cases, abandonment
+after both sockets bind, canceled-waiter recovery, capacity rejection and panic
+reporting. Log: `/tmp/meshspan-int01-quinn-driver-fixed.log`. Initial compilation
+and Clippy caught scoped mutability/import issues, which were corrected.
+Affected transport/cluster/daemon all-target/all-feature Clippy passes with
+warnings denied (**15.35 s**). Log: `/tmp/meshspan-int01-assembled-clippy.log`.
+
+All **9** assembled appliance lifecycle tests now pass (**21.73 s**, build
+**78 s**), including the formerly failing configured bind-failure case, three
+controlled configured restarts with immediate socket reuse and no retained
+PrivateConsensusRuntime owner, and exact committed-receipt recovery after a
+private caller disconnects. Public and private production cleanup paths are
+directly awaited; the bounded snapshot-install worker is not a losing select
+branch. Log: `/tmp/meshspan-int01-daemon-lifecycle-fixed.log`. The broader **22** transport tests pass (**1.41 s**, build **3.25 s**) and
+**36** network tests pass (**11.43 s**, build **15.47 s**). The maximum-command
+case passes here; this does not explain its earlier full-gate timeout. Logs:
+`/tmp/meshspan-int01-transport-tests.log` and
+`/tmp/meshspan-int01-network-integrated-tests.log`.
+
+Real HTTPS mesh creation/restart and three-process join, voter promotion and
+restart both pass (**25.08 s**, build **58.98 s**); exact capability identity and
+historical strong receipts remain checked. Log:
+`/tmp/meshspan-int01-native-create-join-restart.log`. On signed/pushed `36cc730a`, the original offline-backup regression passes
+(**114.57 s**, build **0.38 s**), preserving offline verification, changed-byte
+rejection, exact recovery and no live-state writes. The native command selects
+only this test: update handoff is compiled for macOS/musl, not Linux GNU. Log:
+`/tmp/meshspan-int01-pr269-regressions.log`.
+
+The two original update-handoff regressions then both pass under the configured
+`x86_64-unknown-linux-musl` target (**245.09 s**, build **142 s**, two test
+workers). They retain the exact uninterrupted preparation, replace both real
+processes, verify both installations and the peer witness, and reauthenticate
+the selected executable through the original cold launcher. Log:
+`/tmp/meshspan-int01-musl-handoff-regressions.log`. This cold-launch interruption
+is not a physical power-loss proof. All three failures originally reported on
+PR #269 now pass in these focused runs.
+
+The required NVM `pnpm check:dependency-update` gate on `36cc730a` **fails**
+(**291.31 s**, Rust lane **217.64 s**), with four check/build/test workers, Node
+**26.8.2**, pnpm **11.19.0** and repository Rust **1.98.0**. Advisory scans,
+generated/build/static/licence/tooling checks and web tests (**17.99 s**) pass.
+The cluster target reports **133 passed, 2 failed** (**65.72 s**): maximum
+generic bulk delivery exceeds its unchanged **15 s** deadline, and the
+three-voter maximum-provider proof exceeds **15 s** during large-command
+replication. Later Rust targets are not reached. Log:
+`/tmp/meshspan-dependency-update-36cc730a.log`.
+
+The bulk timeout diagnostic records a held receive-side codec permit and byte
+reservation, with no message in the application queue. The retained authority
+fixture `/home/karl/.cache/meshspan-validation/tmp/.tmpFmJOyP` has all three nodes
+voting for the same root in term **16**; the root repeatedly appends the
+**524,620-byte** command in terms **2/4/6/8/10/12/14/16**, while both followers
+remain at log index **8**. Unlike the previous gate failure, no invalid vote
+persistence is reported. This narrows further investigation to transfer/codec
+progress and leadership churn; it does not establish their cause. The earlier
+passing focused runs do not close either failure. No integration/stage
+completion is claimed.
+
+## INT-01 — configured startup retains the private generation
+
+On `8ea5586a` plus the new lifecycle regression, real first-mesh setup returned
+`CREATED`, published `Configured` and acquired its private UDP address. A forced
+public HTTP-01 bind failure then returned from `serve_daemon_cycle` and stopped
+the authority, but the private UDP address still returned `AddrInUse` after
+fixture-owned runtime references were dropped. The regression failed in
+**5.50 s** (build **37.32 s**); log:
+`/tmp/meshspan-int01-configured-bind-baseline.log`.
+
+Stage 10 tasks **10/12**, pack **INT-01**, therefore still require owned private
+network/dispatcher/topology shutdown, drainage of admitted work and cleanup after
+partial startup. This is failure evidence, not a completed lifecycle proof.
+
+The network-specific baseline also reproduced premature completion: a real
+70 KiB outbound append was admitted and blocked at its owned codec boundary;
+the old close-only path returned while that worker retained the network
+(**0.07 s**, build **5.72 s**). Log/command:
+`/tmp/meshspan-int01-network-close-baseline.txt`.
+
+The new network owner registers bounded accept, outbound and connection jobs,
+reaps them during operation and retains admission permits through success or
+panic observation. Startup prepares all initial jobs before starting its
+supervisor. Closing admission precedes transport closure; all shutdown callers
+await the same retained supervisor handle and cached result. Canceling one
+waiter does not cancel drainage. Five focused tests pass (**0.16 s**, build
+**8.53 s**), followed by all **29** network tests (**8.68 s**). They include
+admitted work, canceled waiting, exhausted-capacity route preservation, pending
+negotiation and registration racing with closure. All **135** cluster tests then
+pass (**51.67 s**); affected all-target/all-feature Clippy passes with warnings
+denied (**3.97 s**), as do scoped formatting/diff checks. Logs:
+`/tmp/meshspan-int01-cluster-tests.log` and
+`/tmp/meshspan-int01-network-clippy.log`.
+
+Worker admission has explicit operational bounds of **4096 outbound workers**,
+**4096 connection workers** and **128 connections per authenticated peer**.
+Queued, running and replaced workers retain their admission slots until reaped.
+Exhaustion rejects admission; these bounds do not confer metadata authority or
+claim availability under arbitrary resource exhaustion. Configuration validates
+the outbound capacity before starting jobs. A new typed shutdown error reports
+unknown/failed drainage; wire, persistence and dependency formats are unchanged.
+The existing synchronous close operation only initiates shutdown. Daemon and
+storage consumers still need the awaited barrier and their own admitted-worker
+drain; integrated daemon validation remains pending.
+
+## Integration gate — retained vote-persistence failure
+
+The NVM dependency-update gate on signed/pushed `d6807f5e` failed after
+**244.92 s**. Advisory scans, generated drift, embedded web build, workspace
+format/lint, TypeScript, both licence checks, tooling and web tests passed.
+The Rust lane stopped in `meshspan-cluster`: **127 passed, 2 failed, 62.93 s**;
+later Rust targets were not reached. Log:
+`/tmp/meshspan-dependency-update-d6807f5e.log`.
+
+The three-voter maximum-provider regression now retains the actual failure:
+authority 1 exited with `Driver(Persistence(InvalidMutation))`. Its database
+at `/home/karl/.cache/meshspan-validation/tmp/.tmpTcnUxl/quinn-node-1.sqlite3`
+has term **10**, no vote, log through index **8** and applied index **7**.
+The persistence adapter rejects a same-term transition from no vote to a first
+candidate, although the deterministic core legitimately emits that transition.
+A new durable restart regression reproduced `InvalidMutation` before the fix
+(**1.22 s**, build **17.90 s**). Permitting only that first vote makes all eight
+consensus-store tests pass (**3.91 s**, build **3.45 s**), including restart,
+idempotent repeat, rejected vote clearing/switching and rejected term rollback.
+This is a source-confirmed persistence defect consistent with the retained
+failure; the original failing mutation itself was not captured.
+
+The separate maximum-generic-command transport test reached its existing
+15-second receive deadline. Its outbound send currently hides the typed send
+failure from the fixture, so slow delivery and an early transfer error remain
+unresolved alternatives. Neither a passing retry nor the vote fix closes that
+transport failure. Its fixture now reports bounded queue, authenticated-support,
+codec and reservation observations on the original timeout, then closes both
+endpoints. It neither retries the message nor extends the receive deadline.
+
+A real core/SQL driver regression also failed before the vote fix with
+`Persistence(InvalidMutation)` (**1.07 s**, build **13.89 s**). It observes a
+higher term without voting, grants the first candidate only after SQL durability,
+reopens both SQL and the core, rejects a competing candidate and permits an exact
+repeat by the original candidate. With the fix, all **130** affected cluster
+tests pass (**56.08 s**), including both previously failing maximum-command
+scenarios. The unexplained transport failure remains open. No stage or full
+integration gate is declared complete.
+
+Final affected metadata/cluster all-target/all-feature Clippy passes with warnings
+denied (**3.44 s**); workspace Rustfmt and diff checks pass. The driver regression
+passes again after test-only lint cleanup (**1.15 s**). No persistence schema,
+wire format, dependency or publication change is required for the vote fix.
+
+## ACC-02 — historical strong receipt recovery
+
+The daemon can now distinguish verified immutable publication facts from a
+strictly verified current local head. Exact historical strong confirmation uses
+the existing authoritative `namespace_publication_is_committed` lookup. Only an
+unconfirmed outcome proceeds to the unchanged current-head proof and proposal
+path, including its original deadline. This adds a narrow opaque filesystem
+proof for its daemon consumer; no wire, persistence or public HTTPS schema
+changes are required.
+
+The new daemon regression first ran with the old strict-first ordering and
+failed with `StrongBarrierFailed` (**1.64 s**, build **63 s**). Moving historical
+confirmation before the head check makes it pass (**1.46 s**, build **11.30 s**).
+Both strong-publication tests pass together (**1.70 s**, build **0.26 s**). They
+exercise real local publication storage and a running metadata authority,
+reopen local storage and authority readers, and check exact prior confirmation
+without a new log entry or head/revision change. Substituted receipts and stale
+unconfirmed publications reject. An expired waiting budget does not erase an
+already-confirmed outcome. This is repository reopen evidence; the authority
+process is not restarted by that focused test.
+
+The filesystem immutable-proof regression passes (**0.13 s**, build **6.09 s**),
+including historical proof after later publication/reopen while the strict head
+verifier still returns `StaleHead`.
+
+The extended existing native test
+`real_headless_process_creates_mesh_over_https_and_restarts` passes (**10.20 s**,
+build **37.09 s**). Both different files return explicit strong, globally
+converged, policy-committed receipts without fallback. After the second
+publication advances the namespace, exact replay of the original first request
+returns the same response, object and acknowledgement. The process then stops
+and restarts; exact bytes, the old response and changed-body rejection are
+checked again alongside the existing authentication/range proofs. The request
+and waiting budgets are unchanged. Log: `/tmp/meshspan-native-strong-replay.log`.
+This resolves the previously recorded historical strong-replay gap. Combined
+filesystem/daemon all-target/all-feature Clippy passes with warnings denied
+(**21.29 s**), as do workspace Rustfmt and diff checks. The full integration
+gate remains pending; no stage is declared complete.
+
+## Integration gate — unresolved three-voter maximum-command failure
+
+The full NVM dependency-update gate on signed/pushed `198e7251` failed after
+**334.17 s**. Advisory scans, generated drift, embedded web build, workspace
+Rust/Web formatting and lint, TypeScript, both licence checks, tooling tests and
+web tests passed. The Rust lane stopped in `meshspan-cluster`: **128 passed,
+1 failed, 65.03 s**, with `Unavailable` from
+`three_real_voters_commit_and_reopen_maximum_provider_configuration`. Later Rust
+targets were not reached. Log: `/tmp/meshspan-dependency-update-198e7251.log`.
+
+An isolated retry passed (**5.83 s**, build **23.34 s**); that does not resolve
+the gate failure. The bulk harness could previously stop at a failed shutdown
+request without joining the failed authority or preserving its underlying
+runtime error. Diagnostic cleanup now observes all owners, aggregates bounded
+errors and retains failed fixtures. All **23** focused authority tests passed
+(**20.26 s**), followed by **129** affected cluster tests (**53.91 s**), still
+without reproducing the original failure. Cargo artifact fingerprints show the
+focused package and canonical workspace use different dependency graphs. The
+workspace test artifacts were rebuilt with the exact gate settings (**3.68 s**,
+no tests run). That canonical cluster binary also passed all **129** tests
+(**50.37 s**) with four workers and the gate's quiet harness setting. The original
+failure remains open; further repetition is deferred until the next required
+integration run. Affected cluster Clippy passes (**11.75 s**), as do workspace
+Rustfmt and diff checks. No full-gate or integration pass is claimed.
+
+## Integration gate — generated barrel drift after the native checkpoint
+
+On signed/pushed `f4cd8c82`, the NVM dependency-update gate passed both advisory
+scans, then stopped at generated drift (**3.93 s** overall). Its normal generation
+pipeline removed one duplicate `export * from "./fetch.gen"` from the generated
+TypeScript barrel; no API schema, client method or type changed. A subsequent
+`pnpm check:generated` passes with no further drift. No generated file was edited
+by hand. Later canonical lanes were not reached in this attempt; full validation
+still needs a completed run. Log: `/tmp/meshspan-dependency-update-f4cd8c82.log`.
+
+## ACC-01/02 — combined two-user workflow exposes commit replay failure
+
+The new native HTTPS/encrypted-SMB checkpoint reached an exact replay defect on
+`598dffe9` plus its test fixture. Bob's upload returned a committed, eventual,
+node-local receipt; immediate replay of the retained path and original request
+bytes returned HTTP **409** (**23.01 s**, build **3.24 s**). Fixture `.tmpKZDihO`
+is retained under the configured disk-backed validation TMPDIR. The preceding
+checks proved administrator access to exact known HTTPS bytes over SMB, Bob's
+HTTPS and SMB denial before a grant, wrong-SMB-identity rejection, explicit
+permission grant and Bob's subsequent HTTPS commit. The combined 65-second open
+and restart checks were **not reached** in this run.
+
+The owned upload journal hashes server-generated operation time and content
+cutoff, both regenerated by the API on retry. The existing filesystem test
+reproduced `OperationConflict` when its server clock advanced (**0.41 s**).
+The focused later-clock retry now passes (**0.39 s**, build **1.76 s**) using
+the frozen execution context while rechecking current authority and matching
+client input. A separate API-service regression reproduced loss of the recorded
+outcome after rename and reopen (`NativeUploadError::Failed`, **0.45 s**, build
+**60 s**); returning object metadata bound to the immutable publication receipt
+makes that test pass (**0.43 s**, build **26.07 s**).
+
+A retry now uses current attempt time for storage IO while retaining its original
+intent and cutoff. Both production publisher paths reproduced provider reservation
+attempts after cutoff: unprotected **2 → 3** (**0.94 s**) and protected **7 → 10**
+(**1.08 s**). Guards now reject expired prepared recovery before opening its spool
+or invoking a provider. Completed catalog evidence still resolves after cutoff.
+All **15** tests in the two affected recovery targets pass (**1.07 s + 5.13 s**,
+build **1.36 s**), preserving live and full-restart recovery. No trait or public
+schema change was needed.
+
+The extended filesystem retry regression passes (**0.39 s**, build **2.62 s**):
+changed sequence, fence, length and digest reject; revoked current authority
+rejects; completed receipts recover after the original cutoffs with current
+authority; expired unfinished content performs no new begin; completed content
+can finish namespace recovery after its content cutoff. Upload-session expiry
+still rejects uncommitted operations.
+
+The next native run passed enrollment/restart and failed sharing after **87.49 s**
+(build **26.10 s**): the immediate exact replay and retained 65-second SMB open
+passed, then a later exact replay returned HTTP **500**. Private fixture
+`.tmpwftB41` is retained. It contains the committed upload, complete content and
+intact stage bytes; cleanup was ruled out. The upload receipt is namespace
+sequence **2**, while subsequent SMB publications advanced it to **3** and **4**.
+`NativeFilesystemRuntime::publish_file_head` requires a current-head proof even
+for recovery of an already-committed eventual write, matching the existing
+`StaleHead` regression in the publication store. The focused daemon regression
+failed with `StrongBarrierFailed` (**0.39 s**, build **23.96 s**). Eventual replay
+now verifies every immutable receipt field after normalizing only disposition;
+strong head advancement still requires the strict current-head proof. All **5**
+upload-service tests pass (**1.03 s**, build **23.42 s**), including substituted
+receipt rejection and exact response recovery after rename/reopen.
+
+The final native rerun **passes both tests in 111.50 s**, build **19.92 s**:
+`cargo test -p meshspan-daemon --test headless_process user_enrollment:: --
+--include-ignored --test-threads=2`, with four build jobs, disk-backed TMPDIR,
+the existing private Samba lease helper and pinned local SMB client image.
+Log: `/tmp/meshspan-native-two-user-checkpoint-final.log`. The sharing test proves
+independent public enrollment/sign-in; known-file HTTPS and SMB denial before a
+grant; Bob-bound SMB credentials and wrong-identity rejection; explicit grant;
+exact administrator/Bob bytes through both protocols; a retained 65-second SMB
+open with read/write/close; process restart and independent sign-in; exact bytes
+and original commit replay after restart; and changed-body rejection. Responses
+assert eventual, node-local, policy-committed scope without fallback. This is the
+pack's first two-user checkpoint for ordinary API-key enrollment, not passkey or
+all-policy completion. Combined filesystem/daemon all-target/all-feature Clippy
+passes with warnings denied (**28.11 s**); final workspace Rustfmt and diff checks
+pass. One expression received formatting only after lint. The full
+dependency-update gate remains pending; the earlier failed fixtures remain
+evidence of diagnosed defects.
+
+A separate strong-replay gap remains explicit: authoritative historical
+confirmation already exists, but the daemon currently obtains its immutable
+command facts only through a current-head verifier. Recovering a previously
+confirmed strong receipt after later local publications must reuse verified
+historical facts without authorizing a stale new head proposal. This eventual
+slice does not claim that case, the whole replay contract or Stage 11 task 8.
+
+Fixture development also observed HTTP 404 for a new unmaterialized volume and
+SMB `ls` returning `NT_STATUS_NO_SUCH_FILE`. Those were not permission-denial
+proofs. The test now targets administrator-verified existing file bytes. Earlier
+fixture-only status/response-shape assumptions were corrected against the Rust
+and OpenAPI contracts; no production behavior was weakened to satisfy them.
+This is earlier Stage 6 prerequisite work for Stage 11 task 8. Stage 11 remains
+not started as an integrated stage.
+
+## Dependency gate — Rustls advisory and yanked wnaf patch
+
+On clean signed candidate `7f35e683`, NVM `pnpm check:dependency-update` stopped
+at Rust advisories in **1.41 s**. Rustls **0.23.43** is affected by
+[RUSTSEC-2026-0285 / GHSA-2mjx-qc3c-rqvc](https://github.com/rustls/rustls/security/advisories/GHSA-2mjx-qc3c-rqvc),
+a TLS 1.3 handshake encryption-level validation defect. JavaScript audit and
+canonical integration checks were not reached. The same scan separately warned
+that transitive **wnaf 0.14.0** was yanked. Log:
+`/tmp/meshspan-viability-integration-7f35e683.log`. An earlier attempt could not
+start because an external timing binary was absent; the actual run used Bash's
+built-in timer. Neither attempt is an integration pass.
+
+All three Rustls declarations now require **0.23.45**, the upstream patched
+release. The lockfile changes only Rustls and **wnaf 0.14.1**; the latter adds an
+edge to already-locked `primefield` for its endianness bounds. No other package
+version or enabled application feature changed. Both retain compatible MIT
+licence options. `cargo deny check licenses` passes. Thirteen focused TLS/QUIC
+adapter, external-chain and real mutual-TLS tests pass (**6.33 s** build; **0.19 s**
+reported test time). Affected all-target/all-feature Clippy passes **3.64 s**.
+The NVM advisory recheck passes both Rust and JavaScript scans in **1.62 s**.
+The complete dependency-update gate remains required after the assembled
+candidate is ready. Publication, live-CA and Stage 10/11 proof remain open.
+
+## CORE-02 — interrupted bulk retry through three authorities
+
+The remaining interrupted/reconnect proof now passes. The existing real Quinn
+three-authority harness captures a genuine leader request, admits a partial
+body, resets the connection and verifies released transfer capacity. During
+interruption there is no accepted match above the baseline, no committed/applied
+index advance, no follower log advance and no operation receipt. The same
+original probe and entry then cross a new connection; the correlated match
+response binds the exact probe and digest, all three authorities apply the exact
+index/receipt, and reopening all three repositories retains canonical bytes and
+receipt identity. No new operation substitutes for the interrupted one.
+
+The first focused run passed **1/1, 5.13 s** (build **7.55 s**). After strengthening
+match-index and bounded diagnostic assertions, all four authority-bulk tests
+passed **8.69 s** (build **5.74 s**). Cluster all-target/all-feature Clippy passed
+**1.98 s**; scoped Rustfmt and diff checks passed. A five-second election window
+belongs only to the named controlled-interruption fixture; existing test timing
+is unchanged. Changes are test-only and reuse the existing transport/authority
+harness. Tested tree: `67ca152a` plus these four test files. This resolves the
+previously recorded CORE-02 interrupted-reconnect acceptance gap. Integration
+still requires the complete dependency-update gate; Stage 10/11 remain open.
+
+## CORE-02 / ACC-01 — legacy migration fixtures after schemas 118/119 and 17
+
+Pre-gate compatibility review found two stale fixture assumptions introduced by
+the additive enrollment/capability schemas. The v109 backup fixture retained
+post-v109 tables and failed reopening with `user_enrollments already exists`
+(**1.56 s**). Its teardown now removes the 118/119 tables before replaying normal
+migrations; the existing exact surviving-history assertions remain unchanged.
+The focused test passed **1.49 s** (build **3.59 s**).
+
+The v14 quota fixture reached the correct new local schema 17 but still expected
+16 (**1 failed, 1.74 s**). Its expected version now names 17 and documents the
+new capability-cache migration. Existing exact pending, committed and replayed
+charge assertions remain unchanged. All **14** matching capacity-seal tests
+passed **8.07 s** (build **3.95 s**). Metadata all-target/all-feature Clippy
+passed **4.35 s**; scoped Rustfmt and diff checks passed. Fail-before runs used
+the already-built metadata test binary; after-fix runs used Cargo with four
+workers. Tested tree: `598a13b1` plus these two fixture changes. Production
+migrations, safety assertions and dependency policy are unchanged; the full
+gate remains pending.
+
+## Stage 10 — retained readiness diagnostics before integration
+
+The existing setup-status transport diagnostic is retained in the headless test
+client. On cancellation or completion after five seconds, it reports the phase,
+elapsed time, received byte count and bounded framing facts; it never prints
+request credentials or response bodies. It does not alter request deadlines or
+assertions. The latest native capability and enrollment tests exercised this
+client. The earlier setup timeout investigation remains unresolved; absence of
+a diagnostic line does not establish its cause. The final gate will test this
+exact client along with the assembled implementation.
+
+## ACC-05 — ordinary SMB lease renewal and owned connection shutdown
+
+The connection owner now renews one due open per maintenance step, with a
+one-second wake and half-life scheduling for the existing 60-second lease.
+Uncertain renewal fences that open and advances the queue. Close removes its
+renewal; disconnect releases clean opens and preserves acknowledged dirty staging
+for durable expiry without implicit publication or abort. Filesystem branch
+migration **046** explicitly distinguishes handle-bound locks from independently
+timed locks. Live handle-bound locks renew atomically; immutable acquisition
+deadlines and exact receipts survive replay. Legacy locks remain independent,
+including when their original deadlines happen to equal the handle deadline.
+
+SMB renewal samples its executed timestamp after acquiring native runtime
+ownership. It retains the original operation ID and intended expiry, rejects
+backward clocks, and never retries changed bytes after uncertainty. Other adapters
+and explicit takeover retain caller-owned replay timestamps. Idle maintenance
+preserves a partially read TCP frame. Shutdown signals idle readers, observes
+started blocking work, and retains bounded dispatch/cleanup failure reports.
+
+Fail-before evidence is retained:
+
+- The real client held the same open for 65 seconds, then its read failed with
+  errno 22 (**72.22 s**); fixture `.tmpcPkj4R` remains under the configured disk
+  validation TMPDIR. No renewal implementation was present for that baseline.
+- Lock continuity/corrupt-lifetime admission: **2 failed, 2 passed, 0.58 s**.
+- Missing idle maintenance and abandoned work at the old 30-second shutdown
+  deadline: **2 failed, 30.01 s**.
+- Native mutex admission: **2 failed, 1 passed, 0.22 s**. A queued renewal at
+  time 30 incorrectly extended an expired-at-60 handle to 90 after the clock
+  reached 70; a backward clock was also accepted.
+
+On `011d599f` plus the assembled working tree, focused native admission tests
+passed **3/3, 0.21 s** (final fixture build **72 s**). The fixed server binary passed **5/5,
+31.01 s**, including the named slow shutdown proof. Filesystem tests previously
+passed **245/245** (unit **37.96 s**, integration **16.06 s**), and SMB tests
+**65/65**. Their production behavior was unchanged after those runs. Combined
+`cargo clippy -p meshspan-metadata -p meshspan-daemon -p meshspan-filesystem
+-p meshspan-smb --all-targets --all-features -- -D warnings` passed in **19.57 s**.
+The first lint pass found test-only `expect`/`panic` plumbing and separately
+owned daemon composition/reporting/enrollment findings; these were corrected
+without weakening lint rules. The changed native fixture was rerun afterward.
+Targeted Rustfmt, diff checks and evidence Prettier passed; the latter used the
+installed web tool under NVM Node **26.8.2**, pnpm **11.19.0**. Cargo used four
+build workers, the shared target directory and disk-backed validation TMPDIR.
+
+The real public SMB proof now **passes**: the same `SMBCFILE` stays idle for
+65 seconds after acknowledged staging, reads exact bytes, rewrites and rereads
+through that open, closes, then reopens exact published bytes. The combined
+`cargo test -p meshspan-daemon --test headless_process -- --include-ignored
+--test-threads=2 smb_lease:: user_enrollment:: --nocapture` ran in **73.11 s**
+(build **16.15 s**): SMB passed, independent enrollment failed with HTTP 401
+creating a TOTP challenge; `.tmp93Me3Q` is retained for that separate diagnosis.
+This command is therefore a failed combined gate, not a passing checkpoint.
+
+The optional local helper uses installed Samba 4.24.7 `libsmbclient`; no runner
+was downloaded. Its authored source is GPL-2.0-only, but the external library is
+GPL-3.0-or-later: the combined local binary is not distributable as GPL-2.0-only
+and must never enter MeshSpan artifacts. It is selected only through
+`MESHSPAN_SMB_LEASE_CLIENT`; no Samba implementation source or dependency was added.
+
+ACC-05 remains open: native runtime lock contention can still delay unrelated
+opens beyond expiry (CORE-06 fairness); explicit wire FLUSH and lock-continuity
+proofs, current export generation/revocation binding, and accepted resource caps
+remain. The old 30-second forced-abort behavior was unsafe and is removed; a
+cooperative aggregate shutdown bound is **not** proved. Private INT-01 lifecycle,
+the full integration gate, Stage 10 and publication remain open.
+
+## ACC-01 — registration after another user is created
+
+The native enrollment test reached a real server defect: TOTP challenge creation
+returned 401 after Bob's creation. The active administrator session carried the
+mesh identity revision (5), while the registration profile returned the unchanged
+administrator principal revision (1). The shared TOTP/passkey registration profile
+now returns the mesh identity revision; the recipient creation remains before
+registration in the process test.
+
+A focused metadata regression failed with revision 1 instead of 2 before the fix
+(6.64-second build, 1.15-second test). All four registration-profile tests passed
+afterward (4.60-second build, 2.13-second tests), using four build/test workers.
+Formatting and diff checks passed. No schema, wire or dependency changes. The
+native rerun exposed a second startup defect: integrity validation rejected a
+replacement session's copied primary-factor timestamp, although migration 049
+and step-up preserve its earlier authentication time. Reopening the committed
+step-up fixture failed `IntegrityFailed` before the fix (**1.22 s**, build
+**4.02 s**). The checker now accepts earlier factors only for replacement
+sessions; corruption tests still reject stale normal-session and future
+replacement-session factors. All five metadata session tests passed **3.18 s**
+(build **2.73 s**); metadata all-target/all-feature Clippy passed **10.96 s**.
+
+Native HTTPS enrollment/restart passed **1/1, 16.58 s** (build **13.17 s**): Bob
+signs in independently as a nonmanager, then signs in again after restart and
+recovers the exact enrollment receipt. Changed-request and second-operation
+redemptions are rejected before restart. Scoped formatting and diff checks
+passed. Tested tree: `68e476ad` plus this integrity fix and native acceptance
+fixture. No schema, wire or dependency changes. First-passkey enrollment and
+real two-user file sharing through HTTPS/SMB remain open; ACC-01 and Stage 10
+are not closed.
+
+## CORE-02 — bounded bulk replication and authoritative capability refresh
+
+The 64 KiB consensus control envelope remains unchanged. Oversized append and
+committed-prefix bodies use authenticated DataFrames on a separate, deadline-bound
+bulk lane. The descriptor binds the exact request, probe, phase, entry count and
+body digest; its receipt acknowledges ingress only, never durable replication.
+DecodeLimits bound repeated entries before allocation. Per-peer (64 MiB) and
+aggregate (128 MiB) reservations charge three simultaneous payload copies plus
+frame/entry overhead and survive queue dispatch and cancellation. Immutable core
+log payloads share Arc storage; these network reservations do not claim to bound
+permanent log or persistence memory.
+
+The original real-three-voter 70 KiB regression failed with NotLeader (**5.09 s**)
+and then timed out replicating the same operation (**18.37 s**). The failures are
+retained. After the bulk transport and exact admission fixtures, real Quinn tests
+committed and reopened exact **70 KiB** and maximum **512 KiB provider
+configuration** commands on all three repositories (**2/2, 7.55 s**, build
+**2.16 s**). Earlier protocol bulk tests passed **3/3, 0.46 s** and cluster bulk
+coverage passed **11/11, 9.78 s**, including generic 16 MiB command bytes,
+malformed/reset bodies, reservation release and responsive vote controls while a
+transfer stalls. The provider limit remains 512 KiB; metadata's 1 MiB codec bound
+and the reusable core's 16 MiB bound are distinct contracts.
+
+Large local proposals require every active-plan member's exact admitted
+capability before pending insertion or append. Unknown and unsupported evidence
+produce explicit errors without durable log changes (**2.13 s**). Local schema
+**17** stores bounded canonical Hello preimages; partition schema **119** stores
+root-committed current presentations separately from immutable activation.
+Authenticated node self-reports use opcode **138**, a distinct node actor envelope,
+principal NULL and the existing consensus/preflight/apply/receipt pipeline. Only
+versions **18** (historical principal commands) and **19** are decoded; new
+commands cannot be mislabeled as 18. The old exact-current-version consumer failed
+with InvalidCommittedCommand (**1.28 s**, build **8.32 s**); the mixed replica
+suite subsequently passed **17/17, 20.97 s**.
+
+Exact cached evidence survives network restart with the source offline; changed
+certificate, incarnation or digest fails admission. Cache tests passed **3/3,
+0.32 s**. Repeated closed response waiters are pruned and live duplicates bounded
+(**1/1, 0.45 s**). Current node codec tests passed **2/2, 0.02 s**. Those last two
+commands used the already-built unit binaries whose tested behavior was current;
+no concurrent Cargo build was started. Metadata capability tests passed **12/12,
+6.67 s** (build **2.54 s**), including migration 17/119, truthful actors, rollback,
+reopen/replay and prior-record guards. A new persisted upgrade-state fixture first
+failed StaleRevision (**1.08 s**) when current incarnation 2 had immutable
+activation 1. The fix accepts only a historical incarnation at or below current,
+with exact activation revision/digest and independently checked current
+certificate; the passing fixture preserves activation bytes unchanged.
+
+The native three-daemon promotion proof failed (**28.48 s**): cached and committed
+Hello digests agreed but retained learner roles after promotion. The network now
+replaces roles fallibly and invalidates cached handshakes without closing
+in-flight requests. A real Quinn regression passed (**0.12 s**, build **9.00 s**),
+including invalid/duplicate/contradictory roles, no-op replacement and the new
+handshake digest. The native three-daemon proof now passes: every daemon commits
+presentations matching its actual voter Hello, all three stop and restart, and
+the exact capability checks pass again. The combined native command ran in
+**52.25 s** (build **48.76 s**), with **1 passed, 1 failed**: capability promotion
+and restart passed; separate user enrollment failed on restart with
+`MetadataStore(IntegrityFailed)`. The latter fixture `.tmpT2GVSj` is retained.
+This is not a passing combined gate.
+
+The daemon owns its periodic self-reporter and cancellation path. Peer reports
+bind the current mTLS node, incarnation, certificate and validated Hello digest;
+unsupported older endpoints remain retryable. Two focused reporter tests passed.
+Applying authoritative metadata clears volatile peer budget overrides before
+further replication. Combined metadata/daemon/filesystem/SMB all-target,
+all-feature Clippy passed **19.57 s**, including the final incarnation guard and
+reporter composition. Tested tree: `07ce8aad` plus this CORE-02 change. No new
+CORE-02 dependency was introduced. The complete dependency-update/integration
+gate, remaining CORE-02 edge-case acceptance, Stage 10 task 17 and Stage 11
+candidate proofs remain open.
+
+Final review reproduced an expired transfer waiting indefinitely for a shared
+codec permit (**1 failed, 1.07 s**, build **9.26 s**). Both inbound and outbound
+codec admission now use the original transfer deadline, as does network IO.
+Started blocking codecs remain owned and observed; their late results cannot
+enter a peer queue. The nearest real Quinn bulk tests passed **7/7, 8.43 s**
+(build **4.24 s**), including exact encoded control payloads of **65,535**,
+**65,536** and **65,537** bytes: the first two traverse the real inline path;
+the last traverses normal queued bulk, all with exact decoded message bytes.
+Affected cluster all-target/all-feature Clippy passed **4.60 s**; scoped Rustfmt
+and diff checks passed. Reconnect-mid-body retry with exact matched/applied
+indexes remains an explicit acceptance gap; reset/substitution tests currently
+prove no dispatch and released reservations.
+
+## CORE-02 — per-peer framing of replication backlogs
+
+A peer's declared framing budget now limits both ordinary append and historical
+committed-prefix batches before entry cloning. A conservative per-entry cost is
+included alongside the existing 16 MiB command-byte and 64-entry limits. The
+outer runtime supplies explicit, volatile budgets; membership activation clears
+all peer overrides before emitting replication, including when an identity's
+incarnation changes. This does not change durable records or weaken quorum proof.
+
+Two focused regressions failed before batch selection used the new policy:
+three individually legal small commands were sent together where only one fit;
+two entries crossed the exact framing boundary where only one fit. After the
+fix, `CARGO_BUILD_JOBS=4 cargo test -p meshspan-consensus --lib --
+--test-threads=4` passed all 43 tests in 3.97 seconds. Affected all-target,
+all-feature Clippy passed in 0.57 seconds; package formatting and diff checks
+passed. Tested tree: `1b34523b` plus this core change. No dependencies changed.
+
+Runtime capability admission, automatic presentation refresh, real distributed
+acceptance and the complete integration gate remain separate unfinished work.
+This is a progress slice, not closure of CORE-02 or Stage 10.
+
+## Viability pack adoption and CORE-01 prefix proof
+
+The owner adopted the pack on 2026-09-14. Archive SHA-256:
+`55c28d1ea794a7b9611413f1d48a0c88402e383dae665c69a5f0f4e94ee86564`.
+All 2,293 tracked checkout files matched its original source snapshot. The
+baseline is signed progress commit `47da63689ca295b05d127d1f5ab0120bb953258c`
+plus the preserved uncommitted headless status-request diagnostic and evidence.
+It is not a clean integrated candidate: PR #270 is still draft, and fetched
+remote main remains PR #269's `fcd65853fc9fbd54112859a7188231b4b1abf4d2`.
+The failed complete gate and interrupted diagnostic recorded above remain open.
+
+One integrator owns consensus, daemon composition, generated contracts and stage
+evidence. Separate worktrees own ACC-02 browser outcomes, DATA-05 storage pack
+retirement and NET-01 external TLS. Cargo validation has one owner at a time;
+web validation uses bounded workers and NVM. Their worktrees start from the
+unmerged signed checkpoint, not a claimed passing main. No existing stage task
+or requirement is discarded; Stage 9 exit still needs integrated reconciliation,
+Stage 10 remains incomplete and Stage 11 candidate acceptance has not started.
+
+CORE-01's two new focused prefix regressions failed before the correction:
+expected commit index **64**, actual **100** (build **2.09 s**, tests **0.01 s**).
+The follower now retains its request-scoped reply through persistence, commits
+only through that proven prefix and preserves an already higher commit on a
+delayed heartbeat. Empty appends prove only their checked previous position.
+Conflicts return a hint below the rejected probe, and current-term leader
+contact steps a candidate down even when the prefix conflicts.
+`cargo test -p meshspan-consensus -- --test-threads=4` then passed all **34 tests**
+in **3.67 s**, build **1.28 s**; affected all-target/all-feature Clippy with
+warnings denied passed in **0.55 s**. Cargo used four build workers. No dependency,
+persisted schema or wire shape changed in this slice.
+
+CORE-01 remains open for correlated, bounded append probes, delayed-response
+and finite-backtracking regressions, and real transport validation. The full
+integration gate has not run on this slice. Stage 10/11 estimates remain 81/126;
+physical, interoperability, soak and independent-review gates are not claimed.
+The publication hold remains in force.
+
+### ACC-01 — native first API-key enrollment and generated client
+
+A recent-step-up manager can issue and revoke short-lived consent for an active
+user's first primary credential. Anonymous JSON redemption creates that user's
+ordinary API key and consumes the invitation atomically. Partition migration
+**118** persists digest-only consent. Exact replay is bound to the operation,
+recipient, credential request and live consent; a second operation is rejected.
+The public API and generated Zod/Fetch client expose all three operations.
+
+Review found two secret-release defects before integration: a locally retained
+receipt could bypass authoritative revocation during isolation, and a capability
+could expire while its command committed. Both new regressions failed before the
+fix (**2 failed, 2 passed; 2.70 s**, daemon build **71 s**). Enrollment now obtains
+fresh quorum read fences and checks exact local applied history before secret
+release, sampling time after synchronization. Final file-backed daemon service
+tests: **4 passed, 2.67 s**, consumer build **72 s**. Migration compatibility through
+118: **1 passed, 49.07 s**, build **15.56 s**. Earlier focused domain/metadata/API
+checks passed **1/7/2 tests**. Rejection, unavailable authority and corrupt evidence
+retain their distinct error classifications.
+
+The client regressions initially found all three methods absent (**4 failed,
+0.714 s**). The final enrollment and existing authentication suites passed
+**13 tests, 0.473 s**, with two Vitest workers under NVM. Typecheck passed.
+Full web lint initially found one oversized test group; separating manager and
+recipient cases resolved it, and the affected-file lint passed. Generated API
+artifacts were regenerated from Rust; the native Fetch generator was extended.
+
+This is a progress checkpoint, not completed onboarding acceptance. The real
+HTTPS two-user/restart test is authored but not yet run; browser and first-passkey
+flows remain. Integration review also identified the need to accept existing
+version-18 log entries alongside newly written version 19; its driver regression
+and fix are in progress. That issue and the complete dependency-update gate must
+be resolved before integration. No migration, hardware or full-suite result is
+inferred from these focused checks.
+
+### CORE-02 — bounded batches and shared immutable log payloads
+
+The two new core regressions failed before the fix: two legal 9 MiB entries
+were emitted together (expected one entry, actual two; **0.50 s**), and the
+follower requested persistence for their oversized aggregate (**1.02 s**) rather
+than rejecting it. Current append and historical-prefix selection now stop at
+16 MiB aggregate command bytes as well as 64 entries. Receivers enforce the same
+bound before persistence, and acknowledgement advances the next bounded batch.
+
+Log-entry payloads are shared immutable bytes across core effects and durable
+mutations. Transport adapters make independently owned wire copies after byte
+reservation; inbound conversion avoids an extra temporary full-command copy.
+The persistence boundary still independently validates command digests. No wire
+or stored-log encoding changes in this core slice. This does not close the
+separate lifetime log-compaction requirement.
+
+Final `cargo test -p meshspan-consensus -- --test-threads=4`: **41 passed, 0 ignored,
+3.94 s**. Affected all-target/all-feature Clippy with warnings denied: **0.41 s**.
+Formatting and diff checks passed. Consumer integration, capability admission,
+and the complete dependency-update gate remain pending; no whole stage is closed.
+
+### ACC-02 follow-up — replacement-session logout
+
+Integration review reproduced an uncertain logout being retained after a different
+session signed in: the second logout incorrectly stayed `revocation_unknown`.
+The new regression failed before the fix (**1 failed, 4 passed; 2.14 s**).
+Retried revocations now belong to the exact session, and late outcomes cannot
+clear a replacement login. The final two focused suites passed **9 tests in
+0.991 s**; full web lint, typecheck and formatting passed under NVM. No public
+contract or dependency changed. The assembled integration gate remains pending.
+
+### DATA-05 — Stage 10 task 17, retiring fully reclaimed packs
+
+The first pack retirement slice was integrated from the isolated worktree based
+on `47da6368`. A fully reclaimed old pack can now be removed without losing exact
+put, tombstone or reclamation replay. Target-journal migration **004** fences
+retirement before deletion. Source identity/payload verification and the existing
+exclusive provider lock protect deletion; directory sync precedes the durable
+completion record. Pending packs remain visible to space observations.
+
+The missing-payload-pack replay regression failed before the fix with `NotFound`
+(build **3.20 s**, test **0.31 s**). Integration review found that prioritizing one
+pending retirement would starve all later work behind a corrupt source. The new
+two-candidate regression reproduced `Corrupt` on the second attempt (**0.41 s**).
+Maintenance now uses its indexed cyclic cursor across active and pending packs:
+the failure remains visible, later packs advance and wrapping retries the failure.
+The final `cargo test -p meshspan-storage -- --test-threads=4` passed **59 tests**,
+none ignored, in **6.00 s** (build **0.39 s**). Affected all-target/all-feature
+Clippy with warnings denied passed in **0.50 s**; formatting and diff checks
+passed. Four Cargo build workers were used. The exact patch was applied to the
+integrator checkout without conflict; the assembled integration gate is pending.
+
+DATA-05/task 17 is not closed: legacy oversized-pack splitting, terminal-history
+archival, temporary-space reservation and measured compaction pause/throughput
+remain. Receipts, routes and segment history still grow over the target lifetime;
+the current provider lock and 32-pack observation limit are not claimed solved.
+No dependency or wire/API contract changed. Stage estimates remain unchanged.
+
+### ACC-02 — truthful browser mutation outcomes
+
+The first browser slice retains the exact request and operation ID for uncertain
+file namespace changes, API-key issuance, passkey registration, backup settings
+and logout. Receipts are checked against the request. A successful mutation stays
+committed when its later refresh fails. Lost responses and missing sign-out CSRF
+state remain explicitly unknown with recovery controls. Retained sensitive
+requests stay in memory; this is not persistent upload recovery.
+
+Three pre-fix browser regressions failed: refresh failure reversed creation
+success, lost mutation response claimed non-commit and missing-CSRF logout
+claimed anonymity. Six focused suites passed **38 tests** in **2.28 s** in the
+isolated worktree; focused strict lint, typecheck, formatting and diff checks
+passed under NVM Node **26.8.2** / pnpm **11.19.0**. After exact patch integration,
+the same six suites passed **38 tests** in **3.77 s** with two Vitest workers:
+mutation-outcome, authentication-security-panel, backup-administration-panel,
+file-browser-model, file-browser-panel and session-provider.
+
+ACC-02 remains open for server outcome/retry classification, real dropped-response
+daemon proof and the remaining credential/admin forms. Upload retry belongs to
+ACC-04. The current API supplies no reliable rollback classification, so server
+exceptions remain unknown. No dependency or generated/public API shape changed.
+The complete assembled gate is pending; no stage acceptance is claimed closed.
+
+### NET-01 — external P-384 certificate chains
+
+External certificate HTTPS, ACME result validation and gateway publication now
+select an explicit P-384-capable verification profile. Internal node/federation
+identity and local signing retain P-256. Captured public service chains and an
+independent OpenSSL-issued P-384 issuer/P-256 leaf fixture exercise the owning
+boundaries, including exact application bytes through a TLS handshake. Negative
+tests cover names, expiry, wrong roots and altered signatures.
+
+Before the change the captured production ACME chain regression failed
+(build **5.39 s**, test **0.00 s**). The provider suite then passed **9 tests**
+(build **3.00 s**, tests **0.19 s**), and the daemon `p384_` filter passed **3 tests**
+(build **98 s**, tests **0.08 s**). Affected all-target/all-feature Clippy passed
+in **16.31 s**. Captured chains passed **4 tests** again after test-only lint
+repairs; Rust formatting and `cargo deny check licenses` passed. The isolated
+daemon build first lacked its ignored web bundle; the unchanged baseline bundle
+was supplied before those tests. These are focused results, not live issuance.
+
+The sole added dependency is `p384` **0.14.0**, selecting its MIT option. Existing
+resolved dependency versions are unchanged. The full dependency-update gate is
+still required before integration. NET-01 remains open for RSA interoperability,
+real process issuance/installation and the remaining external acceptance. No
+publication, signature-profile weakening or advisory exclusion occurred.
+
+### CORE-01 — correlated replication proof
+
+After the prefix correction, a focused delayed-response regression still failed:
+a proven peer match of **100** retreated to **64**. The leader now retains at most
+64 outstanding append probes per peer. Replies bind the exact request ID and
+entry digest; accepted progress is monotonic, and only the latest conflict may
+backtrack without crossing established proof. Phase changes and leadership loss
+discard correlations. Unknown, duplicate or evicted probes cannot confirm reads
+or writes. Current-term correlated negative contact can still satisfy the read
+predicate without asserting a log match.
+
+Private wire additions are request probe tag **11**, response probe tag **9**
+and matched digest tag **10**. Successful legacy/missing correlation and malformed
+digests fail closed. Uncorrelated negative membership notices carry no read proof.
+No persisted schema or application command encoding changes in this slice.
+
+The consensus suite passed **38 tests** in **3.80 s**, build **0.93 s**, including
+the 64/100 prefix boundary, finite equal-tail backtracking, delayed success/failure,
+forged digest/read contact and expired probes. Affected consensus Clippy passed
+in **0.59 s**. Protocol correlation **4**, cluster wire **8**, read barrier **4**,
+election deadline **2** and leadership waiter **1** tests passed; cluster/protocol
+all-target/all-feature Clippy passed in **13.77 s**. The real three-node Quinn
+leader-loss/re-election/commit test passed in **4.53 s**, build **5.18 s**.
+The first equal-tail fixture incorrectly attempted an election while already
+leader; correcting that setup is not counted as a production defect reproduction.
+An additional synthetic restore/retransmit regression passed in **0.01 s**
+(build **1.10 s**), covering crashes before/after term persistence without
+claiming physical power-loss evidence. Final consensus Clippy passed in **0.31 s**.
+These checks use four Cargo build/test workers. Final assembled acceptance,
+the separate command-size transport defect (CORE-02), and the complete gate remain
+open; these focused results do not close Stage 3/10/11 acceptance by themselves.
+
+### INT-01 — public service and storage-worker shutdown ownership
+
+Two focused regressions reproduced owned-task leaks: the public supervisor
+returned its first error before a blocking writer completed, and failure to bind
+the public HTTP01 listener left metadata authority running. Shutdown now withdraws
+readiness and signals stop before draining every public-service result. The
+storage reconciler belongs to that JoinSet and observes each blocking tick;
+authority is explicitly stopped and joined after public startup/service failure.
+The primary failure survives alongside a bounded count of cleanup failures.
+
+The final lifecycle suite passed **6 tests** in **5.34 s**, build **34.48 s**;
+daemon all-target/all-feature Clippy passed in **30.21 s**. Formatting/diff checks
+passed. Earlier setup failures (missing storage path, invalid port-zero origin)
+and a divergent generated-protocol worktree cache were failed builds/fixtures,
+not behavioral evidence. The regressions ran against the assembled root checkout.
+
+INT-01 is not closed: private network/topology generations, partial composition
+cleanup, repeated configured-cycle restart and aggregate shutdown bounds remain.
+Shutdown now waits for current storage work, including provider budgets up to
+two minutes. No new forced abort, fixed sleep or timeout increase was introduced.
+
+## Tasks 10/27 — Linux directory durability prerequisite
+
+On 2026-09-14 the provided clean Linux checkout was fast-forwarded from
+`3e3c3060` to PR #269's merge `fcd65853`; both Git fetch and the GitHub branch
+API confirmed that remote main had no later commit. The three failed headless
+tests recorded on that PR remain unresolved. Its owner-approved checkpoint merge
+did not close Stage 10 or supply passing integration evidence. Earlier Stage 4
+pack lifecycle and Stage 5 mesh-wide reuse gaps remain tracked once in task 17;
+Stage 9's integrated exit evidence still needs reconciliation.
+
+The initial offline-backup test could not build because `web/dist` was absent.
+The prescribed `pnpm build:daemon` then passed with NVM Node **26.8.2**, pnpm
+**11.19.0**, Rust **1.98.0** and four Cargo build workers: web **0.485 s**, Rust
+**97 s**. The focused headless run on the unchanged source failed in **18.88 s**
+(test build **13.51 s**) before backup capture: its storage folder remained
+`configuring`. Failure state is retained at `/tmp/.tmpz4sbZs` on this host.
+
+The existing `meshspan-storage` regression
+`folder::tests::registration_preserves_siblings_and_identity_survives_path_move`
+reproduced `EBADF` in **0.00 s** (build **5.00 s**). Linux capability directories
+use `O_PATH`; duplicating that descriptor does not make it fsync-capable. Folder
+publication now opens `.` readably through the held capability and fsyncs that
+same directory. It neither resolves an ambient pathname nor suppresses a failed
+flush. All **51 storage tests passed in 0.17 s**, build **1.31 s**, including
+restart, path movement, corruption, guarded deletion and CoW reclamation.
+
+The same defect in backup-object rename/unlink was independently reproduced by
+`directory_provider_tests::exact_stream_survives_restart_replays_and_retires_once`
+in **0.00 s** (build **3.83 s**). Applying the same capability-relative readable
+open passed all **21 backup tests in 1.49 s**, build **0.64 s**. Tests used four
+harness workers. Workspace Rust formatting and diff checks passed. Affected
+storage/backup all-target/all-feature Clippy passed with warnings denied in
+**3.40 s**. The real offline recovery rerun reached the later storage cleanup
+workflow but failed in **109.86 s** (build **9.48 s**) because the storage node
+rejected the newly enrolled cleanup peer as unknown. State is retained at
+`/tmp/.tmpIg8wOS` and `/tmp/.tmpnYbkMD`. Read-only inspection confirms the storage
+replica lacks that enrolled node, while both gateways retain it; the cause of
+stalled catch-up is under investigation. This is not passing recovery evidence.
+
+The original zero-root failure was then reproduced in **17.85 s**, build
+**3.25 s**, by making the existing fixture await the protected startup archive
+before creating its file. The old selection then predictably exported that
+earlier empty archive. The fixture correction is being verified separately;
+the Linux directory-sync correction does not claim to close it. The update
+handoff filter selected **zero tests** on GNU Linux: its existing compile-time
+gate requires macOS or musl, and this host currently has only the GNU Rust
+target and no musl C compiler. Neither update failure has passing evidence.
+The complete integration gate remains pending.
+
+The recovery fixture now requests a fresh automatic capture after the strong
+file upload and requires that exact-or-later schedule sequence. It deliberately
+finishes the startup archive first and requires a different backup identity;
+the existing root/manifests/content assertions are unchanged. The shared capture
+helper has a general name and all its callers use it. The corrected run passed
+the formerly failing history checks, then reproduced the later unknown-peer
+cleanup failure in **93.46 s**, build **0.13 s**. The full test is still failed;
+state is retained at `/tmp/.tmpkDjJ71` and `/tmp/.tmpdhR7ck`. No full-suite retry
+was used to mask either defect.
+
+One signed progress-commit attempt for the Linux directory correction failed:
+the configured 1Password signer reported `failed to fill whole buffer`, and Git
+reported `failed to write commit object`. No commit, push or merge occurred.
+The staged Linux fix/evidence and separate recovery-fixture edits are preserved
+on `codex/stage10-recovery-update-regressions`. Signing was not retried or
+disabled; owner restoration of signing access has been requested. External and
+physical acceptance infrastructure is expected later per the owner, not tested
+or claimed available now.
+Final daemon all-target/all-feature Clippy passed with warnings denied in
+**52.23 s** on the corrected fixture tree. Rust formatting, both changed-document
+format checks and staged/unstaged diff checks passed. The root `pnpm exec
+prettier` lookup was unavailable; document checks used the already installed
+web-package formatter under NVM. All test and check processes have completed.
+No dependency, schema, protocol, licence or durability requirement changed.
+Task estimates remain **Stage 10: 81; Stage 11: 126/not started**. No release,
+tag, package/image publication or GitHub Actions ran.
+
+### Signing retry — authorization prompt timed out
+
+After the owner requested another attempt, the configured 1Password signer was
+retried once for the staged Linux directory fix. It again returned `failed to
+fill whole buffer`; Git created no commit. Read-only inspection found that the
+local SSH agent responds and advertises the exact configured Ed25519 signing
+key. The 1Password application log identifies an SSH authorization prompt timeout;
+earlier attempts also recorded a background prompt waiting in the tray. The owner
+reported seeing no request. Signing configuration remains intact, the staged fix
+is preserved, and no unsigned fallback, push or merge occurred.
+
+With 1Password in the foreground, the next owner-coordinated attempt succeeded:
+`61c698342f9ef874a6b42c073f52d9eb5714d707` contains the two Linux directory
+corrections and their initial evidence. `git verify-commit` reports a good SSH
+signature. The progress branch was pushed, `git ls-remote` confirms that exact
+head, and GitHub's commit API reports `verified: true`, reason `valid`. Remote
+main remains `fcd65853`; nothing has been merged. The later recovery fixture
+corrections and additional evidence remain separate uncommitted work.
+
+### Storage-replica restart diagnosis — not closure
+
+Disposable SQLite backups of retained failure state replayed successfully from
+index **28/epoch 2** through **54/epoch 4**, then from **36/epoch 2** through
+**62/epoch 4**, including each joint/stable boundary. Original retained databases
+were opened read-only for copying. This narrows the live failure; it does not
+prove the daemon worker performs that catch-up.
+
+A test-only diagnostic used the storage node's installed identity to request its
+exact missing page from the still-running recovered gateway. The recovery test
+still failed in **105.13 s**, build **5.01 s**, while that fresh authenticated
+fetch succeeded with five entries. State is retained at `/tmp/.tmpQPR6rH` and
+`/tmp/.tmpbKmw60`. Temporary worker tracing then reproduced the failure in
+**113.07 s**, build **9.48 s**, with a fresh fetch of eight entries succeeding;
+state is retained at `/tmp/.tmpwbr8VV` and `/tmp/.tmpsH71xH`. Live worker tracing
+showed advancement through index 36 before restart; diagnosis is continuing at
+the worker startup/source-selection boundary. No production catch-up correction,
+longer readiness deadline or passing full recovery is claimed.
+
+Further trace-only runs failed in **115.46 s** (build **8.11 s**, retained
+`/tmp/.tmpOZqHIE`, `/tmp/.tmpxm2clH`) and **125.68 s** (build **20.22 s**,
+retained `/tmp/.tmp7dY4cV`, `/tmp/.tmpHYc0w0`). They confirmed that the storage-only
+worker reopened correctly and began a fetch immediately before gateway death.
+An attached debugger was unavailable under the host's ptrace policy; temporary
+source tracing supplied the required observation instead.
+
+The final diagnostic deliberately retained the original failure after observing
+35 more seconds; it remained failed in **158.16 s**, build **3.76 s**. Its trace
+showed the outstanding fetch reaching the existing **30-second** protocol
+deadline, then automatic catch-up from index **36** to **62**, crossing both
+joint/stable membership changes. A fresh fetch then returned zero entries at
+epoch 4/index 62. State is retained at `/tmp/.tmp7Qy3hI` and `/tmp/.tmpUQdv2g`.
+This explains the apparent stall: the cleanup fixture's generic 15-second routing
+allowance expired before the interrupted history request's accepted deadline.
+
+Only the post-restart fixture readiness budget now includes one existing history
+transfer deadline plus its normal routing allowance. It still requires successful
+real shard read, exact bytes and all unchanged cleanup/restart assertions. The
+production deadline, retry policy, authentication and consensus rules are
+unchanged. All temporary tracing, the delayed-failure observation and the scratch
+example were removed before the corrected focused run. This is an evidence-led
+fixture correction, not a claim that a longer wait fixes a production defect.
+
+The corrected fixture's first run failed earlier in post-restart checks with an
+unlabelled timeout in **137.53 s**, build **27.61 s**, before new-peer cleanup.
+State is retained at `/tmp/.tmpDFwg1i`: both databases retain storage certificate
+generation 2; the gateway is in term 4 while the passive replica remains at its
+term-3 frontier. Certificate-handshake and returning-node-rejection timeouts now
+identify their operation. This separate failure is not explained or closed by
+the catch-up deadline finding. The full corrected workflow remains unverified.
+
+The next corrected full offline recovery run **passed in 139.28 s**, build
+**4.74 s**, with four test threads. It exercises the fresh post-upload export,
+all original offline-verification/history/content checks, replacement services,
+renewal and identity rejection, then exact committed cleanup and receipt replay
+through both interruption windows while preserving original/new file bytes.
+The added timeout messages do not alter either affected operation's deadline or
+success criteria. This passing run does **not** explain the preceding
+137.53-second timeout; its retained state remains an open reliability observation
+for Stage 10/Stage 11 task 14. The other two PR #269 update tests still have no
+passing proof on this GNU-only toolchain. No full integration gate ran.
+
+Affected daemon all-target/all-feature Clippy passed with warnings denied in
+**6.41 s** after removing diagnostics. Fresh `pnpm check:licences` under NVM
+passed Rust licensing and **9 production / 28 tool-only** JavaScript packages.
+Rust formatting and staged/unstaged diff checks passed. No dependency was added
+or changed; project licensing remains `GPL-2.0-only`.
+
+### Federation deadline diagnosis after the failed gate
+
+A daemon-library run with four test threads and test-only error context reproduced
+the federation failure in **72.70 s**, build **44.19 s**: the store after the
+independent interruption proofs rejected `capability deadline elapsed`. The run
+had **438 passing / 2 failing** tests; the additional failure was
+`backup_provider_snapshot_is_independent_of_storage_maintenance_lock`, returning
+`Unavailable`. Its cause is being isolated separately. The diagnostic log is
+`/tmp/meshspan-federation-diagnostic-lib.log`.
+
+The federation fixture created its five-second store context before allocation
+setup, routing, the stalled-upload proof and the separate lost-result recovery
+proof. The correction starts each attempt's existing five-second allowance when
+that attempt is ready to run. It preserves the operation/object identity and
+still replays the successful request exactly. No production deadline or authority
+check changes. Verification is pending; neither this diagnosis nor the earlier
+isolated passing retry closes the integration gate.
+
+The corrected daemon-library run passed **440 tests in 38.10 s**, build
+**19.99 s**, with four test threads. The federation regression passed. The
+storage-maintenance snapshot test also passed, but its previous `Unavailable`
+remains unexplained; its startup-wait failure now reports the observed time and
+deadline. This diagnostic does not change its five-second allowance or lock
+assertions. Affected all-target/all-feature daemon Clippy passed with warnings
+denied in **5.52 s**; Rust formatting and diff checks passed. The complete gate
+must be rerun on the corrected candidate before integration.
+
+### Tasks 22/24/27 — local musl validation tooling
+
+The Linux host had no musl compiler and passwordless system package installation
+was unavailable. A local tool cache now contains the official `extra/musl`
+**1.2.6-2 x86_64** package, downloaded from the configured Arch mirror. Its archive
+SHA-256 is `476173e159e6eafb918bbeb804e322b51d2ad8cdd64ffb577e180d8ebfb3942c`.
+The detached package signature verifies against the installed Arch keyring, using
+key `C5D2A6E0ED2D11C66B9FA2A306313911057DD5A8`. The keyring first required dearmoring;
+that initial verification attempt did not succeed and was not treated as trust.
+
+Only the extracted compiler wrapper/specification paths were relocated beneath
+`/home/karl/.cache/meshspan-validation/musl/root`. No system package or repository
+toolchain configuration changed. The package retains its upstream MIT/permissive
+copyright notices. A compiled C smoke executable is inspected as static x86-64
+ELF and executes successfully. Rust's `x86_64-unknown-linux-musl` standard-library
+component was installed for the repository's existing **1.98.0** toolchain.
+
+This prepares the environment; no MeshSpan musl build, update handoff, packaged
+acceptance or publication has yet run. The active GNU integration gate owns the
+Cargo lane. Complete package notices must also cover the actual linked compiler/
+standard-library components, beyond the current Cargo/npm source scan; this is
+part of task 24's remaining dependency inventory, not a waived requirement.
+
+### Corrected full local gate — three later headless failures
+
+The next NVM `MESHSPAN_CHECK_WORKERS=4 CARGO_BUILD_JOBS=4 pnpm check` failed in
+**587.50 s**; its Rust lane ran **546.13 s**. Executable/test source was commit
+`2e3e6952`; the later `6efa9d0d` changes only evidence prose. All **440 daemon
+library tests passed in 37.07 s**, including the corrected federation test.
+Headless execution reached **27 passed / 3 failed / 11 ignored in 355.78 s**.
+Offline recovery passed; later Rust targets were not reached.
+
+Failures and retained local state:
+
+- `federated_backup::remote_backup_forwards_through_gateway_to_distinct_storage_process`:
+  scheduled capture remained `Recorded`, without its required protected result.
+  State: `/tmp/.tmpx0lBPz`, `/tmp/.tmpYPOX5v`, `/tmp/.tmpBH9flI`.
+- `incarnation::successor_incarnation_restarts_serves_files_and_accepts_a_new_peer`:
+  HTTPS setup never reached `configured`; its last attempt was connection refused.
+  State: `/tmp/.tmpe6cV5u`, `/tmp/.tmpjbq4bB`.
+- `updates::real_signed_executable_passes_runtime_probe_and_retains_staging_after_restart`:
+  signed executable upload exceeded the fixture's 60-second timeout.
+  State: `/tmp/.tmpVDhvzL`.
+
+Generated contracts **1.79 s**, embedded web **0.77 s**, Rust formatting **3.13 s**,
+workspace Clippy **5.37 s**, Rust licences **0.40 s**, JavaScript licences
+**1.04 s**, workspace formatting **3.91 s**, web lint **29.91 s**, web typecheck
+**7.57 s**, tooling tests **0.64 s**, and web tests **17.76 s** all passed.
+The log is `/tmp/meshspan-stage10-corrected-integration.log`. This is a failed
+integration candidate. Draft PR **#270** remains unmerged; every pushed commit
+has a locally verified and GitHub-verified signature. No publication occurred.
+
+Read-only retained-state inspection finds valid SQLite integrity on both
+incarnation nodes and the upload fixture. Both incarnation databases contain
+35 log entries and the same admitted node incarnations (root 2, peer 1), narrowing
+the failure to later startup/readiness rather than absent node admission. The
+upload left **138,205,784 bytes** in its temporary artifact; the debug executable
+is **674,825,752 bytes**. The production upload allowance is 30 minutes while this
+fixture allows 60 seconds. These are diagnostic leads, not yet explanations or
+fixes. A musl headless build is now running so the original two handoff failures
+can finally be exercised on a supported platform; no source changes accompany it.
+
+### Static musl execution and focused preparation diagnosis
+
+The first musl headless build compiled in **3m 32s**, but the locally configured
+musl compiler wrapper inserted an external ELF interpreter into Rust's static-PIE
+link. The test executable could not launch (`No such file or directory`); no
+handoff test ran in that attempt. A standalone Rust smoke executable using Rust's
+standard linker path was static PIE and ran without an interpreter. Removing only
+the local Cargo linker override rebuilt MeshSpan in **1m 36s**. `file` and
+`readelf` confirm static PIE with no `INTERP` or `NEEDED` entries. The C compiler
+remains the signature-verified local musl wrapper; repository configuration and
+source are unchanged by this tooling correction.
+
+All three musl handoff tests then **ran and failed in 47.93 s**, build **0.17 s**:
+the single-copy safety scenario lacked its expected workload observation; both
+original two-node scenarios failed earlier because the enrolled peer never became
+available over HTTPS. Retained state is `/tmp/.tmpfa9RiW`, `/tmp/.tmppUPHDv`,
+`/tmp/.tmp2NlX8P`, `/tmp/.tmpAwfK4V`, `/tmp/.tmpbzrMo4`. The two original PR #269
+handoff failures still have no passing proof.
+
+The isolated single-copy scenario also failed in **30.15 s**, build **0.09 s**,
+retaining `/tmp/.tmpbMMCQA`: the node was still pending and had advertised no
+artifact source. The read-only `verify-update` command authenticated that exact
+fixture manifest/signature/public signer and **654,393,664-byte** executable in
+**9.68 s**, without opening live mesh state. Public verification inputs are at
+`/tmp/meshspan-update-verification-2347tqjl`.
+
+A temporary test-only diagnostic deliberately preserved the original failure
+while observing 45 more seconds. It remained **failed in 46.14 s**, build
+**35.03 s**; the exact safe observation appeared **14.51 s after** the original
+15-second allowance. It still reported `restart_authorised: false`, one excluded
+target and the expected unavailable local content. State is retained at
+`/tmp/.tmpgQOiD5`; log `/tmp/meshspan-musl-workload-late-observation.log`.
+The next diagnostic is measuring durable source/staging milestones before choosing
+a fixture or product correction. No verification, timeout or safety requirement
+has been weakened to produce a pass; temporary diagnostics are not integration
+changes and must be removed before final checks.
+
+The second failure-preserving diagnostic recorded source advertisement at
+**13.69 s**, staging at **26.29 s**, and the exact safe observation at **30.48 s**
+after selection. It remained failed in **45.97 s**, build **28.86 s**, retaining
+`/tmp/.tmpZC6voM`; log `/tmp/meshspan-musl-workload-milestones.log`. Thus each
+verification made durable progress within the ordinary allowance, but the
+combined preparation exceeded the fixture's single allowance.
+
+The corrected workload waiter renews its existing **15-second** allowance only
+when the exact active rollout's verified-source or staged-node count increases.
+Progress is monotonic and capped at two advances per declared participant. The
+original expected workload, excluded-target, restart refusal and exact file-byte
+assertions remain. After correcting a `PageLimit` argument type before execution,
+the focused single-copy test **passed in 45.69 s**, build **29.21 s**. Log:
+`/tmp/meshspan-musl-workload-progress-fix.log`. A three-scenario run is checking
+this under bounded parallel load while retaining any missed peer-startup deadline
+as a failure and observing the peer's process state and later readiness.
+
+### Task 22 — bounded real-artifact preparation and handoff
+
+The progress-renewal trial above did not close the defect under parallel load:
+all three scenarios failed in **57.18 s**, build **31.98 s**. Initial source
+verification itself exceeded 15 seconds; both workload waiters observed zero
+preparation progress. The installation scenario remained pending, while both
+private readiness probes reported ready at index 32. Log:
+`/tmp/meshspan-musl-handoff-peer-diagnostic.log`. No new peer-startup failure
+occurred in that run; earlier startup failures remain unexplained.
+
+A subsequent read-position diagnostic was invalidated by `/tmp` tmpfs exhaustion
+and resulting `ENOSPC`/identity-file failures. It supplies no product conclusion.
+Nine known completed failure fixtures were archived under
+`/home/karl/.cache/meshspan-validation/failure-state`, retaining their original
+`/tmp` names as symlinks. All retained artifact digests were checked; the mapping
+is `failure-state/locations.json`. This relocation preserves diagnostic contents,
+not physical inode/location evidence. New tests use the private disk-backed
+`/home/karl/.cache/meshspan-validation/tmp` directory.
+
+The same three scenarios then failed on disk-backed scratch in **43.64 s**,
+build **0.33 s**. A read-only `/proc` file-position trace showed five workers
+actively hashing the 654,393,664-byte executable at approximately **29.5–38.7
+MiB/s**. They had reached only **412–519 MB** when the 15-second waits stopped
+them. The log and trace are `/tmp/meshspan-musl-handoff-disk-scratch.log` and
+`.jsonl`. This establishes ongoing mandatory artifact verification, rather than
+an absent worker or stalled state machine.
+
+Artifact upload, preparation, installation and cold-launch readiness now each
+have one fixed **30-minute** maximum, matching the existing production bulk
+transfer allowance. Durable progress remains diagnostic and cannot extend it.
+Ordinary control/startup waits retain 15 seconds. Mandatory cache hashing,
+signature authentication, executable probing, exact process images, preparation
+identity, single-copy restart refusal and byte comparisons are unchanged. No
+production deadline or verification was changed, and temporary tracing was removed.
+
+All three musl handoff scenarios **passed in 262.54 s**, build **20.92 s**, with
+four harness threads. This includes both originally failed PR #269 scenarios:
+the peer reported the exact preparation; both processes installed and verified
+the selected image; launching the original command retained that installation.
+The single-copy test kept its file online and denied restart. Log:
+`/tmp/meshspan-musl-handoff-artifact-operation.log`. A discarded partial-edit
+attempt was interrupted before producing a usable result and is not validation.
+
+The final review additionally binds HTTP polls to the same absolute deadlines,
+so a stalled request cannot escape a waiter's maximum. Clippy first caught an
+explicit standard-library/Tokio instant conversion missing from the new wrapper;
+that was corrected before execution. Final musl all-target/all-feature Clippy
+passed with warnings denied in **3.91 s**. All three final handoff scenarios then
+**passed in 266.38 s**, build **21.41 s**, with four threads; log
+`/tmp/meshspan-musl-handoff-final.log`. These focused passes do not close earlier
+peer-startup observations, the later GNU gate failures, availability-preserving
+coordination, packaging or assembled Stage 10/11 acceptance. No points are removed.
+
+### Tasks 22/27 — GNU upload and native Linux SMB follow-up
+
+The focused GNU run selected the three later headless failures together, with
+four threads and disk-backed scratch. It finished **2 passed / 1 failed in
+262.34 s**, build **10.35 s**; log `/tmp/meshspan-gnu-three-regressions.log`.
+Federated backup protection/permission succession and successor-incarnation
+HTTPS/new-peer admission passed. Their earlier failures remain unexplained.
+Read-only local setup records additionally show the previously failed peers had
+completed join setup; startup investigation is therefore after that durable step.
+
+The complete **672,385,840-byte** GNU executable uploaded successfully beyond
+the old 60-second allowance. A later, separate 15-second staging-status wait then
+failed while the rollout remained pending. This GNU scenario must reject the
+non-distribution target, not install it. Retained state is
+`/home/karl/.cache/meshspan-validation/tmp/.tmpxG0UKn`. A failure-preserving
+observation is measuring completion after that original staging deadline; no
+production verification or deadline has changed.
+
+The repository's existing `tests/smb-client/Dockerfile` built locally against its
+pinned Debian base. The immutable local image ID is
+`sha256:4282e160c6cc3090ee59f3b2581ee7a459fdd3f943323b7583824ea30a618eb0`;
+its client reports **Samba 4.17.12-Debian**. Docker **29.8.0** runs natively on
+this CachyOS host. Build log: `/tmp/meshspan-local-smbclient-build.log`. This is a
+test-client image, not a MeshSpan package or publication.
+
+Both a container hostname lookup and the unchanged successor SMB test fail
+because native Linux Docker does not provide the fixture's expected
+`host.docker.internal` route to the host loopback listener. The real test reports
+`NT_STATUS_UNSUCCESSFUL`, retaining `.tmpeH39af` and `.tmpgvWisS` below the
+private disk scratch directory. The combined diagnostic is still running at
+this entry; log `/tmp/meshspan-gnu-staging-and-smb-diagnostic.log`. The intended
+fixture correction uses native Linux host networking with an explicit loopback
+hostname mapping. Protocol, authentication, file-byte and restart assertions stay
+unchanged; passing SMB evidence is still pending.
+
+The failure-preserving combined diagnostic finished **0 passed / 2 failed in
+235.89 s**, build **3.47 s**. GNU verification completed **12.16 s after** the
+original 15-second staging wait: state `paused`, sequence 2, one failed node,
+zero staged/restarting/verified nodes. The original failure remains in the result;
+state is retained at `.tmp822OEU` in disk scratch. The temporary observation was
+removed before the correction.
+
+The artifact staging-status waiter now uses the same fixed 30-minute artifact
+allowance and bounds each HTTP poll by that absolute deadline. The Linux-only
+SMB client fixture uses Docker host networking and maps the existing hostname to
+127.0.0.1; daemon listen addresses and all protocol/file assertions are unchanged.
+Final GNU all-target/all-feature daemon Clippy passed in **5.30 s**. The corrected
+real SMB successor workflow has passed; the concurrent full GNU artifact upload/
+compatibility-refusal test is still running. No full gate or merge is claimed.
+
+The corrected pair **passed in 245.12 s**, build **5.57 s**, with four threads:
+GNU upload reached its required compatibility refusal, and the real SMB successor
+performed reads/writes/deletes with the existing assertions. Log:
+`/tmp/meshspan-gnu-artifact-smb-final.log`. Final musl daemon all-target/all-feature
+Clippy also passed in **1.53 s**. A six-case musl acceptance run is now checking
+successful real-artifact staging, three-node distribution, SMB authentication
+metrics, offline HTTPS/SMB recovery, three-gateway SMB and the six-process
+protection fixture. It is pending, not passing evidence. The six-process fixture
+is not a physical-machine proof. The complete integration gate still must pass
+before any merge; no dependency, schema, protocol or production deadline changed.
+
+### Tasks 22/27 and Stage 8 — broader musl acceptance
+
+The final six-case musl run finished **5 passed / 1 failed in 346.16 s**, build
+**21.02 s**, using four threads. Log:
+`/tmp/meshspan-musl-artifact-smb-acceptance.log`. The source was subsequently
+committed as **960fe0f4**, signed and pushed; both `git verify-commit` and GitHub
+report a valid signature, and the remote branch matches that commit. PR #270
+remains draft/unmerged.
+
+Passing workflows are successful real-executable staging with exact retained
+report after restart; three-daemon signed artifact distribution/restart;
+real SMB authentication-rejection metrics/restart; three-gateway SMB file work;
+and offline recovery through HTTPS and real SMB, storage restart and cleanup
+interruption windows. These are development-binary, local-process proofs.
+
+The six-process protection fixture failed during `configured` setup at
+127.0.0.1:16412: an in-flight HTTP request reached the absolute 15-second deadline.
+It did not reach the protection assertions. Its old cleanup dropped failed
+fixture directories, so this run has only the log, not retained databases.
+The fixture is being changed to use the existing failure-retention helper and
+label the joining node. Temporary startup/listener-phase timing is being used
+with the six-process and three-gateway workflows; it must be removed before
+final checks. No startup allowance is increased and no full gate has been rerun.
+
+### Task 27 / Stage 8 — strong publication confirmation and retained visibility failure
+
+Startup-phase diagnostics did not reproduce the earlier HTTP readiness failure:
+all six joining listeners became ready in approximately 9–12 seconds, with
+listener binding and spawning taking approximately 1 millisecond. The diagnostic
+pair nevertheless failed both workflows in **69.74 s**: three-gateway SMB file
+visibility and the six-process strong HTTPS upload. Log:
+`/tmp/meshspan-stage8-startup-diagnostic.log`. Temporary startup tracing was
+removed; the six-process fixture now retains all failed directories and labels
+the joining node. The original readiness failure remains unexplained.
+
+The strong upload returned HTTP 503 despite all eight required shard receipts
+and a committed local content publication. Retained databases passed SQLite
+integrity checks. The root had committed the exact publication through its
+background publisher at log index 119; the uploading gateway held that entry
+but had applied only through 118. Its competing foreground proposal returned a
+conflict before local application exposed the already committed outcome.
+
+The foreground strong barrier now uses the catalogue's persisted strong cutoff
+to await only the exact committed publication history after a retryable proposal
+error. It neither resubmits the proposal nor treats the error as success. Missing
+or expired cutoffs grant no additional wait, and retries cannot renew the cutoff.
+The acknowledgement class, required receipts, authority proof and fallback policy
+remain unchanged. There is no schema, wire or dependency change.
+
+The catalogue's exact-reference, persisted-cutoff and existing publication cases
+passed **14 tests in 1.42 s**. The daemon's background-first/later-head authority
+regression passed **1 test in 1.21 s**, build **22.81 s**. An earlier incorrectly
+qualified filter selected zero tests and supplies no evidence. Subsequent Clippy
+caught the expanded catalogue test's function length; its independent pending/
+failure policy case and explicit eventual-receipt case are now separate tests.
+Final affected lint and the corrected test inventory remain pending here.
+
+With the strong-barrier correction, the focused six-process workflow completed
+its strong HTTPS upload and origin SMB write/read, then failed on another
+gateway's file visibility: **73.45 s**, build **70 s**. Log:
+`/tmp/meshspan-stage8-strong-confirmation.log`. All six replicas held the final
+committed metadata head; the failed reader still lacked 97 and 110 immutable
+bodies in two ongoing 209-record import sessions. This is an incomplete namespace
+transfer at the fixture's 15-second observation cutoff, not evidence of a missing
+committed authority head. A failure-preserving late-observation diagnostic is in
+progress; no fixture allowance or production transfer deadline has been increased.
+No complete gate, merge, publication or physical-machine proof is claimed.
+
+The failure-preserving diagnostic then passed the isolated six-process workflow
+in **66.04 s**, build **33.18 s**, and the paired six-process/three-gateway
+workflows in **83.89 s**, build **0.08 s**, with four harness threads. Neither run
+entered the late-observation window. Logs:
+`/tmp/meshspan-stage8-visibility-diagnostic.log` and
+`/tmp/meshspan-stage8-visibility-pair-diagnostic.log`. These passes exercise exact
+HTTPS/SMB content and simulated two-node loss, but do not explain the earlier
+visibility failure. The temporary late-observation diagnostic was removed;
+startup and namespace visibility allowances are unchanged. The historical
+readiness/visibility failures remain open; repeated passing retries are not
+being used to close them.
+The final catalogue inventory passed **15 tests in 1.18 s**; affected filesystem/
+daemon all-target/all-feature Clippy passed in **1.15 s**, warnings denied.
+Workspace Rust formatting and diff checks passed. These checks include removal
+of the temporary diagnostic; no production edit followed the successful paired
+proof. The complete local integration gate is still required before merge.
+
+### Tasks 10/27 — complete gate reaches two stale metadata fixtures
+
+Signed commit **bc581f7d23f39cb92be11b3642a32090156162fa** was pushed and
+verified locally and by GitHub (`verified: true`, `valid`). PR #270 remains draft.
+Its complete NVM local gate failed in **1283.52 s**, with four workers and
+private disk-backed temporary storage. Log:
+`/tmp/meshspan-stage10-publication-confirmation-integration.log`.
+
+The gate passed generated drift, embedded web, workspace formatting, Rust and
+web lint, TypeScript, both dependency licence checks, tooling and web tests.
+All **440 daemon library tests passed in 44.77 s**, all **30 enabled headless
+tests passed in 492.20 s** (11 ignored), and all **225 filesystem tests passed in 46.23 s**.
+The later metadata library reached **560 passes / 2 failures in 417.03 s**;
+subsequent Rust targets were not reached. Earlier unexplained timing failures
+remain recorded; this pass is not their explanation.
+
+Both metadata failures reproduced together in **3.52 s**. The backup-root
+fixture claimed schema 109 while retaining recovery objects from migrations
+116–117. Its existing downgrade now removes those two tables and the activation
+column before reopening; production migrations are unchanged. The v14 quota
+fixture expected schema 15 although the current reader also applies migration 16. Its explicit expectation now includes that recovered-target migration,
+while retaining exact pending charge, seal, replay and committed-usage checks.
+Both corrected tests passed in **2.90 s**, build **7.12 s**. All **22 neighbouring
+backup-root/quota tests passed in 22.67 s**; metadata all-target/all-feature Clippy
+passed in **32.86 s**, warnings denied. Rust/document formatting and diff checks
+passed before the signed progress commit.
+No schema, wire, dependency or production behaviour changed in these two fixes.
+The complete integration gate is still failed; nothing has merged or published.
+
+### Task 27 — musl opt-in failures retained for focused transport diagnosis
+
+Signed commit **47da63689ca295b05d127d1f5ab0120bb953258c** contains the two
+metadata-fixture corrections and evidence. Local SSH verification, remote branch
+identity and GitHub signature verification all passed. PR #270 remains draft.
+
+The 13-case musl/all-feature opt-in run finished **5 passed / 8 failed in
+737.82 s**, build **67 s**, with four harness workers. Log:
+`/tmp/meshspan-musl-final-opt-in-acceptance.log`. Passing cases were successor
+SMB IO, SMB authentication metrics, exact uninterrupted preparation, keeping the
+only file copy online, and real executable staging/restart. Six failures reached
+the unchanged 15-second setup HTTP deadline: backup takeover, three-gateway SMB,
+six-process protection (joining node 5), offline recovery, two-process executable
+replacement, and three-daemon artifact distribution. Failed directories were
+retained; inspected backup-takeover databases pass SQLite integrity checks.
+Both slow ACME cases reached certificate issuance at the test CA but failed the
+gateway TLS-installation deadline. These remain separate open findings.
+
+One remaining artifact upload was observed progressing from 612 MB to 639 MB of
+the 654,325,096-byte executable before its successful completion; it was not
+aborted or treated as hung. The host reports 20 CPUs and observed daemon thread
+counts were 22–25; no thread limit or timeout was changed to obtain a pass.
+
+A focused four-workflow run now adds temporary cancellation-safe transport
+observations to setup-status requests: TCP connect, TLS handshake, request write,
+and response/EOF, with byte counts and bounded framing metadata only. It keeps
+the original deadlines and failure outcome, and must be removed before final
+checks. This tests whether the shared failure precedes the HTTP response or waits
+for TLS closure after a complete response. No diagnosis is claimed yet; no full
+gate rerun, merge or publication has occurred.
+
+### Full local gate — failed; no integration
+
+`MESHSPAN_CHECK_WORKERS=4 CARGO_BUILD_JOBS=4 pnpm check`, under the configured NVM
+toolchain, failed in **510.74 s**. The tested base is `fcd65853`; the binary diff
+of `crates` against that base has SHA-256
+`64dd51044cdb5feb2a60ad610cd7d0aaaaed1fbd88663f5b15e6f192a54e0487`.
+Only evidence prose changed during/after the run. The local gate log is
+`/tmp/meshspan-stage10-linux-integration.log`.
+
+Generated drift (**19.21 s**), embedded web (**0.82 s**), Rust format (**3.85 s**),
+workspace all-target/all-feature Rust lint (**51.18 s**), Rust licensing
+(**0.62 s**), JavaScript licensing (**1.26 s**), workspace format (**7.42 s**), web
+lint (**44.74 s**), web types (**14.01 s**), tooling tests (**1.65 s**) and web
+tests (**22.35 s**) passed. No advisory scan was run by this non-dependency gate.
+
+The Rust test lane failed in **390.31 s** at the daemon library: **439 passed,
+1 failed**, target runtime **44.91 s**. The failing test is
+`consensus_authentication_authority_tests::federation_pairing::connection::federation_connection_recovers_lost_approval_reply_over_real_tls`,
+returning `DeadlineExceeded`. Headless tests and later Rust targets were not
+reached. The previously passing focused offline recovery is not a passing full
+gate and neither missing update proof is closed.
+
+A focused local reproduction attempt passed in **8.08 s**, build **55.34 s**.
+That retry does not resolve the failure. Current source shows the named pairing
+test also exercises native QUIC sessions, allocation and backup IO; several
+backup requests use five-second deadlines, including a store request constructed
+before other setup/proof work. This is a diagnostic lead, not a confirmed cause
+or justification to relax deadlines. No federation code or test assertion was
+changed in response, and the full gate was not rerun while investigating.
+
+The existing 1Password signing failure remains unresolved. No retry, unsigned
+commit, progress push, PR, merge or publication occurred. Staged Linux durability
+changes and separate fixture/evidence edits remain in the provided checkout on
+`codex/stage10-recovery-update-regressions`. Stage 10 remains **81 points**, task
+10 **3 points**, and Stage 11 **126/not started**.
+
+### Earlier-stage prerequisite reconciliation
+
+Current-source/evidence inspection retains Stages 1–3's completed audit and the
+accepted pre-Stage-6 retrofit; it does not rerun their historical exit proofs.
+Stages 4 and 5 remain reopened for pack lifecycle/reuse, tracked once in Stage 10,
+task 17. Stages 6–8 have recorded integrated evidence, while their ignored real-SMB
+proofs still require separate execution on a candidate. The Stage 8 process test
+starts six local `ProcessFixture` children; the `protected_content` test uses
+real temporary folders and a test router's `set_offline_many`. Its historical
+wording is clarified accordingly: neither establishes physical six-host loss.
+
+Stage 9 has repair/scrub/drain workers and component tests in current source, but
+its roadmap exit requires seeded long churn plus those operations alongside real
+HTTPS/SMB traffic. No dedicated Stage 9 exit log or equivalent consolidated proof
+has been located. That acceptance remains open; component presence and Stage 8
+read reconstruction cannot substitute for it. Stage 11's integrated candidate
+requirements and physical/soak/reviewer gates also remain open. This review does
+not change task estimates or start automatic Stage 12 sharding.
+
 ## Task 10 — storage-only startup and shard service
 
 ### Committed cleanup acceptance — in progress
@@ -10264,3 +12148,44 @@ The schedule API does not close these separate outstanding requirements:
 The remaining certificate, operational panel, metrics, update, packaging and
 Stage 11 gates continue to be tracked by [the roadmap](roadmap.md). This file
 records evidence for completed slices, not completion of the whole stage.
+
+## ACC-01 — browser first-key enrollment and session confirmation
+
+Managers can select an existing user or the newly created identity, confirm a
+recent additional factor, issue a ten-minute invitation and revoke that exact
+invitation. The anonymous `/enroll` page, linked from sign-in, accepts the token
+and returns an ordinary HTTPS/native-API key for independent sign-in. Tokens and
+keys remain in component memory; they are not placed in URLs or browser storage.
+Requests retain their operation, recipient route, revision, expiry and payload
+across unknown outcomes. Pending edits and recipient changes are locked. Only a
+matching committed receipt reveals a secret or reports revocation; unsuccessful
+sign-in does not erase the already-created key or imply enrollment failed.
+
+Session-owned step-up adopts the rotated CSRF proof while preserving the chosen
+storage lifetime. Exact retries retain the original factor and operation. The
+integrated review reproduced two races before fixing them: a delayed refresh
+restored the administrator's displayed identity after Bob signed in, and a
+competing sign-in was dispatched while step-up could still replace the cookie.
+Refresh results now belong to a session generation; stale successes and failures
+cannot replace newer state. A shared in-flight guard prevents overlapping
+cookie-changing actions within the session provider. Late step-up receipts are
+also rejected after an observed external session replacement.
+
+Validation on `27de83ab` plus this browser/session slice, using NVM Node 26.8.2:
+
+- Missing invitation entry: new regression failed before implementation; the
+  four existing identity panel tests passed. Both session race regressions also
+  failed before their respective fixes.
+- `pnpm --filter @meshspan/web test` with the enrollment, enrollment-client,
+  identity panel/client, session provider/step-up and mutation-outcome files,
+  `--maxWorkers=2`: **39 tests across seven files passed**, Vitest **4.30 s**,
+  command wall time **5.57 s**.
+- `pnpm web:lint`: passed with warnings denied, **40.79 s**. Earlier fixture-only
+  void-type and nested-conditional lint findings were corrected.
+- `pnpm web:typecheck`: passed, **10.05 s**. Scoped Prettier and diff checks passed.
+
+The native HTTPS two-user enrollment/restart scenario is prepared separately
+and has not been run as evidence for this slice. First-passkey enrollment and
+real two-user file-sharing/SMB acceptance remain required follow-ups. This does
+not close ACC-01 or Stage 10, and no full integration gate, Cargo lane,
+dependency change, release or publication was performed by this browser slice.

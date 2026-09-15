@@ -48,7 +48,7 @@ use crate::{
 const DATABASE_FILE: &str = "filesystem-branch.sqlite3";
 const MAXIMUM_SQLITE_INTEGER: u64 = 9_223_372_036_854_775_807;
 const MAXIMUM_NODES_PER_DIRECTORY_MUTATION: usize = 65;
-const MIGRATIONS: [Migration; 45] = [
+const MIGRATIONS: [Migration; 46] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/branch/001_initial.sql"),
@@ -229,8 +229,12 @@ const MIGRATIONS: [Migration; 45] = [
         version: 45,
         sql: include_str!("../schema/branch/045_backup_reachability_roots.sql"),
     },
+    Migration {
+        version: 46,
+        sql: include_str!("../schema/branch/046_handle_bound_locks.sql"),
+    },
 ];
-const SCHEMA_VERSION: u32 = 45;
+const SCHEMA_VERSION: u32 = 46;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -569,9 +573,9 @@ pub struct NamespacePublicationReceipt {
     pub result_digest: [u8; 32],
 }
 
-/// Locally revalidated file publication safe to present to replicated head authority.
+/// Revalidated immutable publication facts; this proves history, not the current branch head.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct VerifiedPublicationHead {
+pub struct VerifiedPublication {
     receipt: NamespacePublicationReceipt,
     convergence_digest: [u8; 32],
     volume_id: VolumeId,
@@ -581,7 +585,7 @@ pub struct VerifiedPublicationHead {
     created_at: UnixMicros,
 }
 
-impl VerifiedPublicationHead {
+impl VerifiedPublication {
     pub(crate) const fn new(
         receipt: NamespacePublicationReceipt,
         volume_id: VolumeId,
@@ -615,15 +619,15 @@ impl VerifiedPublicationHead {
         self.convergence_digest
     }
 
-    /// Volume whose converged head may advance.
+    /// Volume containing the immutable publication.
     #[must_use]
     pub const fn volume_id(self) -> VolumeId {
         self.volume_id
     }
 
-    /// Current converged head which the local publication directly extends.
+    /// Immutable parent commit directly extended by this publication.
     #[must_use]
-    pub const fn expected_namespace_commit_id(self) -> Option<NamespaceCommitId> {
+    pub const fn parent_namespace_commit_id(self) -> Option<NamespaceCommitId> {
         self.expected_namespace_commit_id
     }
 
@@ -643,6 +647,66 @@ impl VerifiedPublicationHead {
     #[must_use]
     pub const fn created_at(self) -> UnixMicros {
         self.created_at
+    }
+}
+
+/// Revalidated publication which is also the current local branch head.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedPublicationHead {
+    publication: VerifiedPublication,
+}
+
+impl VerifiedPublicationHead {
+    pub(crate) const fn new(publication: VerifiedPublication) -> Self {
+        Self { publication }
+    }
+
+    /// Immutable facts contained in this strictly verified current-head proof.
+    #[must_use]
+    pub const fn publication(self) -> VerifiedPublication {
+        self.publication
+    }
+
+    /// Exact durable publication receipt reloaded from local storage.
+    #[must_use]
+    pub const fn receipt(self) -> NamespacePublicationReceipt {
+        self.publication.receipt()
+    }
+
+    /// Canonical immutable history digest, excluding separate federation admission.
+    #[must_use]
+    pub const fn convergence_digest(self) -> [u8; 32] {
+        self.publication.convergence_digest()
+    }
+
+    /// Volume whose converged head may advance.
+    #[must_use]
+    pub const fn volume_id(self) -> VolumeId {
+        self.publication.volume_id()
+    }
+
+    /// Immutable parent which this current local publication directly extends.
+    #[must_use]
+    pub const fn expected_namespace_commit_id(self) -> Option<NamespaceCommitId> {
+        self.publication.parent_namespace_commit_id()
+    }
+
+    /// Root object revision selected by the immutable namespace commit.
+    #[must_use]
+    pub const fn root_object_revision_id(self) -> ObjectRevisionId {
+        self.publication.root_object_revision_id()
+    }
+
+    /// Principal responsible for the local publication.
+    #[must_use]
+    pub const fn created_by(self) -> PrincipalId {
+        self.publication.created_by()
+    }
+
+    /// Durable local publication instant.
+    #[must_use]
+    pub const fn created_at(self) -> UnixMicros {
+        self.publication.created_at()
     }
 }
 
@@ -1748,6 +1812,19 @@ impl VersionPublicationStore {
         let commit =
             namespace::repository::load_namespace_root(&self.connection, namespace_commit_id)?;
         Ok((commit.volume_id, commit.root_object_revision_id))
+    }
+
+    /// Reloads one immutable publication independently of the current branch head.
+    ///
+    /// This proof supports exact outcome recovery; it does not authorise a new head proposal.
+    ///
+    /// # Errors
+    /// Rejects missing, substituted or corrupt publication receipts and immutable history.
+    pub fn verify_publication(
+        &self,
+        receipt: NamespacePublicationReceipt,
+    ) -> Result<VerifiedPublication, PublicationError> {
+        namespace::verify_publication(&self.connection, receipt)
     }
 
     /// Reloads and verifies one file publication at the replicated-head boundary.

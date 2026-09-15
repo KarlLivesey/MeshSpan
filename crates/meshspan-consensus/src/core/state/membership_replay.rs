@@ -5,7 +5,7 @@
 use super::super::types::validate_committed_prefix;
 use super::{
     AfterPersistence, AppendResponse, ConsensusCore, CoreEffect, CoreError, CoreMessage,
-    DurableMutation, LogEntry, LogPosition, MAXIMUM_APPEND_ENTRIES, NodeId,
+    DurableMutation, LogPosition, NodeId,
 };
 use crate::CommittedPrefix;
 
@@ -63,13 +63,7 @@ impl ConsensusCore {
                 .ok_or(CoreError::InvalidInput)?
                 .entry_digest()
         };
-        let entries: Vec<LogEntry> = self
-            .log
-            .iter()
-            .filter(|entry| entry.position.index >= next && entry.position.index <= end)
-            .take(MAXIMUM_APPEND_ENTRIES)
-            .cloned()
-            .collect();
+        let entries = self.replication_entries(peer, next, end);
         let sent_through = entries
             .last()
             .map_or(previous.index, |entry| entry.position.index);
@@ -100,10 +94,10 @@ impl ConsensusCore {
             .is_err()
             || prefix.committed_index <= self.applied_index
         {
-            return Ok(vec![self.append_response_effect(from, false, None)]);
+            return Ok(vec![self.membership_notice_effect(from)]);
         }
         if !self.position_matches(prefix.previous, prefix.previous_digest) {
-            let mut response = self.append_response_effect(from, false, None);
+            let mut response = self.membership_notice_effect(from);
             if let CoreEffect::Send {
                 message: CoreMessage::AppendResponse(reply),
                 ..
@@ -145,7 +139,7 @@ impl ConsensusCore {
         // Historical evidence does not elect its supplier or erase a newer durable vote.
         self.follow_leader(None);
         let mut effects = self.advance_follower_commit(committed_index.max(self.commit_index))?;
-        effects.push(self.append_response_effect(from, false, None));
+        effects.push(self.membership_notice_effect(from));
         Ok(effects)
     }
 }

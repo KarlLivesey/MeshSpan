@@ -35,7 +35,7 @@ async fn remote_backup_forwards_through_gateway_to_distinct_storage_process()
         let relationship = pair(&provider, &consumer_api).await?;
         offer(&provider, &relationship).await?;
         remote_only_destination(&consumer_api, &provider.mesh_id).await?;
-        let sequence = super::stage10::request_post_enrolment_backup(
+        let sequence = super::stage10::request_fresh_backup(
             consumer.address,
             &consumer_api.client,
             &consumer_api.authorization(),

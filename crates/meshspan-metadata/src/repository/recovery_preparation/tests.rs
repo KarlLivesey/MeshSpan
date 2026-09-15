@@ -345,7 +345,8 @@ fn recovery_preparation_migration_keeps_ordinary_databases_admissible() -> TestR
     verify_ordinary_migration(114)?;
     verify_ordinary_migration(115)?;
     verify_ordinary_migration(116)?;
-    verify_ordinary_migration(117)
+    verify_ordinary_migration(117)?;
+    verify_ordinary_migration(118)
 }
 
 fn verify_ordinary_migration(version: u32) -> TestResult {

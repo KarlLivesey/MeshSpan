@@ -17,10 +17,10 @@ use meshspan_domain::{
 };
 use meshspan_filesystem::{
     ContentChunkCipher, ContentChunkLimits, ContentKeyEnvelopeCipher, ContentPublicationError,
-    EncryptedContentChunk, FilesystemCommitError, FilesystemCommitService, NamespaceLimits,
-    NamespacePath, NamespacePublicationPath, RootFileCommitRequest, StageCompletionRequest,
-    StageRegistration, StageWrite, UnprotectedContentAccess, UnprotectedContentPublisher,
-    VolumeContentKeyring, VolumeKeyEncryptionKey,
+    DurableContentPublisher, EncryptedContentChunk, FilesystemCommitError, FilesystemCommitService,
+    NamespaceLimits, NamespacePath, NamespacePublicationPath, RootFileCommitRequest,
+    StageCompletionRequest, StageRegistration, StageWrite, UnprotectedContentAccess,
+    UnprotectedContentPublisher, VolumeContentKeyring, VolumeKeyEncryptionKey,
 };
 use meshspan_storage::{
     CapacityPolicy, FolderRegistration, FolderShardStore, RegisteredFolder, StoragePermitVerifier,
@@ -77,7 +77,7 @@ fn interrupted_provider_publication_resumes_after_complete_restart()
     let mut retry = request.clone();
     retry.completion.observed_at = UnixMicros::new(6);
     service.commit_root_file(&retry)?;
-    let publisher = service.into_content_publisher();
+    let mut publisher = service.into_content_publisher();
 
     assert_eq!(
         read_prepared_file(&publisher, registration, &retry)?,
@@ -90,6 +90,56 @@ fn interrupted_provider_publication_resumes_after_complete_restart()
             .chunks
             .is_empty()
     );
+    let mut expired = retry.content_publication_request();
+    expired.observed_at = UnixMicros::new(201);
+    let manifest = publisher.catalog().resolve(expired)?;
+    assert!(manifest.is_some());
+    assert_eq!(publisher.resolve(expired)?, manifest);
+
+    Ok(())
+}
+
+#[test]
+fn expired_prepared_publication_does_not_attempt_provider_io()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let storage_path = directory.path().join("storage");
+    let storage_state = directory.path().join("storage-state");
+    let filesystem_state = directory.path().join("filesystem-state");
+    fs::create_dir(&storage_path)?;
+    let registration = folder_registration()?;
+    let mut random = FixedRandom;
+    let folder = RegisteredFolder::register_new(&storage_path, registration, &mut random)?;
+    let provider = open_provider(folder, &storage_state, UnixMicros::new(1))?;
+    let publisher = open_publisher(
+        &filesystem_state,
+        InterruptSecondPut::new(provider),
+        registration,
+        UnixMicros::new(1),
+    )?;
+    let mut service =
+        FilesystemCommitService::open(&filesystem_state, UnixMicros::new(1), publisher)?;
+    prepare_stage(&mut service)?;
+    let request = commit_request()?;
+
+    assert!(matches!(
+        service.commit_root_file(&request),
+        Err(FilesystemCommitError::Content(
+            ContentPublicationError::Unavailable
+        ))
+    ));
+    let mut publisher = service.into_content_publisher();
+    let reserves = publisher.provider().reserve_calls;
+    let mut expired = request.content_publication_request();
+    expired.observed_at = expired.deadline;
+    let result = publisher.resolve(expired);
+    assert_eq!(
+        publisher.provider().reserve_calls,
+        reserves,
+        "expired recovery must not call the provider"
+    );
+    assert!(matches!(result, Err(ContentPublicationError::InvalidInput)));
+    assert!(publisher.catalog().resolve(expired)?.is_none());
     Ok(())
 }
 
@@ -285,6 +335,7 @@ fn folder_registration() -> Result<FolderRegistration, Box<dyn std::error::Error
 struct InterruptSecondPut<P> {
     inner: P,
     put_calls: usize,
+    reserve_calls: usize,
 }
 
 impl<P> InterruptSecondPut<P> {
@@ -292,6 +343,7 @@ impl<P> InterruptSecondPut<P> {
         Self {
             inner,
             put_calls: 0,
+            reserve_calls: 0,
         }
     }
 
@@ -309,6 +361,7 @@ impl<P: StorageProvider> StorageProvider for InterruptSecondPut<P> {
         &mut self,
         request: ReserveStorageRequest,
     ) -> Result<StorageReservation, ContractError> {
+        self.reserve_calls += 1;
         self.inner.reserve(request)
     }
 

@@ -447,7 +447,11 @@ fn persist_vote(
         if let Some((term, voted_for)) = mutation.vote_state {
             let current_term = nonnegative_u64(*stored_term)?;
             let current_vote = stored_vote.as_deref().map(node_id).transpose()?;
-            if term < current_term || (term == current_term && voted_for != current_vote) {
+            // Observing a term does not cast a vote. Its first vote may be recorded
+            // later, but an existing vote must never be cleared or changed in that term.
+            if term < current_term
+                || (term == current_term && current_vote.is_some() && voted_for != current_vote)
+            {
                 return Err(ConsensusStoreError::InvalidMutation);
             }
         }
@@ -560,18 +564,13 @@ fn persist_log(
 fn validate_mutation_entries(mutation: &DurableMutation) -> Result<(), ConsensusStoreError> {
     let mut previous: Option<&LogEntry> = None;
     for entry in &mutation.append {
-        let rebuilt = LogEntry::new(
-            entry.position,
-            entry.operation_id,
-            entry.command_version,
-            entry.command.clone(),
-        )?;
-        if rebuilt != *entry
-            || previous.is_some_and(|prior| {
-                entry.position.index != prior.position.index.saturating_add(1)
-                    || entry.position.term < prior.position.term
-            })
-        {
+        entry
+            .validate()
+            .map_err(|_| ConsensusStoreError::InvalidMutation)?;
+        if previous.is_some_and(|prior| {
+            entry.position.index != prior.position.index.saturating_add(1)
+                || entry.position.term < prior.position.term
+        }) {
             return Err(ConsensusStoreError::InvalidMutation);
         }
         previous = Some(entry);
@@ -748,6 +747,58 @@ mod tests {
     }
 
     #[test]
+    fn observed_term_accepts_one_durable_vote_after_restart()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let file_path = directory.path().join("first-vote.sqlite3");
+        let voter = NodeId::from_bytes([2; 16])?;
+        let other = NodeId::from_bytes([3; 16])?;
+        let mut database = PartitionDatabase::open(
+            &file_path,
+            PartitionId::from_bytes([1; 16])?,
+            UnixMicros::new(1),
+        )?;
+        initialise_plan(&mut database, voter, 1)?;
+        let mut mutation = DurableMutation {
+            vote_state: Some((10, None)),
+            truncate_from: None,
+            append: vec![entry(2, 1, 4, b"retained log")?],
+            membership_epoch: None,
+            quorum_plan: None,
+        };
+        persist_mutation(&mut database, 1, &mutation, UnixMicros::new(2))?;
+        drop(database);
+        let mut database = PartitionDatabase::open_existing(&file_path, UnixMicros::new(3))?;
+        assert_eq!(load_state(&database, 1)?.voted_for, None);
+        mutation.append.clear();
+        mutation.vote_state = Some((10, Some(voter)));
+        persist_mutation(&mut database, 1, &mutation, UnixMicros::new(4))?;
+        drop(database);
+        let mut database = PartitionDatabase::open_existing(&file_path, UnixMicros::new(5))?;
+        let persisted = load_state(&database, 1)?;
+        assert_eq!(persisted.current_term, 10);
+        assert_eq!(persisted.voted_for, Some(voter));
+        persist_mutation(&mut database, 1, &mutation, UnixMicros::new(6))?;
+        for invalid in [(10, None), (10, Some(other)), (9, Some(voter))] {
+            mutation.vote_state = Some(invalid);
+            assert!(matches!(
+                persist_mutation(&mut database, 1, &mutation, UnixMicros::new(7)),
+                Err(ConsensusStoreError::InvalidMutation)
+            ));
+            assert_eq!(load_state(&database, 1)?, persisted);
+        }
+        mutation.vote_state = Some((11, Some(other)));
+        persist_mutation(&mut database, 1, &mutation, UnixMicros::new(8))?;
+        drop(database);
+        let database = PartitionDatabase::open_existing(&file_path, UnixMicros::new(9))?;
+        let next = load_state(&database, 1)?;
+        assert_eq!(next.current_term, 11);
+        assert_eq!(next.voted_for, Some(other));
+        assert_eq!(next.log, persisted.log);
+        Ok(())
+    }
+
+    #[test]
     fn vote_and_log_mutation_survive_exact_restart() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempdir()?;
         let file_path = directory.path().join("partition.sqlite3");
@@ -819,7 +870,7 @@ mod tests {
         ));
         let recovered = load_state(&database, 1)?;
         assert_eq!(recovered.current_term, 1);
-        assert_eq!(recovered.log[0].command, b"old");
+        assert_eq!(recovered.log[0].command.as_ref(), b"old");
         Ok(())
     }
 

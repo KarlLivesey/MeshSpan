@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use meshspan_cluster::MetadataAuthorityHandle;
 use meshspan_domain::{
@@ -179,6 +179,8 @@ impl SmbConnectionFactory {
         )?;
         Ok(SmbDaemonConnection {
             protocol: Some(protocol),
+            maintenance_failure: None,
+            additional_maintenance_failures: 0,
         })
     }
 
@@ -197,7 +199,45 @@ impl SmbConnectionFactory {
 /// One ordered protocol connection whose blocking metadata/filesystem work uses Tokio's worker
 /// pool rather than the asynchronous network executor.
 pub(crate) struct SmbDaemonConnection {
+    maintenance_failure: Option<Box<SmbDaemonConnectionError>>,
+    additional_maintenance_failures: u64,
     protocol: Option<ProductionProtocolConnection>,
+}
+
+enum LeaseWork {
+    Renew,
+    Detach,
+}
+enum LeaseStep {
+    Idle,
+    Advanced,
+    OpenFailed(ConnectorFailure),
+}
+
+impl SmbDaemonConnection {
+    async fn lease_step(&mut self, work: LeaseWork) -> Result<LeaseStep, SmbDaemonConnectionError> {
+        let mut protocol = self
+            .protocol
+            .take()
+            .ok_or(SmbDaemonConnectionError::InvalidState)?;
+        // The connection owns one blocking operation at a time. No protocol or runtime lock is
+        // held across await, and the worker's result is observed before the next step begins.
+        let (protocol, result) = tokio::task::spawn_blocking(move || {
+            let result = current_time().map(|now| match work {
+                LeaseWork::Renew => protocol.maintain(now),
+                LeaseWork::Detach => protocol.detach_one(now),
+            });
+            (protocol, result)
+        })
+        .await
+        .map_err(|_| SmbDaemonConnectionError::WorkerStopped)?;
+        self.protocol = Some(protocol);
+        Ok(match result? {
+            Ok(false) => LeaseStep::Idle,
+            Ok(true) => LeaseStep::Advanced,
+            Err(failure) => LeaseStep::OpenFailed(failure),
+        })
+    }
 }
 
 impl SmbConnectionHandler for SmbDaemonConnection {
@@ -217,6 +257,63 @@ impl SmbConnectionHandler for SmbDaemonConnection {
             .map_err(|_| SmbDaemonConnectionError::WorkerStopped)?;
             self.protocol = Some(protocol);
             response.map(Some)
+        })
+    }
+
+    fn maintain(
+        &mut self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Duration, Self::Error>> + Send + '_>,
+    > {
+        Box::pin(async move {
+            match self.lease_step(LeaseWork::Renew).await? {
+                LeaseStep::Idle => Ok(Duration::from_secs(1)),
+                LeaseStep::Advanced => Ok(Duration::ZERO),
+                LeaseStep::OpenFailed(failure) => {
+                    // Retain a bounded report without failing unrelated opens in this session.
+                    if self.maintenance_failure.is_none() {
+                        self.maintenance_failure = Some(Box::new(Self::Error::Lease(failure)));
+                    } else {
+                        self.additional_maintenance_failures =
+                            self.additional_maintenance_failures.saturating_add(1);
+                    }
+                    Ok(Duration::ZERO)
+                }
+            }
+        })
+    }
+
+    fn shutdown(
+        &mut self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Self::Error>> + Send + '_>>
+    {
+        Box::pin(async move {
+            let mut primary = self.maintenance_failure.take();
+            let mut additional_failures = self.additional_maintenance_failures;
+            loop {
+                let (failure, terminal) = match self.lease_step(LeaseWork::Detach).await {
+                    Ok(LeaseStep::Idle) => break,
+                    Ok(LeaseStep::Advanced) => continue,
+                    Ok(LeaseStep::OpenFailed(failure)) => (Self::Error::Lease(failure), false),
+                    Err(failure) => (failure, true),
+                };
+                if primary.is_none() {
+                    primary = Some(Box::new(failure));
+                } else {
+                    additional_failures = additional_failures.saturating_add(1);
+                }
+                if terminal {
+                    break;
+                }
+            }
+            self.protocol = None;
+            match primary {
+                Some(primary) => Err(Self::Error::Cleanup {
+                    primary,
+                    additional_failures,
+                }),
+                None => Ok(()),
+            }
         })
     }
 }
@@ -359,6 +456,13 @@ pub(crate) enum SmbDaemonConnectionError {
     Protocol(#[from] SmbProtocolConnectionError),
     #[error("SMB blocking worker stopped")]
     WorkerStopped,
+    #[error("SMB handle lease authority failed ({0:?})")]
+    Lease(ConnectorFailure),
+    #[error("SMB cleanup failed: {primary}; {additional_failures} additional failure(s)")]
+    Cleanup {
+        primary: Box<Self>,
+        additional_failures: u64,
+    },
 }
 
 #[cfg(test)]

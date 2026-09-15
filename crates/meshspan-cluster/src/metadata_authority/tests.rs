@@ -16,6 +16,7 @@ use zeroize::Zeroizing;
 use super::*;
 use crate::{ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, ConsensusPeerConfig};
 
+mod consensus_bulk;
 mod election_deadline;
 mod leadership_waiters;
 mod read_barriers;
@@ -477,7 +478,9 @@ type AuthorityTask = (
 );
 
 struct RealAuthorityCluster {
-    _directory: tempfile::TempDir,
+    networks: Vec<ConsensusNetwork>,
+    certificate_der: Vec<Vec<u8>>,
+    directory: tempfile::TempDir,
     nodes: [NodeId; 3],
     authorities: Vec<AuthorityTask>,
     forwarders: Vec<JoinHandle<()>>,
@@ -485,6 +488,12 @@ struct RealAuthorityCluster {
 
 impl RealAuthorityCluster {
     async fn start() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::start_with_bulk_gate(None).await
+    }
+
+    async fn start_with_bulk_gate(
+        gate: Option<Arc<consensus_bulk::interruption::BulkGate>>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let certificate_authority = CertificateAuthority::new()?;
         let authority_certificate = certificate_authority.certificate_der().to_vec();
@@ -514,10 +523,16 @@ impl RealAuthorityCluster {
             partition_id,
         )?;
         probe_network_mesh(&networks, &nodes).await?;
-        let authorities = start_authorities(&directory, &nodes, &plan, networks)?;
+        let authorities =
+            start_authorities(&directory, &nodes, &plan, networks.clone(), gate.as_ref())?;
         let forwarders = start_forwarders(inbound, &authorities);
         Ok(Self {
-            _directory: directory,
+            networks,
+            certificate_der: identities
+                .iter()
+                .map(|identity| identity.certificate_der().to_vec())
+                .collect(),
+            directory,
             nodes,
             authorities,
             forwarders,
@@ -600,6 +615,7 @@ fn start_authorities(
     nodes: &[NodeId; 3],
     plan: &meshspan_consensus::CompiledQuorumPlan,
     networks: Vec<ConsensusNetwork>,
+    gate: Option<&Arc<consensus_bulk::interruption::BulkGate>>,
 ) -> Result<Vec<AuthorityTask>, Box<dyn std::error::Error>> {
     networks
         .into_iter()
@@ -610,8 +626,20 @@ fn start_authorities(
                 nodes[index],
                 plan,
             )?;
-            let transport: Arc<dyn ConsensusMessageTransport> = Arc::new(network);
-            let config = authority_config(index)?;
+            let mut config = authority_config(index)?;
+            let transport: Arc<dyn ConsensusMessageTransport> = if let Some(gate) = gate {
+                // Only the reconnect fixture changes its election timing; contact proofs retain
+                // the ordinary per-voter deadlines while the body remains unavailable.
+                if let Some(timeout) = gate.election_timeout() {
+                    config.election_timeout = timeout;
+                }
+                Arc::new(consensus_bulk::interruption::GatedTransport::new(
+                    network,
+                    Arc::clone(gate),
+                ))
+            } else {
+                Arc::new(network)
+            };
             Ok(spawn_replication_fixture_authority(
                 driver, transport, config,
             )?)
@@ -676,13 +704,11 @@ impl ConsensusMessageTransport for InMemoryTransport {
         let Some(peer) = peers.get(&to) else {
             return;
         };
-        let _full_or_closed = peer
-            .events
-            .try_send(AuthorityEvent::Peer(PeerConsensusMessage {
-                from: self.from,
-                sender_incarnation: 1,
-                message,
-            }));
+        let _full_or_closed =
+            peer.events
+                .try_send(AuthorityEvent::Peer(PeerConsensusMessage::new(
+                    self.from, 1, message,
+                )));
     }
 }
 
@@ -889,6 +915,7 @@ fn network_config(
         private_key_pkcs8: Zeroizing::new(identities[local_index].private_key().to_vec()),
         trust_anchors: vec![trust_anchor.to_vec()],
         peers,
+        capability_cache: None,
         snapshot_staging_path: None,
     }
 }

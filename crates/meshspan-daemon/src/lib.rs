@@ -279,6 +279,7 @@ mod native_upload_api_tests;
 #[cfg(test)]
 mod native_upload_service_tests;
 mod node_activation;
+mod node_capability_reporting;
 mod node_enrolment;
 mod node_enrolment_api;
 mod node_join_grant;
@@ -953,3 +954,11 @@ impl RandomSource for OperatingSystemRandom {
 }
 #[cfg(test)]
 mod bootstrap_test_support;
+
+mod user_enrollment;
+pub use user_enrollment::{
+    ProtectedUserEnrollmentController, UserEnrollmentAuthority, UserEnrollmentController,
+    UserEnrollmentError, UserEnrollmentService,
+};
+
+pub use user_enrollment::{UserEnrollmentApiError, user_enrollment_api_router};

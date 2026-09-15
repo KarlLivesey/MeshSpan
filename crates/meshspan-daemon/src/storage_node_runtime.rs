@@ -57,6 +57,31 @@ pub(super) async fn run<F: Future<Output = ()> + Send>(
     config: &HeadlessDaemonConfig,
     shutdown: Pin<&mut F>,
 ) -> Result<DaemonCycleExit, DaemonProcessError> {
+    let network = Arc::clone(&node.private_network);
+    let result = run_inner(node, config, shutdown).await;
+    let mut outcome = super::ShutdownOutcome::default();
+    let exit = match result {
+        Ok(exit) => Some(exit),
+        Err(error) => {
+            outcome.record(Err(error));
+            None
+        }
+    };
+    outcome.record(
+        network
+            .shutdown()
+            .await
+            .map_err(|()| DaemonProcessError::PrivateNetworkState),
+    );
+    outcome.finish()?;
+    exit.ok_or(DaemonProcessError::PrivateNetworkState)
+}
+
+async fn run_inner<F: Future<Output = ()> + Send>(
+    node: DaemonNodeRuntime,
+    config: &HeadlessDaemonConfig,
+    shutdown: Pin<&mut F>,
+) -> Result<DaemonCycleExit, DaemonProcessError> {
     let paths = config.storage().storage_paths().to_vec();
     let listen = config.private_listen();
     let runtime = tokio::runtime::Handle::current();
@@ -88,7 +113,7 @@ pub(super) async fn run<F: Future<Output = ()> + Send>(
     let router = crate::setup_api_router(Arc::clone(&node.setup_state))?
         .merge(public_contract_api_router(readiness)?);
     let https = HttpsServer::bind(config.https_listen(), tls, router).await?;
-    let (network, peers, controls) = start_network(&mut node, network_config)?;
+    let (network, peers, controls) = start_network(&mut node, network_config).await?;
     let (stop, stopped) = watch::channel(false);
     let replica = spawn_metadata_replica(
         MetadataReplicaRuntimeConfig {
@@ -104,12 +129,21 @@ pub(super) async fn run<F: Future<Output = ()> + Send>(
         stopped.clone(),
     );
     let Ok((replica_handle, replica_task)) = replica else {
-        network.close()?;
+        network
+            .shutdown()
+            .await
+            .map_err(|_| DaemonProcessError::PrivateNetworkState)?;
         return Err(DaemonProcessError::PrivateNetworkState);
     };
     let https_stop = stopped.clone();
     let https_task =
         tokio::spawn(async move { https.run_until(wait_for_shutdown(https_stop)).await });
+    let reporter = crate::node_capability_reporting::NodeCapabilityReporter::new(
+        node.local_state.state_directory().to_path_buf(),
+        Arc::clone(&node.private_network),
+        None,
+    );
+    let capability_task = tokio::spawn(reporter.run_until(stopped.clone()));
     let mut cycle = StorageCycle {
         node,
         network,
@@ -122,12 +156,22 @@ pub(super) async fn run<F: Future<Output = ()> + Send>(
         replica: Some(replica_task),
         replica_handle,
         https: Some(https_task),
+        capabilities: Some(capability_task),
         maintenance: None,
         jobs: tokio::task::JoinSet::new(),
     };
     let outcome = cycle.serve_until(shutdown).await;
-    let drained = cycle.drain().await;
-    outcome.and_then(|exit| drained.map(|()| exit))
+    let mut errors = super::ShutdownOutcome::default();
+    let exit = match outcome {
+        Ok(exit) => Some(exit),
+        Err(error) => {
+            errors.record(Err(error));
+            None
+        }
+    };
+    errors.record(cycle.drain().await);
+    errors.finish()?;
+    exit.ok_or(DaemonProcessError::PrivateNetworkState)
 }
 
 /// Owns every cycle task until observed, including after a listener or worker fails.
@@ -144,6 +188,7 @@ struct StorageCycle {
     replica_handle: MetadataReplicaRuntimeHandle,
     https: Option<JoinHandle<Result<(), HttpsServerError>>>,
     maintenance: Option<JoinHandle<Result<(), ()>>>,
+    capabilities: Option<JoinHandle<Result<(), meshspan_cluster::MetadataAuthorityRequestError>>>,
     jobs: tokio::task::JoinSet<Result<(), ()>>,
 }
 
@@ -163,6 +208,11 @@ impl StorageCycle {
                         Ok(MetadataReplicaRuntimeExit::MembershipAdmitted) => Ok(DaemonCycleExit::RestartRequested),
                         Ok(MetadataReplicaRuntimeExit::Stopped) | Err(_) => Err(DaemonProcessError::AuthorityTaskStopped),
                     };
+                }
+                result = wait_task(&mut self.capabilities) => {
+                    self.capabilities = None;
+                    return result.map_err(|_| DaemonProcessError::AuthorityTaskStopped)?
+                        .map(|()| DaemonCycleExit::Shutdown).map_err(|_| DaemonProcessError::PrivateNetworkState);
                 }
                 result = wait_task(&mut self.https) => {
                     self.https = None;
@@ -199,9 +249,12 @@ impl StorageCycle {
 
     async fn drain(mut self) -> Result<(), DaemonProcessError> {
         self.stop.send_replace(true);
-        let mut failed = self.network.close().is_err();
+        let mut failed = false;
         while let Some(result) = self.jobs.join_next().await {
             failed |= result.is_err(); // Protocol errors are already returned to their caller.
+        }
+        if let Some(task) = self.capabilities {
+            failed |= !matches!(task.await, Ok(Ok(())));
         }
         if let Some(task) = self.maintenance {
             failed |= task.await.is_err();
@@ -212,6 +265,7 @@ impl StorageCycle {
         if let Some(task) = self.https {
             failed |= !matches!(task.await, Ok(Ok(())));
         }
+        failed |= self.network.shutdown().await.is_err();
         if failed {
             Err(DaemonProcessError::ListenerTaskStopped)
         } else {
@@ -227,7 +281,7 @@ async fn wait_task<T>(task: &mut Option<JoinHandle<T>>) -> Result<T, tokio::task
     }
 }
 
-fn start_network(
+async fn start_network(
     node: &mut DaemonNodeRuntime,
     config: ConsensusNetworkConfig,
 ) -> Result<
@@ -257,9 +311,19 @@ fn start_network(
         controls,
         node.data_streams.clone(),
     )?;
-    node.private_network
-        .install(network.clone())
-        .map_err(|()| DaemonProcessError::PrivateNetworkState)?;
+    if node.private_network.install(network.clone()).is_err() {
+        let mut outcome = super::ShutdownOutcome::default();
+        outcome.record(Err(DaemonProcessError::PrivateNetworkState));
+        outcome.record(
+            network
+                .shutdown()
+                .await
+                .map_err(|_| DaemonProcessError::PrivateNetworkState),
+        );
+        return outcome
+            .finish()
+            .and(Err(DaemonProcessError::PrivateNetworkState));
+    }
     Ok((network, received_peers, received_controls))
 }
 

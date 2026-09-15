@@ -2381,7 +2381,10 @@ fn content_reuse_migration_preserves_existing_namespace_versions()
     let first = initial_root_publication()?;
     let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
     store.publish_root_file(&first)?;
-    store.connection.execute_batch("DELETE FROM schema_migrations WHERE version = 45;
+    store.connection.execute_batch("DELETE FROM schema_migrations WHERE version = 46;
+        ALTER TABLE range_locks DROP COLUMN acquired_lease_expires_at;
+        ALTER TABLE range_locks DROP COLUMN lock_lifetime;
+        DELETE FROM schema_migrations WHERE version = 45;
         DROP TABLE namespace_convergence_job_heads;
         DROP TABLE namespace_convergence_jobs; DROP TRIGGER namespace_convergence_enqueue;
         DROP TABLE namespace_convergence_frontier; DELETE FROM schema_migrations WHERE version = 44;
@@ -3321,6 +3324,49 @@ fn foreground_and_background_publication_use_identical_convergence_evidence()
         foreground.root_object_revision_id()
     );
     assert_eq!(result_digest, foreground.convergence_digest());
+    Ok(())
+}
+
+#[test]
+fn immutable_publication_proof_survives_later_head_and_reopen()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let first = initial_root_publication()?;
+    let mut store = VersionPublicationStore::open(directory.path(), UnixMicros::new(1))?;
+    let receipt = store.publish_root_file(&first)?;
+    let current = store.verify_publication_head(receipt)?;
+    let next = next_root_publication(&first)?;
+    store.publish_root_file(&next)?;
+    drop(store);
+    let reopened = VersionPublicationStore::open(directory.path(), UnixMicros::new(3))?;
+    let historical = reopened.verify_publication(receipt)?;
+    assert_eq!(historical, current.publication());
+    assert_eq!(
+        historical.root_object_revision_id(),
+        first.root_object_revision_id
+    );
+    assert_eq!(historical.parent_namespace_commit_id(), None);
+    assert_eq!(historical.created_by(), first.file.created_by);
+    assert_eq!(historical.created_at(), first.file.created_at);
+    assert!(matches!(
+        reopened.verify_publication_head(receipt),
+        Err(PublicationError::StaleHead)
+    ));
+    for substituted in [
+        NamespacePublicationReceipt {
+            result_digest: [99; 32],
+            ..receipt
+        },
+        NamespacePublicationReceipt {
+            namespace_commit_id: next.namespace_commit_id,
+            ..receipt
+        },
+    ] {
+        assert!(matches!(
+            reopened.verify_publication(substituted),
+            Err(PublicationError::OperationConflict)
+        ));
+    }
     Ok(())
 }
 

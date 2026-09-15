@@ -54,6 +54,21 @@ impl PackStore {
         Ok(before.database_bytes - after)
     }
 
+    /// No live or tombstoned payload may be discarded by whole-pack retirement.
+    pub(crate) fn verify_reclaimed(&self) -> Result<(), PackStoreError> {
+        verify_identity(&self.connection, self.marker, self.sequence)?;
+        let (records, payload): (i64, bool) = self.connection.query_row(
+            "SELECT count(*), COALESCE(max(state <> 3 OR payload), 0)
+             FROM (SELECT state, stored_bytes IS NOT NULL AS payload FROM shards LIMIT 4097)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if records > 4096 || payload {
+            return Err(PackStoreError::Corrupt);
+        }
+        Ok(())
+    }
+
     fn publish_compacted(
         &mut self,
         folder: &RegisteredFolder,

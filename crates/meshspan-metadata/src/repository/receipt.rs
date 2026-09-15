@@ -162,6 +162,8 @@ pub enum EntityKind {
     FederationPairingInvitation = 63,
     /// Consumer-owned remote route, without a provider storage acknowledgement.
     FederatedBackupRoute = 64,
+    /// Manager consent for a user first-credential enrollment.
+    UserEnrollment = 65,
 }
 
 impl EntityKind {
@@ -231,6 +233,7 @@ impl EntityKind {
             62 => Ok(Self::UpdateRollout),
             63 => Ok(Self::FederationPairingInvitation),
             64 => Ok(Self::FederatedBackupRoute),
+            65 => Ok(Self::UserEnrollment),
             _ => Err(RepositoryError::CorruptState),
         }
     }

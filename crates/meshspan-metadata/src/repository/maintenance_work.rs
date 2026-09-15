@@ -1219,6 +1219,20 @@ fn merge_signals(
     revision: Revision,
 ) -> Result<(), RepositoryError> {
     let priority = value.signals.priority(context.occurred_at).get();
+    let stored = load_record(transaction, work_id)?.ok_or(RepositoryError::CorruptState)?;
+    let earlier_deadline = value.signals.due_at.is_some_and(|due| {
+        due < stored.next_attempt_at && stored.signals.due_at.is_none_or(|previous| due < previous)
+    });
+    // Repeated discovery must preserve an attempted job's durable backoff unless
+    // its urgency increases or a newly earlier deadline requires another attempt.
+    let next_attempt_at = if stored.attempt_count == 0
+        || value.signals.urgency() > stored.signals.urgency()
+        || earlier_deadline
+    {
+        stored.next_attempt_at.min(value.next_attempt_at)
+    } else {
+        stored.next_attempt_at
+    };
     let changed = transaction.execute(
         "UPDATE maintenance_work_jobs SET
             data_unavailable = MAX(data_unavailable, ?1),
@@ -1232,7 +1246,7 @@ fn merge_signals(
                 WHEN ?8 IS NULL THEN due_at
                 ELSE MIN(due_at, ?8)
             END,
-            priority = MAX(priority, ?9), next_attempt_at = MIN(next_attempt_at, ?10),
+            priority = MAX(priority, ?9), next_attempt_at = ?10,
             revision = ?11
          WHERE work_id = ?12 AND state <> ?13",
         params![
@@ -1245,7 +1259,7 @@ fn merge_signals(
             to_i64(value.demand.in_flight_bytes)?,
             value.signals.due_at.map(UnixMicros::get),
             to_i64(priority)?,
-            value.next_attempt_at.get(),
+            next_attempt_at.get(),
             to_i64(revision.get())?,
             work_id.as_bytes().as_slice(),
             JOB_COMPLETE,

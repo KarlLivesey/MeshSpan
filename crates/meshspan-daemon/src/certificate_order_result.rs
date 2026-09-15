@@ -33,7 +33,7 @@ impl CertificateOrderResultService {
     ///
     /// Rejects an empty or otherwise unusable trust-anchor set.
     pub fn new(trust_roots: RootCertStore) -> Result<Self, CertificateOrderResultError> {
-        let provider = Arc::new(meshspan_rustls_provider::provider());
+        let provider = Arc::new(meshspan_rustls_provider::external_webpki_provider());
         let verifier = WebPkiServerVerifier::builder_with_provider(Arc::new(trust_roots), provider)
             .build()
             .map_err(|_| CertificateOrderResultError::InvalidTrust)?;

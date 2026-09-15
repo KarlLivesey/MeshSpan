@@ -14,11 +14,10 @@ use meshspan_domain::{
     DurabilityScope, DurationMicros, OperationId, StageId, UnixMicros, UploadId, VolumeId,
 };
 use meshspan_filesystem::{
-    AdapterStatRequest, AdapterUploadAbortRequest, AdapterUploadBeginRequest,
-    AdapterUploadCommitRequest, AdapterUploadRangePageRequest, AdapterUploadStatusRequest,
-    AdapterUploadWriteRequest, FilesystemAccessContext, FilesystemFileAdapter,
-    FilesystemUploadAdapter, NamespaceLimits, NamespacePath, UploadDisposition, UploadState,
-    UploadStatusReceipt,
+    AdapterUploadAbortRequest, AdapterUploadBeginRequest, AdapterUploadCommitRequest,
+    AdapterUploadRangePageRequest, AdapterUploadStatusRequest, AdapterUploadWriteRequest,
+    FilesystemAccessContext, FilesystemFileAdapter, FilesystemUploadAdapter, NamespaceLimits,
+    NamespacePath, UploadDisposition, UploadState, UploadStatusReceipt,
 };
 use sha2::{Digest, Sha256};
 
@@ -233,27 +232,12 @@ where
             )
             .map_err(|error| self.map_error(&error))?;
         let upload = self.current_status(context, upload_id)?;
-        let path = domain_path(upload.path.as_str())?;
-        let stat = self
-            .filesystem
-            .stat(
-                context,
-                &AdapterStatRequest {
-                    volume_id: domain_volume(upload.volume_id.as_str())?,
-                    path,
-                    observed_at: context.now,
-                },
-            )
-            .map_err(|error| self.map_error(&error))?;
-        if stat.file_version_id != Some(receipt.publication.file_version_id) {
-            return Err(NativeUploadError::Failed);
-        }
         let object = object_stat_response(
             upload.volume_id.clone(),
             GetObjectQuery {
                 path: upload.path.clone(),
             },
-            &stat,
+            &receipt.object,
         )
         .map_err(|_| NativeUploadError::Failed)?;
         Ok(CommitUploadResponse {

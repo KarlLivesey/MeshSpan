@@ -55,6 +55,11 @@ pub(super) fn configuration(
         private_key_pkcs8: Zeroizing::new(private_key.to_vec()),
         trust_anchors: vec![recovery.root_certificate_der],
         peers: Vec::new(),
+        capability_cache: Some(meshspan_cluster::ConsensusCapabilityCacheConfig::open(
+            directory.join("local.sqlite3"),
+            node,
+            now,
+        )?),
         snapshot_staging_path: None,
     })
 }

@@ -29,6 +29,8 @@ pub enum StreamKind {
     Data = 4,
     /// Cross-swarm authority and reconciliation; never interpreted as same-swarm control.
     Federation = 5,
+    /// Voting append bodies on a bounded lane below control scheduling priority.
+    ConsensusBulk = 6,
 }
 
 impl StreamKind {
@@ -39,6 +41,7 @@ impl StreamKind {
             Self::Snapshot => 10,
             Self::Data => 0,
             Self::Federation => 40,
+            Self::ConsensusBulk => 20,
         }
     }
 
@@ -49,6 +52,7 @@ impl StreamKind {
             3 => Ok(Self::Snapshot),
             4 => Ok(Self::Data),
             5 => Ok(Self::Federation),
+            6 => Ok(Self::ConsensusBulk),
             _ => Err(TransportError::InvalidFrame),
         }
     }

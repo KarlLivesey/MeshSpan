@@ -3704,6 +3704,54 @@ export type HealthResponse = {
 };
 
 /**
+ * IssueUserEnrollmentRequest
+ *
+ * Recent-step-up manager consent for one active user's first primary method.
+ */
+export type IssueUserEnrollmentRequest = {
+  /**
+   * Current target-principal revision, checked again inside the authority transaction.
+   */
+  expected_principal_revision: number;
+  /**
+   * Exclusive capability expiry, at most 24 hours after authoritative issuance.
+   */
+  expires_at_epoch_micros: number;
+  /**
+   * Exact retry identity; also identifies the invitation itself.
+   */
+  operation_id: string;
+};
+
+/**
+ * IssueUserEnrollmentResponse
+ *
+ * Secret-bearing committed invitation, recoverable only during its live capability window.
+ */
+export type IssueUserEnrollmentResponse = {
+  /**
+   * Authoritative invitation revision for cancellation.
+   */
+  committed_revision: number;
+  /**
+   * Exclusive end of invitation redemption and secret-response retrieval.
+   */
+  expires_at_epoch_micros: number;
+  /**
+   * Exact committed consent and invitation identity.
+   */
+  operation_id: string;
+  /**
+   * Recipient who may register their first primary method.
+   */
+  principal_id: string;
+  /**
+   * Distinct one-use enrollment token; never a session, API key or URL parameter.
+   */
+  readonly token: string;
+};
+
+/**
  * JoinMeshSetupRequest
  *
  * One exact request to join an existing mesh from an unclaimed daemon.
@@ -6093,6 +6141,30 @@ export type PublishSmbExportResponse = {
 };
 
 /**
+ * RedeemUserEnrollmentApiKeyRequest
+ *
+ * Anonymous capability redemption into a normal independently revocable API key.
+ */
+export type RedeemUserEnrollmentApiKeyRequest = {
+  /**
+   * Exact key expiry, or explicit null for no automatic key expiry.
+   */
+  expires_at_epoch_micros: number | null;
+  /**
+   * Recipient's label for their ordinary credential.
+   */
+  label: string;
+  /**
+   * Retained exact identity for both credential creation and response recovery.
+   */
+  operation_id: string;
+  /**
+   * Entry points supported by the initial primary-key enrollment workflow.
+   */
+  scopes: Array<"https_session" | "headless_api">;
+};
+
+/**
  * RegisterStorageFolderRequest
  *
  * Exact-retry manager request to register one existing local folder.
@@ -6391,6 +6463,42 @@ export type RevokePermissionGrantResponse = {
    * Original authoritative revocation instant used by exact retries.
    */
   revoked_at_epoch_micros: number;
+};
+
+/**
+ * RevokeUserEnrollmentRequest
+ *
+ * Exact manager request to stop invitation use and secret-bearing replay.
+ */
+export type RevokeUserEnrollmentRequest = {
+  /**
+   * Expected current invitation revision.
+   */
+  expected_revision: number;
+  /**
+   * Exact retry identity of this cancellation.
+   */
+  operation_id: string;
+};
+
+/**
+ * RevokeUserEnrollmentResponse
+ *
+ * Committed cancellation; an already-created method remains separately revocable.
+ */
+export type RevokeUserEnrollmentResponse = {
+  /**
+   * Resulting authoritative invitation revision.
+   */
+  committed_revision: number;
+  /**
+   * Issuance operation whose capability can no longer be used.
+   */
+  enrollment_operation_id: string;
+  /**
+   * Exact cancellation identity.
+   */
+  operation_id: string;
 };
 
 /**
@@ -7210,6 +7318,30 @@ export type EnrolNodeRequestWritable = {
 };
 
 /**
+ * IssueUserEnrollmentResponse
+ *
+ * Secret-bearing committed invitation, recoverable only during its live capability window.
+ */
+export type IssueUserEnrollmentResponseWritable = {
+  /**
+   * Authoritative invitation revision for cancellation.
+   */
+  committed_revision: number;
+  /**
+   * Exclusive end of invitation redemption and secret-response retrieval.
+   */
+  expires_at_epoch_micros: number;
+  /**
+   * Exact committed consent and invitation identity.
+   */
+  operation_id: string;
+  /**
+   * Recipient who may register their first primary method.
+   */
+  principal_id: string;
+};
+
+/**
  * JoinMeshSetupRequest
  *
  * One exact request to join an existing mesh from an unclaimed daemon.
@@ -7235,6 +7367,34 @@ export type JoinMeshSetupRequestWritable = {
    * Client-generated idempotency identity retained across the internal restart.
    */
   operation_id: string;
+};
+
+/**
+ * RedeemUserEnrollmentApiKeyRequest
+ *
+ * Anonymous capability redemption into a normal independently revocable API key.
+ */
+export type RedeemUserEnrollmentApiKeyRequestWritable = {
+  /**
+   * Exact key expiry, or explicit null for no automatic key expiry.
+   */
+  expires_at_epoch_micros: number | null;
+  /**
+   * Recipient's label for their ordinary credential.
+   */
+  label: string;
+  /**
+   * Retained exact identity for both credential creation and response recovery.
+   */
+  operation_id: string;
+  /**
+   * Entry points supported by the initial primary-key enrollment workflow.
+   */
+  scopes: Array<"https_session" | "headless_api">;
+  /**
+   * Secret first-credential capability; never accepted through a URL or login handler.
+   */
+  token: string;
 };
 
 /**
@@ -8706,6 +8866,148 @@ export type RemoveGroupMemberResponses = {
 
 export type RemoveGroupMemberResponse2 =
   RemoveGroupMemberResponses[keyof RemoveGroupMemberResponses];
+
+export type RevokeUserEnrollmentData = {
+  /**
+   * Exact manager consent mutation
+   */
+  body: RevokeUserEnrollmentRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    /**
+     * OperationId
+     *
+     * A client-generated idempotency key for a mutation.
+     */
+    enrollment_operation_id: string;
+  };
+  query?: never;
+  url: "/admin/identities/user-enrollments/{enrollment_operation_id}/revocations";
+};
+
+export type RevokeUserEnrollmentErrors = {
+  /**
+   * Invalid bounded request
+   */
+  400: ApiError;
+  /**
+   * Current authentication required
+   */
+  401: ApiError;
+  /**
+   * Current consent or authentication rejected
+   */
+  403: ApiError;
+  /**
+   * Changed retry or stale authoritative state
+   */
+  409: ApiError;
+  /**
+   * Request exceeds its bound
+   */
+  413: ApiError;
+  /**
+   * JSON required
+   */
+  415: ApiError;
+  /**
+   * Invalid authoritative evidence
+   */
+  500: ApiError;
+  /**
+   * Authority unavailable; retain the exact operation
+   */
+  503: ApiError;
+};
+
+export type RevokeUserEnrollmentError =
+  RevokeUserEnrollmentErrors[keyof RevokeUserEnrollmentErrors];
+
+export type RevokeUserEnrollmentResponses = {
+  /**
+   * Verified committed result
+   */
+  200: RevokeUserEnrollmentResponse;
+};
+
+export type RevokeUserEnrollmentResponse2 =
+  RevokeUserEnrollmentResponses[keyof RevokeUserEnrollmentResponses];
+
+export type IssueUserEnrollmentData = {
+  /**
+   * Exact manager consent mutation
+   */
+  body: IssueUserEnrollmentRequest;
+  headers?: {
+    /**
+     * Required for browser-cookie authentication and omitted for API-key authentication.
+     */
+    "MeshSpan-CSRF-Token"?: string;
+  };
+  path: {
+    /**
+     * PrincipalId
+     *
+     * A globally qualified principal's local UUID within the current swarm.
+     */
+    principal_id: string;
+  };
+  query?: never;
+  url: "/admin/identities/users/{principal_id}/enrollments";
+};
+
+export type IssueUserEnrollmentErrors = {
+  /**
+   * Invalid bounded request
+   */
+  400: ApiError;
+  /**
+   * Current authentication required
+   */
+  401: ApiError;
+  /**
+   * Current consent or authentication rejected
+   */
+  403: ApiError;
+  /**
+   * Changed retry or stale authoritative state
+   */
+  409: ApiError;
+  /**
+   * Request exceeds its bound
+   */
+  413: ApiError;
+  /**
+   * JSON required
+   */
+  415: ApiError;
+  /**
+   * Invalid authoritative evidence
+   */
+  500: ApiError;
+  /**
+   * Authority unavailable; retain the exact operation
+   */
+  503: ApiError;
+};
+
+export type IssueUserEnrollmentError =
+  IssueUserEnrollmentErrors[keyof IssueUserEnrollmentErrors];
+
+export type IssueUserEnrollmentResponses = {
+  /**
+   * Verified committed result
+   */
+  200: IssueUserEnrollmentResponse;
+};
+
+export type IssueUserEnrollmentResponse2 =
+  IssueUserEnrollmentResponses[keyof IssueUserEnrollmentResponses];
 
 export type ListLocalityPoliciesData = {
   body?: never;
@@ -11958,6 +12260,64 @@ export type WriteUploadRangeResponses = {
 
 export type WriteUploadRangeResponse2 =
   WriteUploadRangeResponses[keyof WriteUploadRangeResponses];
+
+export type RedeemUserEnrollmentApiKeyData = {
+  /**
+   * Exact one-use capability redemption
+   */
+  body: RedeemUserEnrollmentApiKeyRequestWritable;
+  path?: never;
+  query?: never;
+  url: "/user-enrollments/api-keys";
+};
+
+export type RedeemUserEnrollmentApiKeyErrors = {
+  /**
+   * Invalid bounded request
+   */
+  400: ApiError;
+  /**
+   * Current authentication required
+   */
+  401: ApiError;
+  /**
+   * Current consent or authentication rejected
+   */
+  403: ApiError;
+  /**
+   * Changed retry or stale authoritative state
+   */
+  409: ApiError;
+  /**
+   * Request exceeds its bound
+   */
+  413: ApiError;
+  /**
+   * JSON required
+   */
+  415: ApiError;
+  /**
+   * Invalid authoritative evidence
+   */
+  500: ApiError;
+  /**
+   * Authority unavailable; retain the exact operation
+   */
+  503: ApiError;
+};
+
+export type RedeemUserEnrollmentApiKeyError =
+  RedeemUserEnrollmentApiKeyErrors[keyof RedeemUserEnrollmentApiKeyErrors];
+
+export type RedeemUserEnrollmentApiKeyResponses = {
+  /**
+   * Verified committed result
+   */
+  200: CreateApiKeyResponse;
+};
+
+export type RedeemUserEnrollmentApiKeyResponse =
+  RedeemUserEnrollmentApiKeyResponses[keyof RedeemUserEnrollmentApiKeyResponses];
 
 export type ListCurrentUserAuthenticationMethodsData = {
   body?: never;

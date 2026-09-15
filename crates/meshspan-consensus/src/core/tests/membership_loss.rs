@@ -20,6 +20,8 @@ fn historical_reply_cannot_acknowledge_new_writes_or_reads() -> Result<(), Box<d
     )?;
     let matched = source.peer_matched_index(node(2)?);
     let response = super::AppendResponse {
+        probe_id: None,
+        matched_digest: [0; 32],
         term: 99,
         accepted: true,
         matched_index: u64::MAX,
@@ -46,6 +48,8 @@ fn replay_never_overwrites_committed_content_or_accepts_an_unbounded_commit()
 -> Result<(), Box<dyn Error>> {
     let (mut source, mut follower) = recovery_pair(1)?;
     let response = super::AppendResponse {
+        probe_id: None,
+        matched_digest: [0; 32],
         term: 1,
         accepted: false,
         matched_index: 0,

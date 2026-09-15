@@ -55,6 +55,24 @@ export function AppLayout(props: Readonly<ParentProps>): JSX.Element {
           </button>
         </Show>
       </header>
+      <Show when={session.state().phase === "revocation_unknown"}>
+        <section aria-label="Sign-out recovery">
+          <p role="status">
+            {(() => {
+              const current = session.state();
+              return current.phase === "revocation_unknown"
+                ? current.message
+                : "";
+            })()}
+          </p>
+          <button type="button" onClick={() => void session.signOut()}>
+            Retry sign-out
+          </button>
+          <button type="button" onClick={() => void session.refresh()}>
+            Check session
+          </button>
+        </section>
+      </Show>
       <main id="main-content">{props.children}</main>
     </>
   );

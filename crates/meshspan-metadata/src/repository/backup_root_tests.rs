@@ -20,7 +20,12 @@ fn backup_root_migration_retains_surviving_legacy_history() -> TestResult {
         fixture.repository.database.connection(),
     )?;
     fixture.repository.database.connection().execute_batch(
-        "DROP TABLE partition_recovery_node_key_projection;
+        "DROP TABLE node_capability_presentations;
+         DROP TABLE user_enrollments;
+         DROP TABLE partition_recovery_consensus_activation;
+         ALTER TABLE consensus_active_quorum_plan DROP COLUMN activation_kind;
+         DROP TABLE partition_recovery_consensus_permission;
+         DROP TABLE partition_recovery_node_key_projection;
          DROP TABLE partition_recovery_state_installations;
          DROP TABLE partition_recovery_shards; DROP TABLE partition_recovery_restorations;
          DROP TABLE partition_recovery_targets;

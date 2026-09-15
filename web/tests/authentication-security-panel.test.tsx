@@ -48,6 +48,24 @@ describe("authentication method management", () => {
     );
   });
 
+  it("replays passkey evidence without starting another browser ceremony", async () => {
+    installRegistrationCredential();
+    const fixture = createFixture();
+    fixture.createPasskey.mockRejectedValueOnce(new Error("response lost"));
+    mountPanel(fixture.client);
+    await waitForText("Add a passkey");
+    clickButton("Add passkey");
+    await waitForText("The result is unknown.");
+    clickButton("Retry passkey registration");
+    await waitForText("The passkey is now available for sign-in.");
+    expect(fixture.createPasskey.mock.calls[1]).toEqual(
+      fixture.createPasskey.mock.calls[0],
+    );
+    expect(
+      fixture.client.createCurrentUserPasskeyRegistrationChallenge,
+    ).toHaveBeenCalledTimes(1);
+  });
+
   it("registers a passkey with browser-produced evidence", async () => {
     installRegistrationCredential();
     const fixture = createFixture();
@@ -68,6 +86,25 @@ describe("authentication method management", () => {
       }),
       CSRF_TOKEN,
     );
+  });
+});
+
+describe("API key request admission", () => {
+  it("rejects invalid local fields before retaining or sending an attempt", async () => {
+    const fixture = createFixture();
+    mountPanel(fixture.client);
+    await waitForText("Create API key");
+    const checkbox = [...document.querySelectorAll("label")]
+      .find((label) => label.textContent === "Native API")
+      ?.querySelector("input");
+    if (checkbox === null || checkbox === undefined)
+      throw new Error("missing native API scope");
+    checkbox.click();
+    flush();
+    clickButton("Create API key");
+    await waitForText("The API key request could not be prepared.");
+    expect(fixture.createApiKey).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toContain("result is unknown");
   });
 });
 
@@ -109,6 +146,35 @@ describe("authentication secret enrolment", () => {
     );
   });
 
+  it("retries the same API key request after losing the issuance response", async () => {
+    const fixture = createFixture();
+    fixture.createApiKey.mockRejectedValueOnce(new Error("response lost"));
+    mountPanel(fixture.client);
+    await waitForText("Create API key");
+    clickButton("Create API key");
+    await waitForText("The result is unknown.");
+    clickButton("Retry API key creation");
+    await waitForText(API_KEY);
+    expect(fixture.createApiKey.mock.calls[1]).toEqual(
+      fixture.createApiKey.mock.calls[0],
+    );
+    expect(fixture.createApiKey).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps an issued API key visible when the inventory refresh fails", async () => {
+    const fixture = createFixture();
+    mountPanel(fixture.client);
+    await waitForText("AutomationAPI key");
+    fixture.client.listCurrentUserAuthenticationMethods.mockRejectedValueOnce(
+      new Error("list unavailable"),
+    );
+    clickButton("Create API key");
+    await waitForText(API_KEY);
+    await waitForText("could not load your current sign-in methods");
+    expect(document.body.textContent).not.toContain("Nothing was changed");
+    expect(document.body.textContent).not.toContain("result is unknown");
+  });
+
   it("issues a scoped API key and displays its secret once", async () => {
     const fixture = createFixture();
     mountPanel(fixture.client);
@@ -131,8 +197,18 @@ describe("authentication secret enrolment", () => {
 function createFixture() {
   const list = vi.fn(async () => Promise.resolve(methodPage()));
   const revoke = vi.fn(async () => Promise.resolve(revocationResponse()));
-  const createApiKey = vi.fn(async () => Promise.resolve(apiKeyResponse()));
-  const createPasskey = vi.fn(async () => Promise.resolve(methodResponse()));
+  const createApiKey = vi.fn<
+    AuthenticationSecurityClient["createCurrentUserApiKey"]
+  >(async (request) => ({
+    ...apiKeyResponse(),
+    operation_id: request.operation_id,
+  }));
+  const createPasskey = vi.fn<
+    AuthenticationSecurityClient["createCurrentUserPasskey"]
+  >(async (request) => ({
+    ...methodResponse(),
+    operation_id: request.operation_id,
+  }));
   const createRecoveryCodes = vi.fn(async () =>
     Promise.resolve(recoveryCodeResponse()),
   );

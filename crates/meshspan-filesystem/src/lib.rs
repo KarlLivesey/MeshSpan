@@ -120,7 +120,7 @@ pub use handles::{
     HandleAccess, HandleAuthorityTarget, HandleError, HandleInformationReceipt, HandleLeaseReceipt,
     HandleLeaseRequest, HandleShare, HandleWriteAdmissionReceipt, HandleWriteAdmissionRequest,
     LockRangeReceipt, LockRangeRequest, OpenHandleReceipt, OpenHandleRequest, RangeLockKind,
-    ReadyNamespaceDelete, ReadyNamespaceDeletePage, SetHandleDispositionRequest,
+    RangeLockLifetime, ReadyNamespaceDelete, ReadyNamespaceDeletePage, SetHandleDispositionRequest,
     SetHandleLengthRequest, UnlockRangeReceipt, UnlockRangeRequest,
 };
 pub use name::{
@@ -145,8 +145,9 @@ pub use publication::{
     NamespaceReconciliationReceipt, NamespaceRenamePublication, NamespaceRenameReceipt,
     NamespaceUnlinkAuthority, NamespaceUnlinkPublication, NamespaceUnlinkReceipt,
     PublicationDisposition, PublicationError, PublicationPathError, RootFilePublication,
-    SnapshotRestorePublication, SnapshotRestoreReceipt, VerifiedPublicationHead,
-    VerifiedReconciliationHead, VerifiedSnapshotRestoreHead, VersionPublicationStore,
+    SnapshotRestorePublication, SnapshotRestoreReceipt, VerifiedPublication,
+    VerifiedPublicationHead, VerifiedReconciliationHead, VerifiedSnapshotRestoreHead,
+    VersionPublicationStore,
 };
 pub use reachability::{
     ReachabilityRoot, ReachabilityRootPage, ReachabilityRootSource, VersionReachabilityError,

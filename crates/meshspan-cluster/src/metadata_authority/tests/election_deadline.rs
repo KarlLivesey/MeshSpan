@@ -22,6 +22,7 @@ async fn only_accepted_leader_contact_resets_the_election_deadline()
     let deadline = Instant::now();
     runtime.election_deadline = deadline;
     let mut append = meshspan_consensus::AppendRequest {
+        probe_id: meshspan_consensus::AppendProbeId(1),
         term: 1,
         leader: peer,
         leader_incarnation: 1,
@@ -33,30 +34,30 @@ async fn only_accepted_leader_contact_resets_the_election_deadline()
         membership_epoch: 1,
         plan_digest: [0; 32],
     };
-    runtime.receive_peer(PeerConsensusMessage {
-        from: peer,
-        sender_incarnation: 1,
-        message: CoreMessage::AppendRequest(append.clone()),
-    })?;
+    runtime.receive_peer(PeerConsensusMessage::new(
+        peer,
+        1,
+        CoreMessage::AppendRequest(append.clone()),
+    ))?;
     assert_eq!(runtime.driver.current_term(), 0);
     assert_eq!(runtime.election_deadline, deadline);
     append.plan_digest = plan.proof_digest();
-    runtime.receive_peer(PeerConsensusMessage {
-        from: peer,
-        sender_incarnation: 1,
-        message: CoreMessage::AppendRequest(append.clone()),
-    })?;
+    runtime.receive_peer(PeerConsensusMessage::new(
+        peer,
+        1,
+        CoreMessage::AppendRequest(append.clone()),
+    ))?;
     assert_eq!(runtime.driver.current_term(), 1);
     assert_eq!(runtime.driver.leader_id(), Some(peer));
     assert!(runtime.election_deadline > deadline);
     // Remembering this sender as leader does not authenticate a later mismatched plan.
     runtime.election_deadline = deadline;
     append.plan_digest = [0; 32];
-    runtime.receive_peer(PeerConsensusMessage {
-        from: peer,
-        sender_incarnation: 1,
-        message: CoreMessage::AppendRequest(append),
-    })?;
+    runtime.receive_peer(PeerConsensusMessage::new(
+        peer,
+        1,
+        CoreMessage::AppendRequest(append),
+    ))?;
     assert_eq!(runtime.election_deadline, deadline);
     Ok(())
 }
@@ -78,16 +79,16 @@ async fn higher_term_stale_candidate_cannot_postpone_an_up_to_date_voters_electi
         false,
     );
     runtime.process_input(CoreInput::ElectionTimeout)?;
-    runtime.receive_peer(PeerConsensusMessage {
-        from: stale,
-        sender_incarnation: 1,
-        message: CoreMessage::VoteResponse(VoteResponse {
+    runtime.receive_peer(PeerConsensusMessage::new(
+        stale,
+        1,
+        CoreMessage::VoteResponse(VoteResponse {
             term: 1,
             granted: true,
             membership_epoch: 1,
             plan_digest: plan.proof_digest(),
         }),
-    })?;
+    ))?;
     let (context, command) = command(local, [73; 16])?;
     runtime.process_input(CoreInput::Propose {
         proposal_id: ProposalId(1),
@@ -98,10 +99,10 @@ async fn higher_term_stale_candidate_cannot_postpone_an_up_to_date_voters_electi
     assert!(runtime.driver.last_log_entry().is_some());
     let election_deadline = runtime.election_deadline;
     for term in 2..=4 {
-        runtime.receive_peer(PeerConsensusMessage {
-            from: stale,
-            sender_incarnation: 1,
-            message: CoreMessage::VoteRequest(VoteRequest {
+        runtime.receive_peer(PeerConsensusMessage::new(
+            stale,
+            1,
+            CoreMessage::VoteRequest(VoteRequest {
                 term,
                 candidate: stale,
                 candidate_incarnation: 1,
@@ -109,7 +110,7 @@ async fn higher_term_stale_candidate_cannot_postpone_an_up_to_date_voters_electi
                 membership_epoch: 1,
                 plan_digest: plan.proof_digest(),
             }),
-        })?;
+        ))?;
         assert_eq!(runtime.driver.current_term(), term);
         assert_eq!(runtime.driver.role(), Role::Follower);
         assert_eq!(

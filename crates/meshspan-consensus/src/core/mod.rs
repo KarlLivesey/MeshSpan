@@ -2,7 +2,9 @@
 
 //! Deterministic leader-based replicated-log state machine with explicit durable effects.
 
+mod append_probes;
 mod membership_history;
+mod replication_budget;
 mod state;
 mod types;
 
@@ -12,9 +14,11 @@ mod tests;
 #[cfg(test)]
 mod simulation_tests;
 
+pub use replication_budget::ReplicationBatchBudget;
 pub use state::ConsensusCore;
 pub use types::{
-    AppendRequest, AppendResponse, CommittedPrefix, CoreConfig, CoreEffect, CoreError, CoreInput,
-    CoreMessage, DurableCoreState, DurableMutation, DurableQuorumPlan, LogEntry, LogPosition,
-    MemberIncarnations, PersistenceId, ProposalId, ReadBarrierId, Role, VoteRequest, VoteResponse,
+    AppendProbeId, AppendRequest, AppendResponse, CommittedPrefix, CoreConfig, CoreEffect,
+    CoreError, CoreInput, CoreMessage, DurableCoreState, DurableMutation, DurableQuorumPlan,
+    LogEntry, LogPosition, MemberIncarnations, PersistenceId, ProposalId, ReadBarrierId, Role,
+    VoteRequest, VoteResponse,
 };

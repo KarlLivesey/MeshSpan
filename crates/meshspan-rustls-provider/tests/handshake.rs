@@ -10,49 +10,112 @@ use meshspan_test_certificates::CertificateAuthority;
 use rustls::client::ClientConnection;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName};
 use rustls::server::{ServerConnection, WebPkiClientVerifier};
-use rustls::{ClientConfig, RootCertStore, ServerConfig};
+use rustls::{ClientConfig, RootCertStore, ServerConfig, SupportedCipherSuite};
 
 const CERTIFICATE_NAME: &str = "node.meshspan.test";
 
 #[test]
-fn real_tls13_mutual_authentication_round_trip() -> Result<(), Box<dyn Error>> {
-    let certificates = certificates()?;
-    let provider = Arc::new(meshspan_rustls_provider::provider());
-    let roots = roots(&certificates.authority)?;
-    let verifier =
-        WebPkiClientVerifier::builder_with_provider(Arc::new(roots.clone()), provider.clone())
-            .build()?;
-    let server_config = ServerConfig::builder_with_provider(provider.clone())
-        .with_protocol_versions(&[&rustls::version::TLS13])?
-        .with_client_cert_verifier(verifier)
-        .with_single_cert(
-            vec![certificates.server.certificate],
-            PrivatePkcs8KeyDer::from(certificates.server.private_key).into(),
+fn real_tls13_mutual_authentication_with_aes_only_peer() -> Result<(), Box<dyn Error>> {
+    for restrict_client in [true, false] {
+        round_trip(
+            meshspan_rustls_provider::TLS13_AES_128_GCM_SHA256,
+            restrict_client,
         )?;
-    let client_config = ClientConfig::builder_with_provider(provider)
-        .with_protocol_versions(&[&rustls::version::TLS13])?
-        .with_root_certificates(roots)
-        .with_client_auth_cert(
-            vec![certificates.client.certificate],
-            PrivatePkcs8KeyDer::from(certificates.client.private_key).into(),
-        )?;
-    let mut client = ClientConnection::new(
-        Arc::new(client_config),
-        ServerName::try_from(CERTIFICATE_NAME)?.to_owned(),
-    )?;
-    let mut server = ServerConnection::new(Arc::new(server_config))?;
+    }
+    Ok(())
+}
 
+#[test]
+fn real_tls13_mutual_authentication_with_chacha_only_peer() -> Result<(), Box<dyn Error>> {
+    for restrict_client in [true, false] {
+        round_trip(
+            meshspan_rustls_provider::TLS13_CHACHA20_POLY1305_SHA256,
+            restrict_client,
+        )?;
+    }
+    Ok(())
+}
+
+fn round_trip(suite: SupportedCipherSuite, restrict_client: bool) -> Result<(), Box<dyn Error>> {
+    let (mut client, mut server) = connection_pair(suite, restrict_client)?;
     complete_handshake(&mut client, &mut server)?;
     client.writer().write_all(b"provider handshake proof")?;
     client_to_server(&mut client, &mut server)?;
     let mut received = [0; 24];
     server.reader().read_exact(&mut received)?;
     assert_eq!(&received, b"provider handshake proof");
+    server.writer().write_all(b"authenticated reply")?;
+    server_to_client(&mut server, &mut client)?;
+    let mut reply = [0; 19];
+    client.reader().read_exact(&mut reply)?;
+    assert_eq!(&reply, b"authenticated reply");
     assert_eq!(
-        client.negotiated_cipher_suite().map(|suite| suite.suite()),
-        Some(rustls::CipherSuite::TLS13_CHACHA20_POLY1305_SHA256,)
+        client.negotiated_cipher_suite().map(|value| value.suite()),
+        Some(suite.suite())
+    );
+    assert_eq!(
+        server.negotiated_cipher_suite().map(|value| value.suite()),
+        Some(suite.suite())
+    );
+    assert_eq!(
+        client.protocol_version(),
+        Some(rustls::ProtocolVersion::TLSv1_3)
+    );
+    assert_eq!(
+        server.protocol_version(),
+        Some(rustls::ProtocolVersion::TLSv1_3)
+    );
+    assert!(
+        client
+            .peer_certificates()
+            .is_some_and(|chain| chain.len() == 1)
+    );
+    assert!(
+        server
+            .peer_certificates()
+            .is_some_and(|chain| chain.len() == 1)
     );
     Ok(())
+}
+
+fn connection_pair(
+    suite: SupportedCipherSuite,
+    restrict_client: bool,
+) -> Result<(ClientConnection, ServerConnection), Box<dyn Error>> {
+    let certificates = certificates()?;
+    let mut client_provider = meshspan_rustls_provider::provider();
+    let mut server_provider = meshspan_rustls_provider::provider();
+    if restrict_client {
+        client_provider.cipher_suites = vec![suite];
+    } else {
+        server_provider.cipher_suites = vec![suite];
+    }
+    let provider = Arc::new(server_provider);
+    let roots = roots(&certificates.authority)?;
+    let verifier =
+        WebPkiClientVerifier::builder_with_provider(Arc::new(roots.clone()), provider.clone())
+            .build()?;
+    let server_config = ServerConfig::builder_with_provider(provider)
+        .with_protocol_versions(&[&rustls::version::TLS13])?
+        .with_client_cert_verifier(verifier)
+        .with_single_cert(
+            vec![certificates.server.certificate],
+            PrivatePkcs8KeyDer::from(certificates.server.private_key).into(),
+        )?;
+    let client_config = ClientConfig::builder_with_provider(Arc::new(client_provider))
+        .with_protocol_versions(&[&rustls::version::TLS13])?
+        .with_root_certificates(roots)
+        .with_client_auth_cert(
+            vec![certificates.client.certificate],
+            PrivatePkcs8KeyDer::from(certificates.client.private_key).into(),
+        )?;
+    let client = ClientConnection::new(
+        Arc::new(client_config),
+        ServerName::try_from(CERTIFICATE_NAME)?.to_owned(),
+    )?;
+    let server = ServerConnection::new(Arc::new(server_config))?;
+
+    Ok((client, server))
 }
 
 fn complete_handshake(

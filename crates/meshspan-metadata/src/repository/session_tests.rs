@@ -187,11 +187,8 @@ fn step_up_atomically_replaces_the_source_and_consumes_one_fresh_factor()
     let directory = tempdir()?;
     let partition_id = meshspan_domain::PartitionId::from_bytes([1; 16])?;
     let administrator = meshspan_domain::PrincipalId::from_bytes([2; 16])?;
-    let database = PartitionDatabase::open(
-        &directory.path().join("session-step-up.sqlite3"),
-        partition_id,
-        UnixMicros::new(1),
-    )?;
+    let file_path = directory.path().join("session-step-up.sqlite3");
+    let database = PartitionDatabase::open(&file_path, partition_id, UnixMicros::new(1))?;
     let mut repository = AuthoritativeRepository::new(database);
     bootstrap(&mut repository, administrator)?;
     let passkey_method = AuthenticationMethodId::from_bytes([20; 16])?;
@@ -229,6 +226,9 @@ fn step_up_atomically_replaces_the_source_and_consumes_one_fresh_factor()
         context(83, administrator, 84, 130, Some(Revision::new(4)))?,
         &step_up,
     )?;
+    drop(repository.into_database());
+    let database = PartitionDatabase::open(&file_path, partition_id, UnixMicros::new(131))?;
+    let mut repository = AuthoritativeRepository::new(database);
 
     let source = repository
         .resolve_authentication_session(meshspan_domain::OperationId::from_bytes([71; 16])?)?
@@ -276,6 +276,33 @@ fn step_up_atomically_replaces_the_source_and_consumes_one_fresh_factor()
         ),
         Err(RepositoryError::InvalidCommand)
     ));
+    assert_factor_time_corruption_rejected(&repository.database)?;
+    Ok(())
+}
+
+fn assert_factor_time_corruption_rejected(
+    database: &PartitionDatabase,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert!(database.check_integrity()?.sqlite_ok);
+    for (session_byte, authenticated_at) in [(70_u8, 119_i64), (80, 131)] {
+        let transaction = database.connection().unchecked_transaction()?;
+        // Simulate damaged persisted evidence in this private fixture, then roll it back.
+        transaction.execute_batch("DROP TRIGGER authentication_session_factors_immutable")?;
+        assert_eq!(
+            transaction.execute(
+                "UPDATE authentication_session_factors SET authenticated_at = ?1
+                 WHERE session_id = ?2 AND method_kind = 1",
+                rusqlite::params![authenticated_at, [session_byte; 16].as_slice()],
+            )?,
+            1,
+        );
+        assert!(matches!(
+            database.check_integrity(),
+            Err(crate::MetadataStoreError::IntegrityFailed)
+        ));
+        transaction.rollback()?;
+    }
+    assert!(database.check_integrity()?.sqlite_ok);
     Ok(())
 }
 
