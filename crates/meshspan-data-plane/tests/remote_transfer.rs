@@ -35,6 +35,9 @@ use tempfile::TempDir;
 const CERTIFICATE_NAME: &str = "meshspan.internal";
 const PERMIT_KEY: [u8; 32] = [42; 32];
 
+#[path = "remote_transfer/repair_upload.rs"]
+mod repair_upload;
+
 struct FixedRandom;
 
 impl RandomSource for FixedRandom {
@@ -91,6 +94,14 @@ async fn real_mtls_stream_proves_exact_remote_shard_lifecycle() -> Result<(), Bo
         serve_lifecycle(&server_connection, &mut service, client_peer, limits),
         prove_client_lifecycle(&client_connection, &fixture, client_node, limits),
     )?;
+    repair_upload::prove(
+        (&client_connection, &server_connection),
+        service,
+        client_peer,
+        &fixture,
+        limits,
+    )
+    .await?;
     client_connection.close(0_u32.into(), b"test complete");
     server_connection.close(0_u32.into(), b"test complete");
     client.wait_idle().await;
@@ -104,6 +115,7 @@ async fn serve_lifecycle(
     peer: meshspan_transport::AuthenticatedPeer,
     limits: WireLimits,
 ) -> Result<(), Box<dyn Error>> {
+    prove_no_bytes_for_invalid_reservation(connection, limits).await?;
     for index in 0..9 {
         let stream = accept_stream(connection).await?;
         let result = service
@@ -126,6 +138,19 @@ async fn prove_client_lifecycle(
 ) -> Result<(), Box<dyn Error>> {
     let payload = BoundedBytes::copy_from(b"one shard over several bounded frames", 1_024)?;
     let write = fixture.write_permit(payload.len())?;
+    for _ in 0..2 {
+        assert!(matches!(
+            put_shard(
+                connection,
+                request_header(fixture.mesh, client_node, write.operation_id)?,
+                write,
+                &payload,
+                limits
+            )
+            .await,
+            Err(DataPlaneError::InvalidMessage)
+        ));
+    }
     let read = fixture.read_permit()?;
     let removal = fixture.removal_permit()?;
     reject_sender_impersonation(connection, fixture, write, &payload, limits).await?;
@@ -173,6 +198,67 @@ async fn prove_client_lifecycle(
     assert_eq!(replayed_reclamation, reclamation);
     assert_eq!(reclamation.reclaimed_bytes, payload.len() as u64);
     Ok(())
+}
+
+async fn prove_no_bytes_for_invalid_reservation(
+    connection: &quinn::Connection,
+    limits: WireLimits,
+) -> Result<(), Box<dyn Error>> {
+    use meshspan_protocol::v1::{
+        DataControlEnvelope, PutShardReady, data_control_envelope::Message,
+    };
+    use meshspan_transport::{receive_data_control, receive_data_frame, send_data_control};
+
+    for malformed in [true, false] {
+        let mut stream = accept_stream(connection).await?;
+        let begin = receive_data_control(&mut stream.receive, limits)
+            .await?
+            .into_inner();
+        let Some(Message::PutShardBegin(begin)) = begin.message else {
+            return Err("expected put admission".into());
+        };
+        let reservation = if malformed {
+            vec![1]
+        } else {
+            substituted_reservation(&begin)?
+        };
+        send_data_control(
+            &mut stream.send,
+            &DataControlEnvelope {
+                message: Some(Message::PutShardReady(PutShardReady {
+                    reservation,
+                    maximum_frame_bytes: limits.maximum_data_frame_bytes() as u64,
+                    rejection: None,
+                })),
+            },
+            limits,
+        )
+        .await?;
+        assert!(
+            receive_data_frame(&mut stream.receive, limits)
+                .await
+                .is_err(),
+            "client transmitted shard bytes without a valid exact provider reservation"
+        );
+    }
+
+    Ok(())
+}
+
+fn substituted_reservation(
+    begin: &meshspan_protocol::v1::PutShardBegin,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let header = begin.header.as_ref().ok_or("missing header")?;
+    let mut bytes = header.operation_id.clone();
+    // Canonical version-one reservation with a valid but substituted target identity.
+    bytes.extend([99; 16]);
+    bytes.extend(begin.target_generation.to_be_bytes());
+    bytes.push(1);
+    bytes.extend(begin.declared_length.to_be_bytes());
+    bytes.extend(header.deadline_unix_micros.to_be_bytes());
+    bytes.extend([11; 32]);
+    assert_eq!(bytes.len(), 89);
+    Ok(bytes)
 }
 
 async fn reject_sender_impersonation(

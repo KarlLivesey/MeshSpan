@@ -3,6 +3,7 @@
 //! Provider-neutral server side of the authenticated shard stream state machine.
 
 mod federation;
+mod put_resolution;
 mod removal;
 mod scrub;
 
@@ -121,6 +122,10 @@ impl<Provider: StorageProvider> RemoteShardService<Provider> {
     ) -> Result<(), DataPlaneError> {
         validate_authenticated_sender(&message, peer)?;
         match message {
+            Message::ResolveShardPutRequest(request) => {
+                self.serve_put_resolution(&mut stream, limits, observed_at, request)
+                    .await
+            }
             Message::PutShardBegin(begin) => {
                 self.serve_put(&mut stream, limits, observed_at, begin)
                     .await
@@ -417,6 +422,7 @@ fn validate_authenticated_sender(
     peer: AuthenticatedPeer,
 ) -> Result<(), DataPlaneError> {
     let header = match message {
+        Message::ResolveShardPutRequest(value) => value.header.as_ref(),
         Message::PutShardBegin(value) => value.header.as_ref(),
         Message::GetShardRequest(value) => value.header.as_ref(),
         Message::DeleteShardRequest(value) => value.header.as_ref(),

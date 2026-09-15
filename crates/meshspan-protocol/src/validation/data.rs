@@ -28,6 +28,18 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
         Message::ForwardFederatedBackupResult(value) => federation_relay::result(value, limits),
         Message::PutShardBegin(value) => put_begin(value, limits),
         Message::PutShardReady(value) => put_ready(value, limits),
+        Message::ResolveShardPutRequest(value) => {
+            validate_required_header(value.header.as_ref())?;
+            validate_target(&value.target_id, value.target_generation)?;
+            validate_payload(value.original.as_ref(), limits)?;
+            let original = value
+                .original
+                .as_ref()
+                .ok_or(WireContractError::InvalidMessage)?;
+            valid_nonempty_bytes(&original.canonical_bytes, limits.maximum_control_bytes())?;
+            valid_nonempty_bytes(&value.write_capability, limits.maximum_control_bytes())
+        }
+        Message::ResolveShardPutResult(value) => put_resolution(value, limits),
         Message::PutShardFinish(value) => {
             nonzero(value.final_length)?;
             valid_digest(&value.final_digest)
@@ -71,6 +83,32 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
         | Message::LookupBackupResult(_)
         | Message::DeleteBackupRequest(_)
         | Message::DeleteBackupResult(_) => backup::message(value, limits),
+    }
+}
+
+fn put_resolution(
+    value: &crate::v1::ResolveShardPutResult,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    use crate::v1::resolve_shard_put_result::Outcome;
+    valid_digest(&value.original_request_digest)?;
+    if value.original_request_digest.iter().all(|byte| *byte == 0) {
+        return Err(WireContractError::InvalidMessage);
+    }
+    match value
+        .outcome
+        .as_ref()
+        .ok_or(WireContractError::InvalidMessage)?
+    {
+        Outcome::Unknown(true) | Outcome::Prepared(true) => Ok(()),
+        Outcome::Unknown(false) | Outcome::Prepared(false) => {
+            Err(WireContractError::InvalidMessage)
+        }
+        Outcome::Verified(receipt) => {
+            validate_payload(Some(receipt), limits)?;
+            valid_nonempty_bytes(&receipt.canonical_bytes, limits.maximum_control_bytes())
+        }
+        Outcome::Rejection(error) => validate_wire_error(error),
     }
 }
 

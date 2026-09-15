@@ -38,6 +38,26 @@ message PutShardResult {
   VersionedPayload receipt = 2;
 }
 
+// Original write identity is immutable; write_capability is independently refreshed.
+// No shard bytes are accepted and no new capacity reservation is created.
+message ResolveShardPutRequest {
+  RequestHeader header = 1;
+  bytes target_id = 2;
+  uint64 target_generation = 3;
+  VersionedPayload original = 4;
+  bytes write_capability = 5;
+}
+
+message ResolveShardPutResult {
+  bytes original_request_digest = 1;
+  oneof outcome {
+    bool unknown = 2;
+    bool prepared = 3;
+    VersionedPayload verified = 4;
+    WireError rejection = 5;
+  }
+}
+
 message GetShardRequest {
   RequestHeader header = 1;
   bytes target_id = 2;

@@ -3,6 +3,8 @@
 //! Canonical fixed-width encodings for opaque private-wire storage capabilities.
 
 mod federation;
+mod shard_put;
+pub(crate) use shard_put::{decode_put_identity, encode_put_identity};
 
 pub use federation::{decode_federated_shard_permit, encode_federated_shard_permit};
 
@@ -349,6 +351,33 @@ pub(crate) fn encode_reservation(reservation: StorageReservation) -> Vec<u8> {
     bytes.extend_from_slice(&reservation.expires_at.get().to_be_bytes());
     bytes.extend_from_slice(&reservation.reservation_digest);
     bytes
+}
+
+pub(crate) fn decode_reservation(bytes: &[u8]) -> Result<StorageReservation, CapabilityCodecError> {
+    if bytes.len() != RESERVATION_BYTES {
+        return Err(CapabilityCodecError::Invalid);
+    }
+    let mut reader = Reader::new(bytes);
+    let reservation = StorageReservation {
+        operation_id: OperationId::from_bytes(reader.array()?)
+            .map_err(|_| CapabilityCodecError::Invalid)?,
+        target_id: TargetId::from_bytes(reader.array()?)
+            .map_err(|_| CapabilityCodecError::Invalid)?,
+        target_generation: reader.u64()?,
+        class: decode_class(reader.u8()?)?,
+        maximum_bytes: reader.u64()?,
+        expires_at: UnixMicros::new(reader.i64()?),
+        reservation_digest: reader.array()?,
+    };
+    reader.finish()?;
+    if reservation.target_generation == 0
+        || reservation.maximum_bytes == 0
+        || reservation.expires_at.get() <= 0
+        || reservation.reservation_digest == [0; 32]
+    {
+        return Err(CapabilityCodecError::Invalid);
+    }
+    Ok(reservation)
 }
 
 /// Encodes the version-one fixed-width shard receipt used by private data frames
