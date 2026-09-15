@@ -10,6 +10,72 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Current candidate verification — full gate and real process proofs on `2adaba80`
+
+The signed, locally and GitHub-verified source revision
+`2adaba80f619eb80a903a931fb3130b0c7a4c75c` passes the required NVM
+`MESHSPAN_CHECK_WORKERS=4 CARGO_BUILD_JOBS=4 RUST_TEST_THREADS=4 pnpm check:dependency-update`
+in **1315.48 s**: Rust workspace tests **1260.61 s**, web tests **16.54 s**.
+Advisory scans, generated-contract drift, embedded web, formatting,
+all-target/all-feature Clippy, both licence checks, TypeScript/ESLint and tooling
+also pass. Unlike the preceding failed run, this reaches and passes the complete
+Rust workspace, including headless, filesystem and metadata targets. Log:
+`/tmp/meshspan-dependency-update-2adaba80.log`. The default gate still excludes
+ignored/environment-dependent acceptance; those results are recorded separately.
+
+Using `/home/karl/.cache/meshspan-validation/musl/env.sh` and Rust 1.98.0,
+`CARGO_BUILD_JOBS=4 cargo test -p meshspan-daemon --test headless_process --all-features --target x86_64-unknown-linux-musl --no-run --message-format=json`
+builds in **1 min 39 s**. The inspected build output selects the test executable;
+`python3 /tmp/meshspan-musl-2adaba80-acceptance.py` invokes its exact named cases
+with `--exact --include-ignored --test-threads=2`. Both commands use
+`TMPDIR=/home/karl/.cache/meshspan-validation/tmp`.
+Nine exact tests then pass with **two workers**, **zero failures or ignored
+cases**, in **930.78 s** (39 other tests filtered):
+
+- HTTP-01 worker loss followed by actual five-minute lease expiry;
+- rejected HTTP-01 order cleanup and reissue after the real retry backoff;
+- surviving-daemon retirement of an unadmitted upload after worker SIGKILL;
+- exact original-file recovery through HTTPS and real SMB after storage restart;
+- real SMB 3.1.1 round trips through three gateways;
+- six local processes applying one protection contract through HTTPS/SMB;
+- authenticated reporting of the exact uninterrupted preparation;
+- automatic replacement of two real executables, verified installations and
+  retained installation after cold launch;
+- signed-candidate delivery to three daemons and survival of peer restart.
+
+The first six cases plus three-daemon candidate propagation resolve the seven
+previously failing musl cases at current-candidate acceptance scope. The two
+handoff cases also revalidate the original PR #269 regressions with the current
+executable. Logs: `/tmp/meshspan-musl-2adaba80-build.log` and
+`/tmp/meshspan-musl-2adaba80-acceptance.log`; exact selection is retained in
+`/tmp/meshspan-musl-2adaba80-acceptance.py`. The SMB proof uses inspected image
+`sha256:4282e160c6cc3090ee59f3b2581ee7a459fdd3f943323b7583824ea30a618eb0`.
+These assembled passes accompany the focused lifecycle, receipt, consensus and
+partial-stream regressions below; they are not attributed solely to the latest
+transport fix or used to erase unclassified historical failures.
+
+The NVM `MESHSPAN_CHECK_WORKERS=2 pnpm check:dns-providers` proof also passes.
+Its separate offline container build takes **194.71 s**, then Cloudflare and
+webhook each pass in **28.74 s**, and manual DNS in **21.30 s**. The exact image is
+`sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922`.
+Each case uses its own network-isolated local DNS/HTTPS fixture, checks exact
+owned-record cleanup and certificate reuse, and removes its successful fixture.
+Log: `/tmp/meshspan-dns-providers-2adaba80.log`. These are not live provider-account
+or public staging-CA proofs. DNS compilation used its separate target volume
+with two workers after the musl build finished, while two musl test workers were
+waiting for their real lease/backoff boundaries; no Cargo build lock was shared.
+
+All **40 source-branch commits** verify locally. Remote `main` is still the
+PR #269 merge `fcd65853fc9fbd54112859a7188231b4b1abf4d2`. This candidate is ready
+for integration after this prose evidence is signed and pushed. Stage 10 remains
+in progress, and Stage 11 has not started as an integrated stage. First-passkey
+onboarding, full maintenance/healing projection, consensus-log compaction,
+availability-preserving update admission and the remaining numbered criteria
+are still open. Task 10's unclassified historical storage-snapshot failure is
+retained for investigation, not closed by a passing retry. No physical hardware,
+power-loss, mixed-platform, soak or independent-security-review result is claimed.
+No releases, tags, package/image publication or GitHub Actions were performed.
+
 ## Assembled gate on `50469e80` — reconnect history remains incomplete
 
 The required NVM `pnpm check:dependency-update`, with four bounded workers,
