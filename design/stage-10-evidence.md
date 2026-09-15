@@ -57,10 +57,59 @@ admission and pre/post read-fence admission reopen authority databases. Merely
 moving the aggregate out of persistence would still scan history on each such
 open. The existing metadata owner must supply fresh typed admission reads through
 its bounded queue, retaining certificate/incarnation/role/deadline checks and
-post-fence revalidation. That consumer work and its actual-request regressions
-are in progress; CORE-03 and Stage 10 task 17 remain incomplete. No final gate
-has run for this new candidate, and no hardware, soak or lifetime-capacity proof
-is claimed.
+post-fence revalidation. Signed, GitHub-verified progress commit
+`22e09dcb6a2fb07674355fcfd6fcbaa61862b4cc` records the persistence slice. Review
+found no production accounting defect but identified an unexercised rollback:
+recovery activation must roll back a changed counter as well as a deleted tail.
+The existing test now injects an exact unapplied entry, fails the accounting,
+vote, applied-state and activation-record writes independently, and checks the
+same tail/counters after every reopen. Successful recovery then removes only the
+tail. It passes in **2.95 s** (`/tmp/meshspan-core03-recovery-accounting-final.log`).
+
+The admission consumer now uses fresh operation-specific reads through that
+existing owner. Typed purpose/detail mismatches fail closed. Codec/digest and
+installation-signature work remain on observed blocking workers; cancellation
+does not undo effects or leave queued read waiters alive. The former `prepare`
+function, retained temporarily as a control with only import/fixture-path
+adaptation, fails the actual repeated-admission test with **Unavailable** when
+the database path is moved (**1.05 s**,
+`/tmp/meshspan-core03-admission-reopen-control.log`). The fixed path passes
+eight such reads, then rejects the old certificate binding, accepts its new
+projection and rejects retirement (**0.98 s**,
+`/tmp/meshspan-core03-admission-restored.log`). Path restoration precedes result
+propagation. These are real owner/SQL projection tests, not certificate-issuance
+or hardware-fault acceptance. An initial fixture borrow error is retained in
+`/tmp/meshspan-core03-admission-first.log`, not counted as executed tests.
+
+Review additionally required a controlled response-boundary interleaving after
+real quorum confirmation. Skipping only final admission makes the new test fail
+with **Ok(fence)** instead of **Unauthorised** (**0.93 s**,
+`/tmp/meshspan-core03-post-fence-control.log`). Restoring that check makes both
+real-owner admission tests pass in **1.50 s**
+(`/tmp/meshspan-core03-admission-final.log`). Three bounded-queue/current-read/
+cancellation tests pass in **1.00 s**
+(`/tmp/meshspan-core03-admission-owner-tests.log`). Five existing purpose,
+binding/deadline, exact installation-acknowledgement and shutdown/drain regressions
+pass in **3.08 s** (`/tmp/meshspan-core03-admission-negative-drain.log`). All
+temporary controls are removed. Metadata/cluster all-target/all-feature Clippy
+passes with warnings denied in **20.477 s**
+(`/tmp/meshspan-core03-owner-accounting-clippy.log`).
+
+Final daemon Clippy initially rejected an unnecessarily owned request header
+(`/tmp/meshspan-core03-admission-clippy.log`). Borrowing it inside the already
+owned blocking closure preserves that worker's lifetime and passes all-target/
+all-feature Clippy with warnings denied in **19.891 s**
+(`/tmp/meshspan-core03-admission-final-clippy.log`). After that correction, both
+real-owner admission regressions pass in **1.49 s**
+(`/tmp/meshspan-core03-admission-checked.log`), and the five negative/drain
+regressions pass in **3.08 s**
+(`/tmp/meshspan-core03-admission-negative-final.log`). No test control remains.
+
+The assembled candidate still requires final validation and integration; CORE-03
+and Stage 10 task 17 remain incomplete. No final gate has run for this new
+candidate, and no hardware, soak or lifetime-capacity proof is claimed. CORE-04
+must still introduce safe snapshot anchors, prefix reclamation and lagging-replica
+installation before lifetime log bounds can be closed.
 
 ## Physical-generation candidate gate — multi-daemon setup failures
 

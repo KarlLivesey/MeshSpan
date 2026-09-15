@@ -19,6 +19,7 @@ use crate::{ConsensusNetwork, ConsensusNetworkConfig, ConsensusNetworkError, Con
 mod consensus_bulk;
 mod election_deadline;
 mod leadership_waiters;
+mod peer_admission;
 mod read_barriers;
 
 #[tokio::test]

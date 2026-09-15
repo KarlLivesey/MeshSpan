@@ -51,6 +51,8 @@ mod federation_pairing;
 mod federation_relationship;
 #[path = "federation_storage_service_tests.rs"]
 mod federation_storage;
+#[path = "metadata_peer_admission_tests.rs"]
+mod peer_admission;
 #[path = "remote_backup_identity_tests.rs"]
 mod remote_backup_identity;
 #[path = "strong_publication_tests.rs"]

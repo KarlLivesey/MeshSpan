@@ -15,7 +15,7 @@ mod repair_projection;
 pub(crate) use repair_projection::project_manifest as project_repair_manifest;
 
 #[path = "metadata_read_fence_service.rs"]
-mod metadata_read_fence_service;
+pub(crate) mod metadata_read_fence_service;
 
 #[path = "private_control_runtime.rs"]
 mod private_control_runtime;
@@ -2307,7 +2307,7 @@ async fn handle_private_control(
     )
     .map_err(|_| DaemonProcessError::PrivateNetworkState)?;
     if let Some(Message::FetchMetadataReadFence(_)) = envelope.message.as_ref() {
-        return metadata_read_fence_service::handle(network, authority, state_directory, request)
+        return metadata_read_fence_service::handle(network, authority, request)
             .await
             .map_err(|_| DaemonProcessError::PrivateNetworkState);
     }
@@ -2325,16 +2325,12 @@ async fn handle_private_control(
         #[cfg(test)]
         if let Some(gate) = work.admission_gate.take() {
             return crate::metadata_forwarding::handle_with_admission_gate(
-                network,
-                authority,
-                state_directory,
-                request,
-                gate,
+                network, authority, request, gate,
             )
             .await
             .map_err(|_| DaemonProcessError::PrivateNetworkState);
         }
-        return crate::metadata_forwarding::handle(network, authority, state_directory, request)
+        return crate::metadata_forwarding::handle(network, authority, request)
             .await
             .map_err(|_| DaemonProcessError::PrivateNetworkState);
     }
