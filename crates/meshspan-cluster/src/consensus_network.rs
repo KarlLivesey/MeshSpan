@@ -28,7 +28,7 @@ use meshspan_protocol::{WireLimits, node_capability_digest};
 use meshspan_transport::{
     InstalledNodeCertificate, NegotiationConfig, NodeCredentials, NodeTransportConfig, PeerBinding,
     PeerRegistry, RotatingNodeTransport, StreamKind, TransportLimits, accept_stream,
-    certificate_fingerprint, open_stream, receive_control, send_control,
+    certificate_fingerprint, classify_stream, open_stream, receive_control, send_control,
 };
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
@@ -1050,13 +1050,22 @@ impl ConsensusNetwork {
                 outcome = streams.join_next(), if !streams.is_empty() => {
                     if let Some(Err(_)) = outcome { break Err(ConsensusNetworkError::InvalidTraffic); }
                 }
-                accepted = accept_stream(&connection), if streams.len() < MAXIMUM_STREAMS as usize => {
-                    let accepted = match accepted { Ok(stream) => stream, Err(error) => break Err(error.into()) };
+                accepted = connection.accept_bi(), if streams.len() < MAXIMUM_STREAMS as usize => {
+                    let (send, receive) = match accepted { Ok(stream) => stream, Err(error) => break Err(meshspan_transport::TransportError::Connection(error).into()) };
                     let network = self.clone();
                     let connection = connection.clone();
                     let ingress = ingress.clone();
                     streams.spawn(async move {
-                        if let Err(error) = network.receive_authenticated_stream(accepted, ingress).await
+                        // Only accept_bi is cancellation-safe. Once accepted, this bounded
+                        // worker owns the prefix read across unrelated stream completions.
+                        let result = match tokio::time::timeout(
+                            PEER_OPERATION_TIMEOUT, classify_stream(send, receive),
+                        ).await {
+                            Ok(Ok(accepted)) => network.receive_authenticated_stream(accepted, ingress).await,
+                            Ok(Err(error)) => Err(error.into()),
+                            Err(_) => return, // An absent prefix expires only this stream.
+                        };
+                        if let Err(error) = result
                             && !error.is_stream_cancellation() {
                             connection.close(2_u32.into(), b"invalid peer traffic");
                         }

@@ -10,6 +10,66 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Assembled gate on `50469e80` — reconnect history remains incomplete
+
+The required NVM `pnpm check:dependency-update`, with four bounded workers,
+**failed in 885.91 s** (Rust lane **824.66 s**). Advisory scans, generated drift,
+embedded web, formatting, all-target/all-feature Clippy, both licence lanes,
+TypeScript/ESLint, tooling and web tests passed. Cluster **136/136** passed in
+**64.32 s**, including the unchanged maximum-transfer deadline; consensus
+**45/45** passed, and daemon unit tests passed **464 with one ignored**.
+
+Headless processes passed **31**, failed **one**, and ignored **13**, in
+**495.35 s**. The disconnected-gateway reconnect test returned `404` for
+`home.txt` at the peer instead of the exact bytes. Later Rust targets were not
+reached. Log: `/tmp/meshspan-dependency-update-50469e80.log`.
+Read-only inspection of retained fixtures shows matching committed metadata
+heads, but incomplete immutable-object receive sessions for the final merge;
+terminal history pages alone do not prove complete import. Source delivery was
+correctly left unacknowledged. No full-gate pass or integration is claimed.
+
+The focused unchanged reconnect regression also fails in **37.76 s** (build
+**56.15 s**), this time with `office.txt` missing at the root. Its retained
+sessions likewise lack immutable objects. Log:
+`/tmp/meshspan-namespace-reconnect-focused.log`. Investigation is now at object
+fetch/receive failure and retry, not metadata commit or final merge validation.
+This remains Stage 10 task 22 acceptance work; Stage 11 and publication remain
+open/held respectively.
+
+The transport diagnostic run logged empty responses during immutable-object
+fetches (`Transport(Read(FinishedEarly(0)))`), despite eventually passing in
+**38.23 s**. That passing retry does not erase the two failures. Source inspection
+identified `accept_stream` inside a `select!` with completed request workers:
+accepting a stream and then waiting for its kind byte is not cancellation-safe.
+Reaping another worker could drop the newly accepted stream before reading its
+prefix; an absent prefix also blocked independent streams.
+
+A real-Quinn regression opens an empty stream, sends a later complete request,
+then completes the earlier request after the later response. It **fails before**
+the fix in **2.09 s** (build **16.81 s**), and the five cancellation tests **pass
+after** in **0.31 s** (build **9.50 s**). The dispatcher now selects only on
+cancellation-safe `accept_bi`; its bounded worker owns classification with the
+existing two-second peer deadline. Prefix expiry releases only that stream;
+invalid traffic retains existing rejection rules. No transport/API/schema,
+dependency, concurrency limit or acceptance deadline changed. Temporary diagnostic
+printing is removed. Logs: `/tmp/meshspan-namespace-object-diagnostic.log`,
+`/tmp/meshspan-kind-prefix-baseline.log`, `/tmp/meshspan-kind-prefix-fixed.log`.
+Real-daemon reconnect validation and affected lint remain in progress.
+
+Both real-daemon namespace-delivery tests now **pass in 40.57 s** (build
+**42.31 s**), preserving the unchanged exact-byte assertions, offline independent
+writes, reconnect and second restart, plus pre-enrolment history delivery.
+Log: `/tmp/meshspan-namespace-prefix-fixed.log`. This closes the reproduced
+partial-stream cancellation defect at focused acceptance scope; broader network
+checks and the new assembled gate remain required before integration.
+
+Broader network validation passes **31 tests in 8.77 s** (build **6.15 s**),
+including independent prefix expiry, continued exact requests on the same
+connection, malformed/bulk traffic and lifecycle coverage. Affected cluster and
+daemon all-target/all-feature Clippy passes with warnings denied in **9.98 s**.
+Logs: `/tmp/meshspan-prefix-network-tests.log`, `/tmp/meshspan-prefix-clippy.log`.
+Formatting and diff checks pass; no full-gate pass is implied by these results.
+
 ## DATA-01 — independent maintenance progression and durable retry
 
 The assembled implementation evaluates all nine bounded maintenance families
