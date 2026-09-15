@@ -56,7 +56,7 @@ use self::encoder::Encoder;
 use crate::{AuthoritativeCommand, CommandContext};
 
 /// Current closed metadata-command wire format.
-pub const METADATA_COMMAND_VERSION: u16 = 19;
+pub const METADATA_COMMAND_VERSION: u16 = 20;
 
 const MAGIC: [u8; 4] = *b"MSC\x04";
 const MAXIMUM_COMMAND_BYTES: usize = 1024 * 1024;

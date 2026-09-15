@@ -66,13 +66,14 @@ pub(super) fn commit(
         value.worker_incarnation,
         value.fence,
     )?;
+    super::repair_plan::validate_effect(transaction, context, value)?;
     validate_repair_subject(transaction, value)?;
     let replacement_generation = value
         .source_layout_generation
         .checked_add(1)
         .ok_or(RepositoryError::CapacityExceeded)?;
     ensure_repair_stripe(transaction, value, revision)?;
-    validate_active_repair_route(transaction, value)?;
+    validate_source_route(transaction, value.manifest_id, value.source_receipt)?;
     insert_repair_effect(
         transaction,
         context,
@@ -202,9 +203,10 @@ fn ensure_repair_stripe(
     Ok(())
 }
 
-fn validate_active_repair_route(
+pub(super) fn validate_source_route(
     transaction: &Transaction<'_>,
-    value: &CommitShardRepair,
+    manifest_id: ContentManifestId,
+    source: ShardReceipt,
 ) -> Result<(), RepositoryError> {
     let route = transaction
         .query_row(
@@ -213,9 +215,9 @@ fn validate_active_repair_route(
              FROM maintenance_repair_routes
              WHERE manifest_id = ?1 AND stripe_index = ?2 AND shard_index = ?3",
             params![
-                value.manifest_id.as_bytes().as_slice(),
-                super::to_i64(value.source_receipt.shard.stripe_index)?,
-                i64::from(value.source_receipt.shard.shard_index),
+                manifest_id.as_bytes().as_slice(),
+                super::to_i64(source.shard.stripe_index)?,
+                i64::from(source.shard.shard_index),
             ],
             |row| {
                 Ok((
@@ -232,7 +234,6 @@ fn validate_active_repair_route(
     let Some(route) = route else {
         return Ok(());
     };
-    let source = value.source_receipt;
     if exact::<16>(route.0)? == source.operation_id.as_bytes()
         && u32::try_from(positive(route.1)?).ok() == Some(source.shard.generation)
         && nonnegative(route.2)? == source.length
@@ -343,7 +344,7 @@ fn replace_repair_route(
     Ok(())
 }
 
-fn target_generation_exists(
+pub(super) fn target_generation_exists(
     transaction: &Transaction<'_>,
     target_id: meshspan_domain::TargetId,
     generation: u64,
@@ -356,7 +357,7 @@ fn target_generation_exists(
     )? == 1)
 }
 
-fn active_target_generation_exists(
+pub(super) fn active_target_generation_exists(
     transaction: &Transaction<'_>,
     target_id: meshspan_domain::TargetId,
     generation: u64,
@@ -386,7 +387,7 @@ fn active_target_generation_exists(
     )? == 1)
 }
 
-fn valid_receipt(receipt: ShardReceipt) -> bool {
+pub(super) fn valid_receipt(receipt: ShardReceipt) -> bool {
     receipt.shard.manifest_digest != [0; 32]
         && receipt.shard.generation > 0
         && receipt.length > 0

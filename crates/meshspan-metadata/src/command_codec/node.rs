@@ -21,13 +21,13 @@ pub struct DecodedAuthoritativeEntry {
 /// Whether the exact metadata command version has a compatibility decoder.
 #[must_use]
 pub const fn is_supported_metadata_command_version(version: u16) -> bool {
-    matches!(version, 18 | 19)
+    matches!(version, 18..=20)
 }
 
 /// Decodes a closed supported version without treating new commands as historical entries.
 ///
 /// # Errors
-/// Rejects unknown versions, malformed input, and node or version-19 commands marked version 18.
+/// Rejects unknown versions, malformed input and commands newer than the declared version.
 pub fn decode_authoritative_entry_for_version(
     version: u16,
     bytes: &[u8],
@@ -36,12 +36,15 @@ pub fn decode_authoritative_entry_for_version(
         return Err(MetadataCommandCodecError::Unsupported);
     }
     if bytes.starts_with(&MAGIC) {
-        if version != super::METADATA_COMMAND_VERSION {
+        if version < 19 {
             return Err(MetadataCommandCodecError::Unsupported);
         }
         return decode_node(bytes);
     }
     let decoded = super::decode_authoritative_command(bytes)?;
+    if version < 20 && matches!(decoded.command, AuthoritativeCommand::PlanShardRepair(_)) {
+        return Err(MetadataCommandCodecError::Unsupported);
+    }
     if version == 18
         && matches!(
             decoded.command,

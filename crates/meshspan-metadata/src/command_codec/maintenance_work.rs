@@ -15,6 +15,9 @@ use crate::{
     RebalanceScanCursor, RenewMaintenanceWork,
 };
 
+mod repair_plan;
+
+pub(super) const PLAN_SHARD_REPAIR: u16 = 138;
 pub(super) const QUEUE_MAINTENANCE_WORK: u16 = 36;
 pub(super) const CLAIM_MAINTENANCE_WORK: u16 = 37;
 pub(super) const RENEW_MAINTENANCE_WORK: u16 = 38;
@@ -45,6 +48,9 @@ pub(super) fn encode_command(
         }
         crate::AuthoritativeCommand::CompleteMaintenanceWork(value) => {
             encode_complete(encoder, *value)?;
+        }
+        crate::AuthoritativeCommand::PlanShardRepair(value) => {
+            repair_plan::encode(encoder, value)?;
         }
         crate::AuthoritativeCommand::CommitShardRepair(value) => {
             encode_repair(encoder, value)?;
@@ -81,7 +87,8 @@ pub(super) fn encode_command(
 pub(super) const fn is_command_kind(kind: u16) -> bool {
     matches!(
         kind,
-        QUEUE_MAINTENANCE_WORK
+        PLAN_SHARD_REPAIR
+            | QUEUE_MAINTENANCE_WORK
             | CLAIM_MAINTENANCE_WORK
             | RENEW_MAINTENANCE_WORK
             | COMPLETE_MAINTENANCE_WORK
@@ -113,6 +120,9 @@ pub(super) fn decode_command(
         }
         COMPLETE_MAINTENANCE_WORK => {
             decode_complete(decoder).map(crate::AuthoritativeCommand::CompleteMaintenanceWork)
+        }
+        PLAN_SHARD_REPAIR => {
+            repair_plan::decode(decoder).map(crate::AuthoritativeCommand::PlanShardRepair)
         }
         COMMIT_SHARD_REPAIR => {
             decode_repair(decoder).map(crate::AuthoritativeCommand::CommitShardRepair)

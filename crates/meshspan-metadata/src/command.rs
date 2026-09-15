@@ -255,6 +255,8 @@ pub enum AuthoritativeCommand {
     CompleteMaintenanceWork(CompleteMaintenanceWork),
     /// Advances one protected stripe to a provider-confirmed replacement shard location.
     CommitShardRepair(CommitShardRepair),
+    /// Retains one physical repair intent and claim-specific control identities before provider IO.
+    PlanShardRepair(PlanShardRepair),
     /// Commits the bounded summary of one complete provider scrub pass.
     CommitScrubPass(CommitScrubPass),
     /// Commits one returning target's complete inventory-verification pass.
@@ -521,6 +523,7 @@ impl AuthoritativeCommand {
             Self::RenewMaintenanceWork(value) => value.update_digest(digest),
             Self::CompleteMaintenanceWork(value) => value.update_digest(digest),
             Self::CommitShardRepair(value) => value.update_digest(digest),
+            Self::PlanShardRepair(value) => value.update_digest(digest),
             Self::CommitScrubPass(value) => value.update_digest(digest),
             Self::CommitTargetReconciliation(value) => value.update_digest(digest),
             Self::PublishSmbExport(value) => value.update_digest(digest),
@@ -2368,6 +2371,24 @@ pub enum MaintenanceWorkCompletion {
     },
 }
 
+/// Durable physical selection and exact control requests for one live repair claim.
+/// A later worker adopts the same physical intent with new claim-specific control identities.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlanShardRepair {
+    /// Existing authoritative claim; this command does not acquire or renew it.
+    pub claim: ClaimMaintenanceWork,
+    /// Exact source route generation selected by the queued work.
+    pub source_layout_generation: u64,
+    /// Existing source location; selection is not proof of current decodability.
+    pub source_receipt: ShardReceipt,
+    /// Original physical operation and destination retained across worker takeover.
+    pub intent: meshspan_contracts::ShardPutIntent,
+    /// Exact effect request context retained before attempting any provider work.
+    pub effect_context: CommandContext,
+    /// Exact completion request context for this claim only.
+    pub completion_context: CommandContext,
+}
+
 /// One copy-on-write shard replacement committed under a live repair claim.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CommitShardRepair {
@@ -4185,6 +4206,21 @@ digest_simple_record!(
         }
     }
 );
+digest_simple_record!(PlanShardRepair, b"plan-shard-repair", |value, digest| {
+    value.claim.update_digest(digest);
+    digest.unsigned(value.source_layout_generation);
+    digest_shard_receipt(digest, value.source_receipt);
+    digest.bytes(&meshspan_contracts::encode_shard_put_intent_v1(
+        value.intent,
+    ));
+    for context in [value.effect_context, value.completion_context] {
+        digest.identifier(context.operation_id.as_bytes());
+        digest.identifier(context.actor_principal_id.as_bytes());
+        digest.identifier(context.audit_event_id.as_bytes());
+        digest.signed(context.occurred_at.get());
+        digest.optional_revision(context.expected_revision);
+    }
+});
 digest_simple_record!(
     CommitShardRepair,
     b"commit-shard-repair",

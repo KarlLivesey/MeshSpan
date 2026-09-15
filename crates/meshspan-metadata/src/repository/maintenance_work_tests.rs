@@ -26,6 +26,9 @@ mod retry;
 #[path = "repair_effect_feed_tests.rs"]
 mod repair_effect_feed;
 
+#[path = "repair_attempt_tests.rs"]
+mod repair_attempt;
+
 #[test]
 fn work_is_deduplicated_leased_retried_and_fenced() -> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = Fixture::new()?;

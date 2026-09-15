@@ -10,6 +10,47 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 consensus-owned repair attempt — metadata progress
+
+Native resumption is signed/pushed as `0abea90626979c29bf520f78f707e2fd666fc119`,
+verified locally and by GitHub. The following metadata change adds transactional
+partition migration 121 and `PlanShardRepair` (wire kind 138, operation kind 167).
+Metadata command version 20 advertises this new command; compatibility decoders
+retain versions 18/19 and reject a plan falsely labelled as either older version.
+Historical node-command envelopes remain decodable as version 19.
+
+The consensus-owned job retains its exact physical operation, target, source
+receipt, deadline and byte identity before provider IO. A new claim can adopt
+that same intent with fresh effect/completion identities; it cannot silently
+reselect a destination or recycle the previous claim's control IDs/audit IDs.
+Once a plan exists, an effect must match its exact claim, context and replacement
+identity. Historical effects without a plan remain replayable. Reads bind the
+bounded stored command to the committed operation's digest, kind and revision.
+The record is a plan, not a claim that provider bytes are durable.
+
+Focused proofs cover reopen/adoption, changed physical intent and stale claim
+denial, recycled control identity denial, exact effect/completion, versioned
+codec/truncation rejection, and upgrade from schema 120 with integrity/FK checks.
+The substituted-command read test first failed (1 failed / 1 passed, 1.63s);
+after binding the record to its committed digest both passed in 1.47s. Broader
+maintenance tests passed 17/17 in 7.41s; command-codec tests passed 48/48 in 0.14s.
+Metadata/cluster/daemon all-target/all-feature warnings-denied Clippy passed in
+19.24s. Development compile/lint failures (SQL fixture integer type, visibility,
+reserved operation-kind collision, large value copies and an unnecessary test
+result wrapper) were corrected; no ceilings or expectations were weakened.
+
+Logs: `/tmp/meshspan-data02-repair-plan-tests-{baseline,fixed}.log`,
+`/tmp/meshspan-data02-repair-plan-acceptance{,-fixed}.log`,
+`/tmp/meshspan-data02-repair-plan-maintenance-tests.log`,
+`/tmp/meshspan-data02-repair-plan-codec-tests.log`,
+`/tmp/meshspan-data02-repair-plan-clippy{,-fixed}.log`, and
+`/tmp/meshspan-data02-repair-plan-consumer-clippy{,-fixed}.log`.
+
+The daemon still needs to select/adopt this record and invoke the resumable
+physical path. Real process takeover, remaining interruption cuts, superseded
+attempt cleanup and the complete gate remain open. No integration or Stage 10
+task 16 / DATA-02 completion is claimed by this metadata checkpoint.
+
 ## DATA-02 exact repair resumption over native mTLS — transport progress
 
 Provider resumption is committed as `cae3e0c7a9815b4aa63b0b3c58581370b019a21e`,

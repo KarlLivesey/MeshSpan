@@ -321,9 +321,9 @@ pub use maintenance_work::{
     DueStorageScrub, DueStorageScrubCursor, DueStorageScrubPage, MaintenanceEffectReference,
     MaintenanceVerificationProgress, MaintenanceWorkClaim, MaintenanceWorkCursor,
     MaintenanceWorkRecord, MaintenanceWorkState, MaintenanceWorkWindow, ReadyMaintenanceWork,
-    ReadyMaintenanceWorkPage, RebalanceScanProgress, ShardRepairEffectCursor,
-    ShardRepairEffectRecord, StorageDrainCursor, StorageDrainRecord, StorageDrainState,
-    StorageDrainStatusPage, StorageScopeDrainAction, StorageScopeDrainCursor,
+    ReadyMaintenanceWorkPage, RebalanceScanProgress, ShardRepairAttemptRecord,
+    ShardRepairEffectCursor, ShardRepairEffectRecord, StorageDrainCursor, StorageDrainRecord,
+    StorageDrainState, StorageDrainStatusPage, StorageScopeDrainAction, StorageScopeDrainCursor,
     StorageScopeDrainRecord, StorageScopeDrainState, empty_target_drain_catalogue_digest,
 };
 pub use manual_dns_task::{ManualDnsTaskCursor, ManualDnsTaskRecord, ManualDnsTaskState};
