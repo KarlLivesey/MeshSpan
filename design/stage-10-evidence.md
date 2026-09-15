@@ -202,6 +202,34 @@ compilation (`/tmp/meshspan-provider-lifetime-headless.log`), using headless bin
 Cargo/test workers **4**, and the validation TMPDIR. The completed source awaits a
 new canonical gate; neither focused pass retroactively clears the earlier failures.
 
+The lifetime correction was signed, pushed and locally/GitHub verified as
+`537b1f4b82c405e02e60fb37daabf5c67beb3c07`, tree
+`96401fcbc6991fb860f9774805260e17cd4aab5f`. The advisory-plus-full gate on that
+clean tree **failed**, exit **1**, wall **1160.552 s**
+(`/tmp/meshspan-check-537b1f4b.log`). Both advisories, static/licence checks and web
+tests passed. Cluster: **141 passed, 53.85 s**; daemon: **476 passed, one ignored,
+68.92 s**; headless: **33 passed, 13 ignored, 275.76 s**; filesystem: **237 passed,
+45.22 s**. This reaches and passes the previously failing headless target without
+claiming the historical private-activation failure's cause was established.
+
+The later metadata target passed **596**, failed **one**, ignored **one**, in
+**447.34 s**; subsequent Rust targets were not reached. The failure was
+`migration122_preserves_legacy_repair_plan_and_both_original_receipts`,
+`InvalidMigrationHistory`. Its reconstruction of schema 121 removed migration
+122 but retained migration 123 and its accounting table. A focused unchanged
+reproduction fails identically in **1.06 s**, wall **1.385 s**
+(`/tmp/meshspan-migration122-accounting-baseline.log`). The fixture now also removes
+the later accounting table and migration record before reopening; exact legacy
+repair-plan and both original-receipt assertions remain unchanged. This changes
+only the historical fixture, not production migration validation.
+
+The corrected schema-121 fixture passes **0.95 s**, wall **5.144 s** including
+compilation (`/tmp/meshspan-migration122-accounting-fixed.log`). Metadata
+all-target/all-feature Clippy passes **4.495 s**
+(`/tmp/meshspan-migration122-accounting-clippy.log`); workspace Rust formatting and
+diff whitespace checks pass. Remaining validation includes a new complete gate;
+the earlier run did not reach all Rust targets.
+
 CORE-03 and Stage 10 task 17 remain incomplete; PR #275 is unmerged. The separate
 real HTTPS/Samba proof has not run on this candidate. No hardware, soak or
 lifetime-capacity proof is claimed. CORE-04
