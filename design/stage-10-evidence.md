@@ -10,6 +10,51 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 continuation — committed repair projection
+
+PR #271 merged as `44bf2e5263d6cd9f6a87af74298d8c1f26df2721`. Its GitHub
+signature is verified, remote main matches, and its tree exactly matches signed
+evidence head `2cff499d4943ad72a22ab63d6d2d910348512f5f`. The tested source
+`31c82601` is included; the merged branch was removed without changing later
+main work. This resolves the pending integration statements below.
+
+The next slice addresses repair effects surviving interruption and reaching every
+gateway. Current execution completes the authoritative job before installing its
+local route, and no universal replay owner was found. A prerequisite regression
+also checks stripe-wide layout generation after a different shard was repaired
+and the catalogue reopened. Metadata owns one generation per stripe, whereas
+local candidates previously read a per-route generation. The regression fails
+with **1 instead of 2** after another shard was repaired (**0.16 s**, build
+**2.63 s**; `/tmp/meshspan-data02-stripe-generation-baseline.log`).
+
+The catalogue now derives the stripe's generation from its current route set,
+while retaining the individual route revision for exact replacement CAS. The
+existing primary-key prefix indexes the lookup by publication and stripe;
+`EXPLAIN QUERY PLAN` reports `sqlite_autoindex_content_shard_repair_routes_3`.
+The query is bounded by the stripe's finite shard set, not lifetime effect count.
+No schema or dependency changes are needed. A first compile identified the SQL
+conversion's error type; explicit propagation at the catalogue boundary fixes it.
+
+Focused validation on `44bf2e52` plus this prerequisite:
+
+- `cargo test -p meshspan-filesystem --lib content_catalog::tests`: **16 pass,
+  1.27 s**, build **2.51 s**. New coverage repairs A, B, then A again, exactly
+  replays each effect, reopens persistence and independently checks both current
+  receipts at generation 4 plus rejection of all obsolete receipt routes.
+- `cargo test -p meshspan-filesystem --test protected_content`: **13 pass,
+  9.34 s**, including exact reconstruction/reuse and real-folder loss/recovery.
+  The six-machine-named case models topology with local folders; it is not a
+  six-physical-machine proof.
+- Filesystem all-target/all-feature Clippy with warnings denied: **5.76 s**;
+  formatting and diff checks pass. Four bounded workers and one Cargo owner.
+
+Logs: `/tmp/meshspan-data02-catalogue-generation-fixed.log`,
+`/tmp/meshspan-data02-protected-content.log` and
+`/tmp/meshspan-data02-generation-clippy.log`. This is a checked prerequisite,
+not the DATA-02 workflow: durable replay, interrupted physical-attempt recovery,
+late manifest arrival and multi-gateway exact-byte readback remain open. No new
+full gate, integration, hardware proof or publication is claimed for this slice.
+
 ## DATA-01 continuation after checked integration
 
 PR #270 merged as `30569f42b25a221ebbd6e22a2475eaf1756be9b1`. GitHub verifies

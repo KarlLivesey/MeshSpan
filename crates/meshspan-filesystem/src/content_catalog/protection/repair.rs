@@ -81,8 +81,9 @@ pub(super) fn candidate(
         .filter(|planned| planned.shard_index == shard.shard_index)
         .ok_or(ContentCatalogError::Corrupt)?;
     let original = original_receipt(connection, content, shard.stripe_index, planned)?;
-    let (active, source_layout_generation) =
-        active_receipt(connection, operation_id, original)?.unwrap_or((original, 1));
+    let active = active_receipt(connection, operation_id, original)?
+        .map_or(original, |(receipt, _)| receipt);
+    let source_layout_generation = stripe_generation(connection, operation_id, shard.stripe_index)?;
     if active.shard != shard
         || active.target_id != target_id
         || active.target_generation != target_generation
@@ -119,9 +120,14 @@ pub(super) fn install(
         .copied()
         .ok_or(ContentCatalogError::InvalidInput)?;
     let original = original_receipt(&transaction, content, source.shard.stripe_index, planned)?;
-    let (active, active_generation) =
+    let (active, route_generation) =
         active_receipt(&transaction, content.publication_operation_id, original)?
             .unwrap_or((original, 1));
+    let active_generation = stripe_generation(
+        &transaction,
+        content.publication_operation_id,
+        source.shard.stripe_index,
+    )?;
     validate_transition(
         content,
         transition,
@@ -131,7 +137,7 @@ pub(super) fn install(
         active_generation,
     )?;
     insert_effect(&transaction, content, transition)?;
-    replace_route(&transaction, content, transition, active_generation)?;
+    replace_route(&transaction, content, transition, route_generation)?;
     transaction.commit()?;
     Ok(())
 }
@@ -214,6 +220,26 @@ fn original_receipt(
         target_id: shard.target_id,
         target_generation: shard.target_generation,
     })
+}
+
+// Authority advances the whole stripe, while an individual route can retain an
+// older revision until that shard moves again. The primary-key prefix bounds this
+// indexed read to the stripe's finite shard set, rather than its lifetime effect log.
+fn stripe_generation(
+    connection: &rusqlite::Connection,
+    publication_operation_id: OperationId,
+    chunk_index: u64,
+) -> Result<u64, ContentCatalogError> {
+    let latest: Option<i64> = connection.query_row(
+        "SELECT MAX(layout_generation) FROM content_shard_repair_routes
+         WHERE publication_operation_id = ?1 AND chunk_index = ?2",
+        params![
+            publication_operation_id.as_bytes().as_slice(),
+            to_i64(chunk_index)?
+        ],
+        |row| row.get(0),
+    )?;
+    Ok(latest.map_or(Ok(1), from_sql)?)
 }
 
 fn active_receipt(

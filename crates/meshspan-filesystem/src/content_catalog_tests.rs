@@ -391,6 +391,104 @@ fn scrub_identity_resolves_only_the_current_protected_shard_route()
         .ok_or("replacement route was not resolved")?;
     assert_eq!(current.source_layout_generation, 2);
     assert_eq!(current.source_receipt, replacement);
+    drop(catalog);
+    let reopened = DurableContentCatalog::open(directory.path(), UnixMicros::new(8))?;
+    let untouched = protected_receipt(
+        manifest.root_digest,
+        ProtectedShardCursor {
+            chunk_index: 0,
+            shard_index: 0,
+        },
+        stripe.shards()[0],
+    );
+    let next = reopened
+        .shard_repair_candidate(
+            untouched.target_id,
+            untouched.target_generation,
+            untouched.shard,
+        )?
+        .ok_or("unmoved shard remains current after reopening")?;
+    assert_eq!(next.source_receipt, untouched);
+    assert_eq!(
+        next.source_layout_generation, 2,
+        "every shard repair compares against the authoritative stripe generation"
+    );
+    Ok(())
+}
+
+#[test]
+fn sequential_repairs_share_the_stripe_generation_and_preserve_exact_replay()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempdir()?;
+    let (mut catalog, request, stripe, manifest) = committed_protected_catalog(directory.path())?;
+    let content = PublishedContentReference {
+        publication_operation_id: request.operation_id,
+        manifest,
+    };
+    let original = [0_u16, 1].map(|index| {
+        protected_receipt(
+            manifest.root_digest,
+            ProtectedShardCursor {
+                chunk_index: 0,
+                shard_index: index,
+            },
+            stripe.shards()[usize::from(index)],
+        )
+    });
+    let first = ShardReceipt {
+        operation_id: OperationId::from_bytes([91; 16])?,
+        target_id: TargetId::from_bytes([81; 16])?,
+        ..original[0]
+    };
+    let second = ShardReceipt {
+        operation_id: OperationId::from_bytes([92; 16])?,
+        target_id: TargetId::from_bytes([82; 16])?,
+        ..original[1]
+    };
+    let third = ShardReceipt {
+        operation_id: OperationId::from_bytes([93; 16])?,
+        target_id: TargetId::from_bytes([83; 16])?,
+        ..first
+    };
+    for (source, replacement, generation, identity) in [
+        (original[0], first, 1, 71),
+        (original[1], second, 2, 72),
+        (first, third, 3, 73),
+    ] {
+        let effect = ShardRepairTransition {
+            effect_operation_id: OperationId::from_bytes([identity; 16])?,
+            source_layout_generation: generation,
+            replacement_layout_generation: generation + 1,
+            source_receipt: source,
+            replacement_receipt: replacement,
+            committed_revision: Revision::new(generation + 6),
+        };
+        catalog.install_shard_repair(content, &effect)?;
+        catalog.install_shard_repair(content, &effect)?;
+    }
+    drop(catalog);
+    let reopened = DurableContentCatalog::open(directory.path(), UnixMicros::new(10))?;
+    for expected in [third, second] {
+        let current = reopened
+            .shard_repair_candidate(
+                expected.target_id,
+                expected.target_generation,
+                expected.shard,
+            )?
+            .ok_or("current repaired route")?;
+        assert_eq!(current.source_receipt, expected);
+        assert_eq!(current.source_layout_generation, 4);
+    }
+    for obsolete in [original[0], original[1], first] {
+        assert_eq!(
+            reopened.shard_repair_candidate(
+                obsolete.target_id,
+                obsolete.target_generation,
+                obsolete.shard
+            )?,
+            None
+        );
+    }
     Ok(())
 }
 
