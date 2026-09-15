@@ -18,12 +18,12 @@ use metadata_replica_source::MetadataReplicaSource;
 pub(super) struct RuntimeDataPlane {
     targets: Arc<Mutex<StorageTargetRuntime>>,
     streams: mpsc::Receiver<PeerDataStream>,
-    update_admission: Arc<Semaphore>,
+    blocking_admission: Arc<Semaphore>,
     replica_source: MetadataReplicaSource,
 }
 
 impl RuntimeDataPlane {
-    /// Transfer exclusive receiver ownership into this cycle's bounded update dispatcher.
+    /// Transfer exclusive receiver ownership into this cycle's bounded data dispatcher.
     pub(super) fn take_receiver(
         targets: Arc<Mutex<StorageTargetRuntime>>,
         streams: &mut Option<mpsc::Receiver<PeerDataStream>>,
@@ -39,7 +39,7 @@ impl RuntimeDataPlane {
             streams: streams
                 .take()
                 .ok_or(super::DaemonProcessError::PrivateNetworkState)?,
-            update_admission: Arc::new(Semaphore::new(2)),
+            blocking_admission: Arc::new(Semaphore::new(2)),
             replica_source: MetadataReplicaSource::new(directory, authority),
         })
     }
@@ -55,7 +55,7 @@ impl RuntimeDataPlane {
                 Some(result) = jobs.join_next(), if !jobs.is_empty() => self.observe(&result),
                 incoming = self.streams.recv() => {
                     let Some(stream) = incoming else { break; };
-                    jobs.spawn(serve(Arc::clone(&self.targets), Arc::clone(&self.update_admission), self.replica_source.clone(), stream, stop.clone()));
+                    jobs.spawn(serve(Arc::clone(&self.targets), Arc::clone(&self.blocking_admission), self.replica_source.clone(), stream, stop.clone()));
                 }
             }
         }
@@ -145,21 +145,28 @@ async fn serve(
             result = crate::update_peer::send(stream.stream, expected, file, stream.limits, deadline) => result.map_err(|_| ()),
         }
     } else {
-        let mut router = tokio::task::spawn_blocking(move || match targets.lock() {
-            Ok(mut targets) => targets.data_router(now),
-            Err(poisoned) => {
-                poisoned.into_inner().readiness.store_degraded(true);
-                Err(())
+        let permit = admission.try_acquire_owned().map_err(|_| ())?;
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            // Keep the capacity permit and provider operation owned until synchronous IO ends.
+            // Dropping a network future cannot undo a pack write or journal commitment.
+            let _permit = permit;
+            let mut router = match targets.lock() {
+                Ok(mut targets) => targets.data_router(now),
+                Err(poisoned) => {
+                    poisoned.into_inner().readiness.store_degraded(true);
+                    Err(())
+                }
+            }?;
+            if *stop.borrow() {
+                return Ok(());
             }
-        })
-        .await
-        .map_err(|_| ())??;
-        if *stop.borrow() {
-            return Ok(());
-        }
-        tokio::select! {
-            _changed = stop.changed() => Ok(()),
-            result = router.serve_message(stream.stream, stream.peer, stream.limits, now, message) => result.map_err(|_| ()),
-        }
+            runtime.block_on(async {
+                tokio::select! {
+                    _changed = stop.changed() => Ok(()),
+                    result = tokio::time::timeout(Duration::from_secs(30), router.serve_message(stream.stream, stream.peer, stream.limits, now, message)) => result.map_err(|_| ())?.map_err(|_| ()),
+                }
+            })
+        }).await.map_err(|_| ())?
     }
 }
