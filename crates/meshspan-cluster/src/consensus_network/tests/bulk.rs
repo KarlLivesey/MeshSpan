@@ -83,10 +83,24 @@ fn bulk_delivery_state(network: &ConsensusNetwork, peer: NodeId) -> String {
         .bulk_budgets
         .reserve(peer, MAXIMUM_CONSENSUS_BULK_BODY_BYTES)
         .is_ok();
+    let latest_receive = match network.latest_bulk_receive.lock() {
+        Ok(progress) => progress.as_ref().map_or_else(
+            || "none".to_owned(),
+            |progress| {
+                format!(
+                    "{:?}, total_ms={}, stage_ms={}",
+                    progress.stage,
+                    progress.started.elapsed().as_millis(),
+                    progress.stage_started.elapsed().as_millis()
+                )
+            },
+        ),
+        Err(_) => "unavailable: diagnostic lock poisoned".to_owned(),
+    };
     format!(
         "request_sequence={}, outbound_used_slots_and_closed={outbound:?}, \
          authenticated_support_cached={authenticated:?}, codec_permits={}, \
-         maximum_reservation_available={maximum_reservation_available}",
+         maximum_reservation_available={maximum_reservation_available}, latest_receive={latest_receive}",
         network.next_request.load(Ordering::Relaxed),
         network.bulk_codecs.available_permits(),
     )

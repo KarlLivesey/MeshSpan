@@ -14,32 +14,25 @@ use super::{
 use crate::{DurableCoreState, JointQuorumPlan, compile_plan, flat_plan};
 
 mod append_proof;
+mod leader_contact;
 mod membership_loss;
 mod replication_bytes;
 
 #[test]
 fn cancelled_read_barriers_release_core_capacity_without_success() -> Result<(), Box<dyn Error>> {
     let mut core = elected_core(3, 2)?;
+    let mut cancelled_reply = None;
     for number in 1..=1_025 {
         let id = ReadBarrierId(number);
-        core.step(CoreInput::BeginReadBarrier(id))?;
+        let effects = core.step(CoreInput::BeginReadBarrier(id))?;
+        cancelled_reply = Some(reply_to(&effects, 2, false)?);
         assert!(core.step(CoreInput::CancelReadBarrier(id))?.is_empty());
     }
     assert_eq!(core.commit_index(), 0);
     assert!(core.log_entry(1).is_none());
     let effects = core.step(message(
         2,
-        CoreMessage::AppendResponse(AppendResponse {
-            probe_id: Some(AppendProbeId(1)),
-            matched_digest: [0; 32],
-            term: 1,
-            accepted: false,
-            matched_index: 0,
-            next_index_hint: 1,
-            read_barrier_id: Some(ReadBarrierId(1_025)),
-            membership_epoch: 1,
-            plan_digest: fixture_plan_digest()?,
-        }),
+        CoreMessage::AppendResponse(cancelled_reply.ok_or("cancelled read probe missing")?),
     )?)?;
     assert!(effects.is_empty());
     assert_eq!(

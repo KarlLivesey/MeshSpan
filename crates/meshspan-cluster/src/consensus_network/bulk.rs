@@ -30,6 +30,46 @@ const BULK_TIMEOUT: Duration = Duration::from_secs(30);
 const ENTRY_ENCODING_OVERHEAD: usize = 128;
 const ENVELOPE_ENCODING_OVERHEAD: usize = 1024;
 
+// Test-only, one fixed-size observation per network. Older concurrent transfers cannot
+// overwrite the newest transfer's stage; no payload or credential data is retained.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(super) enum BulkReceiveStage {
+    ReceivingBody,
+    WaitingForCodec,
+    DecodingProtocol,
+    DecodingMessage,
+    AwaitingDispatch,
+    Dispatched,
+}
+
+#[cfg(test)]
+pub(super) struct BulkReceiveProgress {
+    pub(super) started: std::time::Instant,
+    pub(super) stage_started: std::time::Instant,
+    pub(super) stage: BulkReceiveStage,
+}
+
+#[cfg(test)]
+fn record_receive_stage(
+    latest: &super::Mutex<Option<BulkReceiveProgress>>,
+    started: std::time::Instant,
+    stage: BulkReceiveStage,
+) {
+    // Diagnostic poisoning must not alter the operation; the timeout snapshot reports it.
+    if let Ok(mut latest) = latest.lock()
+        && latest
+            .as_ref()
+            .is_none_or(|previous| previous.started <= started)
+    {
+        *latest = Some(BulkReceiveProgress {
+            started,
+            stage_started: std::time::Instant::now(),
+            stage,
+        });
+    }
+}
+
 pub(super) struct OutboundConsensusMessage {
     message: CoreMessage,
     allocation: Option<Arc<ConsensusByteReservation>>,
@@ -209,6 +249,14 @@ impl ConsensusNetwork {
         ingress: AuthenticatedStreamIngress,
     ) -> Result<(), ConsensusNetworkError> {
         let deadline = tokio::time::Instant::now() + BULK_TIMEOUT;
+        #[cfg(test)]
+        let receive_started = std::time::Instant::now();
+        #[cfg(test)]
+        record_receive_stage(
+            &self.latest_bulk_receive,
+            receive_started,
+            BulkReceiveStage::ReceivingBody,
+        );
         let (start, bytes, allocation) =
             tokio::time::timeout_at(deadline, self.receive_bulk_bytes(&mut stream, ingress.peer))
                 .await
@@ -222,11 +270,31 @@ impl ConsensusNetwork {
                 .clone(),
             body_digest: start.body_digest.clone(),
         };
+        #[cfg(test)]
+        record_receive_stage(
+            &self.latest_bulk_receive,
+            receive_started,
+            BulkReceiveStage::WaitingForCodec,
+        );
         let worker = self.acquire_bulk_codec(deadline).await?;
+        #[cfg(test)]
+        let latest_receive = Arc::clone(&self.latest_bulk_receive);
         let message = tokio::task::spawn_blocking(move || {
             let _worker = worker;
+            #[cfg(test)]
+            record_receive_stage(
+                &latest_receive,
+                receive_started,
+                BulkReceiveStage::DecodingProtocol,
+            );
             let decoded = decode_consensus_bulk(start, &bytes)
                 .map_err(|_| ConsensusNetworkError::InvalidTraffic)?;
+            #[cfg(test)]
+            record_receive_stage(
+                &latest_receive,
+                receive_started,
+                BulkReceiveStage::DecodingMessage,
+            );
             let message = crate::wire::decode_bulk_message(&decoded)?;
             Ok::<_, ConsensusNetworkError>(PeerConsensusMessage::with_allocation(
                 ingress.peer.node_id(),
@@ -238,9 +306,21 @@ impl ConsensusNetwork {
         .await
         .map_err(|_| ConsensusNetworkError::InvalidTraffic)??;
         check_bulk_deadline(deadline)?;
+        #[cfg(test)]
+        record_receive_stage(
+            &self.latest_bulk_receive,
+            receive_started,
+            BulkReceiveStage::AwaitingDispatch,
+        );
         tokio::time::timeout_at(deadline, async {
             self.admit_peer_message(ingress.peer, &ingress.messages, message)
                 .await?;
+            #[cfg(test)]
+            record_receive_stage(
+                &self.latest_bulk_receive,
+                receive_started,
+                BulkReceiveStage::Dispatched,
+            );
             send_data_control(
                 &mut stream.send,
                 &DataControlEnvelope {

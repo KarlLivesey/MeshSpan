@@ -10,11 +10,13 @@ type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 pub(in crate::metadata_authority::tests) struct BulkGate {
     state: Mutex<GateState>,
     changed: Notify,
+    reconnect_timeout: bool,
 }
 
 #[derive(Default)]
 struct GateState {
     blocked: Option<OperationId>,
+    contacts: BTreeMap<(NodeId, NodeId), u64>,
     captured: BTreeMap<(NodeId, NodeId), AppendRequest>,
     replies: BTreeMap<(NodeId, NodeId, u64), AppendResponse>,
 }
@@ -51,6 +53,13 @@ impl ConsensusMessageTransport for GatedTransport {
             self.gate.changed.notify_waiters();
         }
         if let CoreMessage::AppendRequest(request) = &message
+            && request.entries.is_empty()
+            && state.blocked.is_some()
+        {
+            *state.contacts.entry((from, to)).or_default() += 1;
+            self.gate.changed.notify_waiters();
+        }
+        if let CoreMessage::AppendRequest(request) = &message
             && request
                 .entries
                 .iter()
@@ -78,7 +87,46 @@ impl ConsensusMessageTransport for GatedTransport {
 }
 
 impl BulkGate {
-    async fn captured(&self, from: NodeId, to: NodeId) -> TestResult<AppendRequest> {
+    fn for_reconnect() -> Self {
+        Self {
+            reconnect_timeout: true,
+            ..Self::default()
+        }
+    }
+
+    pub(in crate::metadata_authority::tests) fn election_timeout(&self) -> Option<Duration> {
+        self.reconnect_timeout.then_some(Duration::from_secs(5))
+    }
+
+    pub(super) fn block(&self, operation: Option<OperationId>) -> TestResult {
+        let mut state = self.state.lock().map_err(|_| "test gate mutex poisoned")?;
+        state.blocked = operation;
+        state.contacts.clear();
+        Ok(())
+    }
+
+    pub(super) async fn contacts(
+        &self,
+        from: NodeId,
+        peers: &[NodeId],
+        minimum: u64,
+    ) -> TestResult {
+        loop {
+            let changed = self.changed.notified();
+            let complete = {
+                let state = self.state.lock().map_err(|_| "test gate mutex poisoned")?;
+                peers
+                    .iter()
+                    .all(|peer| state.contacts.get(&(from, *peer)).copied().unwrap_or(0) >= minimum)
+            };
+            if complete {
+                return Ok(());
+            }
+            changed.await;
+        }
+    }
+
+    pub(super) async fn captured(&self, from: NodeId, to: NodeId) -> TestResult<AppendRequest> {
         loop {
             let changed = self.changed.notified();
             if let Some(request) = self
@@ -95,7 +143,12 @@ impl BulkGate {
         }
     }
 
-    async fn matched(&self, from: NodeId, to: NodeId, index: u64) -> TestResult<AppendResponse> {
+    pub(super) async fn matched(
+        &self,
+        from: NodeId,
+        to: NodeId,
+        index: u64,
+    ) -> TestResult<AppendResponse> {
         loop {
             let changed = self.changed.notified();
             if let Some(response) = self
@@ -115,7 +168,7 @@ impl BulkGate {
 #[tokio::test]
 async fn interrupted_bulk_reconnect_retries_original_entry_and_reopens_exact_receipts() -> TestResult
 {
-    let gate = Arc::new(BulkGate::default());
+    let gate = Arc::new(BulkGate::for_reconnect());
     let cluster = RealAuthorityCluster::start_with_bulk_gate(Some(Arc::clone(&gate))).await?;
     let result =
         tokio::time::timeout(Duration::from_secs(20), prove_interruption(&cluster, &gate)).await;
@@ -202,7 +255,7 @@ async fn prove_interruption(
     Ok((context, encoded, receipt))
 }
 
-async fn verify_committed_receipts(
+pub(super) async fn verify_committed_receipts(
     cluster: &RealAuthorityCluster,
     context: CommandContext,
     command: &AuthoritativeCommand,
@@ -220,7 +273,7 @@ async fn verify_committed_receipts(
     Ok(())
 }
 
-async fn prepare_interruption_baseline(
+pub(super) async fn prepare_interruption_baseline(
     cluster: &RealAuthorityCluster,
     gate: &BulkGate,
 ) -> TestResult<u64> {
@@ -244,7 +297,7 @@ async fn prepare_interruption_baseline(
     Ok(baseline.applied_index)
 }
 
-async fn assert_no_progress(
+pub(super) async fn assert_no_progress(
     cluster: &RealAuthorityCluster,
     gate: &BulkGate,
     baseline: u64,

@@ -628,8 +628,11 @@ fn start_authorities(
             )?;
             let mut config = authority_config(index)?;
             let transport: Arc<dyn ConsensusMessageTransport> = if let Some(gate) = gate {
-                // Only the interrupted-body fixture holds replication while observing disk state.
-                config.election_timeout = Duration::from_secs(5);
+                // Only the reconnect fixture changes its election timing; contact proofs retain
+                // the ordinary per-voter deadlines while the body remains unavailable.
+                if let Some(timeout) = gate.election_timeout() {
+                    config.election_timeout = timeout;
+                }
                 Arc::new(consensus_bulk::interruption::GatedTransport::new(
                     network,
                     Arc::clone(gate),

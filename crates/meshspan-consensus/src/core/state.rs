@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use meshspan_domain::{NodeId, OperationId};
 
-use super::append_probes::{AppendProbes, ProbeResult};
+use super::append_probes::{AppendProbes, ProbeKind, ProbeResult};
 use super::membership_history::MembershipHistory;
 use super::replication_budget::ReplicationBatchBudget;
 
@@ -384,10 +384,18 @@ impl ConsensusCore {
         if self.role() != Role::Leader {
             return Err(CoreError::NotLeader);
         }
-        self.peers()
-            .into_iter()
-            .map(|peer| self.append_effect(peer, None))
-            .collect()
+        let last_index = self.last_position().index;
+        let mut effects = Vec::new();
+        for peer in self.peers() {
+            if self
+                .peer_matched_index(peer)
+                .is_none_or(|matched| matched < last_index)
+            {
+                effects.push(self.probe_effect(peer, ProbeKind::Replication, None)?);
+            }
+            effects.push(self.probe_effect(peer, ProbeKind::Contact, None)?);
+        }
+        Ok(effects)
     }
 
     fn receive(
@@ -628,7 +636,11 @@ impl ConsensusCore {
             let Some(proof) = probes.receive(&response)? else {
                 // A phase notice can request a fresh probe but supplies no write/read evidence.
                 return if response.probe_id.is_none() && !response.accepted {
-                    Ok(vec![self.append_effect(from, None)?])
+                    Ok(vec![self.probe_effect(
+                        from,
+                        ProbeKind::Replication,
+                        None,
+                    )?])
                 } else {
                     Ok(Vec::new())
                 };
@@ -636,6 +648,11 @@ impl ConsensusCore {
             let matched = leader.matched.get(&from).copied().unwrap_or(0);
             let next = leader.next.get(&from).copied().unwrap_or(1);
             match proof {
+                // Current-plan/current-term contact may confirm a read, including a valid
+                // negative response. It supplies no new replication progress or backtracking.
+                ProbeResult::Contact => {
+                    return self.acknowledge_read_barrier(from, response.read_barrier_id);
+                }
                 ProbeResult::Matched(index) => {
                     if index > last_index {
                         return Err(CoreError::InvalidInput);
@@ -669,7 +686,7 @@ impl ConsensusCore {
         let mut effects = self.advance_leader_commit()?;
         effects.extend(self.acknowledge_read_barrier(from, response.read_barrier_id)?);
         if peer_next <= last_index {
-            effects.push(self.append_effect(from, None)?);
+            effects.push(self.probe_effect(from, ProbeKind::Replication, None)?);
         }
         Ok(effects)
     }
@@ -749,7 +766,7 @@ impl ConsensusCore {
         }
         self.peers()
             .into_iter()
-            .map(|peer| self.append_effect(peer, Some(read_barrier_id)))
+            .map(|peer| self.probe_effect(peer, ProbeKind::Contact, Some(read_barrier_id)))
             .collect()
     }
 
@@ -1035,7 +1052,7 @@ impl ConsensusCore {
             return self
                 .peers()
                 .into_iter()
-                .map(|peer| self.append_effect(peer, None))
+                .map(|peer| self.probe_effect(peer, ProbeKind::Replication, None))
                 .collect();
         }
         if may_lead && self.is_local_voter() {
@@ -1108,7 +1125,7 @@ impl ConsensusCore {
             term: self.current_term,
         }];
         for peer in self.peers() {
-            effects.push(self.append_effect(peer, None)?);
+            effects.push(self.probe_effect(peer, ProbeKind::Replication, None)?);
         }
         Ok(effects)
     }
@@ -1133,7 +1150,7 @@ impl ConsensusCore {
             position,
         }];
         for peer in self.peers() {
-            effects.push(self.append_effect(peer, None)?);
+            effects.push(self.probe_effect(peer, ProbeKind::Replication, None)?);
         }
         effects.extend(self.advance_leader_commit()?);
         Ok(effects)
@@ -1231,16 +1248,26 @@ impl ConsensusCore {
             .collect()
     }
 
-    fn append_effect(
+    fn probe_effect(
         &mut self,
         peer: NodeId,
+        kind: ProbeKind,
         read_barrier_id: Option<ReadBarrierId>,
     ) -> Result<CoreEffect, CoreError> {
         let RoleState::Leader(leader) = &self.role else {
             return Err(CoreError::NotLeader);
         };
-        let next = leader.next.get(&peer).copied().unwrap_or(1).max(1);
-        let previous_index = next.checked_sub(1).ok_or(CoreError::InvalidInput)?;
+        let previous_index = match kind {
+            ProbeKind::Replication => leader
+                .next
+                .get(&peer)
+                .copied()
+                .unwrap_or(1)
+                .max(1)
+                .checked_sub(1)
+                .ok_or(CoreError::InvalidInput)?,
+            ProbeKind::Contact => leader.matched.get(&peer).copied().unwrap_or(0),
+        };
         let previous = if previous_index == 0 {
             LogPosition::GENESIS
         } else {
@@ -1255,8 +1282,15 @@ impl ConsensusCore {
                 .map(LogEntry::entry_digest)
                 .ok_or(CoreError::InvalidInput)?
         };
-        let entries = self.replication_entries(peer, next, u64::MAX);
-        let request = AppendRequest {
+        let entries = match kind {
+            ProbeKind::Replication => self.replication_entries(
+                peer,
+                previous_index.checked_add(1).ok_or(CoreError::Exhausted)?,
+                u64::MAX,
+            ),
+            ProbeKind::Contact => Vec::new(),
+        };
+        let mut request = AppendRequest {
             probe_id: AppendProbeId(self.next_append_probe_id),
             term: self.current_term,
             leader: self.config.local_node_id,
@@ -1269,14 +1303,25 @@ impl ConsensusCore {
             membership_epoch: self.active_membership_epoch(),
             plan_digest: self.active_plan_digest(),
         };
-        self.next_append_probe_id = self
-            .next_append_probe_id
-            .checked_add(1)
-            .ok_or(CoreError::Exhausted)?;
+        let existing = match kind {
+            ProbeKind::Replication => leader
+                .probes
+                .get(&peer)
+                .and_then(|probes| probes.replication_id(&request)),
+            ProbeKind::Contact => None,
+        };
+        if let Some(id) = existing {
+            request.probe_id = id;
+        } else {
+            self.next_append_probe_id = self
+                .next_append_probe_id
+                .checked_add(1)
+                .ok_or(CoreError::Exhausted)?;
+        }
         let RoleState::Leader(leader) = &mut self.role else {
             return Err(CoreError::NotLeader);
         };
-        leader.probes.entry(peer).or_default().sent(&request);
+        leader.probes.entry(peer).or_default().sent(&request, kind);
         Ok(CoreEffect::Send {
             to: peer,
             message: CoreMessage::AppendRequest(request),

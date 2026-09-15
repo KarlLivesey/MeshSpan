@@ -73,7 +73,10 @@ fn read_waits_for_both_quorums_and_preserves_a_queued_application_write()
         read.try_recv(),
         Err(oneshot::error::TryRecvError::Empty)
     ));
-    acknowledge(&mut runtime, peer, false, Some(ReadBarrierId(1)), &mut sent)?;
+    // Read contact and term-confirmation replication are independent proof lanes.
+    // Keep both original requests: a negative contact does not retry or consume data.
+    let initial: Vec<_> = std::iter::from_fn(|| sent.try_recv().ok()).collect();
+    acknowledge(&mut runtime, peer, false, Some(ReadBarrierId(1)), &initial)?;
     assert!(matches!(
         read.try_recv(),
         Err(oneshot::error::TryRecvError::Empty)
@@ -90,12 +93,13 @@ fn read_waits_for_both_quorums_and_preserves_a_queued_application_write()
         response.try_recv(),
         Err(oneshot::error::TryRecvError::Empty)
     ));
-    acknowledge(&mut runtime, peer, true, None, &mut sent)?;
+    acknowledge(&mut runtime, peer, true, None, &initial)?;
     let fence = read.try_recv()??;
     assert_eq!(fence.applied.index, 1);
     assert_eq!(fence.revision, Revision::new(0));
     assert!(runtime.queued.is_empty());
-    acknowledge(&mut runtime, peer, true, None, &mut sent)?;
+    let application: Vec<_> = std::iter::from_fn(|| sent.try_recv().ok()).collect();
+    acknowledge(&mut runtime, peer, true, None, &application)?;
     let receipt = response.try_recv()??;
     assert_eq!(receipt.operation_id, context.operation_id);
     assert_eq!(receipt.committed_position.index, 2);
@@ -220,12 +224,12 @@ fn acknowledge(
     peer: NodeId,
     accepted: bool,
     barrier: Option<ReadBarrierId>,
-    sent: &mut mpsc::Receiver<(NodeId, CoreMessage)>,
+    sent: &[(NodeId, CoreMessage)],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut probe = None;
-    while let Ok((to, message)) = sent.try_recv() {
+    for (to, message) in sent {
         if let CoreMessage::AppendRequest(request) = message
-            && to == peer
+            && *to == peer
             && request.read_barrier_id == barrier
         {
             probe = Some(request);

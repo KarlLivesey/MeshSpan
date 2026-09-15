@@ -7,6 +7,7 @@ use sha2::{Digest as _, Sha256};
 use super::*;
 
 pub(super) mod interruption;
+mod leader_contact;
 
 #[tokio::test]
 async fn three_real_voters_commit_and_reopen_a_legal_command_above_control_limit()

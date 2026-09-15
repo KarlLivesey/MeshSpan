@@ -151,6 +151,8 @@ pub struct ConsensusNetwork {
     snapshot_staging_path: Option<Arc<PathBuf>>,
     bulk_budgets: Arc<bulk_budget::ConsensusByteBudgets>,
     bulk_codecs: Arc<tokio::sync::Semaphore>,
+    #[cfg(test)]
+    latest_bulk_receive: Arc<Mutex<Option<bulk::BulkReceiveProgress>>>,
     capability_cache_path: Option<Arc<PathBuf>>,
     capability_cache_updates: Arc<tokio::sync::Mutex<()>>,
 }
@@ -378,6 +380,8 @@ impl ConsensusNetwork {
             snapshot_staging_path: config.snapshot_staging_path.map(Arc::new),
             bulk_budgets: Arc::new(bulk_budget::ConsensusByteBudgets::new()),
             bulk_codecs: bulk::codec_workers(),
+            #[cfg(test)]
+            latest_bulk_receive: Arc::default(),
             capability_cache_path,
             capability_cache_updates: Arc::new(tokio::sync::Mutex::new(())),
         };

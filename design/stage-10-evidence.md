@@ -10,6 +10,85 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## CORE-02 — large append contact and correlation investigation
+
+Temporary local timing instrumentation used the exact canonical workspace test
+artifact. The two failing tests pass together (**9.05 s**); all **135** cluster
+tests pass with live output (**54.03 s**) and through the existing captured-output
+runner (**55.53 s**). These runs do not close the full-gate failures. The maximum
+16 MiB body takes **7.5–9.2 s** to arrive; protocol/core decoding takes
+**0.44–0.60 s**, with negligible blocking-worker queue delay. Thus a held codec
+permit at the original failure can reflect late body arrival rather than a
+stalled codec. Logs: `/tmp/meshspan-bulk-canonical-timing.log`,
+`/tmp/meshspan-bulk-canonical-cluster-timing.log`,
+`/tmp/meshspan-bulk-canonical-captured-timing.log` and
+`/tmp/meshspan-bulk-flow-timing.log`.
+
+The measured 16 MiB stream has no packet loss/congestion and receives one stream
+credit update per frame. A bounded two-frame-window experiment leaves transfer
+time essentially unchanged (**7.535 s → 7.400 s**); it was reverted rather than
+retained as an unsupported fix. The original connection/bulk budgets and every
+test deadline are unchanged. Log: `/tmp/meshspan-bulk-two-frame-timing.log`.
+Temporary timing changes are removed; the local patch is retained outside the
+repository at `/tmp/meshspan-bulk-timing-instrumentation.patch`.
+
+Source tracing identifies a concrete, separate large-append liveness defect:
+heartbeat generation repeats pending entries, while the network drops another
+oversized append whenever its bulk worker is occupied. A slow transfer therefore
+withholds leader contact. Each regenerated request also consumes one of **64**
+probe records, potentially evicting the genuinely transmitted request before
+its acknowledgement. The normal three-voter fixture uses **40 ms** heartbeats
+and **600/850 ms** follower election timeouts; its measured 512 KiB body transfer
+can already overlap that first timeout. Two deterministic core regressions now **fail** (**0.00 s**, build **1.05 s**):
+there is no independent empty contact, and the original valid data reply leaves
+commit/matched at **0** after **70** heartbeats instead of advancing to **1**.
+Log: `/tmp/meshspan-core02-leader-contact-baseline.log`.
+
+The real three-voter delayed-body regression also **fails** (**5.75 s**, build
+**7.08 s**): the held original **70 KiB** operation returns `NotLeader` while
+the control path remains available. Normal fixture election deadlines are used
+(**900/1487.5 ms** after existing rank jitter); the older reconnect proof retains
+its explicit **5 s** override. The new proof requires 70 independent empty
+contacts to both followers, no premature commit/receipt, delivery of the original
+probe and exact reopened bytes/receipt. Failure fixture:
+`/home/karl/.cache/meshspan-validation/tmp/.tmpamzCz6`; log:
+`/tmp/meshspan-core02-delayed-body-baseline.log`.
+
+On `82749f83` plus this repair, replication and empty leader-contact probes have
+separate **64-record** bounds. Identical replication retries retain their exact
+previous/through position and digest binding and probe ID. Heartbeats send an
+independent empty contact at the follower's already-proven prefix; a contact can
+confirm current read authority but cannot advance replication or cause conflict
+backtracking. No wire, persistence, dependency or deadline contract changes.
+
+Pass-after validation: all **45 consensus tests pass** (**4.20 s**, build
+**1.50 s**), including both new regressions and existing expired read-proof,
+higher-term, divergent-log, partition and election simulations. All **five real
+three-voter bulk tests pass** (**10.44 s**, build **20.81 s**), including the new
+70-heartbeat hold followed by original-request delivery and exact reopened
+receipts. These close the reproduced contact/correlation defects, not the
+separate maximum generic transfer failure or the complete integration gate.
+
+The wider cluster run passes **135** tests and fails **one** read-barrier fixture
+(**60.85 s**; `/tmp/meshspan-core02-contact-cluster-fixed.log`). Its helper drains
+and discards the actual data request while selecting a read contact, then relies
+on the old negative-contact side effect to send data again. The fixture now
+retains both original requests and acknowledges each separately; its two-quorum,
+queued-write and exact revision assertions are unchanged. Final focused read and
+bulk validation passes **nine tests** (**12.18 s**, build **5.32 s**):
+`/tmp/meshspan-core02-contact-final-focused.log`. The new delayed-body assertion
+phase was clarified after Clippy reported test complexity **27/25**; no lint
+suppression or acceptance assertion was removed.
+
+Affected consensus/cluster all-target/all-feature Clippy passes with warnings
+denied (**4.11 s**; `/tmp/meshspan-core02-contact-clippy-final.log`). Rust formatting
+and diff checks pass. No required full-gate pass is claimed for this checkpoint.
+
+The maximum-transfer timeout now records its latest receive stage and elapsed
+time in test builds only. This is one fixed-size record per network with no
+payloads, credential data, per-transfer logging or changed deadlines; a later
+failure can distinguish body receipt, codec waiting/decoding and dispatch.
+
 ## INT-01 — daemon drain reaches the underlying transport lifetime
 
 The first assembled daemon lifecycle run passes **7 tests** and fails **2**
