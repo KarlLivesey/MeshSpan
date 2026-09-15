@@ -10,6 +10,85 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 exact provider admission and outcome resolution — signed progress
+
+PR #272 merged as `9560fd84936f90909446291463991d424bdeffd8`; its tree matches
+the checked source plus evidence and GitHub verifies the merge signature. The
+next branch, `codex/durable-repair-attempts`, has three signed, pushed commits,
+verified locally and by GitHub: storage `f39617c6`, transport `97455bf6` and daemon
+ownership `567f9989f100cebc6172688034c5d66579f70b09`. This is progress, not DATA-02
+completion or a passing integration gate. Stage 10 task 16's durable-progress
+prerequisite and the earlier repair-lifecycle acceptance remain open.
+
+The native client previously discarded the actual provider reservation and sent
+bytes after any nonempty ready payload. A real mTLS regression fails before the
+fix in **0.21 s** because bytes are transmitted after malformed admission; it
+passes afterward. It now also rejects a canonical but substituted target before
+upload. `ShardUploadClient` separates admission from upload, exposes the exact
+original context/reservation/shard identity for persistence, rejects changed
+bytes and bounds prepare/finish/resolve by the supplied clock and deadline.
+
+An independently reproduced lost-write-response/restart case could not resolve
+the exact original operation after its reservation expired: baseline **0.20 s**,
+`InvalidInput`. `FolderShardStore::resolve_put` now accepts fresh authenticated
+write authority while retaining every original request field. It returns closed
+unknown/prepared/verified evidence; it neither reserves capacity nor uploads
+bytes. Verification rereads the original pack operation and actual active bytes;
+prepared journal accounting commits once only after that proof. The regression
+passes in **0.24 s**, including exact 24-byte accounting, replay, altered original
+context, forged/expired/stale authority and later pack-byte corruption. Original
+version-one digest bytes are unchanged; no storage schema migration was added.
+
+Private data tags 14/15 add same-swarm exact outcome resolution. Existing tags
+remain unchanged. The resolver preserves fresh native authority checks; it does
+not grant federation authority or replace federation lifecycle/quota accounting.
+A hostile-outcome test found that the generic payload validator permits empty
+payloads. The new resolution messages now additionally reject empty verified
+receipts and unbound outcome digests; the generic validator was not weakened.
+Both new protocol tests pass after this correction. A test-module path error and
+a test cognitive-complexity warning were corrected before the final checks; no
+lint level or timeout was raised to obtain a pass.
+
+The combined real mTLS/folder proof cancels before bytes, retries the identical
+admission, cancels receipt observation after the provider reports durability,
+reopens the provider, advances time past the original expiry, and resolves the
+exact receipt under fresh authority. Replay does not issue another put; forged
+authority and altered original context are rejected. A separate admitted upload
+is stopped at expiry before sending bytes. Controlled time only moves forward.
+The final combined target passes in **0.52 s**. Native and existing federated
+transfer tests pass together: **172 tests across 13 targets, zero failed/ignored**
+for contracts, storage, data-plane and protocol with all targets/features and
+four test threads. Publisher interruption/restart consumers pass **2 tests in
+1.01 s**. Final affected all-target/all-feature Clippy (including filesystem and
+daemon consumers) passes in **8.41 s**; formatting/diff checks pass.
+
+Appliance provider IO now runs on owned blocking workers with the existing
+two-slot admission budget, retained until the synchronous call ends. Cancellation
+does not detach a provider write. The storage-node dispatcher accepts the new
+resolution request. The three-daemon stale-gateway/repair/provider-loss proof
+passes in **29.04 s** (build reported **1m 02s**) with exact original HTTPS bytes.
+This exercises real data traffic, not a full concurrency/performance or hardware
+acceptance claim. NVM selected Node **26.8.2**, npm **11.19.1**, pnpm **11.19.0**;
+`pnpm check:licences` passes Rust and JavaScript checks. No dependency changed.
+
+Logs: `/tmp/meshspan-data02-reservation-baseline.log`,
+`/tmp/meshspan-data02-expired-put-baseline.log`,
+`/tmp/meshspan-data02-put-resolution-adversarial.log`,
+`/tmp/meshspan-data02-resolution-protocol-tests.log`,
+`/tmp/meshspan-data02-resolution-protocol-fixed.log`,
+`/tmp/meshspan-data02-put-boundaries-final-tests.log`,
+`/tmp/meshspan-data02-publisher-consumer-tests.log`,
+`/tmp/meshspan-data02-final-consumer-clippy.log`,
+`/tmp/meshspan-data02-bounded-data-repair-proof.log` and
+`/tmp/meshspan-data02-admission-licences.log`.
+
+Remaining before DATA-02 acceptance: persist the selected physical/effect identities
+before IO; resume incomplete bytes under fresh authority without changing the
+original attempt; recover lost ready responses and worker takeover; integrate
+provider/effect/completion cuts into the real daemon; and authorise obsolete-route
+cleanup without retiring the live logical manifest. The complete NVM integration
+gate remains required before merging this branch. Publication remains on hold.
+
 ## DATA-02 repair projection — complete candidate gate
 
 The complete local NVM `pnpm check` passes on signed, locally/GitHub-verified
