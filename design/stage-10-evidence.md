@@ -10,6 +10,46 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 integration gate — recover contended current-minute metric samples
+
+The full gate on signed/pushed/GitHub-verified `cafd84bb4008aa8da6a492dffc110657b824750a`
+failed after **807.42 s**. All static, licence, tooling and web lanes passed;
+headless tests finished **32 passed, 1 failed, 13 ignored**. The failure was
+`metrics::exporter_policy_survives_restart_and_reaches_another_gateway`, which
+reported an elapsed deadline during its initial root/configuration phase. Later
+Rust targets, including metadata, were not reached. Log:
+`/tmp/meshspan-check-cafd84bb.log`. The same headless binary passed this case in
+the preceding gate, so a passing retry alone was not accepted as resolution.
+
+Retained root state showed no exporter configuration operations. Inspection of
+the initial history wait identified a matching timing defect: a failed
+non-blocking observation snapshot records a missing sample, but the prior
+once-per-minute guard then freezes that missing sample for up to 60 seconds.
+The real-process history wait is 15 seconds. A deterministic regression holds
+the observation mutex for the first sample, releases it, and requires the next
+sample to recover. It failed before the fix with the old observation timestamp
+still retained (`/tmp/meshspan-metrics-history-contention-baseline.log`).
+
+History sampling now retries a missing sample only within the current minute.
+A successful sample remains unchanged; completed buckets and historical gaps
+are not backfilled. The locks remain non-blocking, and the existing one-second
+observer tick bounds retries. No timeout, safety assertion or test parallelism
+was relaxed. The process fixture also names its history/configuration/dispatch
+phases and reports bounded missing-sample counts on a history timeout.
+
+All eight focused history tests passed in **0.08 s** (build **25.29 s**), including
+the real mutex-contention regression, gap preservation and API validation:
+`cargo test -p meshspan-daemon --lib metric_history`
+(`/tmp/meshspan-metrics-history-contention-tests.log`). The real exporter
+restart/second-gateway/root-loss proof passed in **16.69 s** (build **17.71 s**):
+`cargo test -p meshspan-daemon --all-features --test headless_process
+metrics::exporter_policy_survives_restart_and_reaches_another_gateway
+-- --exact --test-threads=4`
+(`/tmp/meshspan-metrics-history-process-proof.log`). Daemon Clippy, all targets
+and features with warnings denied, passed in **5.45 s**; formatting/diff checks
+passed. No schema, API model or dependency changed. A new complete gate remains
+required; PR #273 is still draft and Stage 10 remains incomplete.
+
 ## DATA-02 repair-resumption integration gate — historical backup fixture
 
 The first complete NVM `pnpm check` for signed/pushed/GitHub-verified

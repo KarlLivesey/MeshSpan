@@ -152,6 +152,23 @@ impl MetricHistory {
         self.last_minute = Some(elapsed / 60);
     }
 
+    fn sample_due(&self, elapsed: u64) -> bool {
+        let minute = elapsed / 60;
+        match self.last_minute {
+            None => true,
+            Some(previous) if previous < minute => true,
+            // A contended collector records an honest gap, but the next tick may still
+            // obtain the first valid observation for this bucket. Completed buckets
+            // and successful samples never get rewritten by this retry.
+            Some(previous) if previous == minute => self
+                .minutes
+                .points
+                .back()
+                .is_some_and(|point| point.metrics.is_none()),
+            Some(_) => false,
+        }
+    }
+
     fn page(
         &self,
         query: &MetricHistoryQuery,
@@ -215,10 +232,7 @@ impl RuntimeObservations {
             return;
         };
         let elapsed = self.0.started.elapsed().as_secs();
-        if history
-            .last_minute
-            .is_some_and(|minute| elapsed / 60 <= minute)
-        {
+        if !history.sample_due(elapsed) {
             return;
         }
         // Both locks are non-waiting; no observation collector takes them in reverse order.
