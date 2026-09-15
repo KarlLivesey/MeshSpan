@@ -65,9 +65,22 @@ Logs use `/tmp/meshspan-data01-`: `pagination-distinct-baseline.log`,
 `metadata-maintenance-final.log`, `work-final.log`, `clippy-final.log` and
 `fmt-final.log`. The read API exposes an existing persisted creation instant for
 resuming scans; no schema, wire, dependency or licensing changes are introduced.
-The full integration gate remains pending for this slice. Other expected durable
-deferrals, shared resource attribution, universal repair projection and eventual
-protection completion remain required. DATA-01 and Stage 10 are not closed.
+The complete NVM `MESHSPAN_CHECK_WORKERS=4 CARGO_BUILD_JOBS=4 RUST_TEST_THREADS=4
+pnpm check` now passes on signed, locally and GitHub-verified source
+`31c8260128708a1324002e02fe0320cd5d214145` in **1384.06 s**. Rust workspace tests
+pass in **1316.26 s**, web tests in **20.65 s**; generated drift, embedded web,
+workspace Clippy, formatting, both licence checks, TypeScript/ESLint and tooling
+all pass. Log: `/tmp/meshspan-check-31c82601.log`. The test lane reaches all Rust
+targets, including headless, filesystem and metadata. The GNU update-executable
+case proves rejection of a non-distribution binary; separate successful musl
+proofs below remain evidence for their named earlier revision. This gate does
+not claim ignored, physical, hardware or soak acceptance for the new candidate.
+
+PR #271 contains the checked selection slice. Only prose evidence changes after
+the tested source; remote main remains `30569f42` at final integration review.
+Other expected durable deferrals, shared resource attribution, universal repair
+projection and eventual protection completion remain required. DATA-01 and
+Stage 10 are not closed; no remaining task points are removed by this slice.
 
 ## Current candidate verification — full gate and real process proofs on `2adaba80`
 
