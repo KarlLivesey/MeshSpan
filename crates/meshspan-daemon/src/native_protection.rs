@@ -45,7 +45,9 @@ impl NativeProtectionPolicySource {
         }
     }
 
-    pub(crate) fn current_configuration(
+    /// Maintenance may evacuate its last writable local target onto remote providers.
+    /// Candidate eligibility, generations and fault-domain predicates remain authoritative.
+    pub(crate) fn maintenance_configuration(
         &self,
         volume_id: VolumeId,
     ) -> Result<ProtectionConfiguration, ContentPublicationError> {
@@ -58,6 +60,9 @@ impl ProtectionPolicySource for NativeProtectionPolicySource {
         &self,
         volume_id: VolumeId,
     ) -> Result<ProtectionConfiguration, ContentPublicationError> {
+        if self.local_targets.is_empty() {
+            return Err(ContentPublicationError::Unavailable);
+        }
         protection_configuration(&self.authority, &self.local_targets, volume_id)
     }
 }
@@ -67,9 +72,6 @@ fn protection_configuration(
     local_targets: &[StorageTargetProviderContext],
     volume_id: VolumeId,
 ) -> Result<ProtectionConfiguration, ContentPublicationError> {
-    if local_targets.is_empty() {
-        return Err(ContentPublicationError::Unavailable);
-    }
     let capacity_revision = authority
         .current_revision()
         .map_err(|_| ContentPublicationError::Unavailable)?;

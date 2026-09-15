@@ -145,8 +145,8 @@ pub(super) fn content_layout(
                 .chunks()
                 .iter()
                 .map(|chunk| {
-                    catalog
-                        .committed_protected_stripe(content, chunk.chunk_index)
+                    transfer
+                        .publication_stripe(chunk.chunk_index)
                         .map(|stripe| version_native_protected_stripe(&stripe))
                 })
                 .collect::<Result<Vec<_>, _>>()

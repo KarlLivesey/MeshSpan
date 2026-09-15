@@ -74,6 +74,8 @@ mod recovery_storage_control;
 mod recovery_storage_io;
 #[path = "headless_process/recovery_targets.rs"]
 mod recovery_targets;
+#[path = "headless_process/repair_projection.rs"]
+mod repair_projection;
 #[path = "headless_process/smb_lease.rs"]
 mod smb_lease;
 #[path = "headless_process/stage10.rs"]

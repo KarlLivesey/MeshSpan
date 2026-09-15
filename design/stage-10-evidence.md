@@ -55,6 +55,161 @@ not the DATA-02 workflow: durable replay, interrupted physical-attempt recovery,
 late manifest arrival and multi-gateway exact-byte readback remain open. No new
 full gate, integration, hardware proof or publication is claimed for this slice.
 
+### Ordered replay and committed-effect completion
+
+Continuation on signed prerequisite `0765888fc9ba58e337fb597abc235f81e8dec71a`:
+the authoritative repository now exposes a bounded, ordered, volume/manifest-
+scoped repair-effect feed. Partition migration 120 adds its covering scope/order
+index without changing migration 119. Each row validates its retained repair
+subject, exact receipt identities and stripe generation transition. File-backed
+upgrade, reopen, prior-digest, query-plan, integrity and foreign-key checks pass
+(**3.09 s**); two scoped-feed/corruption tests pass (**1.56 s**). An initial
+corruption fixture violated a foreign key before reaching its intended check;
+the corrected fixture creates a valid alternate scope and retains foreign-key
+enforcement. Logs: `/tmp/meshspan-data02-migration120.log`,
+`/tmp/meshspan-data02-metadata-feed-fixed.log`.
+
+Content migration 13 adds a separate authoritative replay cursor per partition
+and canonical publication. Route installation and cursor advancement share one
+SQLite transaction. Local/provisional repair records do not imply authoritative
+feed progress. Five catalogue tests pass (**0.50 s**), including reopen/exact
+retry, cursor-write rollback, stale cursor/substituted receipt rejection, late
+manifest admission, and schema-12 upgrade preserving committed content and prior
+migration records. Log: `/tmp/meshspan-data02-projection-local.log`.
+
+The daemon scans one local manifest per reconciliation and projects at most 32
+ordered effects, independently of whether it owns any storage target. Each
+manifest retains its own durable position; a late import starts at the beginning
+and a blocked manifest does not prevent scanning the others. A real composed
+consensus/folder fixture snapshots a stale catalogue with SQLite backup, commits
+a replacement, projects and reopens the snapshot, then checks the exact receipt
+and generation. It passes in **9.48 s**. Affected filesystem/metadata/daemon
+all-target/all-feature Clippy passes in **16.51 s**, after two test helpers were
+changed to borrow the enlarged effect record. Logs:
+`/tmp/meshspan-data02-composed-projection.log`,
+`/tmp/meshspan-data02-projection-clippy-fixed.log`.
+
+A further composed regression commits a second route effect using another
+retained real provider receipt, interrupts before work completion, projects the
+route and reopens persistence after claim expiry. The previous executor fails
+because the old source route no longer exists (**8.04 s**, build **24.94 s**).
+Recovery now checks and validates the existing authoritative effect before source
+lookup, catches up its ordered projection and completes under a fresh fenced
+claim with a newly sampled completion time. The same regression passes
+(**8.18 s**, build **21.83 s**), retaining the exact original effect/digest,
+two claim attempts, unchanged replacement receipt and no additional effect.
+Logs: `/tmp/meshspan-data02-completion-recovery-baseline.log` and
+`/tmp/meshspan-data02-completion-recovery-fixed.log`. An initial test helper
+visibility error was corrected before the failing behavioral reproduction.
+
+The first three-daemon acceptance attempt did **not** reach a repair effect
+(**34.76 s**, build **44.42 s**). Both surviving voters retain the same claimed
+repair; neither destination journal admitted a put. Its timeout diagnostic
+incorrectly assumed membership epoch 1 and hid the underlying 15-second repair
+wait; diagnostics now use the active plan. A stopped gateway still advertised a
+provider, but the selected destination has not been established. This observed
+stall remains unresolved, not erased by changing the fixture. An attempted
+storage-free fixture failed configuration validation (**7.52 s**, build
+**25.15 s**): startup requires at least one configured storage path. No production
+configuration requirement was changed. The supported fixture instead drains the
+gateway's empty target while all participants are online, before stopping that
+gateway and repairing onto the remaining provider. Logs of the retained failures:
+`/tmp/meshspan-data02-headless-projection.log`; private fixture paths are retained
+there, and `/tmp/meshspan-data02-headless-gateway-only.log`. No passing real-process
+readback is claimed at this point.
+
+The supported three-daemon scenario subsequently passes (**31.06 s**, build
+**9.48 s**): public empty-target drain reaches `safe_to_detach`, the stale gateway
+stops, the source drain commits one exact replacement onto the remaining live
+provider, the original provider process stops, and gateway restart recovers the
+full original file through HTTPS with only the replacement route installed.
+Log: `/tmp/meshspan-data02-headless-drained-gateway.log`. This proves local
+process/folder behavior, not physical power-loss or SMB interoperability.
+
+Disabling background replay for a negative control did **not** yet isolate the
+readback dependency: repair again stalled before effect commitment (**39.08 s**,
+build **20.81 s**; `/tmp/meshspan-data02-headless-replay-disabled.log`). Replay was
+restored immediately. Comparing both retained failures identifies the owning
+boundary: the root claimed repair after its only local provider entered draining
+state, then reused foreground protection construction, which rejects an empty
+writable-local-target set before considering remote destinations. Third-owned
+attempts have a writable local provider and can pass. Thus the passing attempt
+does not erase the failures; remote-only maintenance policy construction now has
+a focused regression pending before the correction and another process proof.
+
+Review also finds a distinct late-import defect. The native source exports active
+replacement receipts alongside immutable original planned destinations, so the
+wire encoder marks the repaired original receipt absent. A fresh receiver cannot
+finish its publication and therefore never enters committed-manifest projection.
+A composed regression using the actual exporter/codec/receiver import fails with
+`content catalogue publication is incomplete` (**8.89 s**, build **32.58 s**;
+`/tmp/meshspan-data02-fresh-import-baseline.log`). The correction retains immutable
+original publication receipts on export and requires bounded authoritative route
+projection before namespace-adoption acknowledgement, including import retry's
+already-committed fast path. Fresh-import validation remains pending at this
+point; no complete DATA-02 acceptance is claimed.
+
+The remote-only maintenance regression fails before the fix (**5.04 s**, build
+**38.93 s**; `/tmp/meshspan-data02-remote-policy-baseline.log`). The local-writable
+requirement now remains on foreground publication's policy entry point, while
+maintenance constructs the same authoritative global candidate/fault-domain
+snapshot without requiring a writable local target. Draining targets remain
+excluded from replacement placement. The complete composed regression, including
+fresh import through the actual exporter/receiver barrier, wrong-scope rejection,
+stale-catalogue replay and existing-effect completion, passes in **9.47 s**,
+build **16.84 s** (`/tmp/meshspan-data02-composed-all-fixed.log`). Initial export
+edits had two compile errors (SQL iterator error conversion and duplicate derives);
+both were corrected before that passing run.
+
+With the policy fix in place, a second negative control temporarily disables the
+shared projector at both background and import entry points. Repair now commits
+and the test reaches source loss/gateway restart, then fails the original exact-
+byte readback deadline (**44.16 s**, build **40.18 s**;
+`/tmp/meshspan-data02-headless-projector-disabled.log`). This isolates the missing
+projection behavior rather than a planning stall. The temporary bypass was
+removed immediately; no disable hook is retained in the candidate. The final
+positive process and affected-test checks are pending below.
+
+Signed progress commits `7b3f47d3db0a0fefb4113acf457e583260cee269` (scoped feed)
+and `28e6c5a450f8c9f9770c8ba068c9ec851ef0abef` (atomic route/cursor replay) are
+pushed and verified both locally and by GitHub. Remote main remains `44bf2e52`.
+
+The restored final process proof passes (**34.08 s**, build **14.70 s**;
+`/tmp/meshspan-data02-headless-final.log`). All **21 catalogue tests pass in
+1.59 s** (`/tmp/meshspan-data02-catalogue-final.log`). The broader real-folder
+suite initially reports **12 pass, 1 fail in 9.65 s**: its existing schema-11
+reuse fixture removed migration 12 but left newly added migration 13, producing
+an invalid migration gap before reopen (`/tmp/meshspan-data02-protected-final.log`).
+The fixture now first verifies both successor tables are empty, removes exactly
+the additive migration-12/13 objects and records in one transaction, and retains
+all original committed content, physical-payload and exact-byte assertions.
+This updates the historical fixture, not the migration validator. Rerun and
+final Clippy results are pending; the full gate has not started yet.
+
+The corrected real-folder suite now passes **13 tests in 9.09 s**
+(`/tmp/meshspan-data02-protected-fixed.log`). Final affected all-target/all-feature
+Clippy passes in **6.82 s** with warnings denied, after the interrupted-effect
+fixture preparation was separated from its recovery assertions to address the
+test function's responsibility/length warning. The composed regression passes
+again in **9.48 s**, build **21.40 s** (`/tmp/meshspan-data02-composed-final.log`);
+Clippy log: `/tmp/meshspan-data02-final-clippy-fixed.log`. An independent bounded
+review finds no additional concrete defects in the new replay, import, completion
+or remote-maintenance boundaries. Formatting and diff checks pass.
+
+NVM selects Node **26.8.2** and pnpm **11.19.0**, matching the repository engines
+and pinned package manager. The candidate is ready for its required full local
+gate; that gate, merge and any publication are not claimed by these focused
+results. Durable provider-success/effect-not-committed attempt recovery and
+obsolete-placement cleanup remain later DATA-02 work, alongside the retained
+Stage 10/11 acceptance gaps.
+
+DATA-02 remains open: the real gateway proof and its failure diagnosis, durable
+physical-attempt identity/outcome recovery, late-import read freshness and
+obsolete-placement cleanup authority still require completion. These changes
+add no dependency or licence change. The new assembled candidate has not run
+its full integration gate and is not merged. Stage 10 tasks 16/17 and earlier
+repair acceptance remain open; no task points are removed by these local proofs.
+
 ## DATA-01 continuation after checked integration
 
 PR #270 merged as `30569f42b25a221ebbd6e22a2475eaf1756be9b1`. GitHub verifies

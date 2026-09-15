@@ -531,6 +531,28 @@ impl DurableContentCatalog {
         content: crate::PublishedContentReference,
         chunk_index: u64,
     ) -> Result<CommittedProtectedStripe, ContentCatalogError> {
+        let original = self.publication_protected_stripe(request, content, chunk_index)?;
+        let receipts = original
+            .receipts
+            .as_slice()
+            .iter()
+            .map(|receipt| {
+                repair::current_receipt(&self.connection, request.operation_id, *receipt)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(CommittedProtectedStripe {
+            stripe: original.stripe,
+            receipts: BoundedItems::new(receipts, MAXIMUM_STRIPE_SHARDS)
+                .map_err(|_| ContentCatalogError::Corrupt)?,
+        })
+    }
+
+    pub(crate) fn publication_protected_stripe(
+        &self,
+        request: ContentPublicationRequest,
+        content: crate::PublishedContentReference,
+        chunk_index: u64,
+    ) -> Result<CommittedProtectedStripe, ContentCatalogError> {
         if request.format_version != 2 || request.operation_id != content.publication_operation_id {
             return Err(ContentCatalogError::InvalidInput);
         }
@@ -562,7 +584,7 @@ impl DurableContentCatalog {
                     .copied()
                     .filter(|shard| shard.shard_index == index)
                     .ok_or(ContentCatalogError::Corrupt)?;
-                let original = ShardReceipt {
+                Ok(ShardReceipt {
                     operation_id: shard.provider_operation_id,
                     shard: meshspan_contracts::ShardIdentity {
                         manifest_digest: content.manifest.root_digest,
@@ -574,10 +596,9 @@ impl DurableContentCatalog {
                     digest: shard.expected_digest,
                     target_id: shard.target_id,
                     target_generation: shard.target_generation,
-                };
-                repair::current_receipt(&self.connection, request.operation_id, original)
+                })
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, ContentCatalogError>>()?;
         Ok(CommittedProtectedStripe {
             stripe,
             receipts: BoundedItems::new(receipts, MAXIMUM_STRIPE_SHARDS)

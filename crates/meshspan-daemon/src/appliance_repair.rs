@@ -24,12 +24,21 @@ use meshspan_metadata::{
 use meshspan_work::{WorkSubject, WorkUrgency};
 use sha2::{Digest, Sha256};
 
+#[path = "appliance_repair_recovery.rs"]
+mod recovery;
+
+#[cfg(test)]
+pub(super) use recovery::assert_committed_effect_recovery;
+
 impl StorageTargetRuntime {
     pub(super) fn execute_repair_assignment(
         &mut self,
         assignment: MaintenanceDispatchAssignment,
         now: UnixMicros,
     ) -> Result<(), ()> {
+        if recovery::recover_committed_effect(self, assignment, now)? {
+            return Ok(());
+        }
         let mut source = RepairSource::load(self, assignment, now)?;
         let attempt = RepairAttempt::claim(self, assignment, now)?;
         let targets = self.active.values().cloned().collect::<Vec<_>>();

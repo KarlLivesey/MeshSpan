@@ -448,7 +448,7 @@ impl NativeFilesystemRuntime {
                 .map_err(|_| NativeFilesystemRuntimeError::Unavailable)?,
             writable,
         )
-        .current_configuration(volume_id)
+        .maintenance_configuration(volume_id)
         .map_err(|_| NativeFilesystemRuntimeError::Unavailable)
     }
 
