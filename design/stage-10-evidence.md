@@ -10,7 +10,64 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## CORE-02 — measured packet cost and compatible cipher preference
+
+The provider now prefers its existing AES-128-GCM suite on x86/x86_64 only when
+runtime AES, AVX and PCLMULQDQ support is present, matching the installed AES and
+POLYVAL backend requirements. Other architectures retain ChaCha preference. Both
+suites, TLS 1.3, P-256 identity/key-exchange restrictions, packet limits and every
+integrity check remain intact. There is no dependency, wire or persistence change.
+This follows the measured **8.42 → 6.48 s** isolated maximum-transfer result below;
+it is not a claim about other hardware or a full-gate pass.
+
+Validation on `17e2e344` plus the uninstrumented preference change:
+
+- Provider tests: **11 pass**, including RFC packet/header vectors and tamper
+  rejection, external-chain validation/rejection and **four** mutually
+  authenticated handshakes. Each algorithm is forced on each peer side in turn;
+  both endpoints confirm the exact suite/TLS version and exact bidirectional
+  bytes. Selection tests independently cover both acceleration choices. Build
+  **3.77 s**, test groups **0.00/0.14/0.11 s**;
+  `/tmp/meshspan-core02-cipher-provider-tests.log`.
+- Network and three-voter bulk tests: **41 pass**, **13.81 s**, build **7.74 s**,
+  including the unchanged maximum-transfer deadline and delayed original-probe
+  receipt/reopen proof; `/tmp/meshspan-core02-cipher-network-tests.log`.
+- Provider/transport/cluster all-target/all-feature Clippy: **passes**, **2.70 s**;
+  `/tmp/meshspan-core02-cipher-clippy.log`. Formatting and diff checks pass.
+
+The required integration gate and additional opt-in acceptance remain open.
+Temporary AEAD timing code and unconditional AES-first experiments are removed.
+
 ## CORE-02 — large append contact and correlation investigation
+
+The required dependency-update/full gate on signed/pushed `17e2e344` **fails**
+(**297.92 s**, Rust lane **226.63 s**). All advisory, generated, static, licensing,
+tooling and web checks pass; cluster tests pass **135/136** (**65.67 s**), including
+all real three-voter replication and read-barrier proofs. The sole failure is
+maximum generic 16 MiB delivery at its unchanged 15-second deadline. Its receive
+stage is `DecodingProtocol`: the receive owner has existed for **14,466 ms**, and
+protocol decoding began only **347 ms** before the timeout. Thus body receipt and
+codec admission used approximately **14.1 s**; this is not a stuck dispatch queue
+or an unobserved codec worker. Later Rust targets were not reached. The full log
+is `/tmp/meshspan-dependency-update-17e2e344.log`. No merge or integration pass is
+claimed; the contact/correlation fix is signed and remotely verified.
+
+
+A reduced canonical network run passes **29 tests** (**8.88 s**, **11.96 s user /
+0.11 s system CPU**), retaining four harness workers and the same temporary
+storage root. Temporary per-key aggregate AEAD timing then measures the isolated
+maximum transfer at **8.42 s**, of which ChaCha packet encryption/decryption
+accounts for **6.83 s**. A temporary reorder retaining both supported suites
+measures AES-first at **6.48 s**, with **5.27 s** packet AEAD. This is a measured
+CPU-cost difference, not yet proof that cipher preference fixes the full-gate
+failure; no deadline change or permanent preference change is claimed. Logs:
+`/tmp/meshspan-core02-canonical-network-resource.log`,
+`/tmp/meshspan-core02-aead-timing.log` and
+`/tmp/meshspan-core02-aes-preference-timing.log`. Both temporary changes were
+removed before implementation resumed. A reduced maximum-transfer plus federation
+run passes **30 tests** (**10.11 s**, **16.80 s user / 1.51 s system CPU**), so it
+does not reproduce or erase the full-gate timeout. Its log is
+`/tmp/meshspan-core02-bulk-federation-resource.log`.
 
 Temporary local timing instrumentation used the exact canonical workspace test
 artifact. The two failing tests pass together (**9.05 s**); all **135** cluster

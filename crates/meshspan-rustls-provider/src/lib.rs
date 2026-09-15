@@ -59,7 +59,7 @@ pub fn provider() -> CryptoProvider {
 #[must_use]
 pub fn internal_identity_provider() -> CryptoProvider {
     CryptoProvider {
-        cipher_suites: vec![TLS13_CHACHA20_POLY1305_SHA256, TLS13_AES_128_GCM_SHA256],
+        cipher_suites: preferred_cipher_suites(),
         kx_groups: vec![&kx::SECP256R1],
         signature_verification_algorithms: verify::INTERNAL_ALGORITHMS,
         secure_random: &PROVIDER,
@@ -78,6 +78,26 @@ pub fn external_webpki_provider() -> CryptoProvider {
     CryptoProvider {
         signature_verification_algorithms: verify::EXTERNAL_ALGORITHMS,
         ..internal_identity_provider()
+    }
+}
+
+// Match the installed RustCrypto AES and POLYVAL hardware requirements. Other
+// architectures retain the portable preference until their benefit is measured.
+fn preferred_cipher_suites() -> Vec<SupportedCipherSuite> {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    let accelerated = std::is_x86_feature_detected!("aes")
+        && std::is_x86_feature_detected!("avx")
+        && std::is_x86_feature_detected!("pclmulqdq");
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    let accelerated = false;
+    cipher_suites_for_acceleration(accelerated)
+}
+
+fn cipher_suites_for_acceleration(accelerated: bool) -> Vec<SupportedCipherSuite> {
+    if accelerated {
+        vec![TLS13_AES_128_GCM_SHA256, TLS13_CHACHA20_POLY1305_SHA256]
+    } else {
+        vec![TLS13_CHACHA20_POLY1305_SHA256, TLS13_AES_128_GCM_SHA256]
     }
 }
 
@@ -105,7 +125,36 @@ impl KeyProvider for Provider {
 mod tests {
     use rustls::{CipherSuite, NamedGroup, SignatureScheme};
 
-    use super::{TLS13_AES_128_GCM_SHA256, TLS13_CHACHA20_POLY1305_SHA256, provider};
+    use super::{
+        TLS13_AES_128_GCM_SHA256, TLS13_CHACHA20_POLY1305_SHA256, cipher_suites_for_acceleration,
+        provider,
+    };
+
+    #[test]
+    fn cipher_preference_retains_both_suites_with_and_without_acceleration() {
+        for (accelerated, expected) in [
+            (
+                true,
+                [
+                    CipherSuite::TLS13_AES_128_GCM_SHA256,
+                    CipherSuite::TLS13_CHACHA20_POLY1305_SHA256,
+                ],
+            ),
+            (
+                false,
+                [
+                    CipherSuite::TLS13_CHACHA20_POLY1305_SHA256,
+                    CipherSuite::TLS13_AES_128_GCM_SHA256,
+                ],
+            ),
+        ] {
+            let suites: Vec<_> = cipher_suites_for_acceleration(accelerated)
+                .iter()
+                .map(rustls::SupportedCipherSuite::suite)
+                .collect();
+            assert_eq!(suites, expected);
+        }
+    }
 
     #[test]
     fn profile_contains_only_the_proven_algorithms() {
@@ -116,13 +165,9 @@ mod tests {
             .map(rustls::SupportedCipherSuite::suite)
             .collect::<Vec<_>>();
 
-        assert_eq!(
-            suites,
-            [
-                CipherSuite::TLS13_CHACHA20_POLY1305_SHA256,
-                CipherSuite::TLS13_AES_128_GCM_SHA256,
-            ]
-        );
+        assert_eq!(suites.len(), 2);
+        assert!(suites.contains(&CipherSuite::TLS13_CHACHA20_POLY1305_SHA256));
+        assert!(suites.contains(&CipherSuite::TLS13_AES_128_GCM_SHA256));
         assert_eq!(provider.kx_groups.len(), 1);
         assert_eq!(provider.kx_groups[0].name(), NamedGroup::secp256r1);
         assert_eq!(provider.signature_verification_algorithms.all.len(), 1);

@@ -143,6 +143,10 @@ profile is TLS 1.3 only, with P-256 ECDHE and ECDSA identities plus AES-128-GCM 
 ChaCha20-Poly1305 traffic protection. RFC 9001 AES and ChaCha packet/header vectors, tamper
 rejection and a real mutually authenticated Rustls handshake are executable tests. Broader
 algorithm support is not implied and requires equivalent standards and interoperability proof.
+Traffic preference uses AES-128-GCM on x86/x86_64 with AES, AVX and PCLMULQDQ
+support, matching the installed AES/POLYVAL acceleration requirements; other
+architectures retain ChaCha20-Poly1305 preference. Both suites remain enabled,
+and mutual-authentication tests force each algorithm on either peer side.
 
 The explicit external HTTPS/certificate profile additionally admits `p384` 0.14.0
 under its MIT option for ECDSA P-384/SHA-384 verification. It reuses already resolved
