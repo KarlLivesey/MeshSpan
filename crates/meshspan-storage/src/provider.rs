@@ -5,6 +5,7 @@
 mod backup_capacity;
 mod pack_routing;
 mod put_resolution;
+mod repair_put;
 
 use std::path::Path;
 
@@ -249,20 +250,28 @@ impl FolderShardStore {
         if let PreparePutResult::Committed(receipt) = self.journal.prepare_put(journal_request)? {
             return Ok(receipt);
         }
-        self.select_pack(request.shard, now)?;
+        self.persist_prepared_put(journal_request, &request.bytes)
+    }
+
+    fn persist_prepared_put(
+        &mut self,
+        request: JournalPutRequest,
+        bytes: &BoundedBytes,
+    ) -> Result<ShardReceipt, FolderShardStoreError> {
+        self.select_pack(request.shard, request.now)?;
         let evidence = self
             .pack
             .put_exact(PackPutRequest {
-                operation_id: request.context.operation_id,
-                request_digest,
+                operation_id: request.reservation.operation_id,
+                request_digest: request.request_digest,
                 shard: request.shard,
                 expected_digest: request.expected_digest,
-                bytes: &request.bytes,
-                now,
+                bytes,
+                now: request.now,
             })
             .map_err(|error| map_pack(&error))?;
         self.journal
-            .commit_put(journal_request, evidence)
+            .commit_put(request, evidence)
             .map_err(Into::into)
     }
 

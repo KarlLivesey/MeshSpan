@@ -19,6 +19,8 @@ use crate::{CapacityPolicy, FolderRegistration, RegisteredFolder, UsageLimit};
 
 struct FixedRandom;
 
+mod repair_resume;
+
 #[test]
 fn expired_put_recovers_exact_outcome_after_lost_response_and_restart()
 -> Result<(), Box<dyn std::error::Error>> {

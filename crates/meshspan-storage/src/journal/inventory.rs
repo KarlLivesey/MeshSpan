@@ -141,26 +141,7 @@ impl TargetJournal {
             return resolve_provider_operation(existing, request);
         }
         validate_reservation(&transaction, request)?;
-        super::pack_routing::assign_pack(&transaction, request, self.pack_limits)?;
-        let operation = request.reservation.operation_id.as_bytes();
-        let shard = encode_shard(request.shard);
-        transaction.execute(
-            "INSERT INTO provider_operations(
-                operation_id, operation_kind, request_digest, state, shard_identity,
-                expected_length, expected_digest, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                operation.as_slice(),
-                PUT_OPERATION_KIND,
-                request.request_digest.as_slice(),
-                OPERATION_PREPARED,
-                shard.as_slice(),
-                to_i64(request.expected_length)?,
-                request.expected_digest.as_slice(),
-                request.now.get(),
-            ],
-        )?;
-        attach_reservation(&transaction, request)?;
+        insert_prepared_put(&transaction, request, self.pack_limits)?;
         transaction.commit()?;
         Ok(PreparePutResult::Prepared)
     }
@@ -407,13 +388,41 @@ fn decode_inventory_entry(
     })
 }
 
-struct StoredProviderOperation {
+pub(super) struct StoredProviderOperation {
     request_digest: [u8; 32],
     state: i64,
     shard: ShardIdentity,
     expected_length: u64,
     expected_digest: [u8; 32],
     receipt: Option<Vec<u8>>,
+}
+
+pub(super) fn insert_prepared_put(
+    transaction: &Transaction<'_>,
+    request: JournalPutRequest,
+    pack_limits: super::PackLimits,
+) -> Result<(), TargetJournalError> {
+    super::pack_routing::assign_pack(transaction, request, pack_limits)?;
+    let operation = request.reservation.operation_id.as_bytes();
+    let shard = encode_shard(request.shard);
+    transaction.execute(
+        "INSERT INTO provider_operations(
+                operation_id, operation_kind, request_digest, state, shard_identity,
+                expected_length, expected_digest, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            operation.as_slice(),
+            PUT_OPERATION_KIND,
+            request.request_digest.as_slice(),
+            OPERATION_PREPARED,
+            shard.as_slice(),
+            to_i64(request.expected_length)?,
+            request.expected_digest.as_slice(),
+            request.now.get(),
+        ],
+    )?;
+    attach_reservation(transaction, request)?;
+    Ok(())
 }
 
 fn validate_put_request(
@@ -481,7 +490,7 @@ fn attach_reservation(
     }
 }
 
-fn load_provider_operation(
+pub(super) fn load_provider_operation(
     transaction: &Transaction<'_>,
     operation_id: OperationId,
 ) -> Result<Option<StoredProviderOperation>, TargetJournalError> {
@@ -517,7 +526,7 @@ fn load_provider_operation(
         .transpose()
 }
 
-fn resolve_provider_operation(
+pub(super) fn resolve_provider_operation(
     existing: StoredProviderOperation,
     request: JournalPutRequest,
 ) -> Result<PreparePutResult, TargetJournalError> {

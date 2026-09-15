@@ -10,6 +10,50 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 resume prepared repair bytes under fresh authority — provider boundary
+
+The provider can now prepare an immutable repair intent before accepting bytes,
+recover its actual reservation after a lost admission reply, and finish the same
+operation after the original deadline using fresh authenticated repair authority.
+Preparation and capacity pinning are one journal transaction. An expired released
+reservation must reacquire current capacity; an already prepared reservation is
+not charged twice. Original deadlines, reservation tokens and put digests remain
+unchanged. Ordinary expired puts and foreground use of the new path are rejected.
+Committed replay independently verifies current pack bytes through the existing
+resolver. No schema or dependency change is needed at this provider boundary.
+
+The real-folder interruption/restart regression failed with `InvalidInput` in
+0.23s before resumption and passed in 0.24s after it. Its strengthened version
+also checks forged/expired authority, substituted bytes/digests, foreground
+denial, exact committed replay and one 24-byte accounting credit. Journal tests
+prove lost-admission capacity exhaustion rolls back, replay after reopening
+retains the same token, and an intent not previously received can be prepared
+after its original deadline. These are controlled local interruption tests.
+
+Validation on the working tree based on `cbe0f4a3`:
+
+- Contracts/storage all-target/all-feature tests: 39 + 63 passed, no failed or
+  ignored tests; storage runtime 6.20s. The first run had a missing test fixture
+  argument at compile time; corrected before the passing run.
+- Strengthened focused repair regressions: 3 passed in 0.26s. Affected
+  all-target/all-feature Clippy with warnings denied passed in 0.39s.
+- Existing real native transport consumer: 1 passed in 0.52s; foreground
+  publisher recovery/expiry consumers: 2 passed in 1.13s.
+- Intent codec has independent fixed-byte, malformed-boundary and admission
+  binding tests. Its initial admission validator accepted zero length; the
+  fail-before/pass-after logs retain that development correction.
+
+Logs: `/tmp/meshspan-data02-expired-repair-resume-{baseline,fixed}.log`,
+`/tmp/meshspan-data02-repair-admission-tests{,-fixed}.log`,
+`/tmp/meshspan-data02-repair-resume-adversarial.log`,
+`/tmp/meshspan-data02-repair-admission-final-clippy.log`,
+`/tmp/meshspan-data02-repair-admission-{wire,publisher}-consumer.log`, and
+`/tmp/meshspan-data02-intent-validation-{baseline,fixed}.log`.
+
+The new resume path is not yet exposed through the private transport or used by
+durable daemon repair plans. Those integrations, worker takeover and the full
+candidate gate remain required. DATA-02 and Stage 10 task 16 remain incomplete.
+
 ## DATA-02 distinct reservation and put contexts — compatibility regression
 
 The exact-outcome resolver now compares the retained reservation itself and

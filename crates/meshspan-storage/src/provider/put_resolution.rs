@@ -3,8 +3,7 @@
 //! Resolve an original write under fresh authority, without admitting another physical attempt.
 
 use meshspan_contracts::{
-    ContractVersion, ShardPutIdentity, ShardPutResolution, ShardWritePermit,
-    verify_write_permit_mac,
+    ShardPutIdentity, ShardPutIntent, ShardPutResolution, ShardWritePermit, verify_write_permit_mac,
 };
 use meshspan_domain::UnixMicros;
 
@@ -66,26 +65,36 @@ impl FolderShardStore {
         authority: ShardWritePermit,
         now: UnixMicros,
     ) -> Result<(), FolderShardStoreError> {
-        if original.context.contract_version != ContractVersion::V1_0
-            || original.context.operation_id != original.reservation.operation_id
-            || original.context.deadline.get() <= 0
+        if original.context.operation_id != original.reservation.operation_id
             || original.context.deadline > original.reservation.expires_at
-            || original.shard.manifest_digest == [0; 32]
-            || original.shard.generation == 0
-            || original.expected_digest == [0; 32]
+            || original.reservation.reservation_digest == [0; 32]
         {
             return Err(FolderShardStoreError::InvalidInput);
         }
+        self.authorise_put_intent(original.intent(), authority, now)
+    }
+
+    pub(super) fn authorise_put_intent(
+        &self,
+        intent: ShardPutIntent,
+        authority: ShardWritePermit,
+        now: UnixMicros,
+    ) -> Result<(), FolderShardStoreError> {
+        intent
+            .validate()
+            .map_err(|_| FolderShardStoreError::InvalidInput)?;
         let marker = self.folder.marker();
         if now.get() < 0
             || !verify_write_permit_mac(&self.permits.key, authority)
             || authority.mesh_id != self.permits.mesh_id
-            || authority.operation_id != original.context.operation_id
+            || authority.operation_id != intent.context.operation_id
             || authority.target_id != marker.target_id()
             || authority.target_generation != marker.generation()
-            || authority.shard != original.shard
-            || authority.reservation_class != original.reservation.class
-            || authority.maximum_bytes < original.expected_length
+            || intent.target_id != marker.target_id()
+            || intent.target_generation != marker.generation()
+            || authority.shard != intent.shard
+            || authority.reservation_class != intent.reservation_class
+            || authority.maximum_bytes < intent.expected_length
             || authority.authorization_revision.get()
                 < self.permits.minimum_catalogue_revision.get()
             || authority.expires_at <= now

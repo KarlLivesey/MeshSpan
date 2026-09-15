@@ -22,6 +22,7 @@ mod pack_routing;
 #[cfg(test)]
 mod pack_routing_tests;
 mod removal;
+mod repair_put;
 mod scrub;
 
 pub use inventory::{
@@ -308,6 +309,7 @@ struct StoredReservation {
     class: ReservationClass,
     maximum_bytes: u64,
     expires_at: UnixMicros,
+    state: i64,
 }
 
 impl StoredReservation {
@@ -594,7 +596,7 @@ fn load_reservation(
     transaction
         .query_row(
             "SELECT request_digest, reservation_digest, reservation_class,
-                    maximum_bytes, expires_at
+                    maximum_bytes, expires_at, state
              FROM reservations WHERE operation_id = ?1",
             [operation.as_slice()],
             |row| {
@@ -604,6 +606,7 @@ fn load_reservation(
                     row.get::<_, i64>(2)?,
                     row.get::<_, i64>(3)?,
                     row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
                 ))
             },
         )
@@ -615,6 +618,7 @@ fn load_reservation(
                 class: decode_reservation_class(row.2)?,
                 maximum_bytes: to_u64(row.3)?,
                 expires_at: UnixMicros::new(row.4),
+                state: row.5,
             })
         })
         .transpose()
@@ -837,6 +841,8 @@ pub enum TargetJournalError {
 
 #[cfg(test)]
 mod tests {
+    mod repair_admission;
+
     use meshspan_contracts::{ContractVersion, RequestContext, ReservationClass};
     use meshspan_domain::{
         EntropyError, MeshId, OperationId, RandomSource, Revision, TargetId, UnixMicros,
