@@ -10,6 +10,32 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 repair-resumption candidate — complete local gate passes
+
+The complete NVM `pnpm check` passes on signed, locally/GitHub-verified
+`eb2c6ca23e1d55fd5cb3e19f582cb400e9d8b929`, tested tree
+`51f144c9eb5526d2fc7858a16ee6b777bfbc7384`, in **1290.89 s** with four check
+workers, four Cargo build jobs and four Rust test threads. Rust workspace tests
+pass in **1250.97 s**, including the later targets not reached in the prior failed
+gates; web tests pass in **16.29 s**. Generated drift, embedded web, Rust/web
+static checks, formatting, Rust/JavaScript dependency licences and tooling tests
+all pass. Log: `/tmp/meshspan-check-eb2c6ca2.log`.
+
+The exact-byte repair/resumption paths also have the separately executed real
+HTTPS/Samba recovery-and-cleanup proof (**130.65 s**) and three-process automatic
+repair/stale-gateway restart proof (**35.85 s**), recorded below. The final metric
+contention correction additionally passed its deterministic failed-before/fixed-
+after regression and real exporter restart/peer/root-loss proof (**16.69 s**).
+No subsequent production implementation changes are included in this evidence
+update. The historical fixture and intermittent history-sampling failures remain
+recorded below; this passing gate resolves their integration block.
+
+PR #273 is ready for integration. DATA-02 still requires the remaining process
+interruption cuts, obsolete/superseded physical-attempt cleanup and whole-stripe
+generation handling. Stage 10 is incomplete; Stage 11 has not started as an
+integrated stage. Hardware, physical power-loss, soak and independent review are
+not claimed. Publication remains on hold.
+
 ## DATA-02 integration gate — recover contended current-minute metric samples
 
 The full gate on signed/pushed/GitHub-verified `cafd84bb4008aa8da6a492dffc110657b824750a`
@@ -18,8 +44,9 @@ headless tests finished **32 passed, 1 failed, 13 ignored**. The failure was
 `metrics::exporter_policy_survives_restart_and_reaches_another_gateway`, which
 reported an elapsed deadline during its initial root/configuration phase. Later
 Rust targets, including metadata, were not reached. Log:
-`/tmp/meshspan-check-cafd84bb.log`. The same headless binary passed this case in
-the preceding gate, so a passing retry alone was not accepted as resolution.
+`/tmp/meshspan-check-cafd84bb.log`. The preceding gate passed this case with the same production implementation;
+the intervening commit changed only a historical fixture and documentation. A
+passing retry alone was not accepted as resolution.
 
 Retained root state showed no exporter configuration operations. Inspection of
 the initial history wait identified a matching timing defect: a failed
@@ -404,8 +431,7 @@ headless process tests and filesystem targets passed. Web tests passed in
 **16.32 s**. Metadata finished **583 passed, two failed** in **380.39 s**; later
 Rust targets were not reached. PR #272 remains unmerged.
 
-Both failures are legacy-fixture assumptions invalidated by partition migration
-120. The backup-root fixture restored schema 109 but retained migration 120's
+Both failures are legacy-fixture assumptions invalidated by partition migration 120. The backup-root fixture restored schema 109 but retained migration 120's
 `maintenance_repair_effects_scope_order` index, so replay correctly rejected an
 already-existing index. Its focused baseline fails in **1.36 s**. The fixture now
 removes that post-109 index along with the other successor schema objects; the
