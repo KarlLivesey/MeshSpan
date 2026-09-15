@@ -25,7 +25,7 @@ use tower::ServiceExt;
 
 /// Volume keys require the verified offline recipient, just as in the real
 /// headless bootstrap workflow. Retain private temporary copies through verification.
-pub(super) async fn save_and_verify_maintenance_recovery(
+pub(in super::super) async fn save_and_verify_maintenance_recovery(
     router: &Router,
     created: &meshspan_api_contract::CreateMeshSetupResponse,
 ) -> Result<(), Box<dyn Error>> {

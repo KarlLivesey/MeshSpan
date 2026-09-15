@@ -6,6 +6,9 @@ mod private_control_lifecycle;
 #[path = "appliance_maintenance_tests.rs"]
 mod maintenance;
 
+#[path = "storage_node_startup_tests.rs"]
+mod storage_startup;
+
 use super::*;
 use crate::backup_export_service::BackupExportProviders;
 use std::path::Path;

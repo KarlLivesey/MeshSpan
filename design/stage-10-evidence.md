@@ -10,6 +10,98 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 integration gate — recovered cleanup transport failure
+
+Signed metrics fix `12d1fa0098711f8c80f99d145d15d01b60c5deee` is pushed and
+verified locally and by GitHub. The new complete NVM `pnpm check` failed after
+**820.02 s** (`/tmp/meshspan-check-12d1fa00.log`). All static, licence and tooling
+lanes passed; web tests passed in **16.85 s**. Headless finished **32 passed,
+one failed, 13 ignored** in **510.21 s**. Later Rust targets were not reached.
+The provider-loss metric regression and gateway-repair case passed this target;
+the overall integration gate did not pass and PR #272 remains a draft.
+
+The offline-backup failure reports `consensus private transport failed` during
+its late recovered cleanup proof, not the historical missing-history assertion.
+Retained root `.tmpjJzYgL` and cleanup peer `.tmpJszWNM` are under
+`/home/karl/.cache/meshspan-validation/tmp`. Read-only inspection shows the
+recovered gateway and peer both record one reclaimed item, **8,192 bytes**, at
+revision **75**; the storage replica lacks that final accounting record. Thus
+physical cleanup and authoritative accounting happened before the observed
+failure. The remaining distinction is the final commit response versus the
+post-restart private connection used to replay its receipt. Restart currently
+waits for HTTPS configuration status; private service readiness is not yet proved
+by that observation. Phase-specific diagnostics and a focused reproduction are
+in progress. No mutation retry, deadline change or passing-gate claim is made.
+
+The diagnostic-only focused backup run passed in **112.18 s** (build **9.18 s**;
+`/tmp/meshspan-data02-backup-diagnostic.log`), so that retry does not establish
+that the intermittent transport failure is fixed. Storage's durable last-open
+record precedes the final accounting by 473 ms: no later provider reopen completed,
+which still permits either a lost accounting response or an early restart request.
+
+Source tracing found a concrete startup gap. Private bootstrap has an empty peer
+list, while the storage service previously installed committed peer routes only
+on a later maintenance tick. Its HTTPS setup status is a persisted configuration
+snapshot, not proof of private-operation readiness. Private binding itself already
+precedes HTTPS startup, and data connections are fresh; neither a bind-order claim
+nor a stale-connection-cache claim is supported. The draft fix installs committed
+routes and certificate overlap before storage network startup returns. Repository
+reads remain on the blocking worker; existing generation cleanup owns failure.
+A deterministic startup-route regression and the full focused recovery workflow
+are being verified before the next integration gate. No mutation retry or longer
+deadline is added.
+
+The deterministic startup regression now proves the gap independently of process
+timing. It configures a real local authority, saves/verifies its recovery material,
+admits one peer with typed commands, drains and reopens the daemon state, then
+calls the storage network startup boundary without starting periodic maintenance.
+With the preload omitted it fails **0 routes versus 1** in **5.27 s** (build
+**31.52 s**); with the preload restored it passes in **5.27 s** (build **37.45 s**),
+checking exact node, incarnation, endpoint, certificate and certificate name.
+This is a startup registry proof; wire behavior is covered by the real recovery
+workflow, which passes with the fix in **111.71 s** (build **15.23 s**).
+
+Initial fixture attempts found a wrong `RecordName` import and then the legitimate
+rejection of admission before recovery verification. The fixture now reuses the
+existing public save/verify helper; no admission rule was weakened. Two narrowly
+scoped test-helper visibility changes allow that reuse. Final affected daemon
+all-target/all-feature Clippy passes with warnings denied in **6.27 s**; formatting
+and diff checks pass. Logs:
+`/tmp/meshspan-data02-startup-routes-baseline-valid.log`,
+`/tmp/meshspan-data02-startup-routes-fixed.log`,
+`/tmp/meshspan-data02-backup-startup-fixed.log`,
+`/tmp/meshspan-data02-startup-final-clippy.log`.
+The earlier generic full-gate error remains insufficient to distinguish its two
+late phases; named diagnostics are retained. The concrete startup gap is reproduced
+and fixed. The explicit real HTTPS/SMB recovery-and-cleanup case and a new complete
+integration gate remain pending before integration.
+
+Independent review confirmed that initial reconciliation is best effort: unresolved
+remote addresses and route-install failures remain retryable, so it cannot redefine
+`configured` as a guarantee that every private route is ready. Startup still attempts
+current committed routes eagerly, without making an unavailable remote address a
+whole-node startup dependency. The cleanup acceptance client now separately waits
+for the exact authenticated private handshake within the existing `WAIT_LIMIT`,
+retains that successful connection, then sends its mutation/replay once. It does
+not retry a data mutation, change a permit, or rebuild an unknown control command.
+The last handshake error is retained at the deadline.
+
+The explicit ignored-case proof
+`offline_backup::original_file_recovers_through_https_and_real_smb_after_storage_restart`
+passed in **127.75 s** (build **10.22 s**) using the existing local
+`meshspan-smbclient-test:bookworm` image before this harness refinement. Final
+Clippy after the refinement passes in **5.41 s**; the same explicit proof is being
+rerun on the final harness. Logs:
+`/tmp/meshspan-data02-recovery-https-smb.log` and
+`/tmp/meshspan-data02-readiness-clippy.log`. This is local HTTPS/Samba interoperability,
+not physical fault, Windows/macOS, six-machine or soak evidence.
+
+The final explicit HTTPS/SMB recovery-and-cleanup case passes in **124.07 s**
+(build **9.22 s**) with the authenticated handshake barrier and unchanged exact
+receipt/byte assertions (`/tmp/meshspan-data02-recovery-https-smb-final.log`).
+The startup correction and its tests are ready for a signed progress checkpoint;
+a new complete NVM integration gate is still required before merging PR #272.
+
 ## DATA-02 integration regression — provider-loss observations
 
 The complete NVM `pnpm check` on signed `4f4e1b4c` failed after **941.78 s**

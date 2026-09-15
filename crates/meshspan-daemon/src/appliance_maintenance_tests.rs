@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #[path = "appliance_maintenance_setup.rs"]
-mod setup;
+pub(super) mod setup;
 
 use setup::{
     claimed_bootstrap_backup, save_and_verify_maintenance_recovery, upload_maintenance_fixture,
