@@ -4,8 +4,8 @@
 
 use meshspan_domain::{UnixMicros, WorkId};
 use meshspan_metadata::{
-    AuthoritativeRepository, MaintenanceWorkRecord, MaintenanceWorkState, ReadyMaintenanceWorkPage,
-    RepositoryError,
+    AuthoritativeRepository, MaintenanceWorkCursor, MaintenanceWorkRecord, MaintenanceWorkState,
+    ReadyMaintenanceWork, ReadyMaintenanceWorkPage, RepositoryError,
 };
 use meshspan_work::{WorkBudget, WorkDemand, WorkSubject, WorkUsage};
 use thiserror::Error;
@@ -25,6 +25,7 @@ pub trait MaintenanceWorkSource {
         budget: WorkBudget,
         usage: WorkUsage,
         limit: usize,
+        after: Option<MaintenanceWorkCursor>,
     ) -> Result<ReadyMaintenanceWorkPage, RepositoryError>;
 
     /// Reloads one exact job immediately before local resource reservation.
@@ -42,8 +43,9 @@ impl MaintenanceWorkSource for AuthoritativeRepository {
         budget: WorkBudget,
         usage: WorkUsage,
         limit: usize,
+        after: Option<MaintenanceWorkCursor>,
     ) -> Result<ReadyMaintenanceWorkPage, RepositoryError> {
-        self.ready_maintenance_work(now, budget, usage, None, limit)
+        self.ready_maintenance_work(now, budget, usage, after, limit)
     }
 
     fn work(&self, work_id: WorkId) -> Result<Option<MaintenanceWorkRecord>, RepositoryError> {
@@ -58,8 +60,9 @@ impl MaintenanceWorkSource for ConsensusAuthenticationAuthority {
         budget: WorkBudget,
         usage: WorkUsage,
         limit: usize,
+        after: Option<MaintenanceWorkCursor>,
     ) -> Result<ReadyMaintenanceWorkPage, RepositoryError> {
-        self.reader().ready_work(now, budget, usage, limit)
+        self.reader().ready_work(now, budget, usage, limit, after)
     }
 
     fn work(&self, work_id: WorkId) -> Result<Option<MaintenanceWorkRecord>, RepositoryError> {
@@ -103,18 +106,39 @@ pub enum MaintenanceDispatchError {
     /// Attempt counters or local resource arithmetic exceeded their representation.
     #[error("maintenance dispatch capacity was exceeded")]
     Capacity,
+    /// Local immutable state required for execution could not be validated.
+    #[error("maintenance local execution state could not be read")]
+    EligibilityUnavailable,
 }
 
-/// Stateless dispatcher; fenced claims remain the executor's race-winning boundary.
+/// Bounded queue scan; fenced claims remain the executor's race-winning boundary.
+///
+/// The cursor is scheduling progress, not authority or evidence that skipped work completed.
 pub struct MaintenanceDispatcher<'a, Source> {
     source: &'a Source,
+    after: Option<MaintenanceWorkCursor>,
 }
 
 impl<'a, Source> MaintenanceDispatcher<'a, Source> {
     /// Binds the dispatcher to one current authoritative read source.
     #[must_use]
     pub const fn new(source: &'a Source) -> Self {
-        Self { source }
+        Self {
+            source,
+            after: None,
+        }
+    }
+
+    /// Resumes a prior bounded scan against the current authoritative queue.
+    #[must_use]
+    pub const fn resume(source: &'a Source, after: Option<MaintenanceWorkCursor>) -> Self {
+        Self { source, after }
+    }
+
+    /// Returns the last examined position, or the beginning after a completed scan.
+    #[must_use]
+    pub const fn cursor(&self) -> Option<MaintenanceWorkCursor> {
+        self.after
     }
 }
 
@@ -129,13 +153,13 @@ impl<Source: MaintenanceWorkSource> MaintenanceDispatcher<'_, Source> {
     ///
     /// Rejects invalid limits, corrupt projections, database failure and arithmetic overflow.
     pub fn prepare_batch(
-        &self,
+        &mut self,
         now: UnixMicros,
         budget: WorkBudget,
         usage: WorkUsage,
         limit: usize,
     ) -> Result<MaintenanceDispatchBatch, MaintenanceDispatchError> {
-        self.prepare_batch_where(now, budget, usage, limit, |_| true)
+        self.prepare_batch_where(now, budget, usage, limit, |_| Ok(true))
     }
 
     /// Selects only subjects executable by this local runtime before reserving resources.
@@ -144,62 +168,86 @@ impl<Source: MaintenanceWorkSource> MaintenanceDispatcher<'_, Source> {
     ///
     /// Has the same closed failure modes as [`Self::prepare_batch`].
     pub fn prepare_batch_where(
-        &self,
+        &mut self,
         now: UnixMicros,
         budget: WorkBudget,
         usage: WorkUsage,
         limit: usize,
-        executable: impl Fn(WorkSubject) -> bool,
+        executable: impl Fn(&ReadyMaintenanceWork) -> Result<bool, MaintenanceDispatchError>,
     ) -> Result<MaintenanceDispatchBatch, MaintenanceDispatchError> {
-        let ready = self.source.ready_work(now, budget, usage, limit)?;
+        let ready = self
+            .source
+            .ready_work(now, budget, usage, limit, self.after)?;
+        let next_page = ready.next;
+        let mut candidates = ready.work.into_iter();
         let mut reserved_usage = usage;
-        let mut assignments = Vec::with_capacity(ready.work.len());
-        for selected in ready.work {
-            if !executable(selected.subject) {
+        let mut assignments = Vec::new();
+        while reserved_usage.active_jobs < budget.maximum_concurrent_jobs() {
+            let Some(selected) = candidates.next() else {
+                break;
+            };
+            self.after = Some(selected.cursor());
+            if !executable(&selected)? {
                 continue;
             }
-            let Some(record) = self.source.work(selected.work_id)? else {
+            let Some(assignment) = self.current_assignment(selected, now)? else {
                 continue;
             };
-            if record.revision != selected.revision {
+            if !budget.admits(reserved_usage, assignment.demand) {
                 continue;
             }
-            if record.subject != selected.subject
-                || record.demand != selected.demand
-                || record.priority != selected.priority
-            {
-                return Err(MaintenanceDispatchError::InvalidProjection);
-            }
-            if !ready_at(record.state, record.claim, record.next_attempt_at, now) {
-                continue;
-            }
-            if !budget.admits(reserved_usage, record.demand) {
-                continue;
-            }
-            let claim_generation = record
-                .attempt_count
-                .checked_add(1)
-                .ok_or(MaintenanceDispatchError::Capacity)?;
             reserved_usage.active_jobs = reserved_usage
                 .active_jobs
                 .checked_add(1)
                 .ok_or(MaintenanceDispatchError::Capacity)?;
             reserved_usage.in_flight_bytes = reserved_usage
                 .in_flight_bytes
-                .checked_add(record.demand.in_flight_bytes)
+                .checked_add(assignment.demand.in_flight_bytes)
                 .ok_or(MaintenanceDispatchError::Capacity)?;
-            assignments.push(MaintenanceDispatchAssignment {
-                work_id: record.work_id,
-                subject: record.subject,
-                demand: record.demand,
-                priority: record.priority,
-                claim_generation,
-            });
+            assignments.push(assignment);
+        }
+        // A full local budget can stop in the middle of a fetched page. Resume after the
+        // last examined row, not the page end, so unexamined executable jobs remain next.
+        if candidates.len() == 0 {
+            self.after = next_page;
         }
         Ok(MaintenanceDispatchBatch {
             assignments,
             reserved_usage,
         })
+    }
+
+    fn current_assignment(
+        &self,
+        selected: ReadyMaintenanceWork,
+        now: UnixMicros,
+    ) -> Result<Option<MaintenanceDispatchAssignment>, MaintenanceDispatchError> {
+        let Some(record) = self.source.work(selected.work_id)? else {
+            return Ok(None);
+        };
+        if record.revision != selected.revision {
+            return Ok(None);
+        }
+        if record.subject != selected.subject
+            || record.demand != selected.demand
+            || record.priority != selected.priority
+        {
+            return Err(MaintenanceDispatchError::InvalidProjection);
+        }
+        if !ready_at(record.state, record.claim, record.next_attempt_at, now) {
+            return Ok(None);
+        }
+        let claim_generation = record
+            .attempt_count
+            .checked_add(1)
+            .ok_or(MaintenanceDispatchError::Capacity)?;
+        Ok(Some(MaintenanceDispatchAssignment {
+            work_id: record.work_id,
+            subject: record.subject,
+            demand: record.demand,
+            priority: record.priority,
+            claim_generation,
+        }))
     }
 }
 
@@ -279,6 +327,135 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn executable_work_remains_reachable_beyond_the_first_thousand_candidates()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut records = BTreeMap::new();
+        for index in 1_u128..=1_001 {
+            let mut work = record(1, 1, 9, MaintenanceWorkState::Queued, None)?;
+            work.work_id = WorkId::from_bytes(index.to_be_bytes())?;
+            work.deduplication_key[..16].copy_from_slice(&work.work_id.as_bytes());
+            if let WorkSubject::Repair { stripe_index, .. } = &mut work.subject {
+                *stripe_index = u64::try_from(index)?;
+            }
+            records.insert(work.work_id, work);
+        }
+        let mut expected = record(2, 1, 8, MaintenanceWorkState::Queued, None)?;
+        expected.subject = WorkSubject::Scrub {
+            target_id: meshspan_domain::TargetId::from_bytes([5; 16])?,
+            target_generation: 1,
+        };
+        let expected_id = expected.work_id;
+        records.insert(expected_id, expected);
+        let source = FixedSource { records };
+        let mut dispatcher = MaintenanceDispatcher::new(&source);
+        let mut found = Vec::new();
+        for _round in 0..2 {
+            let batch = dispatcher.prepare_batch_where(
+                UnixMicros::new(30),
+                WorkBudget::new(1, 1_000, None)?,
+                WorkUsage {
+                    active_jobs: 0,
+                    in_flight_bytes: 0,
+                },
+                1_000,
+                |work| Ok(matches!(work.subject, WorkSubject::Scrub { .. })),
+            )?;
+            found.extend(batch.assignments.into_iter().map(|work| work.work_id));
+        }
+        assert_eq!(
+            found,
+            vec![expected_id],
+            "a bounded scan must move past unrelated jobs"
+        );
+        assert!(source.records.values().all(|work| work.attempt_count == 0));
+        Ok(())
+    }
+
+    #[test]
+    fn resumed_scan_keeps_unexamined_candidates_and_wraps_after_the_last_row()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = FixedSource::new([
+            record(1, 100, 9, MaintenanceWorkState::Queued, None)?,
+            record(2, 100, 8, MaintenanceWorkState::Queued, None)?,
+            record(3, 100, 7, MaintenanceWorkState::Queued, None)?,
+        ]);
+        let mut cursor = None;
+        let mut selected = Vec::new();
+        let mut positions = Vec::new();
+        for _round in 0..3 {
+            let mut dispatcher = MaintenanceDispatcher::resume(&source, cursor);
+            let batch = dispatcher.prepare_batch(
+                UnixMicros::new(30),
+                WorkBudget::new(1, 1_000, None)?,
+                WorkUsage {
+                    active_jobs: 0,
+                    in_flight_bytes: 0,
+                },
+                3,
+            )?;
+            assert_eq!(batch.assignments.len(), 1);
+            selected.push(batch.assignments[0].work_id);
+            cursor = dispatcher.cursor();
+            positions.push(cursor);
+        }
+        let first = WorkId::from_bytes([1; 16])?;
+        let second = WorkId::from_bytes([2; 16])?;
+        assert_eq!(selected, [first, second, WorkId::from_bytes([3; 16])?]);
+        assert_eq!(
+            positions,
+            [
+                Some(MaintenanceWorkCursor {
+                    priority: 9,
+                    created_at: UnixMicros::new(1),
+                    work_id: first
+                }),
+                Some(MaintenanceWorkCursor {
+                    priority: 8,
+                    created_at: UnixMicros::new(1),
+                    work_id: second
+                }),
+                None,
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn local_validation_failure_is_reported_without_restarting_the_scan()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let unavailable = record(1, 100, 9, MaintenanceWorkState::Queued, None)?;
+        let eligible = record(2, 100, 8, MaintenanceWorkState::Queued, None)?;
+        let unavailable_id = unavailable.work_id;
+        let eligible_id = eligible.work_id;
+        let source = FixedSource::new([unavailable, eligible]);
+        let mut dispatcher = MaintenanceDispatcher::new(&source);
+        let budget = WorkBudget::new(1, 1_000, None)?;
+        let usage = WorkUsage {
+            active_jobs: 0,
+            in_flight_bytes: 0,
+        };
+        let result = dispatcher.prepare_batch_where(UnixMicros::new(30), budget, usage, 2, |_| {
+            Err(MaintenanceDispatchError::EligibilityUnavailable)
+        });
+        assert!(matches!(
+            result,
+            Err(MaintenanceDispatchError::EligibilityUnavailable)
+        ));
+        assert_eq!(
+            dispatcher.cursor().map(|cursor| cursor.work_id),
+            Some(unavailable_id)
+        );
+        let mut resumed = MaintenanceDispatcher::resume(&source, dispatcher.cursor());
+        let batch = resumed.prepare_batch(UnixMicros::new(30), budget, usage, 2)?;
+        assert_eq!(batch.assignments.len(), 1);
+        assert_eq!(batch.assignments[0].work_id, eligible_id);
+        assert_eq!(batch.reserved_usage.in_flight_bytes, 100);
+        assert!(resumed.cursor().is_none());
+        assert!(source.records.values().all(|work| work.attempt_count == 0));
+        Ok(())
+    }
+
     struct FixedSource {
         records: BTreeMap<WorkId, MaintenanceWorkRecord>,
     }
@@ -300,7 +477,8 @@ mod tests {
             _now: UnixMicros,
             _budget: WorkBudget,
             _usage: WorkUsage,
-            _limit: usize,
+            limit: usize,
+            after: Option<MaintenanceWorkCursor>,
         ) -> Result<ReadyMaintenanceWorkPage, RepositoryError> {
             let mut work = self
                 .records
@@ -311,10 +489,37 @@ mod tests {
                     demand: record.demand,
                     priority: record.priority,
                     revision: record.revision,
+                    created_at: record.signals.created_at,
                 })
                 .collect::<Vec<_>>();
-            work.sort_by_key(|item| std::cmp::Reverse(item.priority));
-            Ok(ReadyMaintenanceWorkPage { work, next: None })
+            work.sort_by_key(|item| {
+                (
+                    std::cmp::Reverse(item.priority),
+                    item.created_at,
+                    item.work_id,
+                )
+            });
+            if let Some(after) = after {
+                let boundary = (
+                    std::cmp::Reverse(after.priority),
+                    after.created_at,
+                    after.work_id,
+                );
+                work.retain(|item| {
+                    (
+                        std::cmp::Reverse(item.priority),
+                        item.created_at,
+                        item.work_id,
+                    ) > boundary
+                });
+            }
+            let next = if work.len() > limit {
+                work.truncate(limit);
+                work.last().map(ReadyMaintenanceWork::cursor)
+            } else {
+                None
+            };
+            Ok(ReadyMaintenanceWorkPage { work, next })
         }
 
         fn work(&self, work_id: WorkId) -> Result<Option<MaintenanceWorkRecord>, RepositoryError> {

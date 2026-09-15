@@ -17,7 +17,7 @@ use meshspan_domain::{
 pub const MAXIMUM_WORK_SUBJECT_BYTES: usize = 128;
 
 /// Closed maintenance families sharing the durable work coordinator.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum WorkKind {
     /// Reconstructs or relocates immutable shards to restore a protection promise.
