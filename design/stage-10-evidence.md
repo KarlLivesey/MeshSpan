@@ -10,6 +10,34 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Integration diagnostics — bounded JavaScript test runners
+
+The gate on signed commit `4177ab55970132f06e102e19059a353bd9b81727`
+(tree `e44e832896d828e4a6b9a87282650a70dfc0ae54`) was deliberately stopped
+with exit **143** after discovering that the launcher passed its worker budget
+to Rust but omitted it from Vitest and Node's tooling-test harness. This attempt
+used `MESHSPAN_CHECK_WORKERS=2`; JavaScript could still start CPU-sized pools.
+All static/generated/licence/tooling lanes passed, but joined Rust/web test
+results were not reported. This is an **incomplete gate**, not a pass
+(`/tmp/meshspan-check-4177ab55-two-workers.log`).
+
+The launcher now supplies Vitest `--maxWorkers` and Node `--test-concurrency`
+from the existing 1–32 worker budget. A regression executes a copy of the actual
+launcher with only its process boundary replaced by a command recorder. The
+unchanged launcher fails on the missing Vitest argument in **0.087 s**
+(`/tmp/meshspan-check-budget-baseline.log`). The fixed scheduler suite passes
+**six tests in 0.128 s**, checking budgets 2 and 32, exact Rust/Node/Vitest test
+arguments and all 12 dispatched steps (`/tmp/meshspan-check-budget-fixed.log`).
+Affected ESLint passes. The real web suite with four workers passes **54 files,
+277 tests in 12.304 s** (`/tmp/meshspan-check-budget-web.log`); a live process
+snapshot showed four Vitest fork workers. Installed Vitest's shared pool also
+resolves this bound across the configured projects.
+
+No dependency, test target, deadline, assertion or runtime behavior changed.
+This repairs uncontrolled validation concurrency; it does not establish the
+cause of either earlier timeout. A complete four-worker gate remains required.
+Stage 10 task 16 / DATA-02 and Stage 11 acceptance remain open.
+
 ## Integration diagnostics — owned federation fixture cancellation
 
 Review found a concrete test-fixture lifetime defect independent of the earlier

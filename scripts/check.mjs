@@ -57,6 +57,8 @@ if (!generation.passed) {
       steps: [["cargo", ["deny", "check", "licenses"]]],
     },
   ];
+  // Each test runner must inherit this budget rather than opening a CPU-sized pool
+  // inside its already bounded lane. Lane scheduling and runner concurrency are distinct.
   const independentStaticLanes = [
     {
       name: "JavaScript dependency licences",
@@ -113,6 +115,7 @@ if (!generation.passed) {
           process.execPath,
           [
             "--test",
+            `--test-concurrency=${workerCount}`,
             "scripts/javascript-licence-policy.test.mjs",
             "scripts/scheduler.test.mjs",
             "scripts/local-package.test.mjs",
@@ -132,7 +135,12 @@ if (!generation.passed) {
     },
     {
       name: "web tests",
-      steps: [["web/node_modules/.bin/vitest", ["run", "--root", "web"]]],
+      steps: [
+        [
+          "web/node_modules/.bin/vitest",
+          ["run", "--root", "web", "--maxWorkers", String(workerCount)],
+        ],
+      ],
     },
   ];
   const results = [];
