@@ -10,6 +10,65 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-01 continuation after checked integration
+
+PR #270 merged as `30569f42b25a221ebbd6e22a2475eaf1756be9b1`. GitHub verifies
+the merge signature, remote `main` matches it, and its tree exactly matches signed
+evidence head `b97f504e5c96783d4158262971b19990eb6f964b`. The tested source is
+included, all 41 branch commits are signed, and the merged branch was removed.
+No subsequent main changes were overwritten. This supersedes the ready-for-
+integration status below without declaring Stage 10 or Stage 11 complete.
+
+The follow-up selection slice resumes bounded priority scans after the last
+examined candidate, with an independent cursor for each existing maintenance
+family. A full local reservation does not skip unexamined rows; completing a scan
+wraps to the beginning. Local validation errors remain errors while preserving
+scan progress. Cursors convey no authority and never claim skipped jobs.
+Scrub/reconciliation require an opened, currently readable local target generation;
+repair requires the local immutable manifest and its matching volume; target
+drains require a pending local attestation or exact committed-effect recovery.
+Node/fault-group drains retain their existing scope coordinator.
+
+The composed real consensus/folder fixture now includes an absent local manifest
+and an empty draining provider. The absent-manifest repair remains Queued with
+zero attempts. In the same tick, an eligible but destination-blocked repair
+retains its durable retry, scrub verifies the exact original receipt bytes,
+the empty drain commits its terminal effect and reaches SafeToDetach, and the
+same bootstrap backup becomes Protected with exact protection evidence. A new
+writable provider later completes the original repair after exactly three claims,
+preserving length/digest and advancing layout generation from one to two. This
+proves empty-target drain completion, not evacuation of populated targets.
+
+Focused validation on `30569f42` plus this selection slice:
+
+- The distinct 1,001-repair pagination regression fails before the fix (no scrub
+  selected); two bounded scans find the exact scrub afterward. The local
+  eligibility regression initially selects both an unopened target and missing
+  manifest; after the fix neither is claimed. The first expanded run reached a
+  later assertion where a test-only inspection consumed the new cursor before
+  execution. Removing that redundant inspection preserves the stronger exact
+  attempt/effect assertions; the workflow then passes in **8.42 s**.
+- `cargo test -p meshspan-daemon --lib maintenance`: **14 pass, 8.84 s**,
+  command **9.17 s**. Includes cursor/error continuation and the composed
+  scrub/drain/backup/repair workflow. The separately expanded drain proof passes
+  in **8.28 s**, build **26.32 s**.
+- `cargo test -p meshspan-metadata --lib maintenance`: **13 pass, 7.22 s**,
+  command **26.58 s**, including real keyset paging and reopen-safe retry.
+- `cargo test -p meshspan-work`: **5 pass**, command **0.89 s**.
+- Affected daemon/metadata/work all-target/all-feature Clippy with warnings denied:
+  **34.85 s**; workspace formatting check **6.14 s**. Four bounded Rust workers,
+  two for the isolated composed reproduction; no competing Cargo builds.
+
+Logs use `/tmp/meshspan-data01-`: `pagination-distinct-baseline.log`,
+`eligibility-baseline.log`, `eligibility-fixed.log`, `eligibility-execution.log`,
+`drain-composed.log`, `dispatcher-final.log`, `daemon-maintenance-final.log`,
+`metadata-maintenance-final.log`, `work-final.log`, `clippy-final.log` and
+`fmt-final.log`. The read API exposes an existing persisted creation instant for
+resuming scans; no schema, wire, dependency or licensing changes are introduced.
+The full integration gate remains pending for this slice. Other expected durable
+deferrals, shared resource attribution, universal repair projection and eventual
+protection completion remain required. DATA-01 and Stage 10 are not closed.
+
 ## Current candidate verification — full gate and real process proofs on `2adaba80`
 
 The signed, locally and GitHub-verified source revision

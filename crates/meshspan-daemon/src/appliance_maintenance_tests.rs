@@ -80,27 +80,14 @@ fn prove_scrub_progress(
     volume: VolumeId,
 ) -> Result<(), Box<dyn Error>> {
     let now = current_time()?;
+    let drain = setup::queue_empty_target_drain(runtime, now)?;
     let setup::QueuedMaintenanceFixture {
+        unavailable_repair,
         repair,
         scrub,
         receipt,
     } = setup::queue_maintenance_fixture(runtime, volume, now)?;
-    assert_eq!(
-        runtime
-            .next_maintenance_assignment(now, WorkKind::Repair)
-            .map_err(|()| "repair selection")?
-            .ok_or("repair assignment")?
-            .work_id,
-        repair
-    );
-    assert_eq!(
-        runtime
-            .next_maintenance_assignment(now, WorkKind::Scrub)
-            .map_err(|()| "scrub selection")?
-            .ok_or("scrub assignment")?
-            .work_id,
-        scrub
-    );
+    assert_only_local_candidates_are_reserved(runtime, repair, scrub, now)?;
     assert!(
         runtime
             .maintenance_progress
@@ -150,8 +137,79 @@ fn prove_scrub_progress(
         tick.is_err(),
         "successful scrub must not hide repair deferral"
     );
+    let unavailable = reopened
+        .maintenance_work(unavailable_repair)?
+        .ok_or("unprojected repair")?;
+    assert_eq!(unavailable.state, MaintenanceWorkState::Queued);
+    assert_eq!(
+        unavailable.attempt_count, 0,
+        "local manifest absence must not claim another executor's work"
+    );
+    assert_empty_target_drain_completed(&reopened, runtime.local_node_id, drain, now)?;
     assert_bootstrap_backup_protected(&reopened, backup, now)?;
     assert_repair_retry_schedule(runtime, repair, now)?;
+    Ok(())
+}
+
+fn assert_only_local_candidates_are_reserved(
+    runtime: &mut StorageTargetRuntime,
+    repair: WorkId,
+    scrub: WorkId,
+    now: UnixMicros,
+) -> Result<(), Box<dyn Error>> {
+    // Keep the real provider alive while modelling a runtime that has not opened this target.
+    let active = std::mem::take(&mut runtime.active);
+    let closed = runtime.next_maintenance_assignment(now, WorkKind::Scrub);
+    runtime.active = active;
+    let repair_selected = runtime
+        .next_maintenance_assignment(now, WorkKind::Repair)
+        .map_err(|()| "repair selection")?
+        .map(|work| work.work_id);
+    assert_eq!(
+        (
+            closed
+                .map_err(|()| "closed target selection")?
+                .map(|work| work.work_id),
+            repair_selected
+        ),
+        (None, Some(repair)),
+        "selection must skip unopened targets and manifests absent from this executor",
+    );
+    assert_eq!(
+        runtime
+            .next_maintenance_assignment(now, WorkKind::Scrub)
+            .map_err(|()| "scrub selection")?
+            .ok_or("scrub assignment")?
+            .work_id,
+        scrub,
+    );
+    // Inspection consumed only ephemeral scan positions; the composed tick starts fresh.
+    runtime.maintenance_cursors.clear();
+    Ok(())
+}
+
+fn assert_empty_target_drain_completed(
+    reopened: &meshspan_metadata::AuthoritativeRepository,
+    local_node: meshspan_domain::NodeId,
+    expected: (WorkId, meshspan_work::DrainScope),
+    tick: UnixMicros,
+) -> Result<(), Box<dyn Error>> {
+    let (work_id, scope) = expected;
+    let work = reopened.maintenance_work(work_id)?.ok_or("drain work")?;
+    assert_eq!(work.state, MaintenanceWorkState::Complete);
+    assert_eq!(work.attempt_count, 1);
+    let effect = reopened
+        .maintenance_effect_reference(work_id)?
+        .ok_or("terminal drain effect")?;
+    assert_eq!(work.result_digest, Some(effect.result_digest));
+    let drain = reopened.storage_drain(work_id)?.ok_or("completed drain")?;
+    assert_eq!(drain.scope, scope);
+    assert_eq!(
+        drain.state,
+        meshspan_metadata::StorageDrainState::SafeToDetach
+    );
+    assert!(drain.safe_at.is_some_and(|safe| safe >= tick));
+    assert!(!reopened.target_drain_attestation_pending(work_id, local_node)?);
     Ok(())
 }
 
@@ -216,12 +274,6 @@ fn assert_repair_retry_schedule(
         .run_maintenance_tick(early)
         .map_err(|_| "independent early tick failed")?;
     assert_retry_state(runtime, repair, 1, first_retry)?;
-    assert!(
-        runtime
-            .next_maintenance_assignment(first_retry, WorkKind::Repair)
-            .map_err(|()| "retry selection")?
-            .is_some_and(|work| work.work_id == repair)
-    );
     assert!(runtime.run_maintenance_tick(first_retry).is_err());
     let second_retry = persisted_retry_time(runtime, repair, 2, first_retry)?;
     assert_retry_state(runtime, repair, 2, second_retry)?;
@@ -262,12 +314,6 @@ fn assert_repair_retry_schedule(
         .run_maintenance_tick(next_tick)
         .map_err(|_| "next independent tick failed")?;
     assert_retry_state(runtime, repair, 2, second_retry)?;
-    assert!(
-        runtime
-            .next_maintenance_assignment(second_retry, WorkKind::Repair)
-            .map_err(|()| "later selection")?
-            .is_some_and(|work| work.work_id == repair)
-    );
     assert_repair_completes_when_destination_returns(runtime, repair, second_retry)?;
     Ok(())
 }
@@ -287,7 +333,7 @@ fn assert_repair_completes_when_destination_returns(
     // provider, then runs the now-eligible repair through the same maintenance tick.
     runtime.configured_paths.push(folder);
     runtime.reconcile(eligible_at);
-    assert_eq!(runtime.active.len(), 2);
+    assert_eq!(runtime.active.len(), 3);
     let reopened = open_root_repository_at(&runtime.state_directory, eligible_at)?;
     let work = reopened
         .maintenance_work(repair)?

@@ -6,6 +6,8 @@
 #[path = "appliance_runtime_tests.rs"]
 mod tests;
 
+#[path = "appliance_maintenance_selection.rs"]
+mod maintenance_selection;
 #[path = "appliance_repair.rs"]
 mod repair;
 
@@ -63,7 +65,7 @@ use meshspan_protocol::v1::{
     ControlEnvelope, ErrorCode, NodeActivationResult, NodeRole, NodeRoute, NodeTopologyResult,
     NodeTopologyUpdate, OperationOutcome, OperationResult, WireError,
 };
-use meshspan_work::{WorkBudget, WorkKind, WorkSubject, WorkUsage};
+use meshspan_work::{WorkKind, WorkSubject};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::task::JoinHandle;
@@ -3069,6 +3071,7 @@ struct StorageTargetRuntime {
     completed_rebalance_revision: Option<Revision>,
     next_rebalance_admission_at: Option<UnixMicros>,
     scope_drain_cursor: Option<StorageScopeDrainCursor>,
+    maintenance_cursors: BTreeMap<WorkKind, meshspan_metadata::MaintenanceWorkCursor>,
     readiness: Arc<RuntimeReadiness>,
 }
 
@@ -3152,6 +3155,7 @@ impl StorageTargetRuntime {
             completed_rebalance_revision: None,
             next_rebalance_admission_at: None,
             scope_drain_cursor: None,
+            maintenance_cursors: BTreeMap::new(),
             readiness,
         }
     }
@@ -3726,27 +3730,6 @@ impl StorageTargetRuntime {
             .map(|_| ())
             .map_err(|_| ()),
         )
-    }
-
-    fn next_maintenance_assignment(
-        &self,
-        now: UnixMicros,
-        kind: WorkKind,
-    ) -> Result<Option<crate::MaintenanceDispatchAssignment>, ()> {
-        let budget = WorkBudget::new(1, SCRUB_PAGE_IN_FLIGHT_BYTES, None).map_err(|_| ())?;
-        let batch = crate::MaintenanceDispatcher::new(&self.maintenance_authority)
-            .prepare_batch_where(
-                now,
-                budget,
-                WorkUsage {
-                    active_jobs: 0,
-                    in_flight_bytes: 0,
-                },
-                1_000,
-                |subject| subject.kind() == kind,
-            )
-            .map_err(|_| ())?;
-        Ok(batch.assignments.first().copied())
     }
 
     fn maintenance_actor(&self, now: UnixMicros) -> Result<PrincipalId, ()> {

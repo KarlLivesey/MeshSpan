@@ -517,6 +517,20 @@ pub struct ReadyMaintenanceWork {
     pub priority: u64,
     /// Revision a claimant observed.
     pub revision: Revision,
+    /// Original creation instant used to resume after this exact candidate.
+    pub created_at: UnixMicros,
+}
+
+impl ReadyMaintenanceWork {
+    /// Returns the candidate's position in the persisted priority order.
+    #[must_use]
+    pub const fn cursor(&self) -> MaintenanceWorkCursor {
+        MaintenanceWorkCursor {
+            priority: self.priority,
+            created_at: self.created_at,
+            work_id: self.work_id,
+        }
+    }
 }
 
 /// One bounded keyset page of ready work.
@@ -594,47 +608,33 @@ fn ready_page(
     let mut work = rows.collect::<Result<Vec<_>, _>>()?;
     let next = if work.len() > limit {
         work.pop();
-        work.last().map(|item| MaintenanceWorkCursor {
-            priority: item.work.priority,
-            created_at: item.created_at,
-            work_id: item.work.work_id,
-        })
+        work.last().map(ReadyMaintenanceWork::cursor)
     } else {
         None
     };
-    Ok(ReadyMaintenanceWorkPage {
-        work: work.into_iter().map(|item| item.work).collect(),
-        next,
-    })
+    Ok(ReadyMaintenanceWorkPage { work, next })
 }
 
-struct ReadyWorkRow {
-    work: ReadyMaintenanceWork,
-    created_at: UnixMicros,
-}
-
-fn decode_ready_work(row: &Row<'_>) -> rusqlite::Result<ReadyWorkRow> {
+fn decode_ready_work(row: &Row<'_>) -> rusqlite::Result<ReadyMaintenanceWork> {
     decode_ready_work_inner(row).map_err(|_| rusqlite::Error::InvalidQuery)
 }
 
-fn decode_ready_work_inner(row: &Row<'_>) -> Result<ReadyWorkRow, RepositoryError> {
+fn decode_ready_work_inner(row: &Row<'_>) -> Result<ReadyMaintenanceWork, RepositoryError> {
     let stored_kind = row.get::<_, i64>(1)?;
     let subject = WorkSubject::decode(&row.get::<_, Vec<u8>>(2)?)
         .map_err(|_| RepositoryError::CorruptState)?;
     if stored_kind != kind_code(subject.kind()) {
         return Err(RepositoryError::CorruptState);
     }
-    Ok(ReadyWorkRow {
-        work: ReadyMaintenanceWork {
-            work_id: WorkId::from_bytes(exact(row.get(0)?)?)
-                .map_err(|_| RepositoryError::CorruptState)?,
-            subject,
-            demand: WorkDemand {
-                in_flight_bytes: positive(row.get(3)?)?,
-            },
-            priority: positive(row.get(4)?)?,
-            revision: revision(row.get(5)?)?,
+    Ok(ReadyMaintenanceWork {
+        work_id: WorkId::from_bytes(exact(row.get(0)?)?)
+            .map_err(|_| RepositoryError::CorruptState)?,
+        subject,
+        demand: WorkDemand {
+            in_flight_bytes: positive(row.get(3)?)?,
         },
+        priority: positive(row.get(4)?)?,
+        revision: revision(row.get(5)?)?,
         created_at: UnixMicros::new(row.get(6)?),
     })
 }

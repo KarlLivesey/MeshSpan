@@ -15,8 +15,10 @@ use meshspan_domain::{
     AuditEventId, DurationMicros, NamespaceCommitId, OperationId, PrincipalId, UnixMicros,
     VolumeId, WorkId,
 };
-use meshspan_metadata::{AuthoritativeCommand, CommandContext, QueueMaintenanceWork};
-use meshspan_work::{WorkDemand, WorkSignals, WorkSubject};
+use meshspan_metadata::{
+    AuthoritativeCommand, BeginStorageTargetDrain, CommandContext, QueueMaintenanceWork,
+};
+use meshspan_work::{DrainScope, WorkDemand, WorkSignals, WorkSubject};
 use serde_json::{Value, json};
 use std::error::Error;
 use tower::ServiceExt;
@@ -246,8 +248,87 @@ pub(super) fn queue_work(
     Ok(work_id)
 }
 
-/// Exact independently queued subjects sharing one committed source stripe.
+/// Open an empty real provider and atomically fence it out of replacement placement.
+pub(super) fn queue_empty_target_drain(
+    runtime: &mut StorageTargetRuntime,
+    now: UnixMicros,
+) -> Result<(WorkId, DrainScope), Box<dyn Error>> {
+    let folder = runtime
+        .state_directory
+        .parent()
+        .ok_or("fixture parent")?
+        .join("draining-empty-storage");
+    std::fs::create_dir(&folder)?;
+    let folder = std::fs::canonicalize(folder)?;
+    let registered = runtime.registration.register(&folder, now)?;
+    let context = registered.context();
+    let provider = runtime.opening.open(registered, now)?;
+    runtime.active.insert(
+        folder.clone(),
+        super::super::super::NativeStorageTarget::new(context, provider),
+    );
+    runtime.configured_paths.push(folder);
+    let scope = DrainScope::Target {
+        target_id: context.target_id,
+        target_generation: context.generation,
+    };
+    let work_id = WorkId::from_bytes([117; 16])?;
+    runtime.maintenance_authority.commit(
+        CommandContext {
+            operation_id: OperationId::from_bytes([117; 16])?,
+            actor_principal_id: runtime
+                .maintenance_actor(now)
+                .map_err(|()| "maintenance actor")?,
+            audit_event_id: AuditEventId::from_bytes([117; 16])?,
+            occurred_at: now,
+            expected_revision: None,
+        },
+        &AuthoritativeCommand::BeginStorageTargetDrain(BeginStorageTargetDrain {
+            work: QueueMaintenanceWork {
+                work_id,
+                deduplication_key: [117; 32],
+                subject: WorkSubject::Drain(scope),
+                signals: WorkSignals {
+                    data_unavailable: false,
+                    remaining_recovery_margin: 1,
+                    protection_debt: 0,
+                    locality_debt: 0,
+                    instability: 0,
+                    access_heat: 0,
+                    created_at: now,
+                    due_at: Some(now),
+                },
+                demand: WorkDemand {
+                    in_flight_bytes: 4096,
+                },
+                next_attempt_at: now,
+            },
+            allow_temporary_degraded: false,
+            cleanup_requested: false,
+        }),
+    )?;
+    let drain = runtime
+        .maintenance_authority
+        .reader()
+        .storage_drain(work_id)?
+        .ok_or("admitted drain")?;
+    assert_eq!(drain.scope, scope);
+    assert_eq!(
+        drain.state,
+        meshspan_metadata::StorageDrainState::Evacuating
+    );
+    assert!(
+        runtime
+            .maintenance_authority
+            .reader()
+            .target_drain_attestation_pending(work_id, runtime.local_node_id)?
+    );
+    Ok((work_id, scope))
+}
+
+/// One committed stripe, eligible work and a repair awaiting local manifest projection.
 pub(super) struct QueuedMaintenanceFixture {
+    pub(super) unavailable_repair: WorkId,
     pub(super) repair: WorkId,
     pub(super) scrub: WorkId,
     pub(super) receipt: ShardReceipt,
@@ -271,6 +352,18 @@ pub(super) fn queue_maintenance_fixture(
         .shard_repair_candidate(receipt.target_id, receipt.target_generation, receipt.shard)?
         .ok_or("current repair candidate")?;
     assert_no_repair_destination(runtime, volume, &record.stripe, now)?;
+    let unavailable_repair = queue_work(
+        runtime,
+        WorkSubject::Repair {
+            volume_id: volume,
+            manifest_id: meshspan_domain::ContentManifestId::from_bytes([118; 16])?,
+            stripe_index: 0,
+            shard_index: 0,
+            source_generation: 1,
+        },
+        119,
+        now,
+    )?;
     let repair = queue_work(
         runtime,
         WorkSubject::Repair {
@@ -293,6 +386,7 @@ pub(super) fn queue_maintenance_fixture(
         now,
     )?;
     Ok(QueuedMaintenanceFixture {
+        unavailable_repair,
         repair,
         scrub,
         receipt,
@@ -306,12 +400,21 @@ fn assert_no_repair_destination(
     now: UnixMicros,
 ) -> Result<(), Box<dyn Error>> {
     let targets = runtime.active.values().cloned().collect::<Vec<_>>();
-    assert_eq!(targets.len(), 1, "fixture has no spare provider");
+    assert_eq!(
+        targets.len(),
+        2,
+        "only the original provider and fenced empty drain target"
+    );
     let configuration = runtime
         .native_filesystem
         .maintenance_protection_configuration(&targets, volume, now)?;
     let current_targets = current_stripe_targets(stripe).map_err(|()| "stripe targets")?;
-    assert!(current_targets.contains(&targets[0].context().target_id));
+    assert_eq!(current_targets.len(), 1);
+    assert!(
+        targets
+            .iter()
+            .any(|target| current_targets.contains(&target.context().target_id))
+    );
     let result = configuration.plan_repair(
         &meshspan_placement::FaultAwarePlacement::new(),
         RequestContext {
