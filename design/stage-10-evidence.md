@@ -12,6 +12,37 @@ not close an unexplained failure.
 
 ## Physical-generation candidate gate — multi-daemon setup failures
 
+### Final retained candidate gate
+
+The advisory-plus-full local gate now **passes** on signed, GitHub-verified commit
+`2bb9e08d3779708652086fcff6b96e70e5515306`, tree
+`8034f55f65636e88f581ab9335f2e9b35500fd82`, with a clean checkout at start and
+completion. Command: `pnpm check:dependency-update`, after `nvm use`, with
+`MESHSPAN_CHECK_WORKERS=4`, `CARGO_BUILD_JOBS=4`, `RUST_TEST_THREADS=4` and
+`TMPDIR=/home/karl/.cache/meshspan-validation/tmp`. Selected tools were Node
+26.8.2, pnpm 11.19.0 and Rust 1.98.0. Exit **0**, wall **1,007.907 s**;
+log `/tmp/meshspan-check-2bb9e08d.log`.
+
+Both advisory scans, generated drift, embedded web, Rust formatting and workspace
+all-target/all-feature Clippy, Rust and JavaScript dependency licences, web
+format/lint/typecheck and tooling tests passed. All canonical Rust workspace test
+targets passed in **911.43 s**; web tests passed in **40.34 s**. The normal gate
+does not run ignored/manual/environment-specific proofs. This resolves the
+candidate's earlier full-gate failures after the measured startup and packet-cost
+changes documented below; the failed runs remain retained. The separate real
+HTTPS/Samba recovery-and-storage-restart proof also **passes in 117.18 s** against
+the same canonical headless executable, confirmed from the running gate's process:
+`target/debug/deps/headless_process-ac32a18f1c274d87`. Run the exact test
+`offline_backup::original_file_recovers_through_https_and_real_smb_after_storage_restart`
+with `--exact --ignored --test-threads=4`, under the same NVM/TMPDIR environment.
+Exit **0**; log `/tmp/meshspan-2bb9e08d-https-smb-recovery.log`. The existing pinned
+local Samba image was used without download or publication. Documentation-only
+evidence additions after these checks do not change the tested implementation.
+Stage 10 task 16 / DATA-02
+still requires automatic obsolete-placement cleanup and the remaining interruption
+cuts. This is not Stage 10/11 completion, physical power-loss, hardware, soak or
+independent-review evidence.
+
 The advisory-plus-full local gate on signed, GitHub-verified commit
 `e96b0e4ec6436ad742f079a65b109c89c3bbe0a8` (tree
 `a794e61273ead55aa0c65db6db9a2f756ed085a3`) failed with exit **1** after
