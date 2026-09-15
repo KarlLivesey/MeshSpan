@@ -6,6 +6,9 @@
 #[path = "appliance_runtime_tests.rs"]
 mod tests;
 
+#[path = "appliance_repair.rs"]
+mod repair;
+
 #[path = "metadata_read_fence_service.rs"]
 mod metadata_read_fence_service;
 
@@ -41,7 +44,6 @@ use meshspan_consensus::{
     ActiveQuorumPlan, ConsensusCore, CoreConfig, CoreError, QuorumPlanError, compile_plan,
     flat_plan,
 };
-use meshspan_contracts::{ContractVersion, RequestContext};
 use meshspan_data_plane::{
     RemoteBackupRouter, RemoteBackupService, RemoteDataRouter, RemoteShardRouter,
     RemoteShardService,
@@ -106,22 +108,21 @@ use crate::{
     RecoveryBundleVerificationService, RecoveryCodeIssuanceApiError,
     ResumableStorageScrubExecution, RevokeCurrentSessionApiError, RevokeCurrentSessionService,
     RotatingHttpsIdentity, SessionApiError, SetupApiError, SetupLifecycleError, SetupStateSnapshot,
-    SetupStatusSource, ShardRepairExecution, SmbExportAdministrationApiError,
-    SmbExportAdministrationService, SmbServer, SmbServerConfigurationError, SmbServerError,
-    SmbServerLimits, StepUpCurrentSessionApiError, StepUpCurrentSessionService,
-    StorageDrainAdministrationApiError, StorageDrainAdministrationService,
-    StorageFolderAdministrationApiError, StorageFolderAdministrationService,
-    StoragePermitLoadingService, StorageProviderOpeningError, StorageProviderOpeningService,
-    StorageTargetRegistrationService, TargetDrainExecution, TopologyAdministrationApiError,
-    TopologyAdministrationService, TotpRegistrationApiError, TotpRegistrationConfiguration,
-    TotpRegistrationConfigurationError, TotpRegistrationService, VolumeAdministrationApiError,
-    VolumeAdministrationService, VolumeInventoryApiError, VolumeInventoryService,
-    api_key_issuance_api_router, authentication_method_listing_api_router,
+    SetupStatusSource, SmbExportAdministrationApiError, SmbExportAdministrationService, SmbServer,
+    SmbServerConfigurationError, SmbServerError, SmbServerLimits, StepUpCurrentSessionApiError,
+    StepUpCurrentSessionService, StorageDrainAdministrationApiError,
+    StorageDrainAdministrationService, StorageFolderAdministrationApiError,
+    StorageFolderAdministrationService, StoragePermitLoadingService, StorageProviderOpeningError,
+    StorageProviderOpeningService, StorageTargetRegistrationService, TargetDrainExecution,
+    TopologyAdministrationApiError, TopologyAdministrationService, TotpRegistrationApiError,
+    TotpRegistrationConfiguration, TotpRegistrationConfigurationError, TotpRegistrationService,
+    VolumeAdministrationApiError, VolumeAdministrationService, VolumeInventoryApiError,
+    VolumeInventoryService, api_key_issuance_api_router, authentication_method_listing_api_router,
     authentication_method_revocation_api_router, certificate_provisioning_api_router,
     classify_native_filesystem_error, current_session_api_router, directory_listing_api_router,
     execute_rebalance_step, execute_resumable_storage_scrub,
-    execute_resumable_target_reconciliation, execute_scope_drain_action, execute_shard_repair,
-    execute_target_drain_step, external_certificate_publisher_api_router, file_read_api_router,
+    execute_resumable_target_reconciliation, execute_scope_drain_action, execute_target_drain_step,
+    external_certificate_publisher_api_router, file_read_api_router,
     identity_administration_api_router, manual_dns_task_administration_api_router,
     mesh_local_certificate_api_router, native_namespace_mutation_api_router,
     native_upload_api_router, node_enrolment_api_router, node_join_grant_api_router,
@@ -3299,16 +3300,25 @@ impl StorageTargetRuntime {
         Ok(())
     }
 
-    fn run_maintenance_tick(&mut self, now: UnixMicros) -> Result<(), ()> {
-        self.admit_periodic_scrubs(now)?;
-        self.admit_rebalance_scans(now)?;
-        self.execute_one_repair(now)?;
-        self.execute_one_scope_drain()?;
-        self.execute_one_target_drain(now)?;
-        self.execute_one_rebalance(now)?;
-        self.execute_one_reconciliation(now)?;
-        self.execute_one_scrub_page(now)?;
-        self.execute_metadata_backup(now)
+    fn run_maintenance_tick(&mut self, now: UnixMicros) -> Result<(), usize> {
+        // Each family retains its existing bounded dispatch and observed result.
+        // Evaluate sequentially: failure must not skip independent work, while
+        // another family must not bypass the shared in-flight resource budget.
+        let failures = [
+            self.admit_periodic_scrubs(now),
+            self.admit_rebalance_scans(now),
+            self.execute_one_repair(now),
+            self.execute_one_scope_drain(),
+            self.execute_one_target_drain(now),
+            self.execute_one_rebalance(now),
+            self.execute_one_reconciliation(now),
+            self.execute_one_scrub_page(now),
+            self.execute_metadata_backup(now),
+        ]
+        .into_iter()
+        .filter(Result::is_err)
+        .count();
+        if failures == 0 { Ok(()) } else { Err(failures) }
     }
 
     fn execute_metadata_backup(&mut self, now: UnixMicros) -> Result<(), ()> {
@@ -3637,110 +3647,6 @@ impl StorageTargetRuntime {
         observation.finish(self.execute_repair_assignment(assignment, now))
     }
 
-    fn execute_repair_assignment(
-        &mut self,
-        assignment: crate::MaintenanceDispatchAssignment,
-        now: UnixMicros,
-    ) -> Result<(), ()> {
-        let WorkSubject::Repair {
-            volume_id,
-            manifest_id,
-            stripe_index,
-            shard_index,
-            source_generation,
-        } = assignment.subject
-        else {
-            return Err(());
-        };
-        let targets = self.active.values().cloned().collect::<Vec<_>>();
-        let mut catalogue = self
-            .native_filesystem
-            .maintenance_catalogue(now)
-            .map_err(|_| ())?;
-        let content = catalogue
-            .committed_content_by_manifest(manifest_id)
-            .map_err(|_| ())?
-            .ok_or(())?;
-        let stripe = catalogue
-            .committed_protected_stripe(content, stripe_index)
-            .map_err(|_| ())?;
-        let source_receipt = stripe
-            .receipts
-            .as_slice()
-            .iter()
-            .copied()
-            .find(|receipt| receipt.shard.shard_index == shard_index)
-            .ok_or(())?;
-        let candidate = catalogue
-            .shard_repair_candidate(
-                source_receipt.target_id,
-                source_receipt.target_generation,
-                source_receipt.shard,
-            )
-            .map_err(|_| ())?
-            .filter(|candidate| {
-                candidate.volume_id == volume_id
-                    && candidate.manifest_id == manifest_id
-                    && candidate.source_layout_generation == source_generation
-            })
-            .ok_or(())?;
-        let current_targets = current_stripe_targets(&stripe)?;
-        let authorization_revision = self
-            .maintenance_authority
-            .reader()
-            .current_revision()
-            .map_err(|_| ())?;
-        let deadline = now
-            .checked_add(DurationMicros::new(MAINTENANCE_LEASE_MICROS))
-            .ok_or(())?;
-        let mut random = OperatingSystemRandom;
-        let planning_operation_id = random_operation_id(&mut random)?;
-        let configuration = self
-            .native_filesystem
-            .maintenance_protection_configuration(&targets, volume_id, now)
-            .map_err(|_| ())?;
-        let placement = configuration
-            .plan_repair(
-                &meshspan_placement::FaultAwarePlacement::new(),
-                RequestContext {
-                    contract_version: ContractVersion::V1_0,
-                    operation_id: planning_operation_id,
-                    deadline,
-                    expected_revision: Some(authorization_revision),
-                },
-                stripe.stripe.coding_layout(),
-                shard_index,
-                &current_targets,
-            )
-            .map_err(|_| ())?;
-        if placement.topology_revision != configuration.topology_revision()
-            || placement.capacity_revision != configuration.capacity_revision()
-        {
-            return Err(());
-        }
-        let actor = self.maintenance_actor(now)?;
-        let execution = maintenance_repair_execution(
-            assignment,
-            self.worker_identity()?,
-            actor,
-            now,
-            authorization_revision,
-            candidate,
-            placement.replacement_target_id,
-            placement.replacement_target_generation,
-            &stripe,
-        )?;
-        let mut repairer = self
-            .native_filesystem
-            .maintenance_repairer(&targets, now)
-            .map_err(|_| ())?;
-        let receipt = execute_shard_repair(&self.maintenance_authority, &mut repairer, &execution)
-            .map_err(|_| ())?;
-        catalogue
-            .install_shard_repair(content, &receipt.transition)
-            .map_err(|_| ())
-    }
-
     fn execute_one_target_drain(&mut self, now: UnixMicros) -> Result<(), ()> {
         let Some(assignment) = self.next_maintenance_assignment(now, WorkKind::Drain)? else {
             return Ok(());
@@ -4003,8 +3909,10 @@ impl StorageTargetRuntime {
             failures = failures.saturating_add(1);
         }
         failures = failures.saturating_add(self.reconcile_federation_capacity(now));
-        if !self.active.is_empty() && self.run_maintenance_tick(now).is_err() {
-            failures = failures.saturating_add(1);
+        if !self.active.is_empty()
+            && let Err(maintenance_failures) = self.run_maintenance_tick(now)
+        {
+            failures = failures.saturating_add(maintenance_failures);
         }
         self.readiness.store_degraded(failures > 0);
         self.maintenance_observations.tick(
@@ -4102,12 +4010,7 @@ fn maintenance_verification_execution(
     let claim_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
     let effect_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
     let completion_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
-    let mut fence_bytes = [0_u8; 8];
-    random.fill_bytes(&mut fence_bytes).map_err(|_| ())?;
-    let fence = u64::from_be_bytes(fence_bytes);
-    if fence == 0 {
-        return Err(());
-    }
+    let fence = random_maintenance_fence(&mut random)?;
     Ok(ResumableStorageScrubExecution {
         claim_context,
         effect_context,
@@ -4151,12 +4054,7 @@ fn maintenance_target_drain_execution(
     let claim_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
     let attestation_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
     let completion_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
-    let mut fence_bytes = [0_u8; 8];
-    random.fill_bytes(&mut fence_bytes).map_err(|_| ())?;
-    let fence = u64::from_be_bytes(fence_bytes);
-    if fence == 0 {
-        return Err(());
-    }
+    let fence = random_maintenance_fence(&mut random)?;
     Ok(TargetDrainExecution {
         claim_context,
         attestation_context,
@@ -4193,12 +4091,7 @@ fn maintenance_rebalance_execution(
     let claim_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
     let scan_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
     let completion_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
-    let mut fence_bytes = [0_u8; 8];
-    random.fill_bytes(&mut fence_bytes).map_err(|_| ())?;
-    let fence = u64::from_be_bytes(fence_bytes);
-    if fence == 0 {
-        return Err(());
-    }
+    let fence = random_maintenance_fence(&mut random)?;
     Ok(RebalanceExecution {
         claim_context,
         scan_context,
@@ -4215,81 +4108,6 @@ fn maintenance_rebalance_execution(
         page_items: REBALANCE_PAGE_ITEMS,
         planning_deadline: lease_expires_at,
         continuation_at,
-    })
-}
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the exact work, authority, route and destination fences remain visible"
-)]
-fn maintenance_repair_execution(
-    assignment: crate::MaintenanceDispatchAssignment,
-    (worker_node_id, worker_incarnation): (NodeId, u64),
-    actor_principal_id: PrincipalId,
-    now: UnixMicros,
-    authorization_revision: Revision,
-    candidate: meshspan_filesystem::ShardRepairCandidate,
-    replacement_target_id: TargetId,
-    replacement_target_generation: u64,
-    stripe: &meshspan_filesystem::CommittedProtectedStripe,
-) -> Result<ShardRepairExecution<'_>, ()> {
-    let WorkSubject::Repair {
-        volume_id,
-        manifest_id,
-        stripe_index,
-        shard_index,
-        source_generation,
-    } = assignment.subject
-    else {
-        return Err(());
-    };
-    if candidate.volume_id != volume_id
-        || candidate.manifest_id != manifest_id
-        || candidate.source_receipt.shard.stripe_index != stripe_index
-        || candidate.source_receipt.shard.shard_index != shard_index
-        || candidate.source_layout_generation != source_generation
-    {
-        return Err(());
-    }
-    let lease_expires_at = now
-        .checked_add(DurationMicros::new(MAINTENANCE_LEASE_MICROS))
-        .ok_or(())?;
-    let mut random = OperatingSystemRandom;
-    let claim_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
-    let effect_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
-    let completion_context = random_maintenance_context(&mut random, actor_principal_id, now)?;
-    let replacement_operation_id = random_operation_id(&mut random)?;
-    let mut fence_bytes = [0_u8; 8];
-    random.fill_bytes(&mut fence_bytes).map_err(|_| ())?;
-    let fence = u64::from_be_bytes(fence_bytes);
-    if fence == 0 {
-        return Err(());
-    }
-    Ok(ShardRepairExecution {
-        claim_context,
-        effect_context,
-        completion_context,
-        claim: ClaimMaintenanceWork {
-            work_id: assignment.work_id,
-            claim_generation: assignment.claim_generation,
-            worker_node_id,
-            worker_incarnation,
-            fence,
-            lease_expires_at,
-        },
-        volume_id,
-        manifest_id,
-        source_layout_generation: source_generation,
-        physical: meshspan_filesystem::ShardRepairRequest {
-            replacement_operation_id,
-            source_receipt: candidate.source_receipt,
-            replacement_target_id,
-            replacement_target_generation,
-            authorization_revision,
-            deadline: lease_expires_at,
-            observed_at: now,
-        },
-        stripe,
     })
 }
 
@@ -4320,6 +4138,15 @@ fn random_operation_id(random: &mut impl RandomSource) -> Result<OperationId, ()
     let mut bytes = [0_u8; 16];
     random.fill_bytes(&mut bytes).map_err(|_| ())?;
     OperationId::from_bytes(uuid_v8(bytes)).map_err(|_| ())
+}
+
+fn random_maintenance_fence(random: &mut impl RandomSource) -> Result<u64, ()> {
+    let mut bytes = [0_u8; 8];
+    random.fill_bytes(&mut bytes).map_err(|_| ())?;
+    // Durable claims store a positive SQLite INTEGER. Keep 63 random bits, as
+    // backup claims do; the full u64 range would reject half of all attempts.
+    let fence = u64::from_be_bytes(bytes) >> 1;
+    if fence == 0 { Err(()) } else { Ok(fence) }
 }
 
 fn random_maintenance_context(

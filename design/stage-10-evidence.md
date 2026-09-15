@@ -90,6 +90,28 @@ This is a local composed-runtime proof, not hardware, power-loss or a full-gate
 claim. Explicit backup/drain progression, global queue pagination, broader expected
 deferrals and shared resource attribution remain DATA-01 acceptance work.
 
+The expanded final fixture also proves the **same bootstrap backup** advances
+from a live Claimed run to Protected during the blocked-repair tick. Reopened
+run occurrence/partition/schedule identity, closed claim, Verified catalogue,
+captured protection thresholds and terminal evidence digest all agree. Both
+maintenance tests pass (**7.74 s**, build **36.67 s**;
+`/tmp/meshspan-data01-backup-acceptance.log`). Public API setup helpers now have
+their own fixture owner; both new test modules remain below the source-size
+ceiling. The earlier backup-proof gap is closed for this local fixture; completed
+drain progression, queue pagination, other deferrals and stage-wide acceptance
+remain open. The first affected Clippy run found a needless placement value
+parameter, test `expect` and test-module ordering; all were corrected without
+lint suppressions, and final Clippy is being run.
+Final affected all-target/all-feature Clippy passes with warnings denied
+(**12.91 s**; `/tmp/meshspan-data01-clippy-clean.log`). Before that pass, a function-size
+finding was resolved by placing committed-source selection and job admission
+with the fixture setup owner; one missing import from that move was corrected.
+The final exact workflow and fence tests pass after this test-only ownership
+adjustment (**2/2**, **9.04 s**, build **28.71 s**;
+`/tmp/meshspan-data01-final-workflow.log`). Formatting and diff checks pass after
+normalizing the moved import. This slice is ready for a signed checkpoint and
+the required dependency-update/full integration gate; it does not close DATA-01.
+
 Broader metadata validation on `0fa00c16` completes with **581 passing tests and
 one failure**, **376.29 s** (`/tmp/meshspan-data01-metadata-all.log`). The failure is
 `local_schema_fifteen_upgrade_preserves_existing_registration`: its hand-built

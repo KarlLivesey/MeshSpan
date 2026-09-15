@@ -3,6 +3,9 @@
 #[path = "private_control_lifecycle_tests.rs"]
 mod private_control_lifecycle;
 
+#[path = "appliance_maintenance_tests.rs"]
+mod maintenance;
+
 use super::*;
 use crate::backup_export_service::BackupExportProviders;
 use std::path::Path;
@@ -426,6 +429,15 @@ async fn configure_lifecycle_mesh(
     node: &DaemonNodeRuntime,
     router: Router,
 ) -> Result<PrincipalId, Box<dyn std::error::Error>> {
+    Ok(configure_lifecycle_mesh_with_response(node, router)
+        .await?
+        .0)
+}
+
+async fn configure_lifecycle_mesh_with_response(
+    node: &DaemonNodeRuntime,
+    router: Router,
+) -> Result<(PrincipalId, CreateMeshSetupResponse), Box<dyn std::error::Error>> {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
@@ -451,7 +463,8 @@ async fn configure_lifecycle_mesh(
         .await?;
     assert_eq!(response.status(), StatusCode::CREATED);
     assert_eq!(node.setup_state.setup_state(), SetupState::Configured);
-    Ok(material.administrator_id)
+    let body = axum::body::to_bytes(response.into_body(), 64 * 1024).await?;
+    Ok((material.administrator_id, serde_json::from_slice(&body)?))
 }
 
 fn lifecycle_config(
