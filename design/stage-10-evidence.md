@@ -10,6 +10,24 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 distinct reservation and put contexts — compatibility regression
+
+The exact-outcome resolver now compares the retained reservation itself and
+checks the original put context through the provider operation digest. It no
+longer incorrectly reconstructs reservation admission from a later put's shorter
+deadline or refreshed revision. The existing lost-response/restart regression
+now exercises that valid combination. Before the fix it failed with
+`Journal(OperationConflict)` in 0.12s; after the fix it passed in 0.24s. Logs:
+`/tmp/meshspan-data02-distinct-admission-context-{baseline,fixed}.log`.
+
+On the working tree based on `fe44bb66`, the complete storage target suite
+passed: 60 tests, 0 failed/ignored, 5.96s; affected all-target/all-feature Clippy
+with warnings denied passed in 1.57s. Logs are
+`/tmp/meshspan-data02-reservation-context-{storage-tests,clippy}.log`.
+The reservation digest format and normal admission checks are unchanged.
+Durable repair intent and expired incomplete-write resumption remain open;
+this is not a full integration gate or Stage 10 task 16 completion.
+
 ## DATA-02 exact provider admission and outcome resolution — signed progress
 
 PR #272 merged as `9560fd84936f90909446291463991d424bdeffd8`; its tree matches

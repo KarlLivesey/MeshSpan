@@ -37,7 +37,10 @@ fn expired_put_recovers_exact_outcome_after_lost_response_and_restart()
         UnixMicros::new(1),
         &mut FixedRandom,
     )?;
-    let request = put_request(&mut store, registration, 61, 4, b"one exact repair attempt")?;
+    let mut request = put_request(&mut store, registration, 61, 4, b"one exact repair attempt")?;
+    // A put may tighten its deadline and refresh its revision after reservation admission.
+    request.context.deadline = UnixMicros::new(800);
+    request.context.expected_revision = Some(Revision::new(7));
     let authority = resolution_authority(registration, &request)?;
     assert_eq!(
         store.resolve_put(request.identity(), authority, UnixMicros::new(11))?,

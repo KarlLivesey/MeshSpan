@@ -310,6 +310,24 @@ struct StoredReservation {
     expires_at: UnixMicros,
 }
 
+impl StoredReservation {
+    fn into_reservation(
+        self,
+        marker: TargetMarker,
+        operation_id: OperationId,
+    ) -> StorageReservation {
+        StorageReservation {
+            operation_id,
+            target_id: marker.target_id(),
+            target_generation: marker.generation(),
+            class: self.class,
+            maximum_bytes: self.maximum_bytes,
+            expires_at: self.expires_at,
+            reservation_digest: self.reservation_digest,
+        }
+    }
+}
+
 struct StoredTargetState {
     mesh_id: Vec<u8>,
     target_id: Vec<u8>,
@@ -611,15 +629,7 @@ fn resolve_existing(
     if existing.request_digest != request_digest {
         return Err(TargetJournalError::OperationConflict);
     }
-    Ok(StorageReservation {
-        operation_id,
-        target_id: marker.target_id(),
-        target_generation: marker.generation(),
-        class: existing.class,
-        maximum_bytes: existing.maximum_bytes,
-        expires_at: existing.expires_at,
-        reservation_digest: existing.reservation_digest,
-    })
+    Ok(existing.into_reservation(marker, operation_id))
 }
 
 fn expire_active_reservations(

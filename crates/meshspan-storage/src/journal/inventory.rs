@@ -103,19 +103,9 @@ impl TargetJournal {
         let reservation = super::load_reservation(&transaction, original.context.operation_id)?;
         let has_reservation = reservation.is_some();
         if let Some(reservation) = reservation {
-            let digest = super::reservation_request_digest(
-                original.context,
-                original.reservation.target_id,
-                original.reservation.target_generation,
-                original.reservation.class,
-                original.reservation.maximum_bytes,
-            );
-            let recorded = super::resolve_existing(
-                reservation,
-                digest,
-                self.marker,
-                original.context.operation_id,
-            )?;
+            // The reservation may precede a shorter put deadline or a refreshed put revision.
+            // Compare its retained fields; the provider operation separately binds the put context.
+            let recorded = reservation.into_reservation(self.marker, original.context.operation_id);
             if recorded != original.reservation {
                 return Err(TargetJournalError::OperationConflict);
             }
