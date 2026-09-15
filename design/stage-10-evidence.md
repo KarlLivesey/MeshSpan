@@ -10,6 +10,43 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## Integration diagnostics — owned federation fixture cancellation
+
+Review found a concrete test-fixture lifetime defect independent of the earlier
+unclassified federation timeout. Two owner-exchange fixtures borrowed their
+client streams inside a three-second timeout, then awaited the server worker
+while those streams remained open. If the timeout interrupted an upload, the
+server could still be waiting for client bytes or FIN.
+
+A new real-QUIC regression withholds Ready until the unchanged client deadline
+expires, then releases the server and requires upload EOF within one second.
+The borrowed-stream baseline fails with `timed-out client retained upload while
+joining owner` in **4.57 s**
+(`/tmp/meshspan-federation-owner-cancellation-baseline.log`). The conversation
+now owns its streams inside the timed future, so cancellation drops them before
+the worker join. Both fixture paths observe the worker and preserve timeout
+context if it also fails. The regression passes in **3.44 s**, additionally
+asserting that the QUIC connection remains live and no upload bytes arrive
+(`/tmp/meshspan-federation-owner-cancellation-fixed.log`). The existing real-TLS
+federation workflow passes in **13.70 s**
+(`/tmp/meshspan-federation-owned-exchange-workflow.log`), and all-target/all-feature
+daemon Clippy passes in **9.07 s**
+(`/tmp/meshspan-federation-owned-exchange-clippy.log`). This is test-fixture
+ownership correction, not a claimed explanation for the original gate timeout.
+
+Separate temporary consensus measurements were removed after investigation.
+The canonical four-thread cluster target passed **138 tests** in **112.24 s**;
+the maximum transfer took **9.774 s**, including **8.542 s** of execution on its
+single Tokio test thread and only **9.098 ms** queued for the CPU
+(`/tmp/meshspan-bulk-scheduler-cluster.log`). A bounded two-runtime-worker
+experiment improved the isolated transfer to **5.47 s** but made all four
+concurrent copies fail their unchanged 15-second deadline, consuming
+**26.74–28.35 s** user CPU each (`/tmp/meshspan-bulk-two-workers-{0,1,2,3,4}.log`).
+That experiment was rejected and removed. The original bulk fixture, cipher,
+protocol deadlines, exact-byte and allocation-lease assertions remain unchanged.
+Neither integration timeout is declared resolved, and a complete gate remains
+required. Stage 10 task 16 / DATA-02 and Stage 11 acceptance remain open.
+
 ## DATA-02 final gate blocked by maximum-size consensus transfer
 
 The next full local gate on signed commit
