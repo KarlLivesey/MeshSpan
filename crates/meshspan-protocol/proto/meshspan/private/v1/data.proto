@@ -58,6 +58,30 @@ message ResolveShardPutResult {
   }
 }
 
+// Fresh native repair authority may resume this immutable original intent.
+// Ready pins the original operation before accepting DataFrame/PutShardFinish.
+message ResumeShardPutRequest {
+  RequestHeader header = 1;
+  bytes target_id = 2;
+  uint64 target_generation = 3;
+  VersionedPayload intent = 4;
+  bytes write_capability = 5;
+}
+
+message ResumeShardPutReady {
+  VersionedPayload original = 1;
+  uint64 maximum_frame_bytes = 2;
+}
+
+message ResumeShardPutResult {
+  VersionedPayload intent = 1;
+  oneof outcome {
+    ResumeShardPutReady ready = 2;
+    VersionedPayload verified = 3;
+    WireError rejection = 4;
+  }
+}
+
 message GetShardRequest {
   RequestHeader header = 1;
   bytes target_id = 2;

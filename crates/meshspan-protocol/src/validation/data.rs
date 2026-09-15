@@ -40,6 +40,14 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
             valid_nonempty_bytes(&value.write_capability, limits.maximum_control_bytes())
         }
         Message::ResolveShardPutResult(value) => put_resolution(value, limits),
+        Message::ResumeShardPutRequest(value) => {
+            validate_required_header(value.header.as_ref())?;
+            valid_identifier(&value.target_id)?;
+            nonzero(value.target_generation)?;
+            exact_resume_payload(value.intent.as_ref(), 152)?;
+            valid_nonempty_bytes(&value.write_capability, limits.maximum_control_bytes())
+        }
+        Message::ResumeShardPutResult(value) => repair_admission(value, limits),
         Message::PutShardFinish(value) => {
             nonzero(value.final_length)?;
             valid_digest(&value.final_digest)
@@ -83,6 +91,43 @@ pub(super) fn message(value: &Message, limits: WireLimits) -> Result<(), WireCon
         | Message::LookupBackupResult(_)
         | Message::DeleteBackupRequest(_)
         | Message::DeleteBackupResult(_) => backup::message(value, limits),
+    }
+}
+
+fn exact_resume_payload(
+    value: Option<&crate::v1::VersionedPayload>,
+    size: usize,
+) -> Result<(), WireContractError> {
+    let value = value.ok_or(WireContractError::InvalidMessage)?;
+    if value.format_version != 1 || value.canonical_bytes.len() != size {
+        Err(WireContractError::InvalidMessage)
+    } else {
+        Ok(())
+    }
+}
+
+fn repair_admission(
+    value: &crate::v1::ResumeShardPutResult,
+    limits: WireLimits,
+) -> Result<(), WireContractError> {
+    use crate::v1::resume_shard_put_result::Outcome;
+    exact_resume_payload(value.intent.as_ref(), 152)?;
+    match value
+        .outcome
+        .as_ref()
+        .ok_or(WireContractError::InvalidMessage)?
+    {
+        Outcome::Ready(ready) => {
+            exact_resume_payload(ready.original.as_ref(), 208)?;
+            if ready.maximum_frame_bytes == 0
+                || ready.maximum_frame_bytes > limits.maximum_data_frame_bytes() as u64
+            {
+                return Err(WireContractError::InvalidMessage);
+            }
+            Ok(())
+        }
+        Outcome::Verified(receipt) => exact_resume_payload(Some(receipt), 126),
+        Outcome::Rejection(error) => validate_wire_error(error),
     }
 }
 

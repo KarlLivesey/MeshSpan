@@ -10,6 +10,57 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 exact repair resumption over native mTLS — transport progress
+
+Provider resumption is committed as `cae3e0c7a9815b4aa63b0b3c58581370b019a21e`,
+signed, pushed and verified locally and by GitHub. The next working tree adds
+native `ResumeShardPutRequest/Result` on unused private-envelope tags 16/17.
+It binds the immutable intent, returns its exact prepared admission or a freshly
+verified committed receipt, and retains the existing framed-byte/finish result
+protocol. Fresh transfer expiry is distinct from the original write context.
+Server elapsed time advances across upload and is checked again before provider
+write; an old admission-time sample cannot silently extend fresh authority.
+Federation does not accept this native-only operation.
+
+The real Quinn/mTLS test now cancels after admission, reopens the provider,
+resumes using only the original intent after its deadline, loses the durable
+write acknowledgement, reopens again, resolves the exact receipt twice without
+another upload, and reads identical bytes. Exactly one successful physical write
+is observed. Forged authority and a substituted digest are rejected. Controlled
+test times move forward; this is not hardware/power-loss evidence. The first
+run failed to compile due to a test module path; corrected before the passing
+0.68s proof and final 0.63s consumer run.
+
+Validation on the tree based on `cae3e0c7`:
+
+- Contracts, storage, data-plane and protocol all-target/all-feature tests:
+  182 passed across 13 targets, none failed/ignored; build 5.47s, storage 6.76s.
+- Foreground publisher recovery/expiry consumers: 2 passed in 1.11s.
+- All-target/all-feature warnings-denied Clippy for contracts, storage,
+  protocol, data-plane, filesystem and daemon passed in 15.55s. After the
+  monotonic-deadline unit test, affected Clippy passed in 3.36s.
+- Protocol fixtures reject missing/ambiguous outcomes, wrong intent versions
+  or sizes, missing admissions and invalid frame bounds. A pure time-boundary
+  test rejects arrival at the exact fresh deadline.
+- Development lint failures identified oversized upload enum/future storage
+  and an unnecessary owned payload; ownership was corrected without changing
+  lint thresholds or test expectations.
+- NVM-selected Node 26.8.2 / npm 11.19.1: `pnpm check:licences` passed
+  (`cargo deny` licences and 9 production / 28 tool-only JavaScript packages).
+  Log: `/tmp/meshspan-data02-repair-resume-licences.log`.
+
+Logs: `/tmp/meshspan-data02-repair-resume-wire-proof{,-fixed}.log`,
+`/tmp/meshspan-data02-repair-resume-protocol.log`,
+`/tmp/meshspan-data02-repair-resume-final-tests.log`,
+`/tmp/meshspan-data02-repair-resume-publisher-tests.log`,
+`/tmp/meshspan-data02-repair-resume-clippy{,-fixed,-final}.log`, and
+`/tmp/meshspan-data02-repair-resume-lifetime-clippy.log`.
+
+The daemon accepts the native protocol but does not yet drive it from durable
+repair-job intent. Replicated intent, worker takeover, remaining repair cuts,
+cleanup and the complete integration gate are still required. DATA-02 and
+Stage 10 task 16 remain open.
+
 ## DATA-02 resume prepared repair bytes under fresh authority — provider boundary
 
 The provider can now prepare an immutable repair intent before accepting bytes,

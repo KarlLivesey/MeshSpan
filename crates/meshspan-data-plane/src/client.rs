@@ -3,7 +3,7 @@
 //! Client side of exact remote shard lifecycle streams.
 
 mod upload;
-pub use upload::{PreparedShardUpload, ShardUploadClient};
+pub use upload::{PreparedShardUpload, RepairShardUpload, ShardUploadClient};
 
 use meshspan_contracts::{
     BoundedBytes, FederatedShardPermit, ReclamationReceipt, RemovalPermit, ReservationClass,

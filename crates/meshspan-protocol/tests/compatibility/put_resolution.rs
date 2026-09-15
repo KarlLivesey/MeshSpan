@@ -4,7 +4,9 @@
 
 use super::*;
 use meshspan_protocol::v1::{
-    ResolveShardPutRequest, ResolveShardPutResult, resolve_shard_put_result::Outcome,
+    ResolveShardPutRequest, ResolveShardPutResult, ResumeShardPutReady, ResumeShardPutRequest,
+    ResumeShardPutResult, resolve_shard_put_result::Outcome,
+    resume_shard_put_result::Outcome as ResumeOutcome,
 };
 
 #[test]
@@ -47,6 +49,108 @@ fn exact_put_resolution_frames_round_trip_without_claiming_unknown_as_durable()
         );
     }
     Ok(())
+}
+
+#[test]
+fn repair_resume_frames_bind_exact_original_intent_and_admission()
+-> Result<(), Box<dyn std::error::Error>> {
+    let limits = WireLimits::new(4096, 65536, 32, 1024)?;
+    let messages = [
+        DataMessage::ResumeShardPutRequest(ResumeShardPutRequest {
+            header: Some(valid_header()),
+            target_id: vec![8; 16],
+            target_generation: 3,
+            intent: Some(resume_payload(152)),
+            write_capability: vec![2; 159],
+        }),
+        DataMessage::ResumeShardPutResult(ResumeShardPutResult {
+            intent: Some(resume_payload(152)),
+            outcome: Some(ResumeOutcome::Ready(ResumeShardPutReady {
+                original: Some(resume_payload(208)),
+                maximum_frame_bytes: 1024,
+            })),
+        }),
+        DataMessage::ResumeShardPutResult(ResumeShardPutResult {
+            intent: Some(resume_payload(152)),
+            outcome: Some(ResumeOutcome::Verified(resume_payload(126))),
+        }),
+    ];
+    for message in messages {
+        let envelope = DataControlEnvelope {
+            message: Some(message),
+        };
+        assert_eq!(
+            decode_data_control_frame(&encode_data_control_frame(&envelope, limits)?, limits)?
+                .into_inner(),
+            envelope
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn repair_resume_rejects_unbound_or_unbounded_admission() -> Result<(), Box<dyn std::error::Error>>
+{
+    let limits = WireLimits::new(4096, 65536, 32, 1024)?;
+    for outcome in [
+        None,
+        Some(ResumeOutcome::Verified(resume_payload(0))),
+        Some(ResumeOutcome::Ready(ResumeShardPutReady {
+            original: None,
+            maximum_frame_bytes: 1024,
+        })),
+        Some(ResumeOutcome::Ready(ResumeShardPutReady {
+            original: Some(resume_payload(208)),
+            maximum_frame_bytes: 0,
+        })),
+        Some(ResumeOutcome::Ready(ResumeShardPutReady {
+            original: Some(resume_payload(208)),
+            maximum_frame_bytes: 65537,
+        })),
+    ] {
+        assert!(
+            encode_data_control_frame(
+                &DataControlEnvelope {
+                    message: Some(DataMessage::ResumeShardPutResult(ResumeShardPutResult {
+                        intent: Some(resume_payload(152)),
+                        outcome,
+                    })),
+                },
+                limits
+            )
+            .is_err()
+        );
+    }
+    for intent in [
+        None,
+        Some(resume_payload(151)),
+        Some(resume_payload(153)),
+        Some(VersionedPayload {
+            format_version: 2,
+            ..resume_payload(152)
+        }),
+    ] {
+        assert!(
+            encode_data_control_frame(
+                &DataControlEnvelope {
+                    message: Some(DataMessage::ResumeShardPutResult(ResumeShardPutResult {
+                        intent,
+                        outcome: Some(ResumeOutcome::Verified(resume_payload(126))),
+                    })),
+                },
+                limits
+            )
+            .is_err()
+        );
+    }
+    Ok(())
+}
+
+fn resume_payload(size: usize) -> VersionedPayload {
+    VersionedPayload {
+        format_version: 1,
+        canonical_bytes: vec![1; size],
+    }
 }
 
 #[test]

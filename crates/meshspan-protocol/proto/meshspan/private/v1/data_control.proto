@@ -101,6 +101,8 @@ message DataControlEnvelope {
     PutShardResult put_shard_result = 13;
     ResolveShardPutRequest resolve_shard_put_request = 14;
     ResolveShardPutResult resolve_shard_put_result = 15;
+    ResumeShardPutRequest resume_shard_put_request = 16;
+    ResumeShardPutResult resume_shard_put_result = 17;
     GetShardRequest get_shard_request = 20;
     GetShardHeader get_shard_header = 21;
     GetShardResult get_shard_result = 22;

@@ -8,6 +8,9 @@ use meshspan_contracts::{
 use meshspan_domain::{Clock, UnixMicros};
 use meshspan_protocol::{WireLimits, v1::RequestHeader};
 
+mod repair;
+pub use repair::RepairShardUpload;
+
 use super::{DataPlaneError, ReadyShardUpload, admit_native_upload};
 
 /// Native upload client with an explicit operation clock and bounded connection lifetime.
@@ -20,8 +23,9 @@ pub struct ShardUploadClient<'a> {
 /// Provider admission with no transmitted shard bytes. Persist its identity before finishing.
 /// Dropping closes the streams; it does not imply cancellation of the capacity reservation.
 pub struct PreparedShardUpload {
-    transfer: ReadyShardUpload,
+    transfer: Box<ReadyShardUpload>,
     deadline: tokio::time::Instant,
+    expires_at: UnixMicros,
 }
 
 impl PreparedShardUpload {
@@ -90,13 +94,18 @@ impl<'a> ShardUploadClient<'a> {
         if header.deadline_unix_micros > authority.expires_at.get() {
             return Err(DataPlaneError::InvalidMessage);
         }
+        let expires_at = UnixMicros::new(header.deadline_unix_micros);
         let transfer = tokio::time::timeout_at(
             deadline,
             admit_native_upload(self.connection, header, authority, bytes, self.limits),
         )
         .await
         .map_err(|_| expired())??;
-        Ok(PreparedShardUpload { transfer, deadline })
+        Ok(PreparedShardUpload {
+            transfer: Box::new(transfer),
+            deadline,
+            expires_at,
+        })
     }
 
     /// Sends bytes only after the caller has durably retained the original admission.
@@ -113,8 +122,7 @@ impl<'a> ShardUploadClient<'a> {
         {
             return Err(DataPlaneError::InvalidMessage);
         }
-        let deadline = deadline_at(prepared.identity().context.deadline, self.clock.now())?
-            .min(prepared.deadline);
+        let deadline = deadline_at(prepared.expires_at, self.clock.now())?.min(prepared.deadline);
         tokio::time::timeout_at(deadline, prepared.transfer.finish(bytes))
             .await
             .map_err(|_| expired())?

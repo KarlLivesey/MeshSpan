@@ -433,6 +433,7 @@ async fn serve(
         meshspan_protocol::v1::data_control_envelope::Message::GetShardRequest(_)
             | meshspan_protocol::v1::data_control_envelope::Message::PutShardBegin(_)
             | meshspan_protocol::v1::data_control_envelope::Message::ResolveShardPutRequest(_)
+            | meshspan_protocol::v1::data_control_envelope::Message::ResumeShardPutRequest(_)
             | meshspan_protocol::v1::data_control_envelope::Message::DeleteShardRequest(_)
             | meshspan_protocol::v1::data_control_envelope::Message::ReclaimShardRequest(_)
     ) {

@@ -183,6 +183,51 @@ impl<P> StorageProvider for SharedStorageProvider<P>
 where
     P: StorageProvider,
 {
+    fn prepare_repair_put(
+        &mut self,
+        intent: meshspan_contracts::ShardPutIntent,
+        authority: meshspan_contracts::ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<meshspan_contracts::RepairPutAdmission, ContractError> {
+        let attempt = IoAttempt::new(self.observer.clone(), StorageIoKind::Scrub);
+        let result = self
+            .lock()
+            .and_then(|mut provider| provider.prepare_repair_put(intent, authority, observed_at));
+        let payload_bytes = match &result {
+            Ok(meshspan_contracts::RepairPutAdmission::Verified(receipt)) => receipt.length,
+            Ok(meshspan_contracts::RepairPutAdmission::Prepared(_)) | Err(_) => 0,
+        };
+        attempt.finish(
+            &result,
+            Some(StorageIoCounts {
+                payload_bytes,
+                corruption_reports: 0,
+            }),
+        );
+        result
+    }
+
+    fn finish_repair_put(
+        &mut self,
+        request: PutShardRequest,
+        authority: meshspan_contracts::ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<ShardReceipt, ContractError> {
+        let attempt = IoAttempt::new(self.observer.clone(), StorageIoKind::Write);
+        let result = self
+            .lock()
+            .and_then(|mut provider| provider.finish_repair_put(request, authority, observed_at));
+        let payload_bytes = result.as_ref().map_or(0, |receipt| receipt.length);
+        attempt.finish(
+            &result,
+            Some(StorageIoCounts {
+                payload_bytes,
+                corruption_reports: 0,
+            }),
+        );
+        result
+    }
+
     fn resolve_put(
         &mut self,
         original: meshspan_contracts::ShardPutIdentity,

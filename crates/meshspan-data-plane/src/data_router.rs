@@ -111,6 +111,7 @@ fn family(message: &Message) -> Result<DataFamily, RemoteDataRouterError> {
     match message {
         Message::PutShardBegin(_)
         | Message::ResolveShardPutRequest(_)
+        | Message::ResumeShardPutRequest(_)
         | Message::GetShardRequest(_)
         | Message::DeleteShardRequest(_)
         | Message::ReclaimShardRequest(_) => Ok(DataFamily::Shard),

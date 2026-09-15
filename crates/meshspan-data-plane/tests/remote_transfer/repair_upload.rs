@@ -18,6 +18,9 @@ use meshspan_transport::AuthenticatedPeer;
 
 use super::*;
 
+#[path = "repair_upload/repair_resume.rs"]
+mod repair_resume;
+
 #[derive(Default)]
 struct ObservedWrites {
     count: AtomicUsize,
@@ -60,7 +63,7 @@ pub(super) async fn prove(
         limits,
         observed: observed.clone(),
     };
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    let (service, ()) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         tokio::try_join!(
             server.run(),
             prove_client(connections.0, fixture, limits, &observed)
@@ -72,7 +75,7 @@ pub(super) async fn prove(
         1,
         "resolution must not perform another put"
     );
-    Ok(())
+    repair_resume::prove(connections, (service, marker), peer, fixture, limits).await
 }
 
 struct ResolutionServer<'a> {
@@ -86,7 +89,9 @@ struct ResolutionServer<'a> {
 }
 
 impl ResolutionServer<'_> {
-    async fn run(mut self) -> Result<(), Box<dyn Error>> {
+    async fn run(
+        mut self,
+    ) -> Result<RemoteShardService<SharedStorageProvider<FolderShardStore>>, Box<dyn Error>> {
         let stream = accept_stream(self.connection).await?;
         assert!(matches!(
             self.service
@@ -104,7 +109,7 @@ impl ResolutionServer<'_> {
             Err(error) => return Err(error.into()),
         }
         drop(self.service);
-        let provider = reopen(self.fixture, self.marker)?;
+        let provider = reopen(self.fixture, self.marker, UnixMicros::new(6_000_000))?;
         self.service = shared_service(
             SharedStorageProvider::new(provider).with_io_observer(self.observed),
             self.fixture,
@@ -122,7 +127,7 @@ impl ResolutionServer<'_> {
                 .await,
             Err(DataPlaneError::Transport(_))
         ));
-        Ok(())
+        Ok(self.service)
     }
 }
 
@@ -256,7 +261,11 @@ fn shared_service(
     )?)
 }
 
-fn reopen(fixture: &Fixture, marker: TargetMarker) -> Result<FolderShardStore, Box<dyn Error>> {
+fn reopen(
+    fixture: &Fixture,
+    marker: TargetMarker,
+    opened_at: UnixMicros,
+) -> Result<FolderShardStore, Box<dyn Error>> {
     let folder = RegisteredFolder::reopen(
         &fixture.temporary.path().join("storage"),
         FolderRegistration {
@@ -281,7 +290,7 @@ fn reopen(fixture: &Fixture, marker: TargetMarker) -> Result<FolderShardStore, B
             Revision::new(1),
             StoragePermitMacKey::from_bytes(PERMIT_KEY)?,
         )?,
-        UnixMicros::new(6_000_000),
+        opened_at,
         &mut FixedRandom,
     )?)
 }

@@ -638,6 +638,26 @@ impl meshspan_contracts::StorageUsageSource for FolderShardStore {
 }
 
 impl StorageProvider for FolderShardStore {
+    fn prepare_repair_put(
+        &mut self,
+        intent: meshspan_contracts::ShardPutIntent,
+        authority: meshspan_contracts::ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<meshspan_contracts::RepairPutAdmission, ContractError> {
+        FolderShardStore::prepare_repair_put(self, intent, authority, observed_at)
+            .map_err(contract_error)
+    }
+
+    fn finish_repair_put(
+        &mut self,
+        request: PutShardRequest,
+        authority: meshspan_contracts::ShardWritePermit,
+        observed_at: UnixMicros,
+    ) -> Result<ShardReceipt, ContractError> {
+        FolderShardStore::finish_repair_put(self, &request, authority, observed_at)
+            .map_err(contract_error)
+    }
+
     fn resolve_put(
         &mut self,
         original: meshspan_contracts::ShardPutIdentity,
