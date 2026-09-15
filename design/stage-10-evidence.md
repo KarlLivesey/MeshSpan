@@ -10,6 +10,29 @@ or “remaining” describe their recorded point in time, not necessarily curren
 status. Later evidence must resolve them explicitly; a passing retry alone does
 not close an unexplained failure.
 
+## DATA-02 repair projection — complete candidate gate
+
+The complete local NVM `pnpm check` passes on signed, locally/GitHub-verified
+`c662edb9d1c0fd3ea78e01982bdd5acd8d2b0551` in **1265.20 s** with four
+check workers, four Cargo build jobs and four Rust test threads. Rust workspace
+tests pass in **1221.55 s**; web tests pass in **17.81 s**. Generated drift,
+embedded web build, formatting, all-target/all-feature Clippy, Rust/JavaScript
+dependency licences, web lint/typecheck and tooling tests all pass. The log is
+`/tmp/meshspan-check-c662edb9.log`. This result supersedes the integration-gate
+block for PR #272; the earlier failures and their diagnoses remain below.
+
+The separately invoked real HTTPS/Samba recovery-and-cleanup proof passes in
+**124.07 s** on the final implementation, and the three-daemon repair/restart
+proof passes in **34.08 s** with exact recovered bytes. Its negative control
+fails the restarted read when the shared repair projector is disabled. Together
+with the scoped feed, atomic cursor and import/recovery tests, these establish
+committed repair projection across gateways, fresh imports and restarts.
+
+DATA-02 remains open for durable physical-attempt identity, uncertain provider
+write recovery and obsolete-placement cleanup. Stage 10 remains incomplete;
+Stage 11 has not started as an integrated stage. No hardware, physical power-loss,
+soak or independent-review proof is claimed. Publication remains on hold.
+
 ## DATA-02 integration gate — historical migration fixtures
 
 The complete NVM gate on signed, locally/GitHub-verified `c2f42993` failed after
