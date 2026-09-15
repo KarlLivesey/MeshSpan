@@ -63,6 +63,47 @@ Diagnostic logs end in `family-diagnostic`, `backup-phase-diagnostic`,
 `backup-error-diagnostic`, `capture-diagnostic`, and `history-error-diagnostic`
 under `/tmp/meshspan-data01-`. Temporary diagnostic printing has been removed.
 
+The completed convergence fixture now reaches and passes the exact scrub,
+persisted retry, early-tick exclusion and second-provider repair assertions. It
+then reproduces the old deferral-time defect deterministically: a simulated
+ten-second planning interval is omitted from the persisted completion timestamp
+(**9.39 s**, build **56.41 s**;
+`/tmp/meshspan-data01-deferral-race-baseline.log`). This confirms the earlier
+backup failure was caused by missing fixture convergence, while the timing
+regression remains to be validated against the restored final implementation.
+The separate urgency-race baseline also fails (**8.31 s**, build **13.19 s**):
+without the revision precondition, a completion prepared before an intervening
+urgency update is accepted instead of rejected. Log:
+`/tmp/meshspan-data01-stale-deferral-baseline.log`. Both old-behavior diagnostic
+variants are removed; final deferral uses post-planning time and the revision
+captured before its fresh work read, with one immutable completion identity.
+
+With final behavior restored, **19 affected daemon tests pass** (**26.72 s**,
+build **10.51 s**; `/tmp/meshspan-data01-daemon-affected.log`). The real composed
+fixture verifies exact persisted scrub bytes/effect, two durable placement retries,
+no early admission despite duplicate discovery, and completion of the same repair
+job on a newly available real provider after exactly three claims. Replacement
+length/digest and layout generation are checked against the source. The ten-second
+planning and intervening-urgency regressions pass, alongside existing failed-provider,
+dispatcher and lifecycle/drain tests. Workspace formatting and diff checks pass.
+This is a local composed-runtime proof, not hardware, power-loss or a full-gate
+claim. Explicit backup/drain progression, global queue pagination, broader expected
+deferrals and shared resource attribution remain DATA-01 acceptance work.
+
+Broader metadata validation on `0fa00c16` completes with **581 passing tests and
+one failure**, **376.29 s** (`/tmp/meshspan-data01-metadata-all.log`). The failure is
+`local_schema_fifteen_upgrade_preserves_existing_registration`: its hand-built
+version-15 fixture retains migration 17's table/history and fails
+`InvalidMigrationHistory`. The fixture now removes both later migrations and
+expects the current schema while retaining exact registration and integrity
+assertions; focused validation is pending. This target was not reached by the
+earlier failed full gates. No workspace gate pass is claimed.
+The corrected local recovered-target group passes **3/3 tests** (**0.29 s**,
+build **4.66 s**; `/tmp/meshspan-data01-migration-fixture-fixed.log`), including
+the version-15 upgrade, exact ordinary/recovered registration preservation,
+folder collision rejection and integrity checks. Production migration behavior
+is unchanged. The broader failed run remains recorded above.
+
 ### Fail-before preparation
 
 The new real composed-runtime fixture creates a mesh, a volume and uploaded
