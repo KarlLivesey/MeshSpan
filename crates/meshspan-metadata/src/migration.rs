@@ -14,10 +14,10 @@ mod http01;
 
 const MAXIMUM_MIGRATIONS: usize = 256;
 
-pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 119;
+pub(crate) const PARTITION_SCHEMA_VERSION: u32 = 120;
 pub(crate) const LOCAL_SCHEMA_VERSION: u32 = 17;
 
-const PARTITION_MIGRATIONS: [Migration; 119] = [
+const PARTITION_MIGRATIONS: [Migration; 120] = [
     Migration {
         version: 1,
         sql: include_str!("../schema/partition/001_initial.sql"),
@@ -491,8 +491,12 @@ const PARTITION_MIGRATIONS: [Migration; 119] = [
         sql: include_str!("../schema/partition/118_user_enrollments.sql"),
     },
     Migration {
-        version: PARTITION_SCHEMA_VERSION,
+        version: 119,
         sql: include_str!("../schema/partition/119_node_capability_presentations.sql"),
+    },
+    Migration {
+        version: PARTITION_SCHEMA_VERSION,
+        sql: include_str!("../schema/partition/120_repair_effect_feed.sql"),
     },
 ];
 

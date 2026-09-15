@@ -27,7 +27,7 @@ mod verification_progress;
 pub use verification_progress::MaintenanceVerificationProgress;
 
 pub use rebalance::RebalanceScanProgress;
-pub use repair::ShardRepairEffectRecord;
+pub use repair::{ShardRepairEffectCursor, ShardRepairEffectRecord};
 pub use scope_drain::{
     StorageScopeDrainAction, StorageScopeDrainCursor, StorageScopeDrainRecord,
     StorageScopeDrainState,
@@ -337,6 +337,31 @@ impl AuthoritativeRepository {
         effect_operation_id: OperationId,
     ) -> Result<Option<ShardRepairEffectRecord>, RepositoryError> {
         repair::load(self.database.connection(), effect_operation_id)
+    }
+
+    /// Pages immutable repair effects for one exact volume and manifest.
+    ///
+    /// Results are ordered by authoritative revision then effect operation identity.
+    /// A continuation must name an existing effect in this same scope; it is not an
+    /// authorization token. The consumer must apply its own current access policy.
+    ///
+    /// # Errors
+    /// Rejects out-of-range or cross-scope cursors and malformed effect/claim evidence.
+    pub fn shard_repair_effects(
+        &self,
+        volume_id: meshspan_domain::VolumeId,
+        manifest_id: meshspan_domain::ContentManifestId,
+        after: Option<ShardRepairEffectCursor>,
+        limit: super::PageLimit,
+    ) -> Result<super::Page<ShardRepairEffectRecord, ShardRepairEffectCursor>, RepositoryError>
+    {
+        repair::page(
+            self.database.connection(),
+            volume_id,
+            manifest_id,
+            after,
+            limit,
+        )
     }
 
     /// Returns one committed complete scrub-pass summary.
